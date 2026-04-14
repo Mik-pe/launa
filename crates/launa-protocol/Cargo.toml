@@ -1,0 +1,13 @@
+[package]
+name = "launa-protocol"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+log.workspace = true
+thiserror.workspace = true
+crc.workspace = true
+byteorder.workspace = true
+
+[dev-dependencies]
+env_logger = "0.11"

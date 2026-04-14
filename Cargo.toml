@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/launa-protocol",
+    "crates/launa-hal",
+    "crates/launa-mqtt",
+    "crates/launa-ota",
+]
+exclude = [
+    # The ESP32 app uses esp-idf-sys which has unconventional build rules
+    # that don't mesh well with the rest of the workspace. Build separately.
+    "app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Mik-pe"]
+license = "MIT"
+
+[workspace.dependencies]
+log = "0.4"
+thiserror = "2"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+crc = "3"
+byteorder = "1"
+heapless = "0.8"
+embedded-io = "0.6"
+embedded-io-async = "0.6"

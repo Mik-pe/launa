@@ -1,0 +1,32 @@
+[package]
+name = "launa-app"
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true
+opt-level = "z"
+
+[package.metadata.esp-idf-sys]
+# ESP-IDF version — adjust branch/tag as needed
+esp_idf_version = "branch:v5.1.3"
+
+[dependencies]
+esp-idf-sys = { version = "0.35", features = ["binstart"] }
+esp-idf-hal = "0.44"
+esp-idf-svc = "0.51"
+embedded-svc = "0.27"
+embedded-hal = "1"
+log = "0.4"
+anyhow = "1"
+launa-protocol = { path = "../crates/launa-protocol" }
+launa-hal = { path = "../crates/launa-hal", default-features = false }
+launa-mqtt = { path = "../crates/launa-mqtt", default-features = false }
+launa-ota = { path = "../crates/launa-ota" }
+
+[build-dependencies]
+embuild = "0.32"
+anyhow = "1"

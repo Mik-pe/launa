@@ -1,0 +1,13 @@
+# ESP32 build configuration.
+# To build the firmware, install espflash and run:
+#   cargo espflash flash --monitor
+#
+# For a specific chip, set the target:
+#   cargo espflash flash --chip esp32   --monitor    (original ESP32)
+#   cargo espflash flash --chip esp32s3 --monitor    (ESP32-S3)
+#   cargo espflash flash --chip esp32c3 --monitor    (ESP32-C3)
+
+[env]
+# WiFi credentials (override at build time or use a sdkconfig.defaults)
+# LAUNA_WIFI_SSID = "your-ssid"
+# LAUNA_WIFI_PASSWORD = "your-password"

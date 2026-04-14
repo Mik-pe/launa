@@ -1,0 +1,12 @@
+[package]
+name = "launa-hal"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+log.workspace = true
+thiserror.workspace = true
