@@ -5,8 +5,8 @@
 - [x] **Add missing HA discovery entities** (`launa-mqtt/src/discovery.rs`): Added 6 new entities: Heat Mode select, Circ Pump switch, Temperature Range select, Hold Mode switch, Mister switch, Fault sensor. Total: 14 entities.
 - [x] **Add heating_mode/temp_range/hold_mode commands** (`launa-mqtt/src/command_parser.rs`): Added heat_mode, temp_range, hold_mode toggle subtopics.
 - [x] **Add mister/hold_mode to state JSON** (`launa-mqtt/src/state.rs`): Added mister, hold_mode, last_fault fields to status JSON output.
-- [ ] **Birth/last-will messages**: Publish `online`/`offline` to availability topic on connect/disconnect. Set LWT (Last Will and Testament) in MQTT connect options. Subscribe to `homeassistant/status` and re-publish discovery when HA restarts.
-- [ ] **Set retain flag on discovery payloads**: HA auto-discovery messages should be published with `retain: true` so they survive broker restarts.
+- [x] **Birth/last-will messages**: Added `LwtConfig`, `BirthConfig`, `lwt_config()`, `birth_config()` in `launa-mqtt/src/topics.rs`. LWT publishes "offline" to availability topic on ungraceful disconnect (retain=true, QoS 1). Birth publishes "online" after connect (retain=true, QoS 1). Added `ha_status_topic()` for subscribing to `homeassistant/status` to re-publish discovery on HA restart. (Actual MQTT connect wiring deferred to `app/` crate.)
+- [x] **Set retain flag on discovery payloads**: Added `DiscoveryMessage` struct with `retain` field and `build_with_retain()` method on `DiscoveryBuilder`. All 14 discovery messages can now be published with `retain=true` via `build_with_retain()`.
 
 ## Architecture: esp-hal + embassy (pure Rust, no_std)
 
@@ -62,8 +62,8 @@ Built on esp-hal + embassy (pure Rust, no_std). Workspace tests pass.
 ### Safety & robustness (stack-independent):
 
 - [ ] **Command ACK / status verification for SET commands**: When we send a SET command (set temperature, toggle pump, etc.), the spa has no explicit ACK — it just broadcasts status ~1/sec. We need a robust verification loop: (1) record the expected state change when sending a command, (2) listen for the next N status updates (e.g., 3-5 seconds), (3) verify the spa's reported state matches our expectation, (4) if no confirmation within timeout, either retry the command or report failure to Home Assistant (e.g., publish an error or revert the HA entity state). This prevents stale UI state when commands are lost on the bus, the spa rejects them (e.g., temp out of range), or there's a race between our command and a status update. Consider a `CommandTracker` struct that maps pending commands to expected state transitions and expires them on confirmation or timeout.
-- [ ] **Temperature safety clamping in command builder** (`crates/launa-protocol/src/command.rs`): The `SetTemperature` command must reject values outside the spa's safe range. Per Balboa protocol: **Fahrenheit high range 80-104°F, Fahrenheit low range 50-80°F, Celsius high range 26-40°C, Celsius low range 10-26°C**. Add a `validate_set_temperature(temp, scale, range) -> Result<(), TempError>` function that clamps or rejects out-of-range values. This prevents a buggy MQTT command or Home Assistant misconfiguration from setting the heater to a dangerous temperature. Also add an optional **hard upper limit** (e.g., max 42°C / 108°F) that can never be exceeded regardless of range, as a backstop.
-- [ ] **Command allowlist for MQTT commands** (`crates/launa-mqtt/src/command_parser.rs`): Only accept known command types. Reject any unrecognized or malformed MQTT payloads silently (log warning, don't send to spa). This prevents accidental bus traffic from garbage input.
+- [x] **Temperature safety clamping in command builder** (`crates/launa-protocol/src/command.rs`): Added `validate_set_temperature(temp, scale, range) -> Result<u8, TempError>` function that validates against Balboa safe ranges (F° high: 80-104, F° low: 50-80, C° high: 26-40, C° low: 10-26) with a hard upper limit of 108°F / 42°C. Also added `parse_set_temperature_validated()` in `command_parser.rs` that validates temperature MQTT commands against the current scale/range before producing a `Command`.
+- [x] **Command allowlist for MQTT commands** (`crates/launa-mqtt/src/command_parser.rs`): Replaced `parse_command` returning `Option<Command>` with `ParseResult` enum (`Valid`, `TemperatureOutOfRange`, `UnknownSubtopic`, `InvalidPayload`). Added explicit `ALLOWED_SUBTOPICS` list — only 9 known subtopics are accepted. Unknown subtopics return `UnknownSubtopic` instead of silently dropping. Non-UTF8 payloads are rejected. Backward-compatible `parse_command_ok()` provided.
 - [ ] **Hold mode safety timeout** (`app/src/main.rs`): If the spa enters hold mode (which stops heating and circulation), auto-clear it after a configurable timeout (e.g., 60 minutes) unless explicitly renewed. Prevents forgetting the spa in hold mode and finding cold/unsafe water later.
 
 ## Hardware Testing & Flashing (ESP-WROOM-32)
@@ -123,10 +123,10 @@ But all logic lives in workspace crates that are fully desktop-testable via mock
 
 Expand existing `launa-integration-tests` to simulate the full data pipeline on PC. This catches logic bugs before any flashing.
 
-- [ ] **Full pipeline integration test**: Test the complete data flow that the ESP32 would execute: SpaSimulator generates status frame -> FrameDecoder parses -> StatusUpdate extracted -> `status_to_json()` produces MQTT payload -> assert JSON fields match simulator state. This simulates what `app/main.rs` does without needing the board.
-- [ ] **Command round-trip test**: MQTT command string -> `parse_command()` -> `Command` -> `encode()` -> frame bytes -> SpaSimulator `process_incoming()` -> verify state change -> generate new status -> verify updated JSON.
-- [ ] **HA discovery validation test**: Generate all 14 discovery payloads, validate they are valid JSON with correct `~` HA discovery topic format, correct `unique_id`, `command_topic`, `state_topic` patterns.
-- [ ] **Registration flow test**: Simulate full client ID registration: SpaSimulator sends query -> RegistrationStateMachine processes -> sends ID request -> receives assignment -> sends ack -> `is_registered()` returns true.
+- [x] **Full pipeline integration test**: `test_full_pipeline_status_frame_to_mqtt_json` — SpaSimulator generates status frame -> FrameDecoder parses -> StatusUpdate extracted -> `status_to_json()` produces MQTT payload -> assert all JSON fields match simulator state.
+- [x] **Command round-trip test**: `test_command_round_trip_pump_toggle` and `test_command_round_trip_set_temperature` — MQTT command string -> `parse_command_ok()` -> `Command` -> `encode()` -> frame bytes -> SpaSimulator `process_incoming()` -> verify state change -> generate new status -> verify updated JSON.
+- [x] **HA discovery validation test**: `test_ha_discovery_full_validation` — Generate all 14 discovery payloads, validate they are valid JSON with correct `homeassistant/<component>/<device_id>/<object_id>/config` topic format, correct `unique_id`, `command_topic`, `state_topic` patterns, no duplicate topics.
+- [x] **Registration flow test**: `test_registration_flow_with_state_machine` — Simulate full client ID registration: RegistrationStateMachine processes FE BF 00 query -> SendIdRequest -> receives FE BF 02 assignment -> SendIdAck -> `is_registered()` returns true.
 
 ### Phase 3: Protocol Sniffer (First Thing at the Spa)
 
@@ -204,4 +204,10 @@ PC (Python script simulating spa)
 - [x] **Status parser byte offsets corrected** (`crates/launa-protocol/src/status.rs`): Fixed all byte offsets to match real Balboa BP6013G1 hardware (verified against NorthernMan54/esp32_balboa_spa). Hold=offset 0, Priming=offset 1, Heating Mode=offset 5, flags=offset 9/10, pumps=offset 11, circ/blower=offset 13, lights=offset 14, mister=offset 15.
 - [x] **HDLC byte stuffing** (`crates/launa-protocol/src/frame.rs`): Added escape handling for `0x7E` and `0x7D` bytes in frame encoder/decoder to prevent CRC/data bytes from being interpreted as frame markers.
 - [x] **Spa simulator offsets corrected** (`crates/launa-sim/src/spa_sim.rs`, `crates/launa-integration-tests/src/spa_simulator.rs`): Updated `generate_status_frame()` to use correct real-hardware byte offsets.
-- [x] **All 240 tests passing** (18 HAL + 49 integration + 30 sim + 24 MQTT + 54 protocol + 27 fuzz + 17 property + 21 sim-unit)
+- [x] **All 278 tests passing** (18 HAL + 54 integration + 30 sim + 44 MQTT + 67 protocol + 27 fuzz + 17 property + 21 sim-unit)
+- [x] **Temperature safety clamping** (`crates/launa-protocol/src/command.rs`): Added `validate_set_temperature()` with Balboa-safe ranges and hard upper limit (108°F / 42°C). 13 new tests.
+- [x] **Command allowlist + ParseResult** (`crates/launa-mqtt/src/command_parser.rs`): `parse_command()` now returns `ParseResult` with `Valid`, `TemperatureOutOfRange`, `UnknownSubtopic`, `InvalidPayload` variants. `parse_command_ok()` for backward compat. 10 new tests.
+- [x] **Discovery retain support** (`crates/launa-mqtt/src/discovery.rs`): Added `DiscoveryMessage` struct and `build_with_retain()`. 4 new tests (retain, topics, unique_ids, command_topics).
+- [x] **Birth/last-will MQTT config** (`launa-mqtt/src/topics.rs`): Added `LwtConfig`, `BirthConfig`, `lwt_config()`, `birth_config()`, `ha_status_topic()`. 10 new tests.
+- [x] **Phase 2 desktop e2e tests** (`crates/launa-integration-tests/src/lib.rs`): 4 new tests covering full pipeline, command round-trip, HA discovery validation, and registration flow.
+- [x] **`.cargo/config.toml`**: Added `cargo xtask` alias for standard cargo-xtask workflow.

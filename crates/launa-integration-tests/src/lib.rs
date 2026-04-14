@@ -306,7 +306,7 @@ mod tests {
     fn test_mqtt_command_to_frame_to_simulator() {
         let mut sim = SpaSimulator::new();
 
-        let cmd = launa_mqtt::command_parser::parse_command(
+        let cmd = launa_mqtt::command_parser::parse_command_ok(
             "launa/test_spa/command",
             "launa/test_spa/command/pump1",
             b"true",
@@ -336,7 +336,7 @@ mod tests {
     fn test_mqtt_set_temperature_pipeline() {
         let mut sim = SpaSimulator::new();
 
-        let cmd = launa_mqtt::command_parser::parse_command(
+        let cmd = launa_mqtt::command_parser::parse_command_ok(
             "launa/test_spa/command",
             "launa/test_spa/command/set_temperature",
             b"102",
@@ -673,7 +673,7 @@ mod tests {
 
     #[test]
     fn test_invalid_toggle_payload() {
-        let cmd = launa_mqtt::command_parser::parse_command(
+        let cmd = launa_mqtt::command_parser::parse_command_ok(
             "launa/test_spa/command",
             "launa/test_spa/command/pump1",
             b"on",
@@ -683,7 +683,7 @@ mod tests {
 
     #[test]
     fn test_invalid_temperature_payload() {
-        let cmd = launa_mqtt::command_parser::parse_command(
+        let cmd = launa_mqtt::command_parser::parse_command_ok(
             "launa/test_spa/command",
             "launa/test_spa/command/set_temperature",
             b"abc",
@@ -893,7 +893,7 @@ mod tests {
 
     #[test]
     fn test_mqtt_command_parse_pump2() {
-        let cmd = launa_mqtt::command_parser::parse_command(
+        let cmd = launa_mqtt::command_parser::parse_command_ok(
             "launa/spa/cmd",
             "launa/spa/cmd/pump2",
             b"true",
@@ -903,7 +903,7 @@ mod tests {
 
     #[test]
     fn test_mqtt_command_parse_light1() {
-        let cmd = launa_mqtt::command_parser::parse_command(
+        let cmd = launa_mqtt::command_parser::parse_command_ok(
             "launa/spa/cmd",
             "launa/spa/cmd/light1",
             b"false",
@@ -913,7 +913,7 @@ mod tests {
 
     #[test]
     fn test_mqtt_command_wrong_base() {
-        let cmd = launa_mqtt::command_parser::parse_command(
+        let cmd = launa_mqtt::command_parser::parse_command_ok(
             "launa/spa_a/cmd",
             "launa/spa_b/cmd/pump1",
             b"true",
@@ -923,7 +923,7 @@ mod tests {
 
     #[test]
     fn test_mqtt_command_unknown_subtopic() {
-        let cmd = launa_mqtt::command_parser::parse_command(
+        let cmd = launa_mqtt::command_parser::parse_command_ok(
             "launa/spa/cmd",
             "launa/spa/cmd/nonexistent",
             b"true",
@@ -942,5 +942,196 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
         assert_eq!(parsed["device"]["name"], "My Hot Tub");
         assert_eq!(parsed["device"]["model"], "BP6013G1");
+    }
+
+    // ========================================================================
+    // Phase 2: Desktop end-to-end tests (no HW needed)
+    // ========================================================================
+
+    /// Full pipeline integration test: SpaSimulator generates status frame ->
+    /// FrameDecoder parses -> StatusUpdate extracted -> status_to_json() produces
+    /// MQTT payload -> assert JSON fields match simulator state.
+    #[test]
+    fn test_full_pipeline_status_frame_to_mqtt_json() {
+        let mut sim = SpaSimulator::new();
+        sim.state.current_temp = 100;
+        sim.state.set_temp = 104;
+        sim.state.pump1 = 1; // Low
+        sim.state.pump2 = 0;
+        sim.state.pump3 = 0;
+        sim.state.circ_pump = true;
+        sim.state.blower = false;
+        sim.state.light1 = true;
+        sim.state.mister = false;
+        sim.state.is_heating = true;
+        sim.state.hold = false;
+
+        let status_bytes = sim.generate_status_frame();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&status_bytes);
+        assert!(!frames.is_empty(), "should produce at least one frame");
+
+        let msg = dispatch_frame(&frames[0]);
+        match msg {
+            IncomingMessage::StatusUpdate(status) => {
+                let json_str = launa_mqtt::state::status_to_json(&status);
+                let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+                // Verify JSON fields match simulator state
+                assert_eq!(parsed["current_temp"], 100.0);
+                assert_eq!(parsed["set_temp"], 104.0);
+                assert_eq!(parsed["is_heating"], "true");
+                assert_eq!(parsed["pump1_on"], true);
+                assert_eq!(parsed["pump2_on"], false);
+                assert_eq!(parsed["pump3_on"], false);
+                assert_eq!(parsed["circ_pump"], true);
+                assert_eq!(parsed["blower"], false);
+                assert_eq!(parsed["light1"], true);
+                assert_eq!(parsed["mister"], false);
+                assert_eq!(parsed["hold_mode"], false);
+            }
+            other => panic!("Expected StatusUpdate, got {:?}", other),
+        }
+    }
+
+    /// Command round-trip: MQTT command string -> parse_command() -> Command ->
+    /// encode() -> frame bytes -> SpaSimulator process_incoming -> verify state change.
+    #[test]
+    fn test_command_round_trip_pump_toggle() {
+        let mut sim = SpaSimulator::new();
+        assert_eq!(sim.state.pump1, 0);
+
+        // Parse MQTT command
+        let cmd = launa_mqtt::command_parser::parse_command_ok(
+            "launa/spa/command",
+            "launa/spa/command/pump1",
+            b"true",
+        ).expect("should parse");
+
+        // Encode to frame
+        let (mt, payload) = cmd.encode();
+        let encoded = FrameEncoder::encode(mt, &payload);
+
+        // Feed to simulator
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&encoded);
+        sim.process_incoming(&frames[0]);
+
+        // Verify state change
+        assert_eq!(sim.state.pump1, 1, "pump1 should be on after toggle");
+
+        // Generate new status and verify JSON reflects change
+        let status_bytes = sim.generate_status_frame();
+        let status_frames = decoder.feed_slice(&status_bytes);
+        let msg = dispatch_frame(&status_frames[0]);
+        if let IncomingMessage::StatusUpdate(s) = msg {
+            let json_str = launa_mqtt::state::status_to_json(&s);
+            let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+            assert_eq!(parsed["pump1_on"], true);
+        } else {
+            panic!("Expected StatusUpdate");
+        }
+    }
+
+    /// Command round-trip for set_temperature.
+    #[test]
+    fn test_command_round_trip_set_temperature() {
+        let mut sim = SpaSimulator::new();
+
+        let cmd = launa_mqtt::command_parser::parse_command_ok(
+            "launa/spa/command",
+            "launa/spa/command/set_temperature",
+            b"100",
+        ).expect("should parse");
+        assert_eq!(cmd, Command::SetTemperature(100));
+
+        let (mt, payload) = cmd.encode();
+        let encoded = FrameEncoder::encode(mt, &payload);
+
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&encoded);
+        sim.process_incoming(&frames[0]);
+
+        assert_eq!(sim.state.set_temp, 100);
+    }
+
+    /// HA discovery validation: generate all 14 discovery payloads,
+    /// validate they are valid JSON with correct topic patterns,
+    /// correct unique_id, command_topic, state_topic patterns.
+    #[test]
+    fn test_ha_discovery_full_validation() {
+        let builder = launa_mqtt::discovery::DiscoveryBuilder::new("test_spa");
+        let configs = builder.build();
+
+        assert_eq!(configs.len(), 14, "should produce exactly 14 discovery configs");
+
+        let mut topics_seen = std::collections::HashSet::new();
+
+        for (topic, json_str) in &configs {
+            // Topic must follow HA pattern: homeassistant/<component>/<device_id>/<object_id>/config
+            assert!(topic.starts_with("homeassistant/"), "topic should start with homeassistant/: {}", topic);
+            assert!(topic.ends_with("/config"), "topic should end with /config: {}", topic);
+            assert!(topic.contains("/test_spa/"), "topic should contain device_id: {}", topic);
+
+            // No duplicate topics
+            assert!(topics_seen.insert(topic.clone()), "duplicate topic: {}", topic);
+
+            // Must be valid JSON
+            let v: serde_json::Value = serde_json::from_str(json_str)
+                .unwrap_or_else(|e| panic!("Invalid JSON for topic {}: {}", topic, e));
+
+            // Must have required HA fields
+            assert!(v.get("name").is_some(), "missing name in {}", topic);
+            assert!(v.get("unique_id").is_some(), "missing unique_id in {}", topic);
+            assert!(v.get("state_topic").is_some(), "missing state_topic in {}", topic);
+            assert!(v.get("availability_topic").is_some(), "missing availability_topic in {}", topic);
+
+            // unique_id must contain device_id
+            let uid = v["unique_id"].as_str().unwrap();
+            assert!(uid.starts_with("test_spa_"), "unique_id should start with device_id: {}", uid);
+
+            // state_topic must be the device state topic
+            let st = v["state_topic"].as_str().unwrap();
+            assert_eq!(st, "launa/test_spa/state", "state_topic should match device state topic");
+
+            // availability_topic must match
+            let at = v["availability_topic"].as_str().unwrap();
+            assert_eq!(at, "launa/test_spa/availability");
+
+            // If there's a command_topic, it must be under the device command base
+            if let Some(ct) = v.get("command_topic").and_then(|t| t.as_str()) {
+                assert!(
+                    ct.starts_with("launa/test_spa/command/"),
+                    "command_topic should be under device command base: {}",
+                    ct
+                );
+            }
+        }
+    }
+
+    /// Registration flow test: simulate full client ID registration using
+    /// RegistrationStateMachine, verifying all state transitions.
+    #[test]
+    fn test_registration_flow_with_state_machine() {
+        use launa_protocol::registration::{RegistrationStateMachine, RegistrationAction, RegistrationState};
+
+        let mut sm = RegistrationStateMachine::new();
+        assert!(!sm.is_registered());
+        assert!(matches!(sm.state(), RegistrationState::WaitingForQuery));
+
+        // Step 1: Simulate receiving a client ID query from the spa (FE BF 00)
+        let action = sm.process([0xFE, 0xBF], &[0x00]);
+        assert_eq!(action, RegistrationAction::SendIdRequest, "should respond to query with ID request");
+        assert!(matches!(sm.state(), RegistrationState::WaitingForAssignment));
+
+        // Step 2: Simulate receiving client ID assignment (FE BF 02 <id>)
+        let action = sm.process([0xFE, 0xBF], &[0x02, 0x03]);
+        assert_eq!(action, RegistrationAction::SendIdAck { client_id: 0x03 }, "should send ack after assignment");
+        assert!(sm.is_registered(), "should be registered after assignment");
+
+        // Step 3: Verify we can now encode commands with the assigned client ID
+        let cmd = Command::NothingToSend { client_id: 0x03 };
+        let (mt, _) = cmd.encode();
+        assert_eq!(mt, [0x03, 0xBF]);
     }
 }

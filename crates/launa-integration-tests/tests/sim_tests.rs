@@ -577,7 +577,7 @@ fn test_mqtt_command_to_spa_via_controller() {
 
     complete_registration(&mut spa, &mut transport, &mut controller);
 
-    let cmd = command_parser::parse_command(
+    let cmd = command_parser::parse_command_ok(
         "launa/test_spa/command",
         "launa/test_spa/command/pump1",
         b"true",
@@ -602,7 +602,7 @@ fn test_mqtt_set_temperature_pipeline() {
 
     complete_registration(&mut spa, &mut transport, &mut controller);
 
-    let cmd = command_parser::parse_command(
+    let cmd = command_parser::parse_command_ok(
         "launa/test_spa/command",
         "launa/test_spa/command/set_temperature",
         b"102",

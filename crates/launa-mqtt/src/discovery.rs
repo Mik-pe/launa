@@ -5,6 +5,14 @@ use std::vec::Vec;
 use serde_json::json;
 use crate::topics::TopicBuilder;
 
+/// A discovery config payload with its topic and retain flag.
+#[derive(Debug, Clone)]
+pub struct DiscoveryMessage {
+    pub topic: String,
+    pub payload: String,
+    pub retain: bool,
+}
+
 pub struct DiscoveryBuilder {
     device_id: String,
     device_name: String,
@@ -35,8 +43,24 @@ impl DiscoveryBuilder {
     }
 
     /// Generate all discovery config payloads for the spa device.
-    /// Returns a vec of (topic, json_payload) pairs.
+    /// Returns a vec of (topic, json_payload) pairs with retain=false (backward compat).
     pub fn build(&self) -> Vec<(String, String)> {
+        self.build_messages().into_iter()
+            .map(|m| (m.topic, m.payload))
+            .collect()
+    }
+
+    /// Generate all discovery config payloads with retain=true.
+    /// HA auto-discovery messages should be published with retain so they
+    /// survive broker restarts.
+    pub fn build_with_retain(&self) -> Vec<DiscoveryMessage> {
+        self.build_messages().into_iter()
+            .map(|mut m| { m.retain = true; m })
+            .collect()
+    }
+
+    /// Internal: generate all discovery messages.
+    fn build_messages(&self) -> Vec<DiscoveryMessage> {
         let topics = TopicBuilder::new(&self.device_id);
         let mut configs = Vec::new();
 
@@ -65,9 +89,9 @@ impl DiscoveryBuilder {
         ));
 
         // Set temperature number
-        configs.push((
-            topics.discovery_topic("number", "set_temperature"),
-            json!({
+        configs.push(DiscoveryMessage {
+            topic: topics.discovery_topic("number", "set_temperature"),
+            payload: json!({
                 "device": device_info,
                 "origin": origin,
                 "name": "Set Temperature",
@@ -82,7 +106,8 @@ impl DiscoveryBuilder {
                 "value_template": "{{ value_json.set_temp }}",
                 "availability_topic": avail_topic,
             }).to_string(),
-        ));
+            retain: false,
+        });
 
         // Heating state binary sensor
         configs.push(Self::make_binary_sensor(
@@ -102,9 +127,9 @@ impl DiscoveryBuilder {
         }
 
         // Light
-        configs.push((
-            topics.discovery_topic("light", "light1"),
-            json!({
+        configs.push(DiscoveryMessage {
+            topic: topics.discovery_topic("light", "light1"),
+            payload: json!({
                 "device": device_info,
                 "origin": origin,
                 "name": "Spa Light",
@@ -116,12 +141,13 @@ impl DiscoveryBuilder {
                 "payload_off": "false",
                 "availability_topic": avail_topic,
             }).to_string(),
-        ));
+            retain: false,
+        });
 
         // Blower fan
-        configs.push((
-            topics.discovery_topic("fan", "blower"),
-            json!({
+        configs.push(DiscoveryMessage {
+            topic: topics.discovery_topic("fan", "blower"),
+            payload: json!({
                 "device": device_info,
                 "origin": origin,
                 "name": "Blower",
@@ -132,7 +158,8 @@ impl DiscoveryBuilder {
                 "payload_off": "false",
                 "availability_topic": avail_topic,
             }).to_string(),
-        ));
+            retain: false,
+        });
 
         // Heat Mode select
         configs.push(Self::make_select(
@@ -177,9 +204,9 @@ impl DiscoveryBuilder {
         ));
 
         // Fault sensor
-        configs.push((
-            topics.discovery_topic("sensor", "fault"),
-            json!({
+        configs.push(DiscoveryMessage {
+            topic: topics.discovery_topic("sensor", "fault"),
+            payload: json!({
                 "device": device_info,
                 "origin": origin,
                 "name": "Last Fault",
@@ -188,7 +215,8 @@ impl DiscoveryBuilder {
                 "value_template": "{{ value_json.last_fault }}",
                 "availability_topic": avail_topic,
             }).to_string(),
-        ));
+            retain: false,
+        });
 
         configs
     }
@@ -205,10 +233,10 @@ impl DiscoveryBuilder {
         device_class: &str,
         unit: &str,
         value_template: &str,
-    ) -> (String, String) {
-        (
-            topics.discovery_topic("sensor", object_id),
-            json!({
+    ) -> DiscoveryMessage {
+        DiscoveryMessage {
+            topic: topics.discovery_topic("sensor", object_id),
+            payload: json!({
                 "device": device,
                 "origin": origin,
                 "name": name,
@@ -219,7 +247,8 @@ impl DiscoveryBuilder {
                 "value_template": value_template,
                 "availability_topic": avail_topic,
             }).to_string(),
-        )
+            retain: false,
+        }
     }
 
     fn make_binary_sensor(
@@ -233,10 +262,10 @@ impl DiscoveryBuilder {
         name: &str,
         device_class: &str,
         value_template: &str,
-    ) -> (String, String) {
-        (
-            topics.discovery_topic("binary_sensor", object_id),
-            json!({
+    ) -> DiscoveryMessage {
+        DiscoveryMessage {
+            topic: topics.discovery_topic("binary_sensor", object_id),
+            payload: json!({
                 "device": device,
                 "origin": origin,
                 "name": name,
@@ -248,7 +277,8 @@ impl DiscoveryBuilder {
                 "payload_off": "false",
                 "availability_topic": avail_topic,
             }).to_string(),
-        )
+            retain: false,
+        }
     }
 
     fn make_switch(
@@ -262,10 +292,10 @@ impl DiscoveryBuilder {
         name: &str,
         value_template: &str,
         command_topic: &str,
-    ) -> (String, String) {
-        (
-            topics.discovery_topic("switch", object_id),
-            json!({
+    ) -> DiscoveryMessage {
+        DiscoveryMessage {
+            topic: topics.discovery_topic("switch", object_id),
+            payload: json!({
                 "device": device,
                 "origin": origin,
                 "name": name,
@@ -277,7 +307,8 @@ impl DiscoveryBuilder {
                 "payload_off": "false",
                 "availability_topic": avail_topic,
             }).to_string(),
-        )
+            retain: false,
+        }
     }
 
     fn make_select(
@@ -292,10 +323,10 @@ impl DiscoveryBuilder {
         options: serde_json::Value,
         value_template: &str,
         command_topic: &str,
-    ) -> (String, String) {
-        (
-            topics.discovery_topic("select", object_id),
-            json!({
+    ) -> DiscoveryMessage {
+        DiscoveryMessage {
+            topic: topics.discovery_topic("select", object_id),
+            payload: json!({
                 "device": device,
                 "origin": origin,
                 "name": name,
@@ -306,7 +337,8 @@ impl DiscoveryBuilder {
                 "options": options,
                 "availability_topic": avail_topic,
             }).to_string(),
-        )
+            retain: false,
+        }
     }
 }
 
@@ -324,6 +356,70 @@ mod tests {
         for (topic, json_str) in &configs {
             let _: serde_json::Value = serde_json::from_str(json_str)
                 .unwrap_or_else(|e| panic!("Invalid JSON for topic {}: {}", topic, e));
+        }
+    }
+
+    #[test]
+    fn test_build_with_retain() {
+        let builder = DiscoveryBuilder::new("test_spa_001");
+        let messages = builder.build_with_retain();
+
+        assert_eq!(messages.len(), 14);
+        for msg in &messages {
+            assert!(msg.retain, "discovery messages should have retain=true");
+            let _: serde_json::Value = serde_json::from_str(&msg.payload)
+                .unwrap_or_else(|e| panic!("Invalid JSON for topic {}: {}", msg.topic, e));
+        }
+    }
+
+    #[test]
+    fn test_discovery_topics_match_pattern() {
+        let builder = DiscoveryBuilder::new("test_spa_001");
+        let configs = builder.build();
+
+        for (topic, _) in &configs {
+            // All discovery topics should follow homeassistant/<component>/<device_id>/<object_id>/config
+            let parts: Vec<&str> = topic.split('/').collect();
+            assert_eq!(parts[0], "homeassistant");
+            assert_eq!(parts[2], "test_spa_001");
+            assert_eq!(parts.last(), Some(&"config"));
+        }
+    }
+
+    #[test]
+    fn test_discovery_unique_ids() {
+        let builder = DiscoveryBuilder::new("test_spa_001");
+        let configs = builder.build();
+
+        let mut unique_ids = Vec::new();
+        for (_, json_str) in &configs {
+            let v: serde_json::Value = serde_json::from_str(json_str).unwrap();
+            let uid = v["unique_id"].as_str().unwrap().to_string();
+            assert!(uid.starts_with("test_spa_001_"), "unique_id {} should start with device_id", uid);
+            unique_ids.push(uid);
+        }
+
+        // All unique IDs should be distinct
+        let mut sorted = unique_ids.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), unique_ids.len(), "duplicate unique_ids found");
+    }
+
+    #[test]
+    fn test_discovery_command_topics() {
+        let builder = DiscoveryBuilder::new("test_spa_001");
+        let configs = builder.build();
+
+        for (_, json_str) in &configs {
+            let v: serde_json::Value = serde_json::from_str(json_str).unwrap();
+            if let Some(cmd_topic) = v.get("command_topic").and_then(|t| t.as_str()) {
+                assert!(
+                    cmd_topic.starts_with("launa/test_spa_001/command/"),
+                    "command_topic {} should be under device command base",
+                    cmd_topic
+                );
+            }
         }
     }
 }
