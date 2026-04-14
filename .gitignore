@@ -1,7 +1,9 @@
 /target
+app/target/
 Cargo.lock
 .vscode/
 .idea/
+.factory/settings.json
 *.swp
 *.swo
 *~
