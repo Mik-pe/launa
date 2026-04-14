@@ -293,7 +293,7 @@ mod tests {
 
                 assert_eq!(parsed["current_temp"], 100.0);
                 assert_eq!(parsed["set_temp"], 104.0);
-                assert_eq!(parsed["is_heating"], "true");
+                assert_eq!(parsed["is_heating"], true);
                 assert_eq!(parsed["heating_mode"], "ready");
                 assert_eq!(parsed["temp_range"], "high");
                 assert_eq!(parsed["temp_scale"], "fahrenheit");
@@ -980,7 +980,7 @@ mod tests {
                 // Verify JSON fields match simulator state
                 assert_eq!(parsed["current_temp"], 100.0);
                 assert_eq!(parsed["set_temp"], 104.0);
-                assert_eq!(parsed["is_heating"], "true");
+                assert_eq!(parsed["is_heating"], true);
                 assert_eq!(parsed["pump1_on"], true);
                 assert_eq!(parsed["pump2_on"], false);
                 assert_eq!(parsed["pump3_on"], false);

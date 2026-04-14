@@ -1,5 +1,10 @@
 //! Parse incoming MQTT command messages into `Command` variants.
 
+extern crate alloc;
+
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::format;
 use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::status::{TemperatureScale, TempRange};
 

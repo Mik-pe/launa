@@ -3,6 +3,7 @@
 extern crate alloc;
 
 use alloc::string::String;
+use alloc::string::ToString;
 
 const BASE_TOPIC: &str = "launa";
 

@@ -1,4 +1,7 @@
 //! Timed pump toggle (P1 mode) using embassy time.
+//!
+//! Also includes hold mode safety timeout: auto-clears hold mode after
+//! a configurable period to prevent forgetting the spa in hold mode.
 
 extern crate alloc;
 
@@ -9,6 +12,7 @@ use launa_protocol::status::PumpState;
 use log::info;
 
 const DEFAULT_PUMP_DURATION_SECS: u64 = 20 * 60;
+const DEFAULT_HOLD_MODE_TIMEOUT_SECS: u64 = 60 * 60; // 60 minutes
 
 pub struct PumpTimer {
     pump: ToggleItem,
@@ -108,5 +112,61 @@ impl PumpTimerManager {
         if let Some(c) = self.pump2.tick(p2) { cmds.push(c); }
         if let Some(c) = self.pump3.tick(p3) { cmds.push(c); }
         cmds
+    }
+}
+
+/// Hold mode safety timer. If the spa enters hold mode, auto-clears it
+/// after a configurable timeout (default 60 minutes) to prevent cold/unsafe water.
+pub struct HoldModeTimer {
+    entered_at: Option<Instant>,
+    timeout: Duration,
+}
+
+impl HoldModeTimer {
+    pub fn new() -> Self {
+        HoldModeTimer {
+            entered_at: None,
+            timeout: Duration::from_secs(DEFAULT_HOLD_MODE_TIMEOUT_SECS),
+        }
+    }
+
+    pub fn with_timeout(timeout: Duration) -> Self {
+        HoldModeTimer {
+            entered_at: None,
+            timeout,
+        }
+    }
+
+    /// Tick the timer with the current hold mode state.
+    /// Returns a ToggleItem::HoldMode command if the timeout expired.
+    pub fn tick(&mut self, is_hold: bool) -> Option<Command> {
+        if is_hold {
+            if self.entered_at.is_none() {
+                info!("Hold mode detected, starting {}min safety timer", self.timeout.as_secs() / 60);
+                self.entered_at = Some(Instant::now());
+            } else if self.entered_at.unwrap().elapsed() >= self.timeout {
+                info!("Hold mode safety timeout expired, auto-clearing");
+                self.entered_at = None;
+                return Some(Command::ToggleItem(ToggleItem::HoldMode));
+            }
+        } else {
+            if self.entered_at.is_some() {
+                info!("Hold mode cleared externally");
+            }
+            self.entered_at = None;
+        }
+        None
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.entered_at.is_some()
+    }
+
+    pub fn remaining_secs(&self) -> u64 {
+        if let Some(entered_at) = self.entered_at {
+            self.timeout.as_secs().saturating_sub(entered_at.elapsed().as_secs())
+        } else {
+            0
+        }
     }
 }

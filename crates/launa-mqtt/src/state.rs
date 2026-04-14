@@ -1,6 +1,9 @@
 //! Convert a `StatusUpdate` into a JSON string for the Home Assistant state topic.
 
-use serde_json::json;
+extern crate alloc;
+
+use alloc::string::String;
+use alloc::format;
 use launa_protocol::status::{StatusUpdate, HeatingMode, TemperatureScale, TempRange, PumpState};
 
 /// Serialize a `StatusUpdate` into a JSON string suitable for publishing
@@ -8,16 +11,18 @@ use launa_protocol::status::{StatusUpdate, HeatingMode, TemperatureScale, TempRa
 ///
 /// The JSON field names match the `value_template` patterns used in
 /// the discovery configuration so that HA can extract each value.
+///
+/// This implementation builds JSON manually (no serde) so it works in no_std.
 pub fn status_to_json(status: &StatusUpdate) -> String {
     let current_temp = match status.current_temp {
-        Some(t) => json!(t),
-        None => json!(null),
+        Some(t) => format!("{}", t),
+        None => String::from("null"),
     };
 
     let is_heating = if status.is_heating { "true" } else { "false" };
-    let pump1_on = matches!(status.pump1, PumpState::Low | PumpState::High);
-    let pump2_on = matches!(status.pump2, PumpState::Low | PumpState::High);
-    let pump3_on = matches!(status.pump3, PumpState::Low | PumpState::High);
+    let pump1_on = if matches!(status.pump1, PumpState::Low | PumpState::High) { "true" } else { "false" };
+    let pump2_on = if matches!(status.pump2, PumpState::Low | PumpState::High) { "true" } else { "false" };
+    let pump3_on = if matches!(status.pump3, PumpState::Low | PumpState::High) { "true" } else { "false" };
 
     let heating_mode = match status.heating_mode {
         HeatingMode::Ready => "ready",
@@ -35,26 +40,25 @@ pub fn status_to_json(status: &StatusUpdate) -> String {
         TemperatureScale::Celsius => "celsius",
     };
 
-    json!({
-        "current_temp": current_temp,
-        "set_temp": status.set_temp,
-        "is_heating": is_heating,
-        "pump1_on": pump1_on,
-        "pump2_on": pump2_on,
-        "pump3_on": pump3_on,
-        "light1": status.light1,
-        "blower": status.blower,
-        "circ_pump": status.circ_pump,
-        "mister": status.mister,
-        "hold_mode": status.is_hold,
-        "heating_mode": heating_mode,
-        "temp_range": temp_range,
-        "temp_scale": temp_scale,
-        "hour": status.hour,
-        "minute": status.minute,
-        "last_fault": null,
-    })
-    .to_string()
+    format!(
+        "{{\"current_temp\":{},\"set_temp\":{},\"is_heating\":{},\"pump1_on\":{},\"pump2_on\":{},\"pump3_on\":{},\"light1\":{},\"blower\":{},\"circ_pump\":{},\"mister\":{},\"hold_mode\":{},\"heating_mode\":\"{}\",\"temp_range\":\"{}\",\"temp_scale\":\"{}\",\"hour\":{},\"minute\":{},\"last_fault\":null}}",
+        current_temp,
+        status.set_temp,
+        is_heating,
+        pump1_on,
+        pump2_on,
+        pump3_on,
+        status.light1,
+        status.blower,
+        status.circ_pump,
+        status.mister,
+        status.is_hold,
+        heating_mode,
+        temp_range,
+        temp_scale,
+        status.hour,
+        status.minute
+    )
 }
 
 #[cfg(test)]
@@ -63,6 +67,7 @@ mod tests {
     use launa_protocol::status::{
         StatusUpdate, HeatingMode, TemperatureScale, TempRange, PumpState, TimeFormat,
     };
+    use serde_json;
 
     fn sample_status() -> StatusUpdate {
         StatusUpdate {
@@ -100,7 +105,7 @@ mod tests {
         // Verify all fields
         assert_eq!(parsed["current_temp"], 100.0);
         assert_eq!(parsed["set_temp"], 104.0);
-        assert_eq!(parsed["is_heating"], "true");
+        assert_eq!(parsed["is_heating"], true);
         assert_eq!(parsed["pump1_on"], true);
         assert_eq!(parsed["pump2_on"], false);
         assert_eq!(parsed["pump3_on"], false);
@@ -171,6 +176,6 @@ mod tests {
         status.is_heating = false;
         let json_str = status_to_json(&status);
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-        assert_eq!(parsed["is_heating"], "false");
+        assert_eq!(parsed["is_heating"], false);
     }
 }

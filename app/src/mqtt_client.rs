@@ -10,10 +10,10 @@ use embassy_net::Stack;
 use embassy_time::{Duration, Timer};
 use embedded_io_async::{self, Read, Write, ErrorType};
 use launa_mqtt::topics::TopicBuilder;
-use launa_protocol::command::{Command, ToggleItem};
-use launa_protocol::status::{
-    StatusUpdate, HeatingMode, TemperatureScale, TempRange, PumpState,
-};
+use launa_mqtt::command_parser::{self, ParseResult};
+use launa_mqtt::state::status_to_json;
+use launa_protocol::command::Command;
+use launa_protocol::status::StatusUpdate;
 use log::{info, warn, debug, error};
 
 use crate::config::AppConfig;
@@ -70,85 +70,23 @@ pub enum MqttError {
     ReadFailed,
 }
 
-/// Build a status JSON manually (serde_json is behind std feature in launa-mqtt).
-fn status_to_json(status: &StatusUpdate) -> String {
-    let current_temp = match status.current_temp {
-        Some(t) => format!("{}", t),
-        None => String::from("null"),
-    };
-    let is_heating = if status.is_heating { "true" } else { "false" };
-    let pump1_on = matches!(status.pump1, PumpState::Low | PumpState::High);
-    let pump2_on = matches!(status.pump2, PumpState::Low | PumpState::High);
-    let pump3_on = matches!(status.pump3, PumpState::Low | PumpState::High);
-
-    let heating_mode = match status.heating_mode {
-        HeatingMode::Ready => "ready",
-        HeatingMode::Rest => "rest",
-        HeatingMode::ReadyInRest => "ready_in_rest",
-    };
-    let temp_range = match status.temp_range {
-        TempRange::High => "high",
-        TempRange::Low => "low",
-    };
-    let temp_scale = match status.temperature_scale {
-        TemperatureScale::Fahrenheit => "fahrenheit",
-        TemperatureScale::Celsius => "celsius",
-    };
-
-    format!(
-        "{{\"current_temp\":{},\"set_temp\":{},\"is_heating\":{},\"pump1_on\":{},\"pump2_on\":{},\"pump3_on\":{},\"light1\":{},\"blower\":{},\"circ_pump\":{},\"mister\":{},\"hold_mode\":{},\"heating_mode\":\"{}\",\"temp_range\":\"{}\",\"temp_scale\":\"{}\",\"hour\":{},\"minute\":{},\"last_fault\":null}}",
-        current_temp,
-        status.set_temp,
-        is_heating,
-        pump1_on,
-        pump2_on,
-        pump3_on,
-        status.light1,
-        status.blower,
-        status.circ_pump,
-        status.mister,
-        status.is_hold,
-        heating_mode,
-        temp_range,
-        temp_scale,
-        status.hour,
-        status.minute
-    )
-}
-
-/// Parse incoming MQTT command (reimplemented since launa-mqtt command_parser is std-only).
+/// Parse incoming MQTT command using launa-mqtt's command parser.
+/// Returns a Command only for valid commands; logs and drops invalid ones.
 pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8]) -> Option<Command> {
-    if !topic.starts_with(command_topic_base) {
-        return None;
-    }
-    let suffix = &topic[command_topic_base.len()..];
-    if !suffix.starts_with('/') {
-        return None;
-    }
-    let subtopic = &suffix[1..];
-    let payload_str = core::str::from_utf8(payload).ok()?;
-
-    match subtopic {
-        "pump1" => parse_toggle(payload_str, ToggleItem::Pump1),
-        "pump2" => parse_toggle(payload_str, ToggleItem::Pump2),
-        "pump3" => parse_toggle(payload_str, ToggleItem::Pump3),
-        "light1" => parse_toggle(payload_str, ToggleItem::Light1),
-        "blower" => parse_toggle(payload_str, ToggleItem::Blower),
-        "heat_mode" => parse_toggle(payload_str, ToggleItem::HeatingMode),
-        "temp_range" => parse_toggle(payload_str, ToggleItem::TemperatureRange),
-        "hold_mode" => parse_toggle(payload_str, ToggleItem::HoldMode),
-        "set_temperature" => {
-            let temp: u8 = payload_str.parse().ok()?;
-            Some(Command::SetTemperature(temp))
+    match command_parser::parse_command(command_topic_base, topic, payload) {
+        ParseResult::Valid(cmd) => Some(cmd),
+        ParseResult::TemperatureOutOfRange { raw_value, .. } => {
+            warn!("MQTT command rejected: temperature {} out of range", raw_value);
+            None
         }
-        _ => None,
-    }
-}
-
-fn parse_toggle(payload: &str, item: ToggleItem) -> Option<Command> {
-    match payload {
-        "true" | "false" => Some(Command::ToggleItem(item)),
-        _ => None,
+        ParseResult::UnknownSubtopic(sub) => {
+            warn!("MQTT command rejected: unknown subtopic '{}'", sub);
+            None
+        }
+        ParseResult::InvalidPayload(msg) => {
+            warn!("MQTT command rejected: invalid payload: {}", msg);
+            None
+        }
     }
 }
 
@@ -385,20 +323,155 @@ impl MqttClient {
     }
 
     pub async fn publish_discovery(&mut self) -> Result<(), MqttError> {
-        // TODO: Generate HA auto-discovery configs and publish them.
-        // The full DiscoveryBuilder is behind the "std" feature in launa-mqtt.
-        // For now we skip discovery -- HA entities can be configured manually,
-        // or we can port discovery generation to no_std later.
-        info!("HA discovery publish skipped (not yet ported to no_std)");
+        let topics = TopicBuilder::new(&self.device_id);
+        let device_id = &self.device_id;
+        let state_topic = topics.state_topic();
+        let avail_topic = topics.availability_topic();
+        let cmd_topic = topics.command_topic();
+
+        // Build common device info JSON fragment
+        let device_info = format!(
+            r#"{{"identifiers":["{}"],"name":"Launa Spa","manufacturer":"Launa","model":"BP6013G1"}}"#,
+            device_id
+        );
+
+        let configs: Vec<(&str, &str, String)> = alloc::vec![
+            // Temperature sensor
+            ("sensor", "temperature", format!(
+                r#"{{"device":{},"name":"Water Temperature","unique_id":"{}_temperature","device_class":"temperature","unit_of_measurement":"°F","state_topic":"{}","value_template":"{{{{value_json.current_temp}}}}","availability_topic":"{}"}}"#,
+                device_info, device_id, state_topic, avail_topic
+            )),
+            // Set temperature number
+            ("number", "set_temperature", format!(
+                r#"{{"device":{},"name":"Set Temperature","unique_id":"{}_set_temp","device_class":"temperature","unit_of_measurement":"°F","min":50,"max":104,"step":1,"state_topic":"{}","command_topic":"{}/set_temperature","value_template":"{{{{value_json.set_temp}}}}","availability_topic":"{}"}}"#,
+                device_info, device_id, state_topic, cmd_topic, avail_topic
+            )),
+            // Heating binary sensor
+            ("binary_sensor", "heating", format!(
+                r#"{{"device":{},"name":"Heating","unique_id":"{}_heating","device_class":"heat","state_topic":"{}","value_template":"{{{{value_json.is_heating}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                device_info, device_id, state_topic, avail_topic
+            )),
+            // Pump 1 switch
+            ("switch", "pump1", format!(
+                r#"{{"device":{},"name":"Pump 1","unique_id":"{}_pump1","state_topic":"{}","command_topic":"{}/pump1","value_template":"{{{{value_json.pump1_on}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                device_info, device_id, state_topic, cmd_topic, avail_topic
+            )),
+            // Pump 2 switch
+            ("switch", "pump2", format!(
+                r#"{{"device":{},"name":"Pump 2","unique_id":"{}_pump2","state_topic":"{}","command_topic":"{}/pump2","value_template":"{{{{value_json.pump2_on}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                device_info, device_id, state_topic, cmd_topic, avail_topic
+            )),
+            // Pump 3 switch
+            ("switch", "pump3", format!(
+                r#"{{"device":{},"name":"Pump 3","unique_id":"{}_pump3","state_topic":"{}","command_topic":"{}/pump3","value_template":"{{{{value_json.pump3_on}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                device_info, device_id, state_topic, cmd_topic, avail_topic
+            )),
+            // Light
+            ("light", "light1", format!(
+                r#"{{"device":{},"name":"Spa Light","unique_id":"{}_light1","state_topic":"{}","command_topic":"{}/light1","value_template":"{{{{value_json.light1}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                device_info, device_id, state_topic, cmd_topic, avail_topic
+            )),
+            // Blower fan
+            ("fan", "blower", format!(
+                r#"{{"device":{},"name":"Blower","unique_id":"{}_blower","state_topic":"{}","command_topic":"{}/blower","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                device_info, device_id, state_topic, cmd_topic, avail_topic
+            )),
+            // Heat Mode select
+            ("select", "heat_mode", format!(
+                r#"{{"device":{},"name":"Heat Mode","unique_id":"{}_heat_mode","state_topic":"{}","command_topic":"{}/heat_mode","value_template":"{{{{value_json.heating_mode}}}}","options":["ready","rest","ready_in_rest"],"availability_topic":"{}"}}"#,
+                device_info, device_id, state_topic, cmd_topic, avail_topic
+            )),
+            // Circulation Pump switch
+            ("switch", "circ_pump", format!(
+                r#"{{"device":{},"name":"Circulation Pump","unique_id":"{}_circ_pump","state_topic":"{}","command_topic":"{}/circ_pump","value_template":"{{{{value_json.circ_pump}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                device_info, device_id, state_topic, cmd_topic, avail_topic
+            )),
+            // Temperature Range select
+            ("select", "temp_range", format!(
+                r#"{{"device":{},"name":"Temperature Range","unique_id":"{}_temp_range","state_topic":"{}","command_topic":"{}/temp_range","value_template":"{{{{value_json.temp_range}}}}","options":["high","low"],"availability_topic":"{}"}}"#,
+                device_info, device_id, state_topic, cmd_topic, avail_topic
+            )),
+            // Hold Mode switch
+            ("switch", "hold_mode", format!(
+                r#"{{"device":{},"name":"Hold Mode","unique_id":"{}_hold_mode","state_topic":"{}","command_topic":"{}/hold_mode","value_template":"{{{{value_json.hold_mode}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                device_info, device_id, state_topic, cmd_topic, avail_topic
+            )),
+            // Mister switch
+            ("switch", "mister", format!(
+                r#"{{"device":{},"name":"Mister","unique_id":"{}_mister","state_topic":"{}","command_topic":"{}/mister","value_template":"{{{{value_json.mister}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                device_info, device_id, state_topic, cmd_topic, avail_topic
+            )),
+            // Fault sensor
+            ("sensor", "fault", format!(
+                r#"{{"device":{},"name":"Last Fault","unique_id":"{}_fault","state_topic":"{}","value_template":"{{{{value_json.last_fault}}}}","availability_topic":"{}"}}"#,
+                device_info, device_id, state_topic, avail_topic
+            )),
+        ];
+
+        for (component, object_id, payload) in &configs {
+            let topic = format!(
+                "homeassistant/{}/{}/{}/config",
+                component, device_id, object_id
+            );
+            if let Err(e) = self.publish(topic, payload.as_bytes(), 1, true).await {
+                warn!("Failed to publish discovery for {}: {:?}", object_id, e);
+            }
+        }
+
+        info!("Published {} HA discovery configs", configs.len());
         Ok(())
     }
 
     pub async fn subscribe_commands(&mut self) -> Result<(), MqttError> {
         let topics = TopicBuilder::new(&self.device_id);
+
+        // Subscribe to command wildcard
         let cmd_topic = format!("{}/#", topics.command_topic());
         self.subscribe(&cmd_topic).await?;
         info!("Subscribed to command topic: {}", cmd_topic);
+
+        // Subscribe to OTA topic
+        let ota_topic = topics.ota_topic();
+        self.subscribe(&ota_topic).await?;
+        info!("Subscribed to OTA topic: {}", ota_topic);
+
+        // Subscribe to HA status for re-publishing discovery on HA restart
+        let ha_status_topic = topics.ha_status_topic();
+        self.subscribe(&ha_status_topic).await?;
+        info!("Subscribed to HA status topic: {}", ha_status_topic);
+
         Ok(())
+    }
+
+    /// Check if a received topic is the OTA topic
+    pub fn is_ota_topic(&self, topic: &str) -> bool {
+        let topics = TopicBuilder::new(&self.device_id);
+        topic == topics.ota_topic()
+    }
+
+    /// Check if a received topic is the HA status topic
+    pub fn is_ha_status_topic(&self, topic: &str) -> bool {
+        topic == "homeassistant/status"
+    }
+
+    /// Extract firmware URL from OTA payload. Payload is expected to be JSON: {"url":"http://..."}
+    pub fn parse_ota_url(payload: &[u8]) -> Option<String> {
+        let s = core::str::from_utf8(payload).ok()?;
+        // Simple JSON parsing: find "url" key
+        if let Some(start) = s.find(r#""url""#) {
+            let after_key = &s[start + 5..];
+            // Skip whitespace and colon
+            let after_key = after_key.trim_start();
+            let after_key = after_key.strip_prefix(':')?;
+            let after_key = after_key.trim_start();
+            // Find the opening quote
+            let after_key = after_key.strip_prefix('"')?;
+            // Find the closing quote
+            if let Some(end) = after_key.find('"') {
+                return Some(String::from(&after_key[..end]));
+            }
+        }
+        None
     }
 }
 

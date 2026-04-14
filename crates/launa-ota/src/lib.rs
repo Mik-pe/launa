@@ -1,7 +1,9 @@
 //! OTA firmware update support.
 //!
 //! Provides a trait for OTA operations and a mock implementation for desktop testing.
-//! The real ESP32 implementation will use `esp-ota` crate in the `app/` crate.
+//! The real ESP32 implementation will use `launa-esp-ota` crate in the `app/` crate.
+
+#![no_std]
 
 extern crate alloc;
 

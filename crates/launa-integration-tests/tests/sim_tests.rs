@@ -192,7 +192,7 @@ fn test_full_spa_lifecycle() {
     let parsed: serde_json::Value = serde_json::from_str(state).unwrap();
     assert_eq!(parsed["current_temp"], 100.0);
     assert_eq!(parsed["set_temp"], 100.0);
-    assert_eq!(parsed["is_heating"], "false");
+    assert_eq!(parsed["is_heating"], false);
 
     // Phase 3: Send a command
     send_command(
@@ -840,7 +840,7 @@ fn test_custom_spa_state() {
     let parsed: serde_json::Value = serde_json::from_str(state).unwrap();
     assert_eq!(parsed["current_temp"], 80.0);
     assert_eq!(parsed["set_temp"], 80.0);
-    assert_eq!(parsed["is_heating"], "false");
+    assert_eq!(parsed["is_heating"], false);
     assert_eq!(parsed["heating_mode"], "rest");
     assert_eq!(parsed["temp_range"], "low");
     assert_eq!(parsed["pump1_on"], true);

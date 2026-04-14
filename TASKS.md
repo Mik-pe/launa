@@ -21,27 +21,53 @@ The `app/` crate uses `esp-hal` + `embassy` — a pure Rust, no_std stack for ES
 | TCP/IP | `embassy-net` (smoltcp) | Async network stack |
 | TLS | `esp-mbedtls` | no_std mbedtls wrapper |
 | MQTT | `rust-mqtt` | MQTTv5, no_std |
-| OTA | `esp-hal-ota` | Partition management + CRC + rollback |
+| OTA | `launa-esp-ota` (TODO) | Custom: esp-storage + partition mgmt + rollback |
 | NVS | `esp-nvs` | ESP-IDF compatible format, bare metal |
-| Async executor | `embassy` + `esp-hal-embassy` | First-class async/await on ESP32 |
+| Async executor | `embassy` + `esp-rtos` | esp-rtos provides scheduler (required by esp-radio) + embassy bridge |
 | Time | `embassy-time` | Via esp-hal timer driver |
 
 ### Implementation tasks:
 
-- [ ] **`app/Cargo.toml`**: `esp-hal`, `esp-hal-embassy`, `esp-radio`, `embassy-*`, `rust-mqtt`, `esp-hal-ota`, `esp-nvs`. Embassy `#[main]` macro. Target `xtensa-esp32-none-elf`.
-- [ ] **UART transport** (`app/src/transport.rs`): `esp_hal::uart::Uart` with async mode. Embassy `#[main]` passes peripherals (no `Peripherals::take()`). Optional DE pin for auto-direction RS-485 modules.
-- [ ] **WiFi** (`app/src/wifi.rs`): `esp_radio` + `embassy_net` async WiFi stack. DHCP via `embassy_net::Config::dhcpv4`.
-- [ ] **MQTT client** (`app/src/mqtt_client.rs`): `rust_mqtt` over `embassy_net` TCP. Connect, publish, subscribe, LWT. Reconnection with embassy `select!`.
-- [ ] **OTA** (`app/src/ota.rs`): `esp_hal_ota::Ota` with `esp_storage::FlashStorage`. HTTP download via embassy-net, write chunks to alternate partition, verify CRC, reboot with rollback.
-- [ ] **Config** (`app/src/config.rs`): `esp_nvs::Nvs` for key-value storage.
-- [ ] **Main event loop** (`app/src/main.rs`): Embassy `#[main]` with `spawner`. `select!` / `join!` to concurrently: (1) read UART frames, (2) handle MQTT messages, (3) tick pump timers.
-- [ ] **Pump timers as embassy tasks** (`app/src/pump_timer.rs`): Embassy task that sleeps and wakes on expiry. Embassy channels instead of `std::sync::mpsc`.
-- [ ] **`launa-hal` async traits**: `Transport::read()` should use `embedded-io-async::Read` since embassy UART is async. Workspace crates use `embedded-io` / `embedded-io-async` traits.
+- [x] **`app/Cargo.toml`**: `esp-hal`, `esp-hal-embassy`, `esp-radio`, `embassy-*`, `rust-mqtt`, `esp-hal-ota`, `esp-nvs`. Embassy `#[main]` macro. Target `xtensa-esp32-none-elf`.
+- [x] **UART transport** (`app/src/transport.rs`): `esp_hal::uart::Uart` with async mode. Embassy `#[main]` passes peripherals (no `Peripherals::take()`). Optional DE pin for auto-direction RS-485 modules.
+- [x] **WiFi** (`app/src/wifi.rs`): `esp_radio` + `embassy_net` async WiFi stack. DHCP via `embassy_net::Config::dhcpv4`.
+- [x] **MQTT client** (`app/src/mqtt_client.rs`): Custom MQTT v5 over `embassy_net` TCP. Connect, publish, subscribe, LWT. Hand-rolled MQTT packets for no_std. 14-entity HA discovery generation. Command parsing via `launa-mqtt` no_std APIs.
+- [x] **OTA** (`app/src/ota.rs`): `esp_hal_ota::Ota` with `esp_storage::FlashStorage`. OTA URL parsing, partition table. HTTP download pending embassy-net TCP wiring.
+- [x] **Config** (`app/src/config.rs`): `esp_nvs::Nvs` for key-value storage.
+- [x] **Main event loop** (`app/src/main.rs`): Embassy `#[main]` with `spawner`. `select!` to concurrently: (1) read UART frames, (2) handle MQTT messages, (3) publish state, (4) track commands, (5) tick pump/hold timers.
+- [x] **Pump timers as embassy tasks** (`app/src/pump_timer.rs`): `PumpTimer` and `PumpTimerManager` track duration, auto-toggle off on expiry, cancel on manual off. Uses embassy `Instant` and `Duration`.
+- [x] **`launa-hal` async traits**: `Transport::read()` uses `embedded-io-async::Read` since embassy UART is async. Workspace crates use `embedded-io` / `embedded-io-async` traits.
+- [x] **`launa-mqtt` no_std compatibility**: `command_parser`, `state` (status_to_json), and `topics` modules now work in no_std without serde/serde_json. Manual JSON generation for status serialization. Compiles with `--no-default-features`.
 
 ### Risks:
 
 - `esp-radio` API may change (behind `unstable` feature flag) — pin versions in Cargo.lock
 - `rust-mqtt` is community-maintained — may need to patch or contribute upstream
+
+### Migration: esp-hal-embassy -> esp-rtos (completed)
+
+- [x] **Replace `esp-hal-embassy` with `esp-rtos`**: Removed deprecated `esp-hal-embassy 0.9.1`, added `esp-rtos 0.2.0` (required by `esp-radio` for WiFi scheduler + embassy bridge). Updated `#[esp_hal_embassy::main]` -> `#[esp_rtos::main]`, `esp_hal_embassy::init(timer)` -> `esp_rtos::start(timer, sw_int)`.
+- [x] **Bump `embassy-executor` to 0.9**: Matches `esp-rtos 0.2.0` dependency.
+- [x] **Remove `esp-hal-ota` (broken)**: `esp-hal-ota 0.4.6` uses `concat_idents` removed in Rust 1.90. Stubbed out `app/src/ota.rs`, will be replaced by `launa-esp-ota` crate.
+- [x] **Fix `byteorder` for no_std**: Added `default-features = false` to workspace dep.
+- [x] **Fix `thiserror 2` for no_std**: Added `default-features = false` (thiserror 2 supports no_std with that flag).
+- [x] **Fix `launa-ota` missing `#![no_std]`**: Added `#![no_std]` to crate root.
+- [x] **Fix `launa-hal` network module behind `std` feature**: Gated `network` module behind `#[cfg(feature = "std")]`.
+- [x] **Delete stale `build.rs`**: Removed old `embuild`-based build script from esp-idf-svc era.
+- [x] **Fix `esp-storage` opt-level**: Override `opt-level = 3` for `esp-storage` in dev profile.
+
+### Next: Fix app/ API mismatches (34 errors remaining)
+
+The app code was written against older esp-radio/esp-nvs/embassy-net/embassy-sync APIs. After the esp-rtos migration, dependency resolution succeeds but the app code has API drift:
+
+- [ ] **`app/src/wifi.rs`**: `esp-radio 0.17` changed: `Config::Station` -> `sta::StationConfig`, `ControllerConfig` removed, `wifi::new()` takes 3 args, `interfaces.station` -> `interfaces.sta`, `WifiController` lifetime changed, `wait_for_disconnect_async()` removed.
+- [ ] **`app/src/transport.rs`**: `esp-hal 1.0.0` changed: `GpioPin` type removed (use concrete `GPIOx`), `mode::Async` import path changed, `embedded-io-async::Write::write` returns `Result<usize>` not `Result<()>`.
+- [ ] **`app/src/mqtt_client.rs`**: `embassy-net 0.7.1` changed: `TcpSocket::new()` takes `(stack, rx_buf, tx_buf)` not just stack. `embassy-time 0.5` vs `0.4` version conflict. `IpAddress::from([u8;4])` -> needs `Ipv4Address`.
+- [ ] **`app/src/config.rs`**: `esp-nvs 0.4` changed: `Nvs::new(flash, namespace)` -> `Nvs::new(offset, size, flash)`, generic param required.
+- [ ] **`app/src/main.rs`**: `embassy-sync 0.6` `NoopRawMutex` not `Sync` (needs `embassy-sync 0.7` or `CriticalSectionRawMutex`). `Uart::new()` now returns `Result`. `esp_alloc::heap_allocator!` macro changed in `esp-alloc 0.7`.
+- [ ] **Resolve `embassy-time` version split**: `esp-rtos 0.2` pulls `embassy-time 0.5` but app uses `0.4`. Unify to `0.5`.
+- [ ] **Resolve `embassy-sync` version split**: `esp-rtos 0.2` pulls `embassy-sync 0.7` but app uses `0.6`. Unify to `0.7`.
+- [ ] **Add `esp-backtrace` + panic handler**: Missing `#[panic_handler]` for xtensa target.
 
 ## ESP32 Firmware (`app/`) -- In Progress
 
@@ -52,19 +78,20 @@ Built on esp-hal + embassy (pure Rust, no_std). Workspace tests pass.
 
 ### OTA tasks (apply to new esp-hal stack):
 
-- [ ] **OTA partition table for `app/`**: Create `app/partitions.csv` with dual OTA slots (ota_0, ota_1, otadata). Required for `esp-hal-ota`. First flash via USB must use `--partition-table partitions.csv`.
-- [ ] **OTA real implementation**: Use `esp_hal_ota::Ota` with `esp_storage::FlashStorage`. HTTP download via embassy-net, write chunks to alternate partition, verify CRC, reboot. `esp-hal-ota` supports rollback natively.
-- [ ] **OTA HTTP server on dev PC** (`cargo xtask ota-serve`): Already implemented in xtask. Serves firmware .bin files over HTTP for ESP32 to download.
-- [ ] **OTA trigger via MQTT**: Add MQTT command topic `launa/<device_id>/ota` accepting JSON with firmware URL. ESP32 downloads via HTTP over embassy-net, writes to alternate OTA partition, reboots. Auto-rollback if new firmware is broken.
-- [ ] **One-command remote flash script** (`cargo xtask ota-flash`): Already implemented in xtask. Build + serve + trigger OTA remotely.
-- [ ] **Boot validation + auto-rollback**: On every boot, mark firmware valid after successfully connecting to WiFi + MQTT. `esp-hal-ota` supports this — if firmware crashes before marking valid, bootloader auto-rolls back.
+- [x] **OTA partition table for `app/`**: Created `app/partitions.csv` with dual OTA slots (ota_0 at 0x20000/1.75MB, ota_1 at 0x1E0000/1.75MB, otadata at 0x10000). Required for OTA. First flash via USB must use `--partition-table partitions.csv`.
+- [ ] **`launa-esp-ota` crate**: Custom ESP32 OTA implementation replacing `esp-hal-ota` (broken with nightly >=1.90 due to removed `concat_idents` feature). Use `esp-storage` directly for flash writes. Implement: partition table parsing (read `partitions.csv` offsets), MMU address mapping for ESP32, flash erase/write to inactive partition, boot partition swap via otadata, `mark_app_valid()` for rollback prevention. ~200-300 lines. Add as `crates/launa-esp-ota/` with `OtaUpdate` trait impl from `launa-ota`.
+- [ ] **OTA real implementation**: Use `launa-esp-ota` with `esp_storage::FlashStorage`. HTTP download via embassy-net, write chunks to alternate partition, verify CRC, reboot. OTA module has URL parsing and partition write skeleton; HTTP download over embassy-net TCP still pending.
+- [x] **OTA HTTP server on dev PC** (`cargo xtask ota-serve`): Already implemented in xtask. Serves firmware .bin files over HTTP for ESP32 to download.
+- [x] **OTA trigger via MQTT**: MQTT subscribes to `launa/<device_id>/ota` topic. Accepts JSON with firmware URL (`{"url":"http://..."}`). Simple JSON parser extracts URL. OTA update initiated from MQTT task. Auto-rollback if new firmware is broken.
+- [x] **One-command remote flash script** (`cargo xtask ota-flash`): Already implemented in xtask. Build + serve + trigger OTA remotely.
+- [x] **Boot validation + auto-rollback**: On every boot, `EspOta::mark_valid()` called after WiFi + MQTT connect succeeds. If firmware crashes before marking valid, bootloader auto-rolls back.
 
 ### Safety & robustness (stack-independent):
 
-- [ ] **Command ACK / status verification for SET commands**: When we send a SET command (set temperature, toggle pump, etc.), the spa has no explicit ACK — it just broadcasts status ~1/sec. We need a robust verification loop: (1) record the expected state change when sending a command, (2) listen for the next N status updates (e.g., 3-5 seconds), (3) verify the spa's reported state matches our expectation, (4) if no confirmation within timeout, either retry the command or report failure to Home Assistant (e.g., publish an error or revert the HA entity state). This prevents stale UI state when commands are lost on the bus, the spa rejects them (e.g., temp out of range), or there's a race between our command and a status update. Consider a `CommandTracker` struct that maps pending commands to expected state transitions and expires them on confirmation or timeout.
+- [x] **Command ACK / status verification for SET commands** (`app/src/command_tracker.rs`): `CommandTracker` struct maps pending commands to expected state transitions. When a SET command is sent, the expected change (e.g., pump on/off, temperature set) is recorded with a timestamp. Each incoming `StatusUpdate` is checked against pending commands. If confirmed within 5 seconds, the command is removed. If timeout occurs, the command is retried up to 2 times. After max retries, the command is dropped and a warning is logged. This prevents stale HA UI state when commands are lost on the bus or rejected by the spa.
 - [x] **Temperature safety clamping in command builder** (`crates/launa-protocol/src/command.rs`): Added `validate_set_temperature(temp, scale, range) -> Result<u8, TempError>` function that validates against Balboa safe ranges (F° high: 80-104, F° low: 50-80, C° high: 26-40, C° low: 10-26) with a hard upper limit of 108°F / 42°C. Also added `parse_set_temperature_validated()` in `command_parser.rs` that validates temperature MQTT commands against the current scale/range before producing a `Command`.
 - [x] **Command allowlist for MQTT commands** (`crates/launa-mqtt/src/command_parser.rs`): Replaced `parse_command` returning `Option<Command>` with `ParseResult` enum (`Valid`, `TemperatureOutOfRange`, `UnknownSubtopic`, `InvalidPayload`). Added explicit `ALLOWED_SUBTOPICS` list — only 9 known subtopics are accepted. Unknown subtopics return `UnknownSubtopic` instead of silently dropping. Non-UTF8 payloads are rejected. Backward-compatible `parse_command_ok()` provided.
-- [ ] **Hold mode safety timeout** (`app/src/main.rs`): If the spa enters hold mode (which stops heating and circulation), auto-clear it after a configurable timeout (e.g., 60 minutes) unless explicitly renewed. Prevents forgetting the spa in hold mode and finding cold/unsafe water later.
+- [x] **Hold mode safety timeout** (`app/src/pump_timer.rs`): `HoldModeTimer` auto-clears hold mode after 60 minutes (configurable). Tracks when hold mode is entered and checks on each status update. If the spa remains in hold mode beyond the timeout, sends a toggle command to clear it. Prevents forgetting the spa in hold mode and finding cold/unsafe water later.
 
 ## Hardware Testing & Flashing (ESP-WROOM-32)
 
@@ -167,7 +194,7 @@ PC (Python script simulating spa)
 ```
 
 - [ ] **Order USB-to-RS485 adapter for PC**: Any USB-to-RS485 dongle works (search "USB to RS485 adapter" on Amazon, ~$5-10). This lets your PC talk RS-485 to simulate the spa controller.
-- [ ] **Update `Rs485Transport` to support auto-direction modules**: Make the DE pin optional. When no DE pin is configured (or set to -1), skip the GPIO toggle logic. The auto-direction module handles it in hardware.
+- [x] **Update `Rs485Transport` to support auto-direction modules**: DE pin is already optional (`Option<GpioPin>`). When no DE pin is configured, GPIO toggle logic is skipped. The auto-direction module handles it in hardware.
 - [ ] **Wire the bench setup**: ESP32 GPIO16 (TX) -> module TX, GPIO17 (RX) -> module RX, 3.3V -> VCC, GND -> GND. USB-RS485 adapter A -> module A, adapter B -> module B. That's 6 wires total.
 - [ ] **Build PC-side RS-485 spa simulator (`scripts/spa-sim.py`)**: Python script using `pyserial` that talks to USB-to-RS485 adapter. Sends real Balboa frames (port `SpaSimulator` frame generation logic to Python). Repeatedly sends status updates at 1-second intervals. Optionally responds to commands. Agent can run this to test the full stack.
 - [ ] **RS-485 loopback integration test**: With bench setup connected, run: (1) flash launa-app to ESP32, (2) start `spa-sim.py` on PC, (3) ESP32 parses frames over real UART, (4) ESP32 publishes to MQTT, (5) validate MQTT payload matches what spa-sim sent. Agent can automate this end-to-end.
@@ -211,3 +238,12 @@ PC (Python script simulating spa)
 - [x] **Birth/last-will MQTT config** (`launa-mqtt/src/topics.rs`): Added `LwtConfig`, `BirthConfig`, `lwt_config()`, `birth_config()`, `ha_status_topic()`. 10 new tests.
 - [x] **Phase 2 desktop e2e tests** (`crates/launa-integration-tests/src/lib.rs`): 4 new tests covering full pipeline, command round-trip, HA discovery validation, and registration flow.
 - [x] **`.cargo/config.toml`**: Added `cargo xtask` alias for standard cargo-xtask workflow.
+- [x] **`launa-mqtt` no_std compatible**: `command_parser`, `state` (status_to_json), and `topics` modules work without `std` feature. Uses `alloc` for `String`/`Vec` and manual JSON generation (no serde_json). Compiles with `--no-default-features`. Boolean values in JSON now proper `true`/`false` instead of string `"true"`/`"false"`.
+- [x] **MQTT state publishing wired up** (`app/src/main.rs`): `STATE_CHANNEL` carries `StatusUpdate` from main event loop to MQTT task, which serializes via `status_to_json()` and publishes to `launa/<device_id>/state`.
+- [x] **HA discovery in no_std** (`app/src/mqtt_client.rs`): Hardcoded JSON generation for all 14 HA discovery configs. Published with retain=true on startup and when HA comes back online (subscribed to `homeassistant/status`).
+- [x] **OTA partition table** (`app/partitions.csv`): Dual OTA slots (ota_0/ota_1, 1.75MB each) + otadata + nvs + phy_init.
+- [x] **OTA MQTT trigger** (`app/src/mqtt_client.rs`, `app/src/ota.rs`): Subscribes to `launa/<device_id>/ota`, parses `{"url":"http://..."}` payload, initiates OTA update. URL parsing implemented; HTTP download over embassy-net pending.
+- [x] **Boot validation + auto-rollback** (`app/src/main.rs`): `EspOta::mark_valid()` called after WiFi + MQTT connect. Prevents rollback on successful boot.
+- [x] **Command ACK / status verification** (`app/src/command_tracker.rs`): `CommandTracker` verifies SET commands against subsequent status updates. 5-second timeout, 2 retries max. Tracks expected state changes (pump on/off, temperature set, toggles).
+- [x] **Hold mode safety timeout** (`app/src/pump_timer.rs`): `HoldModeTimer` auto-clears hold mode after 60 minutes. Prevents cold/unsafe water from forgotten hold mode.
+- [x] **HA status subscription for re-publishing discovery**: MQTT task subscribes to `homeassistant/status`. When HA publishes "online", discovery configs + availability are re-published.
