@@ -16,6 +16,7 @@ pub struct StatusUpdate {
     pub pump3: PumpState,
     pub circ_pump: bool,
     pub blower: bool,
+    pub mister: bool,
     pub light1: bool,
     pub is_priming: bool,
     pub is_hold: bool,
@@ -66,6 +67,7 @@ impl StatusUpdate {
             return Err(StatusError::UnexpectedLength(payload.len()));
         }
 
+        // Offset 8 (F5): temperature scale, time format, filter mode
         let scale = if payload[8] & 0x01 != 0 {
             TemperatureScale::Celsius
         } else {
@@ -77,33 +79,42 @@ impl StatusUpdate {
             TemperatureScale::Fahrenheit => 1.0,
         };
 
+        // Offset 2: current temperature
         let current_temp = if payload[2] == 0xFF {
             None
         } else {
             Some(payload[2] as f32 / temp_divisor)
         };
 
+        // Offset 20: set temperature
         let set_temp = payload[20] as f32 / temp_divisor;
 
-        let heating_mode = match payload[5] & 0x03 {
+        // Offset 7 (F4): heating mode (0=Ready, 1=Rest, 3=Ready-in-Rest)
+        let heating_mode = match payload[7] & 0x03 {
             0 => HeatingMode::Ready,
             1 => HeatingMode::Rest,
             3 => HeatingMode::ReadyInRest,
             _ => HeatingMode::Ready,
         };
 
+        // Offset 10 (PP): pump status
         let pp = payload[10];
         let pump1 = decode_pump_state(pp & 0x03);
         let pump2 = decode_pump_state((pp >> 2) & 0x03);
         let pump3 = decode_pump_state((pp >> 4) & 0x03);
 
-        let f6 = payload[11];
-        let circ_pump = f6 & 0x02 != 0;
-        let blower = f6 & 0x0C != 0;
+        // Offset 11 (F5): circ pump, blower
+        let pump_flags = payload[11];
+        let circ_pump = pump_flags & 0x02 != 0;
+        let blower = pump_flags & 0x0C != 0;
 
-        let f5 = payload[9];
-        let is_heating = f5 & 0x30 != 0;
-        let temp_range = if f5 & 0x04 != 0 {
+        // Offset 12 (F6): mister
+        let mister = payload[12] & 0x01 != 0;
+
+        // Offset 9 (F6): heating state, temp range
+        let heating_flags = payload[9];
+        let is_heating = heating_flags & 0x30 != 0;
+        let temp_range = if heating_flags & 0x04 != 0 {
             TempRange::High
         } else {
             TempRange::Low
@@ -129,6 +140,7 @@ impl StatusUpdate {
             pump3,
             circ_pump,
             blower,
+            mister,
             light1: payload[13] & 0x03 != 0,
             is_priming: payload[6] & 0x01 != 0,
             is_hold: payload[5] & 0x05 != 0,

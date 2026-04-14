@@ -22,12 +22,15 @@ pub enum NetworkError {
 #[cfg(feature = "std")]
 pub mod mock {
     use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
 
-    /// Mock network for desktop testing.
+    /// A mock network for desktop testing with bidirectional TCP simulation.
     pub struct MockNetwork {
         connected: bool,
         pending_responses: VecDeque<Vec<u8>>,
-        sent_data: Vec<u8>,
+        sent_data: Arc<Mutex<Vec<u8>>>,
+        last_connect_addr: Option<String>,
+        last_connect_port: Option<u16>,
     }
 
     impl MockNetwork {
@@ -35,16 +38,35 @@ pub mod mock {
             MockNetwork {
                 connected: false,
                 pending_responses: VecDeque::new(),
-                sent_data: Vec::new(),
+                sent_data: Arc::new(Mutex::new(Vec::new())),
+                last_connect_addr: None,
+                last_connect_port: None,
             }
         }
 
+        /// Queue a response that will be available to the next TCP connection's read.
         pub fn queue_response(&mut self, data: Vec<u8>) {
             self.pending_responses.push_back(data);
         }
 
-        pub fn get_sent_data(&self) -> &[u8] {
-            &self.sent_data
+        /// Get all bytes sent across all TCP connections.
+        pub fn get_sent_data(&self) -> Vec<u8> {
+            self.sent_data.lock().unwrap().clone()
+        }
+
+        /// Clear all accumulated sent data.
+        pub fn clear_sent_data(&mut self) {
+            self.sent_data.lock().unwrap().clear();
+        }
+
+        /// Returns the last address used in tcp_connect.
+        pub fn last_connect_addr(&self) -> Option<&str> {
+            self.last_connect_addr.as_deref()
+        }
+
+        /// Returns the last port used in tcp_connect.
+        pub fn last_connect_port(&self) -> Option<u16> {
+            self.last_connect_port
         }
     }
 
@@ -58,20 +80,24 @@ pub mod mock {
             self.connected
         }
 
-        fn tcp_connect(&mut self, _addr: &str, _port: u16) -> Result<Box<dyn super::TcpSocket>, super::NetworkError> {
+        fn tcp_connect(&mut self, addr: &str, port: u16) -> Result<Box<dyn super::TcpSocket>, super::NetworkError> {
             if !self.connected {
                 return Err(super::NetworkError::ConnectionFailed);
             }
+            self.last_connect_addr = Some(addr.to_string());
+            self.last_connect_port = Some(port);
+            let incoming = self.pending_responses.pop_front().unwrap_or_default();
             Ok(Box::new(MockTcpSocket {
-                incoming: self.pending_responses.pop_front().unwrap_or_default(),
-                outgoing: Vec::new(),
+                incoming,
+                network_sent: Arc::clone(&self.sent_data),
             }))
         }
     }
 
+    /// A mock TCP socket that tracks outgoing data in the parent MockNetwork.
     pub struct MockTcpSocket {
         incoming: Vec<u8>,
-        outgoing: Vec<u8>,
+        network_sent: Arc<Mutex<Vec<u8>>>,
     }
 
     impl super::TcpSocket for MockTcpSocket {
@@ -83,7 +109,7 @@ pub mod mock {
         }
 
         fn write(&mut self, data: &[u8]) -> Result<(), super::NetworkError> {
-            self.outgoing.extend_from_slice(data);
+            self.network_sent.lock().unwrap().extend_from_slice(data);
             Ok(())
         }
 

@@ -12,5 +12,16 @@ pub mod discovery;
 pub mod topics;
 
 #[cfg(feature = "std")]
+pub mod command_parser;
+
+#[cfg(feature = "std")]
+pub mod state;
+
+#[cfg(feature = "std")]
 pub use discovery::DiscoveryBuilder;
 pub use topics::TopicBuilder;
+
+#[cfg(feature = "std")]
+pub use command_parser::parse_command;
+#[cfg(feature = "std")]
+pub use state::status_to_json;

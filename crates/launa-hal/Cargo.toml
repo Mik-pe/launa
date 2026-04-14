@@ -10,3 +10,9 @@ std = []
 [dependencies]
 log.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+
+[[test]]
+name = "hal_tests"
+path = "tests/hal_tests.rs"

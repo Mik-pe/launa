@@ -11,3 +11,11 @@ byteorder.workspace = true
 
 [dev-dependencies]
 env_logger = "0.11"
+
+[[test]]
+name = "property_tests"
+path = "tests/property_tests.rs"
+
+[[test]]
+name = "fuzz_tests"
+path = "tests/fuzz_tests.rs"

@@ -1,0 +1,10 @@
+[package]
+name = "launa-integration-tests"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+launa-protocol = { path = "../launa-protocol" }
+launa-mqtt = { path = "../launa-mqtt", features = ["std"] }
+launa-ota = { path = "../launa-ota" }
+serde_json = { workspace = true }

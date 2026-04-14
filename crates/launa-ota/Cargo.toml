@@ -3,6 +3,10 @@ name = "launa-ota"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = ["mock"]
+mock = []
+
 [dependencies]
 log.workspace = true
 thiserror.workspace = true

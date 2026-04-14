@@ -14,48 +14,55 @@ pub enum TransportError {
 
 #[cfg(feature = "std")]
 pub mod mock {
-    use std::io::{Read, Cursor};
-    use std::sync::{Arc, Mutex};
+    use std::collections::VecDeque;
 
-    /// Mock transport for desktop testing. Pre-load with expected responses.
+    /// A mock transport that simulates bidirectional serial communication.
+    /// Supports injecting incoming bytes and capturing outgoing bytes.
     pub struct MockTransport {
-        incoming: Arc<Mutex<Cursor<Vec<u8>>>>,
-        outgoing: Arc<Mutex<Vec<u8>>>,
+        incoming: VecDeque<u8>,
+        outgoing: Vec<u8>,
     }
 
     impl MockTransport {
         pub fn new() -> Self {
             MockTransport {
-                incoming: Arc::new(Mutex::new(Cursor::new(Vec::new()))),
-                outgoing: Arc::new(Mutex::new(Vec::new())),
+                incoming: VecDeque::new(),
+                outgoing: Vec::new(),
             }
         }
 
-        /// Pre-load bytes that will be returned by `read`.
-        pub fn inject_incoming(&self, data: &[u8]) {
-            let mut incoming = self.incoming.lock().unwrap();
-            let pos = incoming.position() as usize;
-            let mut buf = incoming.get_ref().clone();
-            buf.extend_from_slice(data);
-            *incoming = Cursor::new(buf);
-            incoming.set_position(pos as u64);
+        /// Queue bytes that will be returned by subsequent read() calls
+        pub fn inject(&mut self, data: &[u8]) {
+            self.incoming.extend(data.iter().copied());
         }
 
-        /// Get all bytes written via `write`.
-        pub fn get_outgoing(&self) -> Vec<u8> {
-            self.outgoing.lock().unwrap().clone()
+        /// Get all bytes written since last clear
+        pub fn written(&self) -> &[u8] {
+            &self.outgoing
+        }
+
+        /// Clear the outgoing buffer
+        pub fn clear_written(&mut self) {
+            self.outgoing.clear();
+        }
+
+        /// Returns true if there are incoming bytes available
+        pub fn has_incoming(&self) -> bool {
+            !self.incoming.is_empty()
         }
     }
 
     impl super::Transport for MockTransport {
         fn read(&mut self, buf: &mut [u8]) -> Result<usize, super::TransportError> {
-            let mut incoming = self.incoming.lock().unwrap();
-            incoming.read(buf).map_err(|_| super::TransportError::Io)
+            let n = self.incoming.len().min(buf.len());
+            for byte in buf.iter_mut().take(n) {
+                *byte = self.incoming.pop_front().unwrap();
+            }
+            Ok(n)
         }
 
         fn write(&mut self, data: &[u8]) -> Result<(), super::TransportError> {
-            let mut outgoing = self.outgoing.lock().unwrap();
-            outgoing.extend_from_slice(data);
+            self.outgoing.extend_from_slice(data);
             Ok(())
         }
 

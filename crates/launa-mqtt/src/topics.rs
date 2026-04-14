@@ -6,6 +6,12 @@ use alloc::string::String;
 
 const BASE_TOPIC: &str = "launa";
 
+/// Payload published to the availability topic when the device is online.
+pub const AVAILABILITY_ONLINE: &str = "online";
+
+/// Payload published to the availability topic when the device is offline.
+pub const AVAILABILITY_OFFLINE: &str = "offline";
+
 pub struct TopicBuilder {
     device_id: String,
 }

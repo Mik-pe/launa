@@ -28,7 +28,7 @@ pub enum OtaError {
     FlashError,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "mock"))]
 pub mod mock {
     use super::{OtaUpdate, OtaError, alloc::vec::Vec};
 

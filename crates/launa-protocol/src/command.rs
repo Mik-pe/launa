@@ -50,28 +50,32 @@ pub enum SettingsType {
 
 impl Command {
     /// Returns the message type bytes and payload for this command.
+    ///
+    /// All outgoing commands use message type `0A BF`. The first byte of the
+    /// payload acts as a sub-type discriminator per the Balboa protocol.
     pub fn encode(&self) -> ([u8; 2], Vec<u8>) {
         match self {
-            Command::ConfigurationRequest => ([0x0A, 0xBF], Vec::new()),
-            Command::ToggleItem(item) => ([0x0A, 0xBF], vec![item.code(), 0x00]),
-            Command::SetTemperature(temp) => ([0x0A, 0xBF], vec![*temp]),
+            Command::ConfigurationRequest => ([0x0A, 0xBF], vec![0x04]),
+            Command::ToggleItem(item) => ([0x0A, 0xBF], vec![0x11, item.code(), 0x00]),
+            Command::SetTemperature(temp) => ([0x0A, 0xBF], vec![0x20, *temp]),
             Command::SetTime { hour, minute, is_24h } => {
                 let h = if *is_24h { hour | 0x80 } else { *hour };
-                ([0x0A, 0xBF], vec![h, *minute])
+                ([0x0A, 0xBF], vec![0x21, h, *minute])
             }
             Command::SetTemperatureScale(celsius) => {
-                ([0x0A, 0xBF], vec![0x01, if *celsius { 0x01 } else { 0x00 }])
+                let ts = if *celsius { 0x01 } else { 0x00 };
+                ([0x0A, 0xBF], vec![0x27, 0x01, ts])
             }
-            Command::SettingsRequest(SettingsType::Panel) => ([0x0A, 0xBF], vec![0x00, 0x00, 0x01]),
+            Command::SettingsRequest(SettingsType::Panel) => ([0x0A, 0xBF], vec![0x22, 0x00, 0x00, 0x01]),
             Command::SettingsRequest(SettingsType::FilterCycles) | Command::FilterCyclesRequest => {
-                ([0x0A, 0xBF], vec![0x01, 0x00, 0x00])
+                ([0x0A, 0xBF], vec![0x22, 0x01, 0x00, 0x00])
             }
             Command::SettingsRequest(SettingsType::Information) | Command::InformationRequest => {
-                ([0x0A, 0xBF], vec![0x02, 0x00, 0x00])
+                ([0x0A, 0xBF], vec![0x22, 0x02, 0x00, 0x00])
             }
-            Command::SettingsRequest(SettingsType::Preferences) => ([0x0A, 0xBF], vec![0x08, 0x00, 0x00]),
-            Command::FaultLogRequest { entry } => ([0x0A, 0xBF], vec![0x20, *entry, 0x00]),
-            Command::NothingToSend { client_id } => ([*client_id, 0xBF], Vec::new()),
+            Command::SettingsRequest(SettingsType::Preferences) => ([0x0A, 0xBF], vec![0x22, 0x08, 0x00, 0x00]),
+            Command::FaultLogRequest { entry } => ([0x0A, 0xBF], vec![0x22, 0x20, *entry, 0x00]),
+            Command::NothingToSend { client_id } => ([*client_id, 0xBF], vec![0x07]),
         }
     }
 }
@@ -85,23 +89,114 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_configuration_request() {
+        let (mt, payload) = Command::ConfigurationRequest.encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x04]);
+    }
+
+    #[test]
     fn test_toggle_pump1() {
         let (mt, payload) = Command::ToggleItem(ToggleItem::Pump1).encode();
         assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x04, 0x00]);
+        assert_eq!(payload, vec![0x11, 0x04, 0x00]);
+    }
+
+    #[test]
+    fn test_toggle_light1() {
+        let (mt, payload) = Command::ToggleItem(ToggleItem::Light1).encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x11, 0x11, 0x00]);
     }
 
     #[test]
     fn test_set_temp() {
         let (mt, payload) = Command::SetTemperature(104).encode();
         assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![104]);
+        assert_eq!(payload, vec![0x20, 104]);
     }
 
     #[test]
     fn test_set_time_24h() {
         let (mt, payload) = Command::SetTime { hour: 14, minute: 30, is_24h: true }.encode();
         assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x80 | 14, 30]);
+        assert_eq!(payload, vec![0x21, 0x80 | 14, 30]);
+    }
+
+    #[test]
+    fn test_set_time_12h() {
+        let (mt, payload) = Command::SetTime { hour: 9, minute: 5, is_24h: false }.encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x21, 9, 5]);
+    }
+
+    #[test]
+    fn test_set_temp_scale_celsius() {
+        let (mt, payload) = Command::SetTemperatureScale(true).encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x27, 0x01, 0x01]);
+    }
+
+    #[test]
+    fn test_set_temp_scale_fahrenheit() {
+        let (mt, payload) = Command::SetTemperatureScale(false).encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x27, 0x01, 0x00]);
+    }
+
+    #[test]
+    fn test_settings_request_panel() {
+        let (mt, payload) = Command::SettingsRequest(SettingsType::Panel).encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x22, 0x00, 0x00, 0x01]);
+    }
+
+    #[test]
+    fn test_settings_request_filter_cycles() {
+        let (mt, payload) = Command::SettingsRequest(SettingsType::FilterCycles).encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x22, 0x01, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_filter_cycles_request_alias() {
+        let (mt, payload) = Command::FilterCyclesRequest.encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x22, 0x01, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_settings_request_information() {
+        let (mt, payload) = Command::SettingsRequest(SettingsType::Information).encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x22, 0x02, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_information_request_alias() {
+        let (mt, payload) = Command::InformationRequest.encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x22, 0x02, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_settings_request_preferences() {
+        let (mt, payload) = Command::SettingsRequest(SettingsType::Preferences).encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x22, 0x08, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn test_fault_log_request() {
+        let (mt, payload) = Command::FaultLogRequest { entry: 0xFF }.encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x22, 0x20, 0xFF, 0x00]);
+    }
+
+    #[test]
+    fn test_nothing_to_send() {
+        let (mt, payload) = Command::NothingToSend { client_id: 0x02 }.encode();
+        assert_eq!(mt, [0x02, 0xBF]);
+        assert_eq!(payload, vec![0x07]);
     }
 }

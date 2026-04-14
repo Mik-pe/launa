@@ -5,6 +5,7 @@ members = [
     "crates/launa-hal",
     "crates/launa-mqtt",
     "crates/launa-ota",
+    "crates/launa-integration-tests",
 ]
 exclude = [
     # The ESP32 app uses esp-idf-sys which has unconventional build rules
