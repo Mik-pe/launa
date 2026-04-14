@@ -70,18 +70,23 @@ impl SpaSimulator {
 
     /// Generate a complete framed status update (message type `FF AF 13`).
     ///
+    /// Verified against real Balboa BP6013G1 hardware.
     /// The status payload is 24 bytes with layout:
     /// ```text
     ///  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
-    /// F0 F1 CT HH MM F2 -- -- -- F3 F4 PP -- F5 LF F6 -- -- -- -- ST -- -- --
+    /// ST IM CT HH MM HM RT SA SB F9 FA P1 P2 CB LF MR -- -- -- -- ST -- -- --
     /// ```
     pub fn generate_status_frame(&self) -> Vec<u8> {
         let mut payload = [0u8; 24];
 
-        // Offset 0: F0 marker (unused flag byte)
-        payload[0] = 0xF0;
-        // Offset 1: F1 marker
-        payload[1] = 0xF1;
+        // Offset 0: Spa State (0x00=Running, 0x05=Hold)
+        if self.state.hold {
+            payload[0] = 0x05;
+        }
+        // Offset 1: Init Mode (0x00=Idle, 0x01=Priming)
+        if self.state.priming {
+            payload[1] = 0x01;
+        }
 
         // Offset 2: current temperature
         payload[2] = self.state.current_temp;
@@ -91,57 +96,45 @@ impl SpaSimulator {
         // Offset 4: minute
         payload[4] = self.state.minute;
 
-        // Offset 5: hold flag
-        if self.state.hold {
-            payload[5] |= 0x05;
-        }
+        // Offset 5: heating mode (bits 0-1)
+        payload[5] |= self.state.heating_mode & 0x03;
 
-        // Offset 6: priming flag
-        if self.state.priming {
-            payload[6] |= 0x01;
-        }
-
-        // Offset 7: heating mode (bits 0-1)
-        payload[7] |= self.state.heating_mode & 0x03;
-
-        // Offset 8: temperature scale, time format, filter mode
+        // Offset 9: temperature scale (bit 0), 24h time (bit 1), filter mode (bits 2-3)
         if self.state.temp_scale_celsius {
-            payload[8] |= 0x01; // bit 0: Celsius
+            payload[9] |= 0x01; // bit 0: Celsius
         }
-        // bit 1: 24h format (set)
-        payload[8] |= 0x02;
-        // bits 2-3: filter mode = 0
+        payload[9] |= 0x02; // bit 1: 24h format
 
-        // Offset 9: heating state, temp range
+        // Offset 10: heating state (bits 4-5), temp range (bit 2)
         if self.state.is_heating {
-            payload[9] |= 0x30; // bits 4-5: heating active
+            payload[10] |= 0x30; // bits 4-5: heating active
         }
         if self.state.temp_range_high {
-            payload[9] |= 0x04; // bit 2: temp range high
+            payload[10] |= 0x04; // bit 2: temp range high
         }
 
-        // Offset 10: pump status (PP byte)
+        // Offset 11: pump status (PP byte)
         // pump1 bits 0-1, pump2 bits 2-3, pump3 bits 4-5
-        payload[10] = (self.state.pump1 & 0x03)
+        payload[11] = (self.state.pump1 & 0x03)
             | ((self.state.pump2 & 0x03) << 2)
             | ((self.state.pump3 & 0x03) << 4);
 
-        // Offset 11: circ pump, blower flags
+        // Offset 13: circ pump (bit 1), blower (bits 2-3)
         if self.state.circ_pump {
-            payload[11] |= 0x02;
+            payload[13] |= 0x02;
         }
         if self.state.blower {
-            payload[11] |= 0x0C;
+            payload[13] |= 0x0C;
         }
 
-        // Offset 12: mister
-        if self.state.mister {
-            payload[12] |= 0x01;
-        }
-
-        // Offset 13: light1
+        // Offset 14: light1 (bits 0-1)
         if self.state.light1 {
-            payload[13] |= 0x03;
+            payload[14] |= 0x03;
+        }
+
+        // Offset 15: mister (0=off, 1=on)
+        if self.state.mister {
+            payload[15] = 0x01;
         }
 
         // Offset 20: set temperature

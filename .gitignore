@@ -5,3 +5,5 @@ Cargo.lock
 *.swp
 *.swo
 *~
+launa.toml
+*.toml.bak

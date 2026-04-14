@@ -1,173 +1,144 @@
-# Launa — ESP32 Balboa Spa Controller
+# Launa
 
-**Rust firmware for ESP32 that bridges Balboa BP series spa controllers to Home Assistant via MQTT.**
+`~ ˖ ೫ ˖ ~`
 
-[![Rust](https://img.shields.io/badge/rust-2021-orange.svg)](https://www.rust-lang.org/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-14%20passing-brightgreen.svg)]()
+Open-source ESP32 firmware that puts your Balboa hot tub on Home Assistant.
 
-## Overview
+Control your pumps, temperature, lights, and blower from your phone. Set the temperature on your way home. Get notified if something goes wrong. All built in Rust, OTA-updatable, and safe enough to install without worrying about your spa.
 
-Launa reads real-time state from a Balboa BP6013G1 (and compatible BP series) spa controller over RS-485, parses the Balboa serial protocol, and publishes everything to Home Assistant using MQTT auto-discovery. It also accepts commands from Home Assistant (toggle pumps, set temperature, change heat mode) and forwards them to the spa. Over-the-air (OTA) firmware updates are supported so you don't need physical access after initial deployment.
+```
+Your hot tub ──RS-485──► ESP32 ──WiFi──► Home Assistant
+```
 
-## Features
-
-- **Balboa protocol parsing** — CRC-8 validated, `0x7E`-delimited frame encoder/decoder with streaming support
-- **Full status decoding** — water temperature, set temperature, pump/light/blower/circ states, heat mode, fault codes
-- **Command support** — toggle pumps, set temperature, set time, request configuration, change temperature scale
-- **Client ID registration** — complete state machine for joining the RS-485 bus as a new client
-- **Home Assistant auto-discovery** — 8 entities (sensors, switches, numbers, select, fan, light) appear automatically
-- **OTA firmware updates** — dual-partition update flow with rollback support
-- **Desktop testable** — all protocol logic compiles and runs on your dev machine; no hardware needed for unit tests
-- **Modular crate design** — protocol, HAL, MQTT, and OTA are separate crates with clean trait boundaries
-- **`no_std` compatible** — protocol crate works in bare-metal environments
+Supports Balboa BP-series controllers (BP6013G1 and compatibles) — the kind found in most hot tubs.
 
 ## Hardware
 
-### What You Need
-
 | Component | Notes |
 |-----------|-------|
-| ESP32-C3 or ESP32-S3 dev board | Any standard board works |
-| RS-485 transceiver module | MAX485, SP3485, or similar |
-| Balboa BP series spa controller | BP6013G1 or compatible BP model |
-| Jumper wires | For ESP32 ↔ transceiver and transceiver ↔ spa bus |
+| ESP-WROOM-32 dev board | Any standard ESP32 board |
+| RS-485 transceiver module | Auto-direction type recommended (no DE pin) |
+| USB power supply | Phone charger to power ESP32 at the spa |
+| Balboa BP series spa controller | BP6013G1 or compatible |
 
-### Wiring Reference
-
-```
-ESP32                RS-485 Transceiver         Spa Controller
-──────               ──────────────────         ─────────────
-GPIO TX (UART) ────► DI (Data In)
-GPIO RX (UART) ◄──── RO (Data Out)
-GPIO DIR       ────► DE/RE (Direction)
-3.3V           ────► VCC
-GND            ────► GND
-                      A ──────────────────────► RS-485 Data+
-                      B ──────────────────────► RS-485 Data-
-```
-
-> ⚠️ **Always power off the spa controller before making wiring changes.** Verify that your RS-485 module operates at 3.3V logic, or use a level shifter.
-
-## Architecture
-
-The project is organized as a Cargo workspace with an excluded ESP32 binary crate:
-
-| Crate | Description |
-|-------|-------------|
-| `launa-protocol` | Balboa spa protocol parser — CRC-8, frame codec, status/config parsing, command builder, client ID state machine |
-| `launa-hal` | Hardware abstraction traits (`Transport`, `Network`, `Clock`) with mock implementations for desktop testing |
-| `launa-mqtt` | MQTT client wrapper with Home Assistant discovery message generation and state/command routing |
-| `launa-ota` | OTA firmware update support — download, partition management, boot switching, rollback |
-| `launa-integration-tests` | End-to-end tests: mock transport → real frames → parsed status → JSON → MQTT topics |
-| `app/` | ESP32 firmware binary — glues everything together with `esp-idf-hal` UART, WiFi, and MQTT implementations |
+### Wiring
 
 ```
-  Spa Controller ──RS-485──► ESP32 ──WiFi/MQTT──► Home Assistant
+ESP32                  RS-485 Module         Spa Controller
+──────                 ──────────────         ─────────────
+GPIO16 (TX) ───────► TX
+GPIO17 (RX) ◄─────── RX
+3.3V         ───────► VCC
+GND          ───────► GND
+                       A ─────────────────► Data+ (A)
+                       B ─────────────────► Data- (B)
 ```
 
-## Getting Started
+The RS-485 bus is electrically isolated — your ESP32 cannot damage the spa controller. The sniffer firmware (read-only, no transmission) is the safe first step to validate your setup.
+
+## Quick Start
 
 ### Prerequisites
 
-- [Rust](https://rustup.rs/) (edition 2021, stable toolchain)
-- [`espflash`](https://github.com/esp-rs/espflash) — for flashing ESP32
-- ESP-IDF toolchain (installed automatically by `esp-idf-sys` on first build)
+- [Rust](https://rustup.rs/) stable toolchain
+- `cargo espflash` — `cargo install cargo-espflash --locked`
+- USB driver for your board (CP210x or CH340)
 
-### Clone & Build
+### Configure
 
 ```bash
 git clone https://github.com/Mik-pe/launa.git
 cd launa
-
-# Build and test all desktop crates
-cargo build
-cargo test
+cp launa.example.toml launa.toml
+# Edit launa.toml with your WiFi and MQTT broker details
 ```
 
-### Desktop Testing
+`launa.toml` is gitignored. All xtask commands fail early if required fields are missing.
 
-All protocol and business logic lives in workspace crates that compile for both host and ESP32 targets:
+### Flash
 
 ```bash
-# Run all 14 unit tests (no hardware needed)
-cargo test
+cargo test                    # run desktop tests, no hardware needed
+
+cargo xtask config-flash      # write WiFi/MQTT config to ESP32 NVS (USB)
+cargo xtask flash --feature sniff   # flash sniffer firmware (USB, read-only)
+cargo xtask flash             # flash full firmware (USB)
 ```
 
-Tests cover CRC-8 computation, frame encoding/decoding, status update parsing, command construction, client ID registration, and MQTT discovery message generation.
+### Remote Updates
 
-### Flashing to ESP32
+After the first USB flash, the ESP32 stays at the spa on WiFi:
 
 ```bash
-cd app
-cargo espflash flash --monitor
+cargo xtask ota-flash --feature sniff   # deploy sniffer remotely
+cargo xtask ota-flash                   # deploy full firmware remotely
 ```
 
-## Configuration
+Bad updates auto-rollback — if the new firmware crashes before connecting to MQTT, the bootloader reverts to the previous version.
 
-Configuration is currently set at compile time via environment variables or by editing the app source:
+## Commands
 
-| Setting | Description |
+| Command | What it does |
 |---------|-------------|
-| WiFi SSID | Your wireless network name |
-| WiFi password | Your wireless network password |
-| MQTT broker address | IP/hostname of your MQTT broker (e.g., `192.168.1.100:1883`) |
-| Device ID | Unique identifier for Home Assistant entity prefixes |
+| `cargo xtask flash [--feature sniff\|hw-test]` | Flash via USB |
+| `cargo xtask monitor` | Read serial output |
+| `cargo xtask flash-monitor` | Flash + monitor |
+| `cargo xtask config-flash` | Write config to NVS |
+| `cargo xtask ota-flash` | Build and flash remotely over WiFi |
+| `cargo xtask sniff-decode` | Decode sniffer frames from MQTT in real-time |
+| `cargo xtask spa-sim` | Simulate a spa controller over USB-RS485 |
+| `cargo xtask self-test` | Run hardware self-test |
 
-> Runtime NVS-based configuration is planned — see [TASKS.md](TASKS.md) for roadmap.
+## Home Assistant
 
-## Home Assistant Setup
-
-1. **MQTT broker** — Install and configure an MQTT broker (e.g., [Mosquitto](https://mosquitto.org/)) as a Home Assistant add-on or standalone service.
-2. **MQTT integration** — Enable the MQTT integration in Home Assistant (Settings → Devices & Services → Add Integration → MQTT).
-3. **Auto-discovery** — Launa publishes MQTT auto-discovery messages on startup. Entities appear automatically under a new device:
+1. Install an MQTT broker (e.g. [Mosquitto](https://mosquitto.org/))
+2. Enable the MQTT integration in HA
+3. Launa publishes auto-discovery messages on boot — entities appear automatically:
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| Water Temperature | Sensor | Current water temperature |
-| Set Temperature | Number | Target temperature (adjustable) |
+| Water Temperature | Sensor | Current water temp |
+| Set Temperature | Number | Target temp |
 | Heat Mode | Select | Ready / Rest / Ready-in-Rest |
-| Pump 1 / 2 / 3 | Switch | Toggle pumps on/off |
+| Temperature Range | Select | High / Low |
+| Pump 1 / 2 / 3 | Switch | Toggle pumps |
 | Light | Light | Toggle spa light |
 | Blower | Fan | Toggle blower |
-| Heating State | Binary Sensor | Is the heater currently active |
+| Circ Pump | Switch | Circ pump state |
+| Mister | Switch | Mister state |
+| Hold Mode | Switch | Hold mode |
+| Heating | Binary Sensor | Heater active |
 | Fault | Sensor | Last fault code |
 
-No manual entity configuration is needed — Launa handles discovery automatically.
+## Safety
 
-## Development
+- **Temperature clamping** — commands validated against Balboa safe ranges (F: 80-104, C: 26-40), hard cap at 42°C/108°F
+- **Command allowlist** — only known commands forwarded to the bus
+- **Hold mode timeout** — auto-clears after 60 minutes
+- **OTA rollback** — bad firmware reverts automatically
 
-### Desktop Testing Strategy
+## Crates
 
-The key design principle is that all protocol and business logic lives in workspace crates that compile for both host and ESP32 targets:
+| Crate | What it does |
+|-------|-------------|
+| `launa-protocol` | Balboa protocol parser, CRC-8, frame codec, status/command types |
+| `launa-hal` | Hardware abstraction traits with mock impls for desktop testing |
+| `launa-mqtt` | MQTT client, HA discovery, state serialization, command parsing |
+| `launa-ota` | OTA update trait |
+| `launa-integration-tests` | End-to-end tests with SpaSimulator |
+| `app/` | ESP32 firmware binary |
+| `xtask/` | Host-side tooling (reuses `launa-protocol` directly) |
 
 ```
-launa-protocol  → cargo test (desktop) ✅  →  ESP32 binary ✅
-launa-hal       → cargo test with mocks   →  real hardware impl
-launa-mqtt      → cargo test with mocks   →  real MQTT broker
-```
-
-The `app/` crate only compiles for the ESP32 target and contains ESP32-specific glue code. This means you can develop and test the vast majority of the firmware on your desktop without any hardware.
-
-### Running Tests
-
-```bash
-# All workspace tests
-cargo test
-
-# Verbose output
-cargo test -- --nocapture
-
-# Specific crate
-cargo test -p launa-protocol
+Spa Controller ──RS-485──► ESP32 ──WiFi/MQTT──► Home Assistant
 ```
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+MIT
 
 ## Acknowledgments
 
-- [ccutrer/balboa_worldwide_app](https://github.com/ccutrer/balboa_worldwide_app) — Comprehensive Balboa spa protocol documentation
-- [jasta/esp32-balboa-spa](https://github.com/jasta/esp32-balboa-spa) — Rust ESP32 Balboa spa integration reference
-- [cribskip/esp8266_spa](https://github.com/cribskip/esp8266_spa) — Protocol implementation reference
+- [ccutrer/balboa_worldwide_app](https://github.com/ccutrer/balboa_worldwide_app) — protocol docs
+- [NorthernMan54/esp32_balboa_spa](https://github.com/NorthernMan54/esp32_balboa_spa) — reference implementation
+- [cribskip/esp8266_spa](https://github.com/cribskip/esp8266_spa) — original protocol reference

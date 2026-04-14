@@ -1,0 +1,24 @@
+# Launa device configuration
+#
+# Copy this file to launa.toml and fill in your values.
+# launa.toml is gitignored -- your secrets never leave your machine.
+#
+# All xtask commands will fail with a clear error if required fields
+# are missing or still set to placeholder values.
+
+[wifi]
+ssid = "YourWiFiName"          # required
+password = "YourWiFiPassword"  # required
+
+[mqtt]
+host = "192.168.1.100"         # required — IP or hostname of your MQTT broker
+port = 1883                    # optional, default 1883
+user = ""                      # optional
+password = ""                  # optional
+
+[device]
+id = "launa_spa"               # required — unique ID for HA entity prefixes
+serial_port = "COM3"           # required for USB flash commands
+
+[ota]
+serve_port = 8080              # optional, default 8080 — port for local OTA HTTP server

@@ -57,18 +57,31 @@ pub enum PumpState {
 impl StatusUpdate {
     /// Parse a status update from the frame payload.
     /// Message type is `FF AF 13`.
+    ///
+    /// Verified against real Balboa BP6013G1 hardware (see NorthernMan54/esp32_balboa_spa).
     /// Payload layout (24 bytes):
     /// ```text
     ///  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
-    /// F0 F1 CT HH MM F2 -- -- -- F3 F4 PP -- F5 LF F6 -- -- -- -- ST -- -- --
+    /// ST IM CT HH MM HM RT SA SB F9 FA P1 P2 CB LF MR -- -- -- -- ST -- -- --
     /// ```
+    ///
+    /// - ST = Spa State (0x00=Running, 0x05=Hold, 0x14=A/B Temps, 0x17=Test)
+    /// - IM = Init Mode (0x00=Idle, 0x01=Priming)
+    /// - CT = Current Temperature (÷2 if Celsius; 0xFF = unknown)
+    /// - HM = Heating Mode (0=Ready, 1=Rest, 3=Ready-in-Rest)
+    /// - F9 = Flags: bit 0=Temp Scale, bit 1=24h Time, bits 2-3=Filter Mode
+    /// - FA = Flags: bit 2=Temp Range, bits 4-5=Heating State
+    /// - P1 = Pumps 1-4 (2 bits each), P2 = Pumps 5-6
+    /// - CB = Circ pump (bit 1), Blower (bits 2-3)
+    /// - LF = Lights (bits 0-1=Light1), MR = Mister (0=off, 1=on)
+    /// - ST = Set Temperature (÷2 if Celsius)
     pub fn parse(payload: &[u8]) -> Result<Self, StatusError> {
         if payload.len() < 24 {
             return Err(StatusError::UnexpectedLength(payload.len()));
         }
 
-        // Offset 8 (F5): temperature scale, time format, filter mode
-        let scale = if payload[8] & 0x01 != 0 {
+        // Offset 9 (F9): temperature scale, time format, filter mode
+        let scale = if payload[9] & 0x01 != 0 {
             TemperatureScale::Celsius
         } else {
             TemperatureScale::Fahrenheit
@@ -89,30 +102,30 @@ impl StatusUpdate {
         // Offset 20: set temperature
         let set_temp = payload[20] as f32 / temp_divisor;
 
-        // Offset 7 (F4): heating mode (0=Ready, 1=Rest, 3=Ready-in-Rest)
-        let heating_mode = match payload[7] & 0x03 {
+        // Offset 5 (HM): heating mode (0=Ready, 1=Rest, 3=Ready-in-Rest)
+        let heating_mode = match payload[5] & 0x03 {
             0 => HeatingMode::Ready,
             1 => HeatingMode::Rest,
             3 => HeatingMode::ReadyInRest,
             _ => HeatingMode::Ready,
         };
 
-        // Offset 10 (PP): pump status
-        let pp = payload[10];
+        // Offset 11 (P1): pump status (pumps 1-4, 2 bits each)
+        let pp = payload[11];
         let pump1 = decode_pump_state(pp & 0x03);
         let pump2 = decode_pump_state((pp >> 2) & 0x03);
         let pump3 = decode_pump_state((pp >> 4) & 0x03);
 
-        // Offset 11 (F5): circ pump, blower
-        let pump_flags = payload[11];
-        let circ_pump = pump_flags & 0x02 != 0;
-        let blower = pump_flags & 0x0C != 0;
+        // Offset 13 (CB): circ pump, blower
+        let circ_blower = payload[13];
+        let circ_pump = circ_blower & 0x02 != 0;
+        let blower = circ_blower & 0x0C != 0;
 
-        // Offset 12 (F6): mister
-        let mister = payload[12] & 0x01 != 0;
+        // Offset 15 (MR): mister
+        let mister = payload[15] != 0;
 
-        // Offset 9 (F6): heating state, temp range
-        let heating_flags = payload[9];
+        // Offset 10 (FA): heating state, temp range
+        let heating_flags = payload[10];
         let is_heating = heating_flags & 0x30 != 0;
         let temp_range = if heating_flags & 0x04 != 0 {
             TempRange::High
@@ -127,12 +140,12 @@ impl StatusUpdate {
             minute: payload[4],
             heating_mode,
             temperature_scale: scale,
-            time_format: if payload[8] & 0x02 != 0 {
+            time_format: if payload[9] & 0x02 != 0 {
                 TimeFormat::Hour24
             } else {
                 TimeFormat::Hour12
             },
-            filter_mode: (payload[8] >> 2) & 0x03,
+            filter_mode: (payload[9] >> 2) & 0x03,
             is_heating,
             temp_range,
             pump1,
@@ -141,9 +154,9 @@ impl StatusUpdate {
             circ_pump,
             blower,
             mister,
-            light1: payload[13] & 0x03 != 0,
-            is_priming: payload[6] & 0x01 != 0,
-            is_hold: payload[5] & 0x05 != 0,
+            light1: payload[14] & 0x03 != 0,
+            is_priming: payload[1] == 0x01,
+            is_hold: payload[0] == 0x05,
         })
     }
 }
@@ -168,16 +181,18 @@ mod tests {
 
     #[test]
     fn test_parse_status_fahrenheit() {
-        // Construct a plausible status payload
+        // Construct a plausible status payload using correct offsets
         let mut payload = [0u8; 24];
-        payload[2] = 100;  // current temp = 100°F
-        payload[3] = 14;   // hour
-        payload[4] = 30;   // minute
-        payload[8] = 0x30; // heating active, temp range high
-        payload[9] = 0x04; // temp range high
-        payload[10] = 0x03; // pump1=high (bits 0-1=03 → actually 3=off, let me use 1)
-        payload[10] = 0x01; // pump1=low
-        payload[13] = 0x03; // light on
+        payload[0] = 0x00;  // spa state: running
+        payload[1] = 0x00;  // init mode: idle
+        payload[2] = 100;   // current temp = 100°F
+        payload[3] = 14;    // hour
+        payload[4] = 30;    // minute
+        payload[5] = 0x00;  // heating mode: Ready
+        payload[9] = 0x02;  // 24h time format
+        payload[10] = 0x34; // heating active (bits 4-5=0x30) + temp range high (bit 2)
+        payload[11] = 0x01; // pump1=low
+        payload[14] = 0x03; // light on
         payload[20] = 104;  // set temp = 104°F
 
         let status = StatusUpdate::parse(&payload).unwrap();
@@ -188,18 +203,71 @@ mod tests {
         assert_eq!(status.temperature_scale, TemperatureScale::Fahrenheit);
         assert_eq!(status.pump1, PumpState::Low);
         assert!(status.light1);
+        assert!(status.is_heating);
+        assert_eq!(status.temp_range, TempRange::High);
     }
 
     #[test]
     fn test_parse_status_celsius_unknown_temp() {
         let mut payload = [0u8; 24];
         payload[2] = 0xFF;  // unknown temp
-        payload[8] = 0x01;  // celsius
+        payload[9] = 0x01;  // celsius (bit 0)
         payload[20] = 76;   // set temp = 38°C (76/2)
 
         let status = StatusUpdate::parse(&payload).unwrap();
         assert_eq!(status.current_temp, None);
         assert_eq!(status.set_temp, 38.0);
         assert_eq!(status.temperature_scale, TemperatureScale::Celsius);
+    }
+
+    #[test]
+    fn test_parse_status_hold_and_priming() {
+        let mut payload = [0u8; 24];
+        payload[0] = 0x05;  // spa state: hold mode
+        payload[1] = 0x01;  // init mode: priming
+        payload[2] = 100;   // temp
+        payload[9] = 0x02;  // 24h time
+        payload[20] = 104;  // set temp
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert!(status.is_hold);
+        assert!(status.is_priming);
+    }
+
+    #[test]
+    fn test_parse_status_heating_modes() {
+        for (val, expected) in [
+            (0u8, HeatingMode::Ready),
+            (1u8, HeatingMode::Rest),
+            (3u8, HeatingMode::ReadyInRest),
+        ] {
+            let mut payload = [0u8; 24];
+            payload[2] = 100;
+            payload[5] = val;  // heating mode at offset 5
+            payload[9] = 0x02;
+            payload[20] = 104;
+            let status = StatusUpdate::parse(&payload).unwrap();
+            assert_eq!(status.heating_mode, expected);
+        }
+    }
+
+    #[test]
+    fn test_parse_status_pumps_and_circ_blower() {
+        let mut payload = [0u8; 24];
+        payload[2] = 100;
+        payload[9] = 0x02;
+        payload[11] = 0x09;  // pump1=1(low), pump2=0(off), pump3=2(high) → 0b10_00_01_01 = 0x09
+        payload[11] = (1 | (0 << 2) | (2 << 4)) as u8; // pump1=low, pump2=off, pump3=high
+        payload[13] = 0x0E;  // circ pump (bit 1) + blower (bits 2-3)
+        payload[15] = 0x01;  // mister on
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.pump1, PumpState::Low);
+        assert_eq!(status.pump2, PumpState::Off);
+        assert_eq!(status.pump3, PumpState::High);
+        assert!(status.circ_pump);
+        assert!(status.blower);
+        assert!(status.mister);
     }
 }

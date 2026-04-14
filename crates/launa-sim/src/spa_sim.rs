@@ -255,53 +255,63 @@ impl SpaSim {
     pub fn generate_status_frame(&self) -> Vec<u8> {
         let mut payload = [0u8; 24];
 
-        payload[0] = 0xF0;
-        payload[1] = 0xF1;
+        // Offset 0: Spa State (0x00=Running, 0x05=Hold)
+        if self.state.hold {
+            payload[0] = 0x05;
+        }
+        // Offset 1: Init Mode (0x00=Idle, 0x01=Priming)
+        if self.state.priming {
+            payload[1] = 0x01;
+        }
+        // Offset 2: Current Temperature
         payload[2] = SpaState::encode_temp(self.state.current_temp, self.state.temp_scale);
+        // Offset 3: Hour, Offset 4: Minute
         payload[3] = self.state.hour;
         payload[4] = self.state.minute;
 
-        if self.state.hold {
-            payload[5] |= 0x05;
-        }
-        if self.state.priming {
-            payload[6] |= 0x01;
-        }
-        payload[7] |= match self.state.heating_mode {
+        // Offset 5: Heating Mode (0=Ready, 1=Rest, 3=Ready-in-Rest)
+        payload[5] |= match self.state.heating_mode {
             HeatingMode::Ready => 0,
             HeatingMode::Rest => 1,
             HeatingMode::ReadyInRest => 3,
         };
 
+        // Offset 9: Flags (temp scale bit 0, 24h time bit 1, filter mode bits 2-3)
         if matches!(self.state.temp_scale, TemperatureScale::Celsius) {
-            payload[8] |= 0x01;
+            payload[9] |= 0x01;
         }
-        payload[8] |= 0x02; // 24h format
+        payload[9] |= 0x02; // 24h format
 
+        // Offset 10: Flags (temp range bit 2, heating state bits 4-5)
         if self.state.is_heating {
-            payload[9] |= 0x30;
+            payload[10] |= 0x30;
         }
         if matches!(self.state.temp_range, TempRange::High) {
-            payload[9] |= 0x04;
+            payload[10] |= 0x04;
         }
 
-        payload[10] = pump_state_to_bits(self.state.pump1)
+        // Offset 11: Pumps 1-4 (2 bits each)
+        payload[11] = pump_state_to_bits(self.state.pump1)
             | (pump_state_to_bits(self.state.pump2) << 2)
             | (pump_state_to_bits(self.state.pump3) << 4);
 
+        // Offset 13: Circ pump (bit 1), Blower (bits 2-3)
         if self.state.circ_pump {
-            payload[11] |= 0x02;
+            payload[13] |= 0x02;
         }
         if self.state.blower {
-            payload[11] |= 0x0C;
+            payload[13] |= 0x0C;
         }
-        if self.state.mister {
-            payload[12] |= 0x01;
-        }
+        // Offset 14: Lights (bits 0-1 = Light1)
         if self.state.light1 {
-            payload[13] |= 0x03;
+            payload[14] |= 0x03;
+        }
+        // Offset 15: Mister (0=off, 1=on)
+        if self.state.mister {
+            payload[15] = 0x01;
         }
 
+        // Offset 20: Set Temperature
         payload[20] = SpaState::encode_temp(self.state.set_temp, self.state.temp_scale);
 
         FrameEncoder::encode([0xFF, 0xAF], &payload)
