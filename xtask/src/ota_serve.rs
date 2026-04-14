@@ -61,7 +61,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                         tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/octet-stream"[..]).unwrap(),
                         tiny_http::Header::from_bytes(&b"Content-Length"[..], format!("{}", len).as_bytes()).unwrap(),
                     ],
-                    std::io::Cursor::new(std::sync::Arc::try_unwrap(data).unwrap_or_else(|arc| (*arc).clone())),
+                    std::io::Cursor::new((*data).clone()),
                     Some(len),
                     None,
                 );
