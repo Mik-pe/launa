@@ -134,6 +134,62 @@ impl DiscoveryBuilder {
             }).to_string(),
         ));
 
+        // Heat Mode select
+        configs.push(Self::make_select(
+            &topics, &self.device_id, &device_info, &origin, &state_topic, &avail_topic,
+            "heat_mode", "Heat Mode",
+            json!(["ready", "rest", "ready_in_rest"]),
+            "{{ value_json.heating_mode }}",
+            &format!("{}/heat_mode", cmd_topic),
+        ));
+
+        // Circulation Pump switch
+        configs.push(Self::make_switch(
+            &topics, &self.device_id, &device_info, &origin, &state_topic, &avail_topic,
+            "circ_pump", "Circulation Pump",
+            "{{ value_json.circ_pump }}",
+            &format!("{}/circ_pump", cmd_topic),
+        ));
+
+        // Temperature Range select
+        configs.push(Self::make_select(
+            &topics, &self.device_id, &device_info, &origin, &state_topic, &avail_topic,
+            "temp_range", "Temperature Range",
+            json!(["high", "low"]),
+            "{{ value_json.temp_range }}",
+            &format!("{}/temp_range", cmd_topic),
+        ));
+
+        // Hold Mode switch
+        configs.push(Self::make_switch(
+            &topics, &self.device_id, &device_info, &origin, &state_topic, &avail_topic,
+            "hold_mode", "Hold Mode",
+            "{{ value_json.hold_mode }}",
+            &format!("{}/hold_mode", cmd_topic),
+        ));
+
+        // Mister switch
+        configs.push(Self::make_switch(
+            &topics, &self.device_id, &device_info, &origin, &state_topic, &avail_topic,
+            "mister", "Mister",
+            "{{ value_json.mister }}",
+            &format!("{}/mister", cmd_topic),
+        ));
+
+        // Fault sensor
+        configs.push((
+            topics.discovery_topic("sensor", "fault"),
+            json!({
+                "device": device_info,
+                "origin": origin,
+                "name": "Last Fault",
+                "unique_id": format!("{}_fault", self.device_id),
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.last_fault }}",
+                "availability_topic": avail_topic,
+            }).to_string(),
+        ));
+
         configs
     }
 
@@ -223,6 +279,35 @@ impl DiscoveryBuilder {
             }).to_string(),
         )
     }
+
+    fn make_select(
+        topics: &TopicBuilder,
+        device_id: &str,
+        device: &serde_json::Value,
+        origin: &serde_json::Value,
+        state_topic: &str,
+        avail_topic: &str,
+        object_id: &str,
+        name: &str,
+        options: serde_json::Value,
+        value_template: &str,
+        command_topic: &str,
+    ) -> (String, String) {
+        (
+            topics.discovery_topic("select", object_id),
+            json!({
+                "device": device,
+                "origin": origin,
+                "name": name,
+                "unique_id": format!("{}_{}", device_id, object_id),
+                "state_topic": state_topic,
+                "command_topic": command_topic,
+                "value_template": value_template,
+                "options": options,
+                "availability_topic": avail_topic,
+            }).to_string(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -234,7 +319,7 @@ mod tests {
         let builder = DiscoveryBuilder::new("test_spa_001");
         let configs = builder.build();
 
-        assert_eq!(configs.len(), 8);
+        assert_eq!(configs.len(), 14);
 
         for (topic, json_str) in &configs {
             let _: serde_json::Value = serde_json::from_str(json_str)

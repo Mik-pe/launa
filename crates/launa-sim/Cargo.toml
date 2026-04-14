@@ -1,0 +1,10 @@
+[package]
+name = "launa-sim"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+launa-protocol = { path = "../launa-protocol" }
+launa-hal = { path = "../launa-hal", features = ["std"] }
+launa-mqtt = { path = "../launa-mqtt", features = ["std"] }
+log.workspace = true

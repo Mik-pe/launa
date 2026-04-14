@@ -33,6 +33,9 @@ pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8]) -> O
         "pump3" => parse_toggle(payload_str, ToggleItem::Pump3),
         "light1" => parse_toggle(payload_str, ToggleItem::Light1),
         "blower" => parse_toggle(payload_str, ToggleItem::Blower),
+        "heat_mode" => parse_toggle(payload_str, ToggleItem::HeatingMode),
+        "temp_range" => parse_toggle(payload_str, ToggleItem::TemperatureRange),
+        "hold_mode" => parse_toggle(payload_str, ToggleItem::HoldMode),
         "set_temperature" => parse_set_temperature(payload_str),
         _ => None,
     }
@@ -93,6 +96,24 @@ mod tests {
     fn test_parse_blower() {
         let cmd = parse_command(CMD_BASE, "launa/test_spa_001/command/blower", b"true");
         assert_eq!(cmd, Some(Command::ToggleItem(ToggleItem::Blower)));
+    }
+
+    #[test]
+    fn test_parse_heat_mode() {
+        let cmd = parse_command(CMD_BASE, "launa/test_spa_001/command/heat_mode", b"true");
+        assert_eq!(cmd, Some(Command::ToggleItem(ToggleItem::HeatingMode)));
+    }
+
+    #[test]
+    fn test_parse_temp_range() {
+        let cmd = parse_command(CMD_BASE, "launa/test_spa_001/command/temp_range", b"true");
+        assert_eq!(cmd, Some(Command::ToggleItem(ToggleItem::TemperatureRange)));
+    }
+
+    #[test]
+    fn test_parse_hold_mode() {
+        let cmd = parse_command(CMD_BASE, "launa/test_spa_001/command/hold_mode", b"true");
+        assert_eq!(cmd, Some(Command::ToggleItem(ToggleItem::HoldMode)));
     }
 
     #[test]

@@ -7,4 +7,10 @@ edition.workspace = true
 launa-protocol = { path = "../launa-protocol" }
 launa-mqtt = { path = "../launa-mqtt", features = ["std"] }
 launa-ota = { path = "../launa-ota" }
+launa-sim = { path = "../launa-sim" }
+launa-hal = { path = "../launa-hal", features = ["std"] }
 serde_json = { workspace = true }
+
+[[test]]
+name = "sim_tests"
+path = "tests/sim_tests.rs"

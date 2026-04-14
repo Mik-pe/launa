@@ -422,7 +422,7 @@ mod tests {
         let builder = launa_mqtt::discovery::DiscoveryBuilder::new("test_spa_001");
         let configs = builder.build();
 
-        assert_eq!(configs.len(), 8);
+        assert_eq!(configs.len(), 14);
 
         for (topic, json_str) in &configs {
             let _: serde_json::Value = serde_json::from_str(json_str)

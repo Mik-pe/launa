@@ -45,11 +45,14 @@ pub fn status_to_json(status: &StatusUpdate) -> String {
         "light1": status.light1,
         "blower": status.blower,
         "circ_pump": status.circ_pump,
+        "mister": status.mister,
+        "hold_mode": status.is_hold,
         "heating_mode": heating_mode,
         "temp_range": temp_range,
         "temp_scale": temp_scale,
         "hour": status.hour,
         "minute": status.minute,
+        "last_fault": null,
     })
     .to_string()
 }
@@ -104,11 +107,14 @@ mod tests {
         assert_eq!(parsed["light1"], true);
         assert_eq!(parsed["blower"], false);
         assert_eq!(parsed["circ_pump"], false);
+        assert_eq!(parsed["mister"], false);
+        assert_eq!(parsed["hold_mode"], false);
         assert_eq!(parsed["heating_mode"], "ready");
         assert_eq!(parsed["temp_range"], "high");
         assert_eq!(parsed["temp_scale"], "fahrenheit");
         assert_eq!(parsed["hour"], 14);
         assert_eq!(parsed["minute"], 30);
+        assert!(parsed["last_fault"].is_null());
     }
 
     #[test]
