@@ -12,6 +12,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use embassy_executor::Spawner;
 use embassy_sync::channel::Channel;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Duration, Timer};
 use embedded_io_async::Write as _;
 use launa_protocol::command::Command;
@@ -36,14 +37,10 @@ esp_alloc::heap_allocator!(size: 32 * 1024);
 
 // ── Inter-task channels ────────────────────────────────────────────────
 
-static FRAME_CHANNEL: Channel<embassy_sync::blocking_mutex::raw::NoopRawMutex, Frame, 4> =
-    Channel::new();
-static COMMAND_CHANNEL: Channel<embassy_sync::blocking_mutex::raw::NoopRawMutex, Command, 4> =
-    Channel::new();
-static UART_TX_CHANNEL: Channel<embassy_sync::blocking_mutex::raw::NoopRawMutex, Vec<u8>, 4> =
-    Channel::new();
-static STATE_CHANNEL: Channel<embassy_sync::blocking_mutex::raw::NoopRawMutex, StatusUpdate, 2> =
-    Channel::new();
+static FRAME_CHANNEL: Channel<CriticalSectionRawMutex, Frame, 4> = Channel::new();
+static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
+static UART_TX_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
+static STATE_CHANNEL: Channel<CriticalSectionRawMutex, StatusUpdate, 2> = Channel::new();
 
 // ── Combined UART task (reads frames + writes outgoing bytes) ──────────
 
@@ -158,33 +155,37 @@ async fn send_frame(msg_type: [u8; 2], payload: &[u8]) {
 async fn main(spawner: Spawner) {
     let peripherals = esp_hal::init(esp_hal::Config::default());
 
-    // Embassy timer + scheduler init (TIMG0 timer0 + software interrupt 0)
-    let sw_int = esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+    // Embassy timer + scheduler init (TIMG0 timer0)
+    // On xtensa (ESP32), esp_rtos::start() takes only the timer
     let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
-    esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
+    esp_rtos::start(timg0.timer0);
 
     info!("Launa ESP32 firmware starting...");
 
     // ── Load config from NVS ────────────────────────────────────────
-    let flash = esp_storage::FlashStorage::new();
-    let mut nvs = config::AppConfig::open_nvs(flash);
+    let mut nvs = config::AppConfig::open_nvs();
     let app_config = config::AppConfig::load(&mut nvs);
     info!("Config loaded: device_id={}", app_config.device_id);
 
     // ── Initialize RS-485 UART (UART1, 115200 baud, TX=GPIO17, RX=GPIO16) ──
     let uart_config = esp_hal::uart::Config::default().with_baudrate(115200);
     let uart = esp_hal::uart::Uart::new(peripherals.UART1, uart_config)
+        .expect("Failed to create UART")
         .with_tx(peripherals.GPIO17)
         .with_rx(peripherals.GPIO16)
         .into_async();
 
-    let uart_transport = transport::Rs485Transport::new(uart, Some(peripherals.GPIO4));
+    let uart_transport = transport::Rs485Transport::new(uart, Some(peripherals.GPIO4.into()));
     info!("RS-485 UART initialized");
 
+    // ── Initialize esp-radio (required before WiFi) ──────────────────
+    let radio_ctrl = esp_radio::init().expect("Failed to init esp-radio");
+
     // ── Connect WiFi ────────────────────────────────────────────────
-    let rng = esp_hal::rng::Rng::new();
+    let rng = esp_hal::rng::Rng::new(peripherals.RNG);
     let wifi_stack = wifi::WifiStack::connect(
         spawner,
+        radio_ctrl,
         peripherals.WIFI,
         rng,
         &app_config.wifi_ssid,

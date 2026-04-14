@@ -8,11 +8,10 @@ use embassy_net::{Runner, StackResources, Config as NetConfig, Stack};
 use embassy_time::{Duration, Timer};
 use esp_hal::rng::Rng;
 use esp_radio::wifi::{
+    ClientConfig,
     Config as WifiConfig,
-    ControllerConfig,
-    Interface,
     WifiController,
-    sta::StationConfig,
+    WifiDevice,
 };
 use log::{info, warn};
 
@@ -33,10 +32,16 @@ pub struct WifiStack {
 async fn connection_task(mut controller: WifiController<'static>) {
     loop {
         match controller.connect_async().await {
-            Ok(info) => {
-                info!("WiFi connected: {:?}", info);
-                let info = controller.wait_for_disconnect_async().await.ok();
-                warn!("WiFi disconnected: {:?}", info);
+            Ok(()) => {
+                info!("WiFi connected");
+                // Wait for disconnect
+                loop {
+                    if !controller.is_connected().unwrap_or(false) {
+                        break;
+                    }
+                    Timer::after(Duration::from_secs(1)).await;
+                }
+                warn!("WiFi disconnected");
             }
             Err(e) => {
                 warn!("WiFi connect failed: {:?}", e);
@@ -47,32 +52,42 @@ async fn connection_task(mut controller: WifiController<'static>) {
 }
 
 #[embassy_executor::task]
-async fn net_task(mut runner: Runner<'static, Interface<'static>>) {
+async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
     runner.run().await;
 }
 
 impl WifiStack {
     pub async fn connect(
         spawner: Spawner,
-        wifi_peripheral: esp_hal::peripherals::WIFI,
+        radio_ctrl: esp_radio::Controller<'static>,
+        wifi_peripheral: esp_hal::peripherals::WIFI<'static>,
         rng: Rng,
         ssid: &str,
         password: &str,
     ) -> Self {
-        let station_config = WifiConfig::Station(
-            StationConfig::default()
-                .with_ssid(ssid)
-                .with_password(password.into()),
-        );
+        let config = WifiConfig::default();
 
         info!("Starting WiFi...");
         let (controller, interfaces) = esp_radio::wifi::new(
+            &radio_ctrl,
             wifi_peripheral,
-            ControllerConfig::default().with_initial_config(station_config),
+            config,
         )
         .expect("Failed to create WiFi");
 
-        let wifi_interface = interfaces.station;
+        // Configure station mode
+        controller
+            .set_config(&esp_radio::wifi::ModeConfig::Client(
+                ClientConfig::default()
+                    .ssid(ssid)
+                    .password(password),
+            ))
+            .expect("Failed to set WiFi config");
+
+        controller.start_async().await.expect("Failed to start WiFi");
+        info!("WiFi started, connecting...");
+
+        let wifi_interface = interfaces.sta;
 
         let net_config = NetConfig::dhcpv4(Default::default());
         let seed = (rng.random() as u64) << 32 | rng.random() as u64;

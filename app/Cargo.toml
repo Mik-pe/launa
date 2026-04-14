@@ -14,6 +14,10 @@ opt-level = "s"
 [profile.dev.package.esp-storage]
 opt-level = 3
 
+# esp-radio requires opt-level >= 2 for WiFi to work reliably
+[profile.dev.package.esp-radio]
+opt-level = 3
+
 [dependencies]
 esp-hal = { version = "1.0.0", features = ["esp32", "unstable"] }
 esp-rtos = { version = "0.2.0", features = ["esp32", "embassy", "log-04"] }
@@ -21,11 +25,12 @@ esp-radio = { version = "0.17", features = ["esp32", "unstable", "wifi", "smoltc
 esp-alloc = "0.7"
 esp-nvs = { version = "0.4", features = ["esp32"] }
 esp-storage = { version = "0.5", features = ["esp32"] }
+esp-backtrace = { version = "0.15", features = ["esp32", "panic-handler", "exception-handler", "print-uart"] }
 
 embassy-executor = "0.9"
-embassy-time = "0.4"
+embassy-time = "0.5"
 embassy-net = { version = "0.7", features = ["tcp", "dhcpv4", "medium-ethernet"] }
-embassy-sync = "0.6"
+embassy-sync = "0.7"
 embassy-futures = "0.1"
 
 embedded-io-async = "0.6"

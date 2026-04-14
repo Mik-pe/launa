@@ -2,9 +2,9 @@
 
 use embedded_io_async::{self, Read, Write, ErrorType};
 use embassy_time::{Duration, Timer};
-use esp_hal::gpio::{GpioPin, Output, OutputConfig, Level};
+use esp_hal::gpio::{AnyPin, Output, OutputConfig, Level};
 use esp_hal::uart::Uart;
-use esp_hal::mode::Async;
+use esp_hal::Async;
 use log::trace;
 
 pub struct Rs485Transport {
@@ -15,7 +15,7 @@ pub struct Rs485Transport {
 impl Rs485Transport {
     pub fn new(
         uart: Uart<'static, Async>,
-        de_pin: Option<GpioPin>,
+        de_pin: Option<AnyPin<'static>>,
     ) -> Self {
         let de = de_pin.map(|pin| {
             Output::new(pin, Level::Low, OutputConfig::default())
@@ -39,13 +39,12 @@ impl ErrorType for Rs485Transport {
 
 impl Read for Rs485Transport {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        // esp-hal Uart implements embedded_io_async::Read when in Async mode
         self.uart.read(buf).await.map_err(|_| TransportError)
     }
 }
 
 impl Write for Rs485Transport {
-    async fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         // Assert DE pin for transmit
         if let Some(ref mut de) = self.de_pin {
             de.set_high();
@@ -53,11 +52,10 @@ impl Write for Rs485Transport {
             Timer::after(Duration::from_micros(50)).await;
         }
 
-        let result = self.uart.write(buf).await.map_err(|_| TransportError);
+        let result = self.uart.write(buf).map_err(|_| TransportError);
 
         // Flush TX to ensure all bytes are on the wire
-        // esp-hal async UART flush
-        let _ = self.uart.flush().await;
+        let _ = self.uart.flush();
 
         // Release DE pin
         if let Some(ref mut de) = self.de_pin {

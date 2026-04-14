@@ -6,7 +6,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::format;
 use embassy_net::tcp::TcpSocket;
-use embassy_net::Stack;
+use embassy_net::{IpAddress, IpEndpoint, Ipv4Address, Stack};
 use embassy_time::{Duration, Timer};
 use embedded_io_async::{self, Read, Write, ErrorType};
 use launa_mqtt::topics::TopicBuilder;
@@ -95,13 +95,15 @@ impl MqttClient {
         stack: &'static Stack<'static>,
         config: &AppConfig,
     ) -> Result<Self, MqttError> {
-        // 1. Open TCP connection
-        let mut socket = TcpSocket::new(stack);
+        // 1. Allocate TCP socket with buffers
+        let mut rx_buf = [0u8; 1024];
+        let mut tx_buf = [0u8; 1024];
+        let mut socket = TcpSocket::new(stack, &mut rx_buf, &mut tx_buf);
         socket.set_timeout(Some(Duration::from_secs(10)));
 
         let addr = parse_ip(&config.mqtt_host).unwrap_or([192, 168, 1, 100]);
-        let endpoint = embassy_net::IpEndpoint {
-            addr: embassy_net::IpAddress::from(addr),
+        let endpoint = IpEndpoint {
+            addr: IpAddress::Ipv4(Ipv4Address::from_bytes(&addr)),
             port: config.mqtt_port,
         };
 

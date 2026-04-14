@@ -3,7 +3,6 @@
 extern crate alloc;
 
 use alloc::string::String;
-use alloc::format;
 use log::{info, warn};
 
 const NAMESPACE: &str = "launa";
@@ -42,19 +41,22 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    pub fn load(nvs: &mut esp_nvs::Nvs) -> Self {
-        let wifi_ssid = nvs_get_str(nvs, KEY_WIFI_SSID)
+    pub fn load(nvs: &mut esp_nvs::Nvs<esp_storage::FlashStorage<'static>>) -> Self {
+        let ns = esp_nvs::Key::from_str(NAMESPACE);
+
+        let wifi_ssid = nvs_get_str(nvs, &ns, KEY_WIFI_SSID)
             .unwrap_or_else(|| String::from("YOUR_WIFI_SSID"));
-        let wifi_password = nvs_get_str(nvs, KEY_WIFI_PASS)
+        let wifi_password = nvs_get_str(nvs, &ns, KEY_WIFI_PASS)
             .unwrap_or_else(|| String::from("YOUR_WIFI_PASSWORD"));
-        let mqtt_host = nvs_get_str(nvs, KEY_MQTT_HOST)
+        let mqtt_host = nvs_get_str(nvs, &ns, KEY_MQTT_HOST)
             .unwrap_or_else(|| String::from("192.168.1.100"));
-        let mqtt_port = nvs.get_u16(KEY_MQTT_PORT).unwrap_or(1883);
-        let mqtt_user = nvs_get_str(nvs, KEY_MQTT_USER)
+        let mqtt_port = nvs.get::<u16>(&ns, &esp_nvs::Key::from_str(KEY_MQTT_PORT))
+            .unwrap_or(1883);
+        let mqtt_user = nvs_get_str(nvs, &ns, KEY_MQTT_USER)
             .unwrap_or_else(|| String::new());
-        let mqtt_password = nvs_get_str(nvs, KEY_MQTT_PASS)
+        let mqtt_password = nvs_get_str(nvs, &ns, KEY_MQTT_PASS)
             .unwrap_or_else(|| String::new());
-        let device_id = nvs_get_str(nvs, KEY_DEVICE_ID)
+        let device_id = nvs_get_str(nvs, &ns, KEY_DEVICE_ID)
             .unwrap_or_else(|| String::from("launa_spa"));
 
         info!(
@@ -73,26 +75,35 @@ impl AppConfig {
         }
     }
 
-    pub fn save(&self, nvs: &mut esp_nvs::Nvs) {
-        let _ = nvs.set_str(KEY_WIFI_SSID, &self.wifi_ssid);
-        let _ = nvs.set_str(KEY_WIFI_PASS, &self.wifi_password);
-        let _ = nvs.set_str(KEY_MQTT_HOST, &self.mqtt_host);
-        let _ = nvs.set_u16(KEY_MQTT_PORT, self.mqtt_port);
-        let _ = nvs.set_str(KEY_MQTT_USER, &self.mqtt_user);
-        let _ = nvs.set_str(KEY_MQTT_PASS, &self.mqtt_password);
-        let _ = nvs.set_str(KEY_DEVICE_ID, &self.device_id);
+    pub fn save(&self, nvs: &mut esp_nvs::Nvs<esp_storage::FlashStorage<'static>>) {
+        let ns = esp_nvs::Key::from_str(NAMESPACE);
+        let _ = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_WIFI_SSID), self.wifi_ssid.as_str());
+        let _ = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_WIFI_PASS), self.wifi_password.as_str());
+        let _ = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_MQTT_HOST), self.mqtt_host.as_str());
+        let _ = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_MQTT_PORT), self.mqtt_port);
+        let _ = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_MQTT_USER), self.mqtt_user.as_str());
+        let _ = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_MQTT_PASS), self.mqtt_password.as_str());
+        let _ = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_DEVICE_ID), self.device_id.as_str());
         info!("Config saved to NVS");
     }
 
-    pub fn open_nvs(flash: esp_storage::FlashStorage) -> esp_nvs::Nvs {
-        esp_nvs::Nvs::new(flash, NAMESPACE).unwrap_or_else(|_| {
-            warn!("Failed to open NVS namespace 'launa', using defaults");
+    /// Open the NVS partition. The default NVS partition on ESP32 starts at
+    /// the offset defined in the partition table and is typically 24KB (0x6000).
+    pub fn open_nvs() -> esp_nvs::Nvs<esp_storage::FlashStorage<'static>> {
+        let flash = esp_storage::FlashStorage::new();
+        // Default NVS partition: offset 0x9000, size 0x6000 (24KB)
+        // These must match the partition table in app/partitions.csv
+        esp_nvs::Nvs::new(0x9000, 0x6000, flash).unwrap_or_else(|e| {
+            warn!("Failed to open NVS partition: {:?}, using defaults", e);
             panic!("NVS init failed")
         })
     }
 }
 
-fn nvs_get_str(nvs: &esp_nvs::Nvs, key: &str) -> Option<String> {
-    // esp-nvs returns Option<&str> from get_str
-    nvs.get_str(key).map(|s| String::from(s))
+fn nvs_get_str(
+    nvs: &mut esp_nvs::Nvs<esp_storage::FlashStorage<'static>>,
+    namespace: &esp_nvs::Key,
+    key: &str,
+) -> Option<String> {
+    nvs.get::<String>(namespace, &esp_nvs::Key::from_str(key)).ok()
 }

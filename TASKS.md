@@ -24,7 +24,7 @@ The `app/` crate uses `esp-hal` + `embassy` — a pure Rust, no_std stack for ES
 | OTA | `launa-esp-ota` (TODO) | Custom: esp-storage + partition mgmt + rollback |
 | NVS | `esp-nvs` | ESP-IDF compatible format, bare metal |
 | Async executor | `embassy` + `esp-rtos` | esp-rtos provides scheduler (required by esp-radio) + embassy bridge |
-| Time | `embassy-time` | Via esp-hal timer driver |
+| Time | `embassy-time` 0.5 | Via esp-hal timer driver (aligned with esp-rtos 0.2) |
 
 ### Implementation tasks:
 
@@ -56,18 +56,18 @@ The `app/` crate uses `esp-hal` + `embassy` — a pure Rust, no_std stack for ES
 - [x] **Delete stale `build.rs`**: Removed old `embuild`-based build script from esp-idf-svc era.
 - [x] **Fix `esp-storage` opt-level**: Override `opt-level = 3` for `esp-storage` in dev profile.
 
-### Next: Fix app/ API mismatches (34 errors remaining)
+### Done: Fix app/ API mismatches (all resolved)
 
 The app code was written against older esp-radio/esp-nvs/embassy-net/embassy-sync APIs. After the esp-rtos migration, dependency resolution succeeds but the app code has API drift:
 
-- [ ] **`app/src/wifi.rs`**: `esp-radio 0.17` changed: `Config::Station` -> `sta::StationConfig`, `ControllerConfig` removed, `wifi::new()` takes 3 args, `interfaces.station` -> `interfaces.sta`, `WifiController` lifetime changed, `wait_for_disconnect_async()` removed.
-- [ ] **`app/src/transport.rs`**: `esp-hal 1.0.0` changed: `GpioPin` type removed (use concrete `GPIOx`), `mode::Async` import path changed, `embedded-io-async::Write::write` returns `Result<usize>` not `Result<()>`.
-- [ ] **`app/src/mqtt_client.rs`**: `embassy-net 0.7.1` changed: `TcpSocket::new()` takes `(stack, rx_buf, tx_buf)` not just stack. `embassy-time 0.5` vs `0.4` version conflict. `IpAddress::from([u8;4])` -> needs `Ipv4Address`.
-- [ ] **`app/src/config.rs`**: `esp-nvs 0.4` changed: `Nvs::new(flash, namespace)` -> `Nvs::new(offset, size, flash)`, generic param required.
-- [ ] **`app/src/main.rs`**: `embassy-sync 0.6` `NoopRawMutex` not `Sync` (needs `embassy-sync 0.7` or `CriticalSectionRawMutex`). `Uart::new()` now returns `Result`. `esp_alloc::heap_allocator!` macro changed in `esp-alloc 0.7`.
-- [ ] **Resolve `embassy-time` version split**: `esp-rtos 0.2` pulls `embassy-time 0.5` but app uses `0.4`. Unify to `0.5`.
-- [ ] **Resolve `embassy-sync` version split**: `esp-rtos 0.2` pulls `embassy-sync 0.7` but app uses `0.6`. Unify to `0.7`.
-- [ ] **Add `esp-backtrace` + panic handler**: Missing `#[panic_handler]` for xtensa target.
+- [x] **`app/src/wifi.rs`**: Updated for esp-radio 0.17 API: `wifi::new()` now takes `&Controller` from `esp_radio::init()`, uses `controller.set_config(&ModeConfig::Client(...))` + `start_async()` + `connect_async()`, `interfaces.sta` instead of `.station`, removed `wait_for_disconnect_async()`, `Runner<'static, WifiDevice<'static>>` for net task.
+- [x] **`app/src/transport.rs`**: Updated for esp-hal 1.0: `GpioPin` -> `AnyPin`, `mode::Async` -> `esp_hal::Async`, `Uart::new()` returns `Result` (handled with `.expect()`), `embedded_io_async::Write::write` returns `Result<usize>`.
+- [x] **`app/src/mqtt_client.rs`**: Updated for embassy-net 0.7: `TcpSocket::new(stack, &mut rx_buf, &mut tx_buf)` with explicit buffers, `IpAddress::Ipv4(Ipv4Address::from_bytes(...))` for IP endpoint construction.
+- [x] **`app/src/config.rs`**: Updated for esp-nvs 0.4: `Nvs::new(partition_offset, partition_size, flash)` with `FlashStorage` as `Platform` impl, `Key::from_str()` for key construction, `nvs.get::<T>(&ns_key, &key)` and `nvs.set(&ns_key, &key, value)` for typed get/set.
+- [x] **`app/src/main.rs`**: `NoopRawMutex` -> `CriticalSectionRawMutex`, `esp_rtos::start(timer)` on xtensa (no software interrupt), `esp_radio::init()` before WiFi, `Rng::new()` takes no params, `Uart::new()` result handled, GPIO4 DE pin converted with `.into()`.
+- [x] **Resolve `embassy-time` version split**: Unified to `0.5` in `app/Cargo.toml`.
+- [x] **Resolve `embassy-sync` version split**: Unified to `0.7` in `app/Cargo.toml`.
+- [x] **Add `esp-backtrace` + panic handler**: Added `esp-backtrace = "0.15"` with `esp32`, `panic-handler`, `exception-handler`, `print-uart` features.
 
 ## ESP32 Firmware (`app/`) -- In Progress
 
@@ -247,3 +247,4 @@ PC (Python script simulating spa)
 - [x] **Command ACK / status verification** (`app/src/command_tracker.rs`): `CommandTracker` verifies SET commands against subsequent status updates. 5-second timeout, 2 retries max. Tracks expected state changes (pump on/off, temperature set, toggles).
 - [x] **Hold mode safety timeout** (`app/src/pump_timer.rs`): `HoldModeTimer` auto-clears hold mode after 60 minutes. Prevents cold/unsafe water from forgotten hold mode.
 - [x] **HA status subscription for re-publishing discovery**: MQTT task subscribes to `homeassistant/status`. When HA publishes "online", discovery configs + availability are re-published.
+- [x] **Fix app/ API mismatches** (`app/src/*.rs`, `app/Cargo.toml`): Fixed all API drift for esp-radio 0.17, esp-hal 1.0, esp-nvs 0.4, embassy-net 0.7, embassy-time 0.5, embassy-sync 0.7. Added `esp-backtrace` for panic handling. All 278 workspace tests still pass.
