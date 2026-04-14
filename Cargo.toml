@@ -7,10 +7,11 @@ members = [
     "crates/launa-ota",
     "crates/launa-sim",
     "crates/launa-integration-tests",
+    "xtask",
 ]
 exclude = [
-    # The ESP32 app uses esp-idf-sys which has unconventional build rules
-    # that don't mesh well with the rest of the workspace. Build separately.
+    # The ESP32 app targets xtensa-esp32-none-elf and uses esp-hal + embassy.
+    # Build separately with: cd app && cargo build
     "app",
 ]
 

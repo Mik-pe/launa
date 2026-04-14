@@ -1,41 +1,58 @@
-//! OTA firmware update implementation using esp-idf-svc.
+//! OTA firmware update using esp-hal-ota.
 
-use anyhow::{bail, Context, Result};
-use esp_idf_svc::ota::EspOtaUpdate;
 use launa_ota::{OtaError, OtaUpdate};
-use log::{info, warn};
+use esp_hal_ota::Ota;
+use log::{info, warn, error};
 
-pub struct EspOta;
+pub struct EspOta {
+    ota: Ota<esp_storage::FlashStorage>,
+}
 
 impl EspOta {
     pub fn new() -> Self {
-        EspOta
+        let flash = esp_storage::FlashStorage::new();
+        let ota = Ota::new(flash);
+        EspOta { ota }
     }
 }
 
 impl OtaUpdate for EspOta {
     fn begin(&mut self) -> Result<(), OtaError> {
         info!("OTA: beginning update");
-        Ok(())
+        self.ota.begin().map_err(|e| {
+            error!("OTA begin failed: {:?}", e);
+            OtaError::BeginFailed
+        })
     }
 
     fn write(&mut self, chunk: &[u8]) -> Result<(), OtaError> {
-        let _ = chunk;
-        Ok(())
+        self.ota.write(chunk).map_err(|e| {
+            error!("OTA write failed: {:?}", e);
+            OtaError::WriteFailed
+        })
     }
 
     fn finalize(&mut self) -> Result<(), OtaError> {
         info!("OTA: finalizing update");
-        Ok(())
+        self.ota.end().map_err(|e| {
+            error!("OTA finalize failed: {:?}", e);
+            OtaError::FinalizeFailed
+        })
     }
 
     fn mark_valid(&mut self) -> Result<(), OtaError> {
         info!("OTA: marking firmware valid");
-        Ok(())
+        self.ota.mark_app_valid().map_err(|e| {
+            error!("OTA mark_valid failed: {:?}", e);
+            OtaError::FlashError
+        })
     }
 
     fn rollback_and_reboot(&mut self) -> Result<(), OtaError> {
         warn!("OTA: rollback and reboot requested");
-        Ok(())
+        self.ota.rollback_and_reboot().map_err(|e| {
+            error!("OTA rollback failed: {:?}", e);
+            OtaError::FlashError
+        })
     }
 }

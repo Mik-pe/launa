@@ -191,9 +191,12 @@ fn test_very_long_payload_frame() {
         payload,
     };
     let encoded = frame.encode();
-    let inner = &encoded[1..encoded.len() - 1];
-    let decoded = Frame::parse(inner).unwrap();
-    assert_eq!(decoded, frame);
+
+    // Use FrameDecoder to handle byte stuffing
+    let mut decoder = FrameDecoder::new();
+    let decoded = decoder.feed_slice(&encoded);
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(decoded[0], frame);
 }
 
 #[test]

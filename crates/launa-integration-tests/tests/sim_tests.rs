@@ -202,14 +202,7 @@ fn test_full_spa_lifecycle() {
     assert_eq!(spa.state.pump1, PumpState::Low);
 
     // Phase 4: Verify pump shows in next status
-    let spa_bytes = spa.tick();
-    eprintln!("DEBUG spa_bytes: {:02x?}", &spa_bytes);
-    transport.inject_from_spa(&spa_bytes);
-    let mut buf = [0u8; 512];
-    let n = transport.read(&mut buf).unwrap();
-    eprintln!("DEBUG read {} bytes: {:02x?}", n, &buf[..n]);
-    let events = controller.process_bytes(&buf[..n]);
-    eprintln!("DEBUG events: {:?}", events);
+    let events = run_tick(&mut spa, &mut transport, &mut controller);
     let status_event = events.iter().find_map(|e| match e {
         ControllerEvent::StatusUpdate(s) => Some(s.clone()),
         _ => None,

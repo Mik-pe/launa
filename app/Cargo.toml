@@ -10,23 +10,29 @@ opt-level = "s"
 debug = true
 opt-level = "z"
 
-[package.metadata.esp-idf-sys]
-# ESP-IDF version — adjust branch/tag as needed
-esp_idf_version = "branch:v5.1.3"
-
 [dependencies]
-esp-idf-sys = { version = "0.35", features = ["binstart"] }
-esp-idf-hal = "0.44"
-esp-idf-svc = "0.51"
-embedded-svc = "0.27"
-embedded-hal = "1"
+esp-hal = { version = "1.0", features = ["esp32", "unstable"] }
+esp-hal-embassy = { version = "0.9", features = ["esp32", "executors"] }
+esp-radio = { version = "0.17", features = ["esp32", "unstable", "wifi", "smoltcp", "log-04"] }
+esp-alloc = "0.7"
+esp-nvs = { version = "0.4", features = ["esp32"] }
+esp-storage = { version = "0.5", features = ["esp32"] }
+esp-hal-ota = { version = "0.4", features = ["esp32", "log"] }
+
+embassy-executor = { version = "0.7", features = ["task-arena-size-65536"] }
+embassy-time = "0.4"
+embassy-net = { version = "0.7", features = ["tcp", "dhcpv4", "medium-ethernet"] }
+embassy-sync = "0.6"
+embassy-futures = "0.2"
+
+embedded-io-async = "0.6"
+
+rust-mqtt = { version = "0.5", default-features = false, features = ["v5", "alloc", "log-level-info"] }
+
+static_cell = "2"
 log = "0.4"
-anyhow = "1"
+
 launa-protocol = { path = "../crates/launa-protocol" }
 launa-hal = { path = "../crates/launa-hal", default-features = false }
 launa-mqtt = { path = "../crates/launa-mqtt", default-features = false }
 launa-ota = { path = "../crates/launa-ota" }
-
-[build-dependencies]
-embuild = "0.32"
-anyhow = "1"

@@ -8,24 +8,60 @@
 - [ ] **Birth/last-will messages**: Publish `online`/`offline` to availability topic on connect/disconnect. Set LWT (Last Will and Testament) in MQTT connect options. Subscribe to `homeassistant/status` and re-publish discovery when HA restarts.
 - [ ] **Set retain flag on discovery payloads**: HA auto-discovery messages should be published with `retain: true` so they survive broker restarts.
 
-## ESP32 Firmware (`app/`) -- First Draft Complete
+## Architecture: esp-hal + embassy (pure Rust, no_std)
 
-All modules implemented. Requires ESP-IDF toolchain to compile. Workspace tests (186) pass.
+The `app/` crate uses `esp-hal` + `embassy` — a pure Rust, no_std stack for ESP32. No C SDK dependency. Embassy provides `select!` for concurrent UART + MQTT. Workspace crates (launa-protocol, launa-hal, launa-mqtt, launa-ota) are unaffected.
+
+### Dependency map:
+
+| Need | Crate | Notes |
+|---|---|---|
+| HAL (UART, GPIO) | `esp-hal` 1.0+ | Stable |
+| WiFi | `esp-radio` | `unstable` feature, works on ESP32 |
+| TCP/IP | `embassy-net` (smoltcp) | Async network stack |
+| TLS | `esp-mbedtls` | no_std mbedtls wrapper |
+| MQTT | `rust-mqtt` | MQTTv5, no_std |
+| OTA | `esp-hal-ota` | Partition management + CRC + rollback |
+| NVS | `esp-nvs` | ESP-IDF compatible format, bare metal |
+| Async executor | `embassy` + `esp-hal-embassy` | First-class async/await on ESP32 |
+| Time | `embassy-time` | Via esp-hal timer driver |
+
+### Implementation tasks:
+
+- [ ] **`app/Cargo.toml`**: `esp-hal`, `esp-hal-embassy`, `esp-radio`, `embassy-*`, `rust-mqtt`, `esp-hal-ota`, `esp-nvs`. Embassy `#[main]` macro. Target `xtensa-esp32-none-elf`.
+- [ ] **UART transport** (`app/src/transport.rs`): `esp_hal::uart::Uart` with async mode. Embassy `#[main]` passes peripherals (no `Peripherals::take()`). Optional DE pin for auto-direction RS-485 modules.
+- [ ] **WiFi** (`app/src/wifi.rs`): `esp_radio` + `embassy_net` async WiFi stack. DHCP via `embassy_net::Config::dhcpv4`.
+- [ ] **MQTT client** (`app/src/mqtt_client.rs`): `rust_mqtt` over `embassy_net` TCP. Connect, publish, subscribe, LWT. Reconnection with embassy `select!`.
+- [ ] **OTA** (`app/src/ota.rs`): `esp_hal_ota::Ota` with `esp_storage::FlashStorage`. HTTP download via embassy-net, write chunks to alternate partition, verify CRC, reboot with rollback.
+- [ ] **Config** (`app/src/config.rs`): `esp_nvs::Nvs` for key-value storage.
+- [ ] **Main event loop** (`app/src/main.rs`): Embassy `#[main]` with `spawner`. `select!` / `join!` to concurrently: (1) read UART frames, (2) handle MQTT messages, (3) tick pump timers.
+- [ ] **Pump timers as embassy tasks** (`app/src/pump_timer.rs`): Embassy task that sleeps and wakes on expiry. Embassy channels instead of `std::sync::mpsc`.
+- [ ] **`launa-hal` async traits**: `Transport::read()` should use `embedded-io-async::Read` since embassy UART is async. Workspace crates use `embedded-io` / `embedded-io-async` traits.
+
+### Risks:
+
+- `esp-radio` API may change (behind `unstable` feature flag) — pin versions in Cargo.lock
+- `rust-mqtt` is community-maintained — may need to patch or contribute upstream
+
+## ESP32 Firmware (`app/`) -- In Progress
+
+Built on esp-hal + embassy (pure Rust, no_std). Workspace tests pass.
 
 - [x] **Light color cycling**: Documented in `docs/light-colors.md`. No protocol changes needed -- each toggle advances color. Existing `ToggleItem::Light1` does the right thing.
-- [x] **Timed pump toggle (P1 mode)** (`app/src/pump_timer.rs`): `PumpTimer` and `PumpTimerManager` track duration, auto-toggle off on expiry, cancel on manual off.
-- [x] **UART/RS-485 transport** (`app/src/transport.rs`): `Rs485Transport` implements `launa_hal::Transport` with UART1 + DE direction pin.
-- [x] **WiFi connectivity** (`app/src/wifi.rs`): Connects via `EspWifi` + `BlockingWifi` with SSID/password from NVS config.
-- [x] **MQTT client** (`app/src/mqtt_client.rs`): `EspMqttClient` with LWT, discovery publish, state publish, command subscribe.
-- [x] **Main event loop** (`app/src/main.rs`): UART read → frame decode → registration → status parse → MQTT publish. MQTT commands → frame encode → UART write. Pump timer ticking.
-- [x] **Configuration storage** (`app/src/config.rs`): NVS-backed `AppConfig` for WiFi, MQTT, UART pins, device ID.
-- [x] **OTA stub** (`app/src/ota.rs`): Placeholder implementing `OtaUpdate` trait. Real implementation needs ESP-IDF OTA APIs.
-- [ ] **OTA real implementation**: Replace stub with actual `esp-idf-svc` OTA partition management. Needs dual OTA partition table (ota_0 + ota_1 + otadata). Firmware downloads new image via HTTP, writes to alternate partition, sets boot partition, reboots. This enables remote flashing (sniffer FW <-> full FW) without USB.
-- [ ] **OTA partition table for `app/`**: Create `app/partitions.csv` with dual OTA slots (ota_0, ota_1, otadata). Required for any OTA updates. First flash via USB must use `--partition-table partitions.csv`.
-- [ ] **OTA HTTP server on dev PC (`scripts/ota-serve.py`)**: Tiny Python HTTP server that serves firmware .bin files. ESP32 downloads from this over WiFi. Usage: (1) build firmware with `cargo espflash save-image`, (2) start `ota-serve.py` serving the .bin, (3) trigger ESP32 to download via MQTT command.
-- [ ] **OTA trigger via MQTT**: Add an MQTT command topic `launa/<device_id>/ota` that accepts a JSON payload with a firmware URL. ESP32 receives it, downloads from the URL via HTTP, writes to alternate OTA partition, reboots into new firmware. If new firmware is broken, auto-rollback on next boot (ESP-IDF supports this natively).
-- [ ] **One-command remote flash script (`scripts/ota-flash.ps1`)**: End-to-end script that: (1) runs `cargo test` to verify workspace passes, (2) builds `app/` for ESP32, (3) runs `cargo espflash save-image` to produce .bin, (4) starts `ota-serve.py` serving the .bin, (5) publishes MQTT OTA command to the ESP32 with the firmware URL, (6) waits for ESP32 to come back online on MQTT. Agent can call this to deploy new firmware remotely. Example: `scripts/ota-flash.ps1 -feature sniff` or `scripts/ota-flash.ps1 -feature default`.
-- [ ] **Boot validation + auto-rollback**: On every boot, firmware must call `EspOta::mark_valid()` after successfully connecting to WiFi + MQTT. If it crashes or fails before that, ESP-IDF bootloader auto-rolls back to the previous partition. This ensures a bad OTA flash can't brick the device -- it always falls back to the last known-good firmware.
+- [x] **Timed pump toggle (P1 mode)** (`app/src/pump_timer.rs`): `PumpTimer` and `PumpTimerManager` track duration, auto-toggle off on expiry, cancel on manual off. Will be rewritten as embassy task.
+
+### OTA tasks (apply to new esp-hal stack):
+
+- [ ] **OTA partition table for `app/`**: Create `app/partitions.csv` with dual OTA slots (ota_0, ota_1, otadata). Required for `esp-hal-ota`. First flash via USB must use `--partition-table partitions.csv`.
+- [ ] **OTA real implementation**: Use `esp_hal_ota::Ota` with `esp_storage::FlashStorage`. HTTP download via embassy-net, write chunks to alternate partition, verify CRC, reboot. `esp-hal-ota` supports rollback natively.
+- [ ] **OTA HTTP server on dev PC** (`cargo xtask ota-serve`): Already implemented in xtask. Serves firmware .bin files over HTTP for ESP32 to download.
+- [ ] **OTA trigger via MQTT**: Add MQTT command topic `launa/<device_id>/ota` accepting JSON with firmware URL. ESP32 downloads via HTTP over embassy-net, writes to alternate OTA partition, reboots. Auto-rollback if new firmware is broken.
+- [ ] **One-command remote flash script** (`cargo xtask ota-flash`): Already implemented in xtask. Build + serve + trigger OTA remotely.
+- [ ] **Boot validation + auto-rollback**: On every boot, mark firmware valid after successfully connecting to WiFi + MQTT. `esp-hal-ota` supports this — if firmware crashes before marking valid, bootloader auto-rolls back.
+
+### Safety & robustness (stack-independent):
+
+- [ ] **Command ACK / status verification for SET commands**: When we send a SET command (set temperature, toggle pump, etc.), the spa has no explicit ACK — it just broadcasts status ~1/sec. We need a robust verification loop: (1) record the expected state change when sending a command, (2) listen for the next N status updates (e.g., 3-5 seconds), (3) verify the spa's reported state matches our expectation, (4) if no confirmation within timeout, either retry the command or report failure to Home Assistant (e.g., publish an error or revert the HA entity state). This prevents stale UI state when commands are lost on the bus, the spa rejects them (e.g., temp out of range), or there's a race between our command and a status update. Consider a `CommandTracker` struct that maps pending commands to expected state transitions and expires them on confirmation or timeout.
 - [ ] **Temperature safety clamping in command builder** (`crates/launa-protocol/src/command.rs`): The `SetTemperature` command must reject values outside the spa's safe range. Per Balboa protocol: **Fahrenheit high range 80-104°F, Fahrenheit low range 50-80°F, Celsius high range 26-40°C, Celsius low range 10-26°C**. Add a `validate_set_temperature(temp, scale, range) -> Result<(), TempError>` function that clamps or rejects out-of-range values. This prevents a buggy MQTT command or Home Assistant misconfiguration from setting the heater to a dangerous temperature. Also add an optional **hard upper limit** (e.g., max 42°C / 108°F) that can never be exceeded regardless of range, as a backstop.
 - [ ] **Command allowlist for MQTT commands** (`crates/launa-mqtt/src/command_parser.rs`): Only accept known command types. Reject any unrecognized or malformed MQTT payloads silently (log warning, don't send to spa). This prevents accidental bus traffic from garbage input.
 - [ ] **Hold mode safety timeout** (`app/src/main.rs`): If the spa enters hold mode (which stops heating and circulation), auto-clear it after a configurable timeout (e.g., 60 minutes) unless explicitly renewed. Prevents forgetting the spa in hold mode and finding cold/unsafe water later.
@@ -34,7 +70,7 @@ All modules implemented. Requires ESP-IDF toolchain to compile. Workspace tests 
 
 ### Architecture: What Can Be Tested Where
 
-The `app/` crate (ESP32 glue) **cannot compile for desktop** -- it depends on `esp-idf-sys`.
+The `app/` crate (ESP32 glue) **cannot compile for desktop** -- it targets `xtensa-esp32-none-elf`.
 But all logic lives in workspace crates that are fully desktop-testable via mocks.
 
 | Layer | Desktop (cargo test) | ESP32 Board | With RS-485 HW |
@@ -52,16 +88,16 @@ But all logic lives in workspace crates that are fully desktop-testable via mock
 
 - [ ] **Install USB driver**: Identify USB-to-UART chip on ESP-WROOM-32 dev board (CP210x or CH340). Install appropriate Windows VCP driver. Verify COM port appears in Device Manager.
 - [ ] **Install `cargo-espflash`**: Run `cargo install cargo-espflash --locked`. Verify with `cargo espflash board-info --chip esp32`.
-- [ ] **Create `xtask/` crate**: Standard cargo-xtask pattern for project tooling. Desktop-only workspace crate with `launa-protocol` as dependency (reuse frame parsing/encoding directly, no reimplementation). All host tools live here as subcommands. Usage: `cargo xtask <command> [args]`.
-- [ ] **`cargo xtask flash`**: Runs `cargo espflash flash --chip esp32` (without `--monitor`), captures exit code. Non-blocking, agent-callable.
-- [ ] **`cargo xtask monitor [--port COM3] [--duration 10]`**: Opens serial port at 115200 baud using `serialport` crate, reads for N seconds, prints output, exits. Agent calls this after flashing to inspect boot logs or crashes.
-- [ ] **`cargo xtask flash-monitor`**: Combines flash + monitor in one command. Agent calls this to flash and see results.
-- [ ] **`cargo xtask sniff-decode [--host localhost] [--port 1883]`**: Subscribes to MQTT sniff topic `launa/+/sniff`, decodes frames in real-time using `launa-protocol::StatusUpdate::parse()` directly. Shows message type, parsed fields, raw hex, CRC status. Saves session to JSON for offline analysis. Agent can run this to inspect real spa traffic remotely.
-- [ ] **`cargo xtask spa-sim [--port COM5]`**: Talks to USB-to-RS485 adapter via `serialport`. Uses `launa-protocol::FrameEncoder` and `SpaSimulator` frame generation logic to send real Balboa frames. Repeatedly sends status updates at 1-second intervals. Optionally responds to commands. Agent can run this for bench testing.
-- [ ] **`cargo xtask ota-serve [--firmware path/to/fw.bin] [--port 8080]`**: Tiny HTTP server (using `tiny_http` or `actix-web`) that serves firmware .bin files. ESP32 downloads from this over WiFi. Used by `ota-flash` below.
-- [ ] **`cargo xtask ota-flash [--feature sniff|default] [--device-id launa_spa]`**: End-to-end remote flash: (1) runs `cargo test` to verify workspace, (2) builds `app/` for ESP32 with given feature, (3) runs `cargo espflash save-image` to produce .bin, (4) starts `ota-serve` in background, (5) publishes MQTT OTA command to ESP32 with firmware URL, (6) waits for ESP32 to come back online on MQTT. Agent calls this to deploy new firmware remotely. Auto-rollback if new firmware fails.
-- [ ] **`cargo xtask self-test`**: Builds `app/` with `--features hw-test`, flashes via USB, captures serial output, parses `TEST_PASS`/`TEST_FAIL:<reason>` lines, reports summary. Agent uses this to validate hardware.
-- [ ] **Local config via `launa.toml` (gitignored)**: All secrets and device-specific config live in `launa.toml` at project root (gitignored). Contains WiFi SSID/password, MQTT broker host/port/user/password, ESP32 serial port, device ID, OTA server port. **All xtask commands that need config must parse this file first and exit with a clear error if it's missing or has empty required fields** -- no silent defaults, no placeholder values in firmware. Commit a `launa.example.toml` with placeholder values so the format is documented. Example:
+- [x] **Create `xtask/` crate**: Standard cargo-xtask pattern for project tooling. Desktop-only workspace crate with `launa-protocol` as dependency (reuse frame parsing/encoding directly, no reimplementation). All host tools live here as subcommands. Usage: `cargo xtask <command> [args]`.
+- [x] **`cargo xtask flash`**: Runs `cargo espflash flash --chip esp32` (without `--monitor`), captures exit code. Non-blocking, agent-callable.
+- [x] **`cargo xtask monitor [--port COM3] [--duration 10]`**: Opens serial port at 115200 baud using `serialport` crate, reads for N seconds, prints output, exits. Agent calls this after flashing to inspect boot logs or crashes.
+- [x] **`cargo xtask flash-monitor`**: Combines flash + monitor in one command. Agent calls this to flash and see results.
+- [x] **`cargo xtask sniff-decode [--host localhost] [--port 1883]`**: Subscribes to MQTT sniff topic `launa/+/sniff`, decodes frames in real-time using `launa-protocol::StatusUpdate::parse()` directly. Shows message type, parsed fields, raw hex, CRC status. Saves session to JSON for offline analysis. Agent can run this to inspect real spa traffic remotely.
+- [x] **`cargo xtask spa-sim [--port COM5]`**: Talks to USB-to-RS485 adapter via `serialport`. Uses `launa-protocol::FrameEncoder` and `SpaSimulator` frame generation logic to send real Balboa frames. Repeatedly sends status updates at 1-second intervals. Optionally responds to commands. Agent can run this for bench testing.
+- [x] **`cargo xtask ota-serve [--firmware path/to/fw.bin] [--port 8080]`**: Tiny HTTP server (using `tiny_http` or `actix-web`) that serves firmware .bin files. ESP32 downloads from this over WiFi. Used by `ota-flash` below.
+- [x] **`cargo xtask ota-flash [--feature sniff|default] [--device-id launa_spa]`**: End-to-end remote flash: (1) runs `cargo test` to verify workspace, (2) builds `app/` for ESP32 with given feature, (3) runs `cargo espflash save-image` to produce .bin, (4) starts `ota-serve` in background, (5) publishes MQTT OTA command to ESP32 with firmware URL, (6) waits for ESP32 to come back online on MQTT. Agent calls this to deploy new firmware remotely. Auto-rollback if new firmware fails.
+- [x] **`cargo xtask self-test`**: Builds `app/` with `--features hw-test`, flashes via USB, captures serial output, parses `TEST_PASS`/`TEST_FAIL:<reason>` lines, reports summary. Agent uses this to validate hardware.
+- [x] **Local config via `launa.toml` (gitignored)**: All secrets and device-specific config live in `launa.toml` at project root (gitignored). Contains WiFi SSID/password, MQTT broker host/port/user/password, ESP32 serial port, device ID, OTA server port. **All xtask commands that need config must parse this file first and exit with a clear error if it's missing or has empty required fields** -- no silent defaults, no placeholder values in firmware. Commit a `launa.example.toml` with placeholder values so the format is documented. Example:
   ```toml
   [wifi]
   ssid = "MyWiFi"
@@ -80,7 +116,7 @@ But all logic lives in workspace crates that are fully desktop-testable via mock
   [ota]
   serve_port = 8080
   ```
-- [ ] **`cargo xtask config-flash`**: Reads `launa.toml` and writes WiFi/MQTT/device config to ESP32 NVS via serial. Only needed on first setup or when changing credentials. After this, the ESP32 has its config stored in NVS and doesn't need `launa.toml` to boot.
+- [x] **`cargo xtask config-flash`**: Reads `launa.toml` and writes WiFi/MQTT/device config to ESP32 NVS via serial. Only needed on first setup or when changing credentials. After this, the ESP32 has its config stored in NVS and doesn't need `launa.toml` to boot.
 - [ ] **Document xtask commands in AGENTS.md**: Add a "Project Commands" section listing all `cargo xtask` subcommands with examples. Document the `launa.toml` config format and that it must be created from `launa.example.toml`.
 
 ### Phase 2: Desktop End-to-End Test (No HW Needed)
@@ -165,3 +201,7 @@ PC (Python script simulating spa)
 - [x] Integration tests with SpaSimulator (49 tests)
 - [x] Fuzz tests (27 tests) and property tests (17 tests)
 - [x] All 186 tests passing
+- [x] **Status parser byte offsets corrected** (`crates/launa-protocol/src/status.rs`): Fixed all byte offsets to match real Balboa BP6013G1 hardware (verified against NorthernMan54/esp32_balboa_spa). Hold=offset 0, Priming=offset 1, Heating Mode=offset 5, flags=offset 9/10, pumps=offset 11, circ/blower=offset 13, lights=offset 14, mister=offset 15.
+- [x] **HDLC byte stuffing** (`crates/launa-protocol/src/frame.rs`): Added escape handling for `0x7E` and `0x7D` bytes in frame encoder/decoder to prevent CRC/data bytes from being interpreted as frame markers.
+- [x] **Spa simulator offsets corrected** (`crates/launa-sim/src/spa_sim.rs`, `crates/launa-integration-tests/src/spa_simulator.rs`): Updated `generate_status_frame()` to use correct real-hardware byte offsets.
+- [x] **All 240 tests passing** (18 HAL + 49 integration + 30 sim + 24 MQTT + 54 protocol + 27 fuzz + 17 property + 21 sim-unit)

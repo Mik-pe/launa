@@ -56,33 +56,42 @@ excluding the start/end 0x7E markers.
 
 ```
 Offset: 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
-Field:  F0 F1 CT HH MM F2 -- -- -- F3 F4 PP -- F5 LF F6 -- -- -- -- ST -- -- --
+Field: ST IM CT HH MM HM RT SA SB F9 FA P1 P2 CB LF MR -- -- -- -- ST -- -- --
 ```
+
+> Verified against real Balboa BP6013G1 hardware (NorthernMan54/esp32_balboa_spa).
 
 | Offset | Field | Description |
 |--------|-------|-------------|
+| 0 | ST | Spa State: 0x00=Running, 0x05=Hold Mode, 0x14=A/B Temps ON, 0x17=Test Mode |
+| 1 | IM | Init Mode: 0x00=Idle, 0x01=Priming Mode, 0x02=Fault, 0x03=Reminder |
 | 2 | CT | Current Temperature (÷2 if Celsius; 0xFF = unknown) |
 | 3 | HH | Hour (always 0-24) |
 | 4 | MM | Minute |
-| 5 | F2 | Flags: 0x05=Hold Mode |
-| 6 | F3 | Flags: 0x01=Priming |
-| 7 | F4 | Flags: 0x03=Heating Mode (0=Ready, 1=Rest, 3=Ready-in-Rest) |
-| 8 | F5 | Flags: 0x01=Celsius, 0x02=24h time, 0x0C=Filter Mode |
-| 9 | F6 | Flags: 0x30=Heating, 0x04=Temp Range (0=Low, 1=High) |
-| 10 | PP | Pump status: bits 0-1=Pump1, bits 2-3=Pump2, bits 4-5=Pump3 |
-| 11 | F5 | Flags: 0x02=Circ pump, 0x0C=Blower |
-| 12 | F6 | Flags: 0x01=Mister |
-| 13 | LF | Light: 0x03=Light 1 on |
-| 25 | ST | Set Temperature (÷2 if Celsius) |
+| 5 | HM | Heating Mode: 0=Ready, 1=Rest, 3=Ready-in-Rest |
+| 6 | RT | Reminder Type: 0x00=None, 0x04=Clean filter, etc. |
+| 7 | SA | Sensor A Temperature (or Hold Timer Minutes if in Hold Mode) |
+| 8 | SB | Sensor B Temperature (if A/B Temps ON, else 0) |
+| 9 | F9 | Flags: bit 0=Temperature Scale (0=F, 1=C), bit 1=24h time, bits 2-3=Filter Mode |
+| 10 | FA | Flags: bit 2=Temp Range (0=Low, 1=High), bit 3=Needs Heat, bits 4-5=Heating State |
+| 11 | P1 | Pump status (pumps 1-4): bits 0-1=Pump1, bits 2-3=Pump2, bits 4-5=Pump3, bits 6-7=Pump4 |
+| 12 | P2 | Pump status (pumps 5-6): bits 0-1=Pump5, bits 2-3=Pump6 |
+| 13 | CB | Circ pump (bit 1), Blower (bits 2-3) |
+| 14 | LF | Light: bits 0-1=Light 1, bits 2-3=Light 2 |
+| 15 | MR | Mister: 0=OFF, 1=ON |
+| 20 | ST | Set Temperature (÷2 if Celsius) |
 
 #### Pump Status Decoding
 
 Each pump occupies 2 bits. Valid values: 0=off, 1=low, 2=high.
 
 ```text
-Pump 1 = (PP >> 0) & 0x03
-Pump 2 = (PP >> 2) & 0x03
-Pump 3 = (PP >> 4) & 0x03
+Pump 1 = (P1 >> 0) & 0x03
+Pump 2 = (P1 >> 2) & 0x03
+Pump 3 = (P1 >> 4) & 0x03
+Pump 4 = (P1 >> 6) & 0x03
+Pump 5 = (P2 >> 0) & 0x03
+Pump 6 = (P2 >> 2) & 0x03
 ```
 
 ### Configuration Response

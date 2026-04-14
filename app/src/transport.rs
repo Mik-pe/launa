@@ -1,95 +1,70 @@
-//! RS-485 UART transport for Balboa spa communication.
-//!
-//! Implements `launa_hal::Transport` using `esp-idf-hal` UART with a GPIO
-//! direction pin for the RS-485 transceiver.
+//! RS-485 UART transport using esp-hal async UART.
 
-use anyhow::{Context, Result};
-use esp_idf_hal::gpio::{Output, OutputPin, PinDriver};
-use esp_idf_hal::prelude::Peripherals;
-use esp_idf_hal::uart::{self, UartConfig, UartDriver};
-use launa_hal::transport::{Transport, TransportError};
-use log::{debug, trace};
-use std::time::Duration;
+use embedded_io_async::{self, Read, Write, ErrorType};
+use embassy_time::{Duration, Timer};
+use esp_hal::gpio::{GpioPin, Output, OutputConfig, Level};
+use esp_hal::uart::Uart;
+use esp_hal::mode::Async;
+use log::trace;
 
 pub struct Rs485Transport {
-    uart: UartDriver<'static>,
-    de_pin: PinDriver<'static, esp_idf_hal::gpio::AnyOutputPin, Output>,
+    uart: Uart<'static, Async>,
+    de_pin: Option<Output<'static>>,
 }
 
 impl Rs485Transport {
     pub fn new(
-        tx_pin: i32,
-        rx_pin: i32,
-        de_pin: i32,
-    ) -> Result<Self> {
-        let peripherals = Peripherals::take().context("Peripherals already taken")?;
-
-        let config = UartConfig::new()
-            .baudrate(115200)
-            .data_bits(uart::DataBits::DataBits8)
-            .parity(uart::Parity::ParityNone)
-            .stop_bits(uart::StopBits::STOP1);
-
-        let uart = UartDriver::new(
-            peripherals.uart1,
-            peripherals.pins.gpio(tx_pin),
-            peripherals.pins.gpio(rx_pin),
-            Option::<esp_idf_hal::gpio::Gpio0>::None,
-            Option::<esp_idf_hal::gpio::Gpio0>::None,
-            &config,
-        )
-        .context("Failed to create UART driver")?;
-
-        let de = PinDriver::output(peripherals.pins.gpio(de_pin).downgrade())
-            .context("Failed to create DE pin driver")?;
-
-        Ok(Rs485Transport {
-            uart,
-            de_pin: de,
-        })
+        uart: Uart<'static, Async>,
+        de_pin: Option<GpioPin>,
+    ) -> Self {
+        let de = de_pin.map(|pin| {
+            Output::new(pin, Level::Low, OutputConfig::default())
+        });
+        Rs485Transport { uart, de_pin: de }
     }
 }
 
-impl Transport for Rs485Transport {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, TransportError> {
-        match self.uart.read(buf, Duration::from_millis(100)) {
-            Ok(n) => {
-                if n > 0 {
-                    trace!("UART read {} bytes", n);
-                }
-                Ok(n)
-            }
-            Err(e) => {
-                debug!("UART read error: {:?}", e);
-                Err(TransportError::Io)
-            }
+#[derive(Debug)]
+pub struct TransportError;
+
+impl embedded_io_async::Error for TransportError {
+    fn kind(&self) -> embedded_io_async::ErrorKind {
+        embedded_io_async::ErrorKind::Other
+    }
+}
+
+impl ErrorType for Rs485Transport {
+    type Error = TransportError;
+}
+
+impl Read for Rs485Transport {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        // esp-hal Uart implements embedded_io_async::Read when in Async mode
+        self.uart.read(buf).await.map_err(|_| TransportError)
+    }
+}
+
+impl Write for Rs485Transport {
+    async fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+        // Assert DE pin for transmit
+        if let Some(ref mut de) = self.de_pin {
+            de.set_high();
+            // Let RS-485 transceiver switch direction
+            Timer::after(Duration::from_micros(50)).await;
         }
-    }
 
-    fn write(&mut self, data: &[u8]) -> Result<(), TransportError> {
-        // Assert DE pin high for transmit
-        self.de_pin.set_high().map_err(|_| TransportError::Io)?;
+        let result = self.uart.write(buf).await.map_err(|_| TransportError);
 
-        // Small delay to let RS-485 transceiver switch direction
-        std::thread::sleep(Duration::from_micros(50));
+        // Flush TX to ensure all bytes are on the wire
+        // esp-hal async UART flush
+        let _ = self.uart.flush().await;
 
-        let result = self
-            .uart
-            .write(data)
-            .map(|_| ())
-            .map_err(|_| TransportError::Io);
+        // Release DE pin
+        if let Some(ref mut de) = self.de_pin {
+            de.set_low();
+        }
 
-        // Flush to ensure all bytes are sent before releasing DE
-        let _ = self.uart.flush();
-
-        // Release DE pin back to receive mode
-        self.de_pin.set_low().map_err(|_| TransportError::Io)?;
-
-        trace!("UART wrote {} bytes", data.len());
+        trace!("UART wrote {} bytes", buf.len());
         result
-    }
-
-    fn flush(&mut self) -> Result<(), TransportError> {
-        self.uart.flush().map_err(|_| TransportError::Io)
     }
 }

@@ -1,6 +1,9 @@
 use crate::crc8;
 
 const FRAME_MARKER: u8 = 0x7E;
+const ESCAPE_CHAR: u8 = 0x7D;
+const ESCAPED_MARKER: u8 = 0x5E;
+const ESCAPED_ESCAPE: u8 = 0x5D;
 
 /// A parsed Balboa protocol frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +50,10 @@ impl Frame {
     }
 
     /// Encode this frame into raw bytes including start/end markers.
+    ///
+    /// Bytes inside the frame body that equal `0x7E` or `0x7D` are escaped
+    /// using HDLC-style byte stuffing (`0x7D` followed by the byte XOR'd
+    /// with `0x20`). The decoder un-stuffs them on the way in.
     pub fn encode(&self) -> Vec<u8> {
         // Length field = type(2) + payload length
         let length = (2 + self.payload.len()) as u8;
@@ -59,9 +66,19 @@ impl Frame {
         let crc = crc8::compute(&body);
         body.push(crc);
 
-        let mut buf = Vec::with_capacity(body.len() + 2);
+        let mut buf = Vec::with_capacity(body.len() + 2 + body.len() / 8);
         buf.push(FRAME_MARKER);
-        buf.extend_from_slice(&body);
+        for &byte in &body {
+            if byte == FRAME_MARKER {
+                buf.push(ESCAPE_CHAR);
+                buf.push(ESCAPED_MARKER);
+            } else if byte == ESCAPE_CHAR {
+                buf.push(ESCAPE_CHAR);
+                buf.push(ESCAPED_ESCAPE);
+            } else {
+                buf.push(byte);
+            }
+        }
         buf.push(FRAME_MARKER);
         buf
     }
@@ -75,9 +92,13 @@ pub enum FrameError {
 }
 
 /// Streaming frame decoder. Feed bytes one at a time; yields complete frames.
+///
+/// Handles HDLC-style byte stuffing: `0x7D` is the escape character.
+/// Escaped bytes are XOR'd with `0x20` to recover the original value.
 pub struct FrameDecoder {
     buffer: Vec<u8>,
     in_frame: bool,
+    escape_next: bool,
 }
 
 impl FrameDecoder {
@@ -85,6 +106,7 @@ impl FrameDecoder {
         FrameDecoder {
             buffer: Vec::new(),
             in_frame: false,
+            escape_next: false,
         }
     }
 
@@ -95,14 +117,24 @@ impl FrameDecoder {
                 let result = Frame::parse(&self.buffer);
                 self.buffer.clear();
                 self.in_frame = false;
+                self.escape_next = false;
                 result.ok()
             } else {
                 self.in_frame = true;
                 self.buffer.clear();
+                self.escape_next = false;
                 None
             }
         } else if self.in_frame {
-            self.buffer.push(byte);
+            if self.escape_next {
+                // Un-stuff: XOR with 0x20
+                self.buffer.push(byte ^ 0x20);
+                self.escape_next = false;
+            } else if byte == ESCAPE_CHAR {
+                self.escape_next = true;
+            } else {
+                self.buffer.push(byte);
+            }
             None
         } else {
             None

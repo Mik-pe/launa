@@ -34,7 +34,7 @@ launa/
 │   ├── launa-ota/              # OTA firmware update support
 │   └── launa-integration-tests/ # Integration tests with SpaSimulator
 ├── app/                        # ESP32 firmware binary (excluded from workspace)
-│   ├── Cargo.toml              # Uses esp-idf-sys (separate build)
+│   ├── Cargo.toml              # Uses esp-hal + embassy (no_std, xtensa-esp32-none-elf)
 │   └── src/                    # ESP32 main, UART, WiFi, MQTT glue
 └── .factory/droids/            # Factory Droid configurations
 ```
@@ -45,12 +45,13 @@ launa/
 - `cargo test -p launa-protocol` — Protocol crate tests only
 - `cargo test -p launa-integration-tests` — Integration tests with SpaSimulator
 - `cargo check` — Verify workspace compiles
-- `cd app && cargo espflash flash --chip esp32 --monitor` — Flash to ESP32 (needs esp-idf toolchain)
+- `cd app && cargo espflash flash --chip esp32 --monitor` — Flash to ESP32 (needs espflash + xtensa toolchain)
 
 ## Architecture Notes
 
 - **Workspace crates** (`launa-protocol`, `launa-hal`, `launa-mqtt`, `launa-ota`, `launa-integration-tests`) are all pure Rust, desktop-testable, and `no_std` compatible
-- The **`app/`** crate is ESP32-only using `esp-idf-svc`/`esp-idf-hal`, excluded from the Cargo workspace due to unconventional ESP-IDF build rules
+- The **`app/`** crate is ESP32-only using `esp-hal` + `embassy` (no_std, pure Rust), excluded from the Cargo workspace
+- **ESP32 stack**: `esp-hal` 1.0 (UART, GPIO), `esp-radio` (WiFi), `embassy-net` (TCP/IP), `rust-mqtt` (MQTTv5), `esp-hal-ota` (OTA), `esp-nvs` (config storage), `embassy` (async executor)
 - All protocol logic lives in `launa-protocol`; hardware abstractions are in `launa-hal`
 - Tests use **SpaSimulator** (a mock BP6013G1 mainboard) for integration testing
 - Home Assistant integration uses MQTT auto-discovery to create 8 entities (sensor, number, select, switch, light, fan, binary_sensor)
@@ -77,7 +78,7 @@ The Balboa spa protocol is documented in `docs/protocol.md`. Key points:
 ## Coding Conventions
 
 - `no_std` compatible for workspace crates — use `extern crate alloc`, not `std::`
-- `esp-idf-svc`/`esp-idf-hal` for the `app/` crate (std available there)
+- `esp-hal` + `embassy` for the `app/` crate (no_std, pure Rust, no ESP-IDF C SDK)
 - All protocol parsers must handle malformed input gracefully (return `Result`, never panic)
 - Mock implementations behind `cfg(feature = "std")` or in test modules
 - Error handling: `thiserror` for library errors, `anyhow` for application errors
@@ -96,6 +97,17 @@ Key workspace dependencies (see `Cargo.toml` for versions):
 - `thiserror` — Library error types
 - `anyhow` — Application error handling
 
+Key `app/` dependencies:
+- `esp-hal` 1.0+ — Hardware abstraction (UART, GPIO, SPI, I2C)
+- `esp-hal-embassy` — Embassy executor support for esp-hal
+- `esp-radio` — WiFi driver (unstable feature)
+- `embassy-net` — Async TCP/IP stack (smoltcp)
+- `embassy-executor`, `embassy-time` — Async runtime
+- `rust-mqtt` — MQTT v5 client (no_std)
+- `esp-hal-ota` — OTA partition management with rollback
+- `esp-nvs` — Non-volatile storage (ESP-IDF compatible format)
+- `esp-mbedtls` — TLS for MQTT (if needed)
+
 ## Current State
 
 ### Completed
@@ -107,14 +119,16 @@ Key workspace dependencies (see `Cargo.toml` for versions):
 - Spa configuration parser (pump/light/blower/circ capabilities)
 - Client ID registration state machine
 - Hardware abstraction traits with mock implementations
-- Home Assistant MQTT auto-discovery builder (8 entities)
+- Home Assistant MQTT auto-discovery builder (14 entities)
 - OTA update trait with mock
-- ESP32 app skeleton
 - Full protocol documentation
-- Comprehensive test suite with SpaSimulator mock infrastructure
+- Comprehensive test suite with SpaSimulator (240 tests)
+- `0A BF` message dispatcher, information/fault/filter parsers
+- State serialization, command parsing, topic builder
+- Integration tests, fuzz tests, property tests
 
 ### In Progress / Next (see TASKS.md)
-- **Critical bugs**: Command encoding missing sub-type bytes, `heating_mode` wrong offset, mister status not parsed
-- **Protocol**: Parse information/fault log/filter cycles responses; disambiguate `0A BF` sub-types
-- **MQTT**: State serialization, command parsing, birth/last-will messages
-- **ESP32 firmware**: UART transport, WiFi, MQTT client, main event loop, OTA, NVS config
+- **ESP32 firmware rewrite**: Migrating `app/` from esp-idf-svc to esp-hal + embassy (pure Rust, no_std)
+- **Protocol**: Validate parser against real spa hardware via sniffer
+- **MQTT**: Birth/last-will messages, retain flags
+- **OTA**: Real implementation with esp-hal-ota
