@@ -131,12 +131,12 @@ The hand-rolled MQTT client in `app/src/mqtt_client.rs` had multiple protocol bu
 
 ### Moderate
 
-- [ ] **MQTT WiFi-reconnect loop has no backoff or attempt cap** (`app/src/main.rs`): The `WIFI_RECONNECT_SIGNAL`-triggered reconnect loop retries every 5s forever with no max attempt limit or exponential backoff. The MQTT-loss path has alerting after 3 attempts, but this WiFi path does not.
-- [ ] **Alert spam during persistent MQTT failures** (`app/src/main.rs`): After `reconnect_attempts > 3`, every subsequent 5s retry publishes an alert JSON. During an extended outage, this wastes heap on repeated JSON formatting and floods the alert channel. Should throttle (e.g., alert at most once per minute).
+- [x] **MQTT WiFi-reconnect loop has no backoff or attempt cap** (`app/src/main.rs`): Added exponential backoff (5s → 10s → 20s → 40s → 60s cap), max 10 attempts logged as critical, alert after 3 failures throttled to once per 60s.
+- [x] **Alert spam during persistent MQTT failures** (`app/src/main.rs`): Added 60-second throttle on alert publishing in both WiFi-reconnect and MQTT-loss reconnect loops. Only one alert per 60s window.
 - [ ] **OTA: IP-only resolution, no DNS** (`app/src/ota.rs`): `parse_ip()` only handles dotted-quad IPv4. If the OTA URL contains a hostname, OTA fails silently. This limits OTA to LAN IP addresses only. At minimum, document this limitation; ideally add a simple DNS lookup via embassy-net.
 - [ ] **MQTT `reconnect()` leaks old socket's static buffers** (`app/src/mqtt_client.rs`): Each `reconnect()` call creates new `mk_static!` TCP buffers. The old socket's buffers become leaked static memory that can never be reclaimed on a 32 KiB heap. After multiple reconnects, this could exhaust memory.
-- [ ] **`DIAGNOSTICS_START` is `unsafe static mut` accessed from multiple tasks** (`app/src/main.rs`): Accessed via `unsafe` blocks in `send_alert()` and `publish_diagnostics()`. While only written once during init, this is technically UB under Rust's aliasing rules. Should use a `OnceCell<Instant>` or `AtomicU64`.
-- [ ] **MQTT SUBACK read discards result** (`app/src/mqtt_client.rs`): `let _ = self.transport.read(&mut buf).await;` in `subscribe()` doesn't validate the SUBACK packet or check the return code. A failed subscription goes undetected silently.
+- [x] **`DIAGNOSTICS_START` is `unsafe static mut` accessed from multiple tasks** (`app/src/main.rs`): Replaced `static mut DIAGNOSTICS_START: Option<Instant>` with `static DIAGNOSTICS_START_SECS: AtomicU32` and safe `uptime_secs()` helper. Removed all unsafe accesses for diagnostics.
+- [x] **MQTT SUBACK read discards result** (`app/src/mqtt_client.rs`): `subscribe()` now validates SUBACK: checks packet type 0x90, verifies packet ID match, parses MQTT v5 property length, and rejects return code 0x80 (subscription failure).
 
 ### Minor
 
