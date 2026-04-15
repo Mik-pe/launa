@@ -43,7 +43,7 @@ impl SpaConfig {
         pump_configs[2] = decode_pump((payload[5] >> 4) & 0x03);
         pump_configs[3] = decode_pump((payload[5] >> 6) & 0x03);
         pump_configs[4] = decode_pump(payload[6] & 0x03);
-        pump_configs[5] = decode_pump((payload[6] >> 6) & 0x03);
+        pump_configs[5] = decode_pump((payload[6] >> 2) & 0x03);
 
         Ok(SpaConfig {
             pump_configs,
@@ -86,5 +86,33 @@ mod tests {
         assert!(config.circ_pump);
         assert!(config.blower);
         assert!(config.lights[0]);
+    }
+
+    #[test]
+    fn test_parse_config_pump5_correct_bits() {
+        // Pump5 is encoded in bits 2-3 of payload[6] (not bits 6-7).
+        // The sequential 2-bit packing pattern: pumps 0-3 in payload[5],
+        // pump4 in bits 0-1 of payload[6], pump5 in bits 2-3 of payload[6].
+        let mut payload = vec![0u8; 10];
+
+        // Set pump5 = TwoSpeed (value 2) in bits 2-3 of payload[6]
+        payload[6] = 0b00_00_10_00; // bits 2-3 = 10 (TwoSpeed)
+
+        let config = SpaConfig::parse(&payload).unwrap();
+
+        // pump4 (bits 0-1) should be None (00)
+        assert_eq!(config.pump_configs[4], PumpConfig::None);
+        // pump5 (bits 2-3) should be TwoSpeed (10)
+        assert_eq!(config.pump_configs[5], PumpConfig::TwoSpeed);
+
+        // Also verify SingleSpeed in bits 2-3
+        payload[6] = 0b00_00_01_00; // bits 2-3 = 01 (SingleSpeed)
+        let config = SpaConfig::parse(&payload).unwrap();
+        assert_eq!(config.pump_configs[5], PumpConfig::SingleSpeed);
+
+        // And None in bits 2-3
+        payload[6] = 0b00_00_00_00;
+        let config = SpaConfig::parse(&payload).unwrap();
+        assert_eq!(config.pump_configs[5], PumpConfig::None);
     }
 }

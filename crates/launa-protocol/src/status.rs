@@ -263,7 +263,6 @@ mod tests {
         let mut payload = [0u8; 24];
         payload[2] = 100;
         payload[9] = 0x02;
-        payload[11] = 0x09; // pump1=1(low), pump2=0(off), pump3=2(high) → 0b10_00_01_01 = 0x09
         payload[11] = (1 | (0 << 2) | (2 << 4)) as u8; // pump1=low, pump2=off, pump3=high
         payload[13] = 0x0E; // circ pump (bit 1) + blower (bits 2-3)
         payload[15] = 0x01; // mister on
