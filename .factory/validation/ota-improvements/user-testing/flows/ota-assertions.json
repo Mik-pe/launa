@@ -1,0 +1,126 @@
+{
+  "groupId": "ota-assertions",
+  "testedAt": "2026-04-15T23:20:00Z",
+  "isolation": {
+    "workingDirectory": "C:\\dev\\launa",
+    "testingMethod": "cargo test (no services needed)"
+  },
+  "toolsUsed": ["cargo test", "cargo check"],
+  "assertions": [
+    {
+      "id": "VAL-OTA-001",
+      "title": "MockOta fail_on_begin returns error",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-ota test_mock_ota_fail_on_begin", "expected": "Test passes: Err when fail_on_begin=true, Ok when default false", "observed": "Test passed. MockOta::new() default begin() returns Ok(()). With fail_on_begin=true, begin() returns Err(OtaError::BeginFailed)." },
+        { "action": "Verified source: lib.rs lines 85-92", "expected": "Test asserts both default (Ok) and failure injection (Err) paths", "observed": "Test creates two MockOta instances — one default (assert Ok), one with fail_on_begin=true (assert Err(BeginFailed))" }
+      ],
+      "evidence": {
+        "testOutput": "test tests::test_mock_ota_fail_on_begin ... ok",
+        "sourceVerification": "lib.rs lines 85-92 confirm dual-path assertion"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-OTA-002",
+      "title": "MockOta fail_on_write_after(N) succeeds then fails",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-ota test_mock_ota_fail_on_write_after", "expected": "First 5 bytes succeed (5<=7), write of 5 more crossing 7-byte boundary returns Err with byte_offset: 7", "observed": "Test passed. write(&[1,2,3,4,5]) Ok, write(&[6,7,8,9,10]) returns Err(OtaError::WriteFailed { byte_offset: 7 }), firmware_data.len() == 5" },
+        { "action": "cargo test -p launa-ota test_mock_ota_fail_on_write_after_default_none", "expected": "Default None allows unlimited writes", "observed": "Test passed. Two writes of 5 bytes each succeed, firmware_data.len() == 10" }
+      ],
+      "evidence": {
+        "testOutput": "test tests::test_mock_ota_fail_on_write_after ... ok\ntest tests::test_mock_ota_fail_on_write_after_default_none ... ok",
+        "sourceVerification": "lib.rs lines 93-110 confirm partial failure + byte_offset + firmware_data.len()"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-OTA-003",
+      "title": "MockOta fail_on_finalize returns error",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-ota test_mock_ota_fail_on_finalize", "expected": "finalize() returns Err(OtaError::FinalizeFailed) when fail_on_finalize=true, finalized stays false", "observed": "Test passed. Err(OtaError::FinalizeFailed) returned, finalized == false" },
+        { "action": "cargo test -p launa-ota test_mock_ota_fail_on_finalize_default_off", "expected": "Default false: finalize() returns Ok(()), finalized set to true", "observed": "Test passed. finalize() Ok, finalized == true" }
+      ],
+      "evidence": {
+        "testOutput": "test tests::test_mock_ota_fail_on_finalize ... ok\ntest tests::test_mock_ota_fail_on_finalize_default_off ... ok",
+        "sourceVerification": "lib.rs lines 111-126 confirm both paths tested"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-OTA-004",
+      "title": "OtaError derives thiserror Error",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-ota test_ota_error_display", "expected": "All 6 variants produce non-empty Display strings", "observed": "Test passed. All variants (BeginFailed, WriteFailed, FinalizeFailed, NoOtaPartition, InvalidFirmware, FlashError) produce non-empty to_string() output" },
+        { "action": "Verified source: OtaError enum derives Debug, thiserror::Error with #[error(\"...\")] on every variant", "expected": "thiserror derive present on all variants", "observed": "Confirmed: #[derive(Debug, thiserror::Error)] on enum, #[error(\"...\")] on each of 6 variants" }
+      ],
+      "evidence": {
+        "testOutput": "test tests::test_ota_error_display ... ok",
+        "sourceVerification": "lib.rs lines 31-42 confirm thiserror derive with error strings on all 6 variants"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-OTA-005",
+      "title": "OtaError WriteFailed contains byte_offset",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-ota test_ota_error_write_failed_byte_offset", "expected": "WriteFailed { byte_offset: 42 } — pattern match extracts 42", "observed": "Test passed. Constructed WriteFailed { byte_offset: 42 }, extracted via pattern match, assert_eq!(byte_offset, 42)" }
+      ],
+      "evidence": {
+        "testOutput": "test tests::test_ota_error_write_failed_byte_offset ... ok",
+        "sourceVerification": "lib.rs lines 64-71 confirm construction and extraction of byte_offset field"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-OTA-006",
+      "title": "OtaError FlashError contains address",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-ota test_ota_error_flash_error_address", "expected": "FlashError { address: 0x9000 } — pattern match extracts 0x9000", "observed": "Test passed. Constructed FlashError { address: 0x9000 }, extracted via pattern match, assert_eq!(address, 0x9000)" }
+      ],
+      "evidence": {
+        "testOutput": "test tests::test_ota_error_flash_error_address ... ok",
+        "sourceVerification": "lib.rs lines 73-80 confirm construction and extraction of address field"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-OTA-007",
+      "title": "extern crate alloc gated behind mock feature",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo check -p launa-ota --no-default-features", "expected": "Compilation succeeds without alloc (mock feature disabled)", "observed": "Compilation succeeded. Exit code 0. Crate compiles without alloc when mock feature is off." },
+        { "action": "Verified source: extern crate alloc inside #[cfg(any(test, feature = \"mock\"))]", "expected": "alloc gated behind cfg", "observed": "Confirmed: line 6 has #[cfg(any(test, feature = \"mock\"))] extern crate alloc; pub mod mock is also gated with #[cfg(any(test, feature = \"mock\"))]" }
+      ],
+      "evidence": {
+        "testOutput": "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s — exit code 0",
+        "sourceVerification": "lib.rs line 6: #[cfg(any(test, feature = \"mock\"))] extern crate alloc; line 156: #[cfg(any(test, feature = \"mock\"))] pub mod mock"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-OTA-008",
+      "title": "All existing OTA tests pass",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-ota", "expected": "All 14 tests pass, exit code 0", "observed": "14 passed; 0 failed; exit code 0" },
+        { "action": "cargo test -p launa-integration-tests", "expected": "All integration tests pass, exit code 0", "observed": "73 unit tests + 30 sim tests = 103 passed; 0 failed; exit code 0" },
+        { "action": "Verified MockOta::new() defaults", "expected": "fail_on_begin=false, fail_on_write_after=None, fail_on_finalize=false", "observed": "Confirmed via test_mock_ota_default_all_off test and source verification of MockOta::new()" }
+      ],
+      "evidence": {
+        "otaTestOutput": "14 passed; 0 failed; 0 ignored; finished in 0.00s",
+        "integrationTestOutput": "73 passed + 30 passed = 103 total; 0 failed; exit code 0",
+        "defaultTest": "test tests::test_mock_ota_default_all_off ... ok"
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 8 assertions: all 8 passed. cargo test -p launa-ota: 14/14 passed. cargo check -p launa-ota --no-default-features: succeeded. cargo test -p launa-integration-tests: 103/103 passed. All failure injection mechanisms (fail_on_begin, fail_on_write_after, fail_on_finalize) work correctly. OtaError derives thiserror with proper Display on all variants. alloc properly gated behind mock feature."
+}

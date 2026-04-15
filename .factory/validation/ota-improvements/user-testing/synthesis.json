@@ -1,0 +1,25 @@
+{
+  "milestone": "ota-improvements",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 8,
+    "passed": 8,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-OTA-001",
+    "VAL-OTA-002",
+    "VAL-OTA-003",
+    "VAL-OTA-004",
+    "VAL-OTA-005",
+    "VAL-OTA-006",
+    "VAL-OTA-007",
+    "VAL-OTA-008"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null
+}
