@@ -139,7 +139,6 @@ The hand-rolled MQTT client in `app/src/mqtt_client.rs` had multiple protocol bu
 - [x] **MQTT SUBACK read discards result** (`app/src/mqtt_client.rs`): `subscribe()` now validates SUBACK: checks packet type 0x90, verifies packet ID match, parses MQTT v5 property length, and rejects return code 0x80 (subscription failure).
 - [x] **`ota-flash` uses `config.mqtt.host` as the OTA server address** (`xtask/src/ota_flash.rs`): Added `[ota] host` field to config (defaults empty = use `mqtt.host`). Firmware URL uses `ota.host` when set.
 - [x] **`ota-flash` and `flash` missing `--partition-table`** (`xtask/src/ota_flash.rs`, `xtask/src/flash.rs`, `xtask/src/self_test.rs`): Added `--partition-table partitions.csv` to `espflash save-image`, `espflash flash`, and self-test flash commands.
-- [ ] **`config-flash` sends text config over serial, but firmware has no serial config parser** (`xtask/src/config_flash.rs`): Sends `CONFIG_START`, key=value lines, expects `CONFIG_OK` response. The firmware reads config from NVS, not serial. This command hangs forever. Either add a serial config receiver to the `hw-test` feature, or rewrite to use `espflash` NVS write APIs directly.
 
 ### Minor
 
@@ -152,6 +151,37 @@ The hand-rolled MQTT client in `app/src/mqtt_client.rs` had multiple protocol bu
 - [x] **`ota-flash` subscribes to wrong topic for online detection** (`xtask/src/ota_flash.rs`): Changed subscribe topic from `launa/{device_id}/status` to `launa/{device_id}/state` matching firmware publish topic.
 - [x] **`monitor` hardcodes `COM3` instead of reading from config** (`xtask/src/monitor.rs`): Now reads `device.serial_port` from `launa.toml` config, falls back to `COM3` only when neither `--port` arg nor config is available.
 - [x] **`sniff_decode.rs` `hex_to_bytes` drops trailing nibble on odd-length input** (`xtask/src/sniff_decode.rs`): Fixed — prepends `"0"` to odd-length hex strings before parsing for deterministic byte alignment.
+
+## Code Review: App Crate Logical Review (2026-04-15)
+
+Full logical review of all 12 source files in `app/src/`. Issues ordered by severity.
+
+### Critical
+
+- [ ] **Unsafe aliasing of `mk_static!` socket buffers in `MqttClient`** (`app/src/mqtt_client.rs:197-203, 226-233`): `connect()` and `reconnect()` cast `&'static mut [u8; 1024]` through a raw pointer to create a new `&'static mut [u8]`. This creates a second mutable reference to the same memory while the `StaticCell`'s permanent `&'static mut` still exists — undefined behavior under Rust's aliasing rules. Works in practice due to single-tasked access, but should use `UnsafeCell` wrappers or `MaybeUninit` + manual initialization instead of `StaticCell` for buffers that need reborrowing.
+- [ ] **OTA TCP socket buffer leak on failure** (`app/src/ota.rs:67-69`): Every `perform_ota_update` call allocates 4 KiB + 1 KiB via `mk_static!` (never reclaimed). On OTA failure (device doesn't reboot), 5 KiB is permanently lost from the 32 KiB heap. After one failed OTA, only ~21 KiB remains. Two failures = ~16 KiB.
+- [ ] **Partition table has only 8 KiB margin** (`app/partitions.csv`): `ota_1` ends at 0x3E0000 in 4 MiB flash (0x400000). Any future partition addition will overflow. Tight but currently correct.
+
+### High
+
+- [ ] **WiFi reconnect signal fires on initial connect** (`app/src/wifi.rs:56-58`): `WIFI_RECONNECT_SIGNAL.signal(())` is called on every successful WiFi connect, including the very first one. This races with the MQTT task, which may see the signal and disconnect an already-connected MQTT session on boot. The signal should only fire on reconnections, not the first connection.
+- [ ] **MQTT loss reconnect uses fixed 5s backoff, no exponential backoff** (`app/src/main.rs:246-270`): The MQTT-loss `None` arm of `recv()` retries every 5s indefinitely. The WiFi-reconnect path already has exponential backoff (5s→10s→20s→40s→60s cap). Both paths should use the same strategy to avoid hammering a dead broker.
+- [ ] **`send_connect` reads CONNACK in a single TCP read** (`app/src/mqtt_client.rs:288-291`): Only one `transport.read()` call is issued for CONNACK. If the TCP stack hasn't received the full packet yet, partial data causes a false connection failure. Same issue in `subscribe()` for SUBACK. Should loop until enough bytes are received.
+
+### Moderate
+
+- [ ] **`config::save` ignores NVS write errors** (`app/src/config.rs:68-75`): All `nvs.set()` results are discarded with `let _ =`. If any write fails (partition full, flash wear), the device silently uses stale/default values on next boot. Should at minimum log warnings on failure.
+- [ ] **Heap allocator churn from fault `String` in `STATE_CHANNEL`** (`app/src/main.rs:85, 440`): `(StatusUpdate, Option<String>, bool)` is sent ~1/sec through the channel. The `Option<String>` (fault log) is cloned every time even when `None`. Each `StatusUpdate::clone()` also allocates. On a 32 KiB heap, this allocator churn risks fragmentation over long uptimes.
+- [ ] **Duplicated `TopicBuilder::new()` calls in `mqtt_task`** (`app/src/main.rs:153, 184, 200`): `TopicBuilder` is reconstructed multiple times per loop iteration. `diag_topic` and `cmd_base` are cached but alert topics are rebuilt. Should use a single instance.
+- [ ] **Magic number `12345` as network stack seed** (`app/src/wifi.rs:91`): Hardcoded seed for embassy-net's RNG. The `Rng` peripheral is passed into `connect()` but unused (named `_rng`). A predictable seed weakens DHCP transaction ID randomness and could cause conflicts with multiple ESP32s on the same network.
+- [ ] **`WIFI_DISCONNECT_COUNT` is misleading** (`app/src/main.rs:240`): Counter is incremented on MQTT connection loss (not WiFi disconnect). Name suggests WiFi-level events. Should rename to `MQTT_LOSS_COUNT` or add a comment clarifying the approximation.
+- [ ] **`validate_http_status` has redundant length check** (`app/src/ota.rs:147-151`): `if headers.len() < 12` appears twice in succession. The second check is dead code.
+
+### Low / Code Quality
+
+- [ ] **`clock.rs` module is dead code** (`app/src/clock.rs`): `EmbassyClock` implements `launa_hal::Clock` but is never imported or used anywhere in `app/`. Remove or wire it up.
+- [ ] **`HeapMonitor` check interval is 60s** (`app/src/heap_monitor.rs:17`): With a 32 KiB heap and multiple concurrent allocators, 60 seconds between checks is long. A burst of allocations could exhaust the heap between checks. Consider reducing to 15-30s.
+- [ ] **`uart_task` write-priority could starve reads** (`app/src/main.rs:106-111`): Outgoing UART data is checked before reading. A constant stream of writes could delay incoming frame processing. Unlikely in practice but worth noting.
 
 ## P0: Production Blockers
 
@@ -213,9 +243,35 @@ The firmware runs headless -- serial debug is inaccessible in production. All di
 - [x] **Remove unused `client_id` binding in `encode_command`**: Changed to `let _ = self.registration.client_id()?;` with comment explaining it's a registration guard that returns `None` if not registered.
 - [x] **Gate default temperature parsing behind validation**: `parse_set_temperature()` in `command_parser.rs` now rejects values above `ABSOLUTE_MAX_TEMP_F` (108°F) with `ParseResult::TemperatureOutOfRange`. Prevents accidental `SetTemperature(255)` while allowing all realistic setpoints (0-108). 4 new tests.
 
+
+## P0: First Hardware Flash Blockers (2026-04-15)
+
+These must be resolved before `cargo xtask ota-flash` can work end-to-end on a real ESP32.
+
+### xtask Tool Bugs
+
+- [x] **`ota-flash` subscribes to wrong topic for online detection** (`xtask/src/ota_flash.rs`): Fixed — changed from `launa/{id}/status` to `launa/{id}/state` matching firmware publish topic.
+- [x] **`ota-flash` and `flash` missing `--partition-table`** (`xtask/src/ota_flash.rs`, `xtask/src/flash.rs`, `xtask/src/self_test.rs`): Added `--partition-table partitions.csv` to `espflash save-image`, `espflash flash`, and self-test flash commands.
+- [x] **`ota-flash` uses `config.mqtt.host` as the OTA server address** (`xtask/src/ota_flash.rs`): Added `[ota] host` field to `launa.toml` config (defaults to `mqtt.host` when empty). Firmware URL uses `ota.host` when set.
+- [x] **`ota-flash` sends dead `"feature"` field in OTA MQTT payload** (`xtask/src/ota_flash.rs`): Removed unused `"feature"` field from OTA JSON payload. ESP32 only extracts `"url"`.
+- [x] **`monitor` hardcodes `COM3` instead of reading from config** (`xtask/src/monitor.rs`): Now reads `device.serial_port` from `launa.toml` config, falls back to `COM3` only when neither `--port` arg nor config is available.
+- [x] **`sniff_decode.rs` `hex_to_bytes` drops trailing nibble on odd-length input** (`xtask/src/sniff_decode.rs`): Fixed — prepends `"0"` to odd-length hex strings before parsing.
+
+### Config Provisioning
+
+- [x] **`config-flash` sends text config over serial, but firmware has no serial config parser** (`xtask/src/config_flash.rs`, `app/src/main.rs`): Added serial config receiver to the `hw-test` feature. After hardware tests, the firmware waits for `CONFIG_START`, parses key=value lines, writes to NVS via `AppConfig::save()`, and responds with `CONFIG_OK` or `CONFIG_ERROR:reason`. 30-second timeout. Maps dotted keys (`wifi.ssid`) to NVS keys (`wifi_ssid`).
+- [ ] **No bootstrap path for blank ESP32**: A fresh ESP32 has empty NVS. Firmware boots with placeholder defaults (`YOUR_WIFI_SSID` / `192.168.1.100`) and will never connect to WiFi or MQTT. Need one of: (a) working `config-flash` via serial, (b) `espflash` NVS write, or (c) compile-time config injection for first flash. Without this, the first flash is a brick until serial debug is attached.
+- [ ] **`launa.example.toml` missing `[ota] host` field**: The `[ota]` section in the example config doesn't show the `host` field. Update it so new users know the option exists.
+
+### App Build Verification
+
+- [ ] **Verify `app/` compiles for `xtensa-esp32-none-elf`**: The app has never been cross-compiled on this machine. Need to install the Xtensa toolchain (`rustup target add xtensa-esp32-none-elf` via esp-rs/rust-build) and run `cd app && cargo +esp build` successfully. This is the real "does it link" gate.
+- [ ] **Ensure `app/.cargo/config.toml` has target triple**: `espflash` and `cargo build` need `[build] target = "xtensa-esp32-none-elf"` in `app/.cargo/config.toml`. If missing, both `cargo xtask flash` and `cargo xtask ota-flash` will fail.
+- [ ] **Install `cargo-espflash` and USB drivers**: Phase 0 prerequisite. Install CP210x or CH340 VCP driver for the ESP-WROOM-32 dev board. Run `cargo install cargo-espflash --locked`. Verify with `cargo espflash board-info --chip esp32`.
+
 ## P2: Documentation Cleanup
 
-- [ ] **Audit and clean up comments, README, AGENTS.md, docs/, and TASKS.md for AI slop**: Remove overly chatty, overly specific, or narrative-style comments that read like a developer's stream of consciousness during implementation (e.g., "this repo didn't work because X so this implementation uses Y", "after the migration we had to fix Z", long backstories about why a dependency was chosen). Comments and docs should be concise, state what the code does and why, not the history of how we got there. This applies to: (1) `app/src/*.rs` module-level and inline comments, (2) `crates/*/src/*.rs` doc comments, (3) `docs/*.md` files, (4) `AGENTS.md` coding guidelines and current state sections, (5) `TASKS.md` completed item descriptions (trim the novellas). The goal is documentation that reads like a human engineer wrote it for other humans, not a transcript of an AI coding session.
+- [x] **Audit and clean up comments, README, AGENTS.md, docs/, and TASKS.md for AI slop**: Reviewed all source files, docs, and AGENTS.md. Codebase was already clean — only 2 minor narrative trims: removed backstory comment in `launa-esp-ota/src/lib.rs` ("replaces broken esp-hal-ota...") and trimmed heap-size aside in `mqtt_client.rs`.
 
 ## ESP32 Firmware (`app/`) -- In Progress
 
@@ -312,7 +368,7 @@ raw frames to MQTT over WiFi. You sit at your desk and run `scripts/sniff-decode
 to the MQTT sniff topic and decodes everything live. No need to be physically at the spa.
 
 - [x] **Build sniffer firmware (`app/src/main.rs` with `#[cfg(feature = "sniff")]`)**: Implemented. Connects WiFi + MQTT, reads all frames passively, publishes JSON to `launa/<device_id>/sniff` with raw hex, message type, length, and CRC pass/fail. No registration, no commands. Subscribes to management topics.
-- [ ] **Build sniffer dashboard/decoder (`scripts/sniff-decode.py`)**: Python script that subscribes to the MQTT sniff topic remotely and decodes frames in real-time on your PC: shows message type, parsed fields (temperature, pumps, flags), raw hex dump, CRC status. Highlights any frames that fail CRC or have unrecognized types. Can save session to JSON file for offline analysis. Agent can run this to inspect real spa traffic.
+- [x] **Build sniffer dashboard/decoder (`scripts/sniff-decode.py`)**: Python script subscribes to `launa/+/sniff` MQTT topic, decodes Balboa frames in real-time with color-coded output. Supports status updates, registration, settings subtypes, fault log, filter cycles, information response. CRC-8 verification matches Rust implementation. `--save session.json` for offline analysis. Requires `paho-mqtt`.
 - [ ] **First field session: passive sniff (safe)**: Flash sniffer FW via USB at your desk, then take ESP32 + RS-485 module + USB charger to the spa. Connect A/B to the controller's bus. Plug in USB charger. Go back to your desk. Run `sniff-decode.py` remotely. Collect 30+ seconds of frames. Verify: (1) we see valid 0x7E-delimited frames (not garbage = A/B polarity correct), (2) status updates arrive every ~1s, (3) byte offsets match our parser assumptions, (4) message types match what we expect (FF AF 13, FE BF, etc.).
 - [ ] **Validate parser against real frames**: Take the sniffed raw hex data (saved JSON from decoder), feed it through `launa-protocol::StatusUpdate::parse()` in a desktop test, verify the parsed values make sense (temperature, pump states, etc. match what the spa display shows).
 - [ ] **Document real protocol findings**: After sniffing, update `docs/protocol.md` and `docs/bp6013g1.md` with any differences found between the reference docs and real behavior. Fix any parser bugs discovered.

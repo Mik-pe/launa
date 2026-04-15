@@ -501,7 +501,7 @@ async fn main(_spawner: Spawner) {
 
     // Test 1: UART
     let uart_config = esp_hal::uart::Config::default().with_baudrate(115200);
-    let _uart = esp_hal::uart::Uart::new(peripherals.UART1, uart_config)
+    let mut uart = esp_hal::uart::Uart::new(peripherals.UART1, uart_config)
         .expect("Failed to create UART")
         .with_tx(peripherals.GPIO17)
         .with_rx(peripherals.GPIO16)
@@ -521,6 +521,121 @@ async fn main(_spawner: Spawner) {
     }
 
     info!("TEST_PASS:all");
+
+    // ── Serial config receiver ────────────────────────────────────
+    // Wait for CONFIG_START over serial, parse key=value lines,
+    // write to NVS on CONFIG_END. 30-second timeout.
+    info!("Waiting for serial config (30s timeout)...");
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut line_buf: Vec<u8> = Vec::new();
+    let mut read_buf = [0u8; 64];
+    let mut config_started = false;
+    let mut kv_pairs: Vec<(alloc::string::String, alloc::string::String)> = Vec::new();
+    let mut config_done = false;
+
+    while Instant::now() < deadline && !config_done {
+        match uart.read(&mut read_buf) {
+            Ok(0) => {
+                Timer::after(Duration::from_millis(10)).await;
+            }
+            Ok(n) => {
+                for &byte in &read_buf[..n] {
+                    if byte == b'\n' {
+                        // Process complete line — extract as owned string before clearing buffer
+                        let line = {
+                            let raw = core::str::from_utf8(&line_buf).unwrap_or("");
+                            // Trim CR/LF whitespace
+                            let trimmed = raw.trim_start_matches('\r').trim_end_matches('\r');
+                            alloc::string::String::from(trimmed)
+                        };
+                        line_buf.clear();
+
+                        if !config_started {
+                            if line == "CONFIG_START" {
+                                config_started = true;
+                                info!("Config reception started");
+                            }
+                        } else if line == "CONFIG_END" {
+                            config_done = true;
+                        } else if !line.is_empty() {
+                            // Parse key=value
+                            if let Some(eq_pos) = line.find('=') {
+                                let key = &line[..eq_pos];
+                                let value = &line[eq_pos + 1..];
+                                kv_pairs.push((
+                                    alloc::string::String::from(key),
+                                    alloc::string::String::from(value),
+                                ));
+                            }
+                        }
+                    } else if byte != b'\r' {
+                        line_buf.push(byte);
+                    }
+                }
+            }
+            Err(_) => {
+                // No data available or read error — brief pause before retry
+                Timer::after(Duration::from_millis(10)).await;
+            }
+        }
+    }
+
+    if !config_done {
+        let msg: &[u8] = if !config_started {
+            b"CONFIG_ERROR:timeout_no_start\n"
+        } else {
+            b"CONFIG_ERROR:timeout_no_end\n"
+        };
+        let _ = uart.write(msg);
+        let _ = uart.flush();
+        warn!("Config reception timed out");
+        return;
+    }
+
+    // Map xtask dotted keys to AppConfig fields and save to NVS
+    let mut app_config = config::AppConfig::default();
+
+    for (key, value) in &kv_pairs {
+        match key.as_str() {
+            "wifi.ssid" => app_config.wifi_ssid = value.clone(),
+            "wifi.password" => app_config.wifi_password = value.clone(),
+            "mqtt.host" => app_config.mqtt_host = value.clone(),
+            "mqtt.port" => {
+                match value.parse::<u16>() {
+                    Ok(p) => {
+                        app_config.mqtt_port = p;
+                    }
+                    Err(_) => {
+                        let msg = alloc::format!("CONFIG_ERROR:invalid_port={}\n", value);
+                        let _ = uart.write(msg.as_bytes());
+                        let _ = uart.flush();
+                        warn!("Invalid port: {}", value);
+                        return;
+                    }
+                }
+            }
+            "mqtt.user" => app_config.mqtt_user = value.clone(),
+            "mqtt.password" => app_config.mqtt_password = value.clone(),
+            "device.id" => app_config.device_id = value.clone(),
+            other => {
+                warn!("Unknown config key: {}", other);
+            }
+        }
+    }
+
+    info!(
+        "Parsed config: ssid={} mqtt={}:{} device={}",
+        app_config.wifi_ssid, app_config.mqtt_host, app_config.mqtt_port, app_config.device_id
+    );
+
+    // Write to NVS
+    let mut nvs = config::AppConfig::open_nvs(peripherals.FLASH);
+    app_config.save(&mut nvs);
+
+    let _ = uart.write(b"CONFIG_OK\n");
+    let _ = uart.flush();
+    info!("Config saved to NVS successfully");
 }
 
 // ── Main entry point ──────────────────────────────────────────────────

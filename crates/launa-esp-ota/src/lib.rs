@@ -1,8 +1,7 @@
 //! Custom ESP32 OTA implementation using `embedded-storage` traits.
 //!
-//! Replaces the broken `esp-hal-ota` crate (which depends on the removed
-//! `concat_idents` feature). Uses `esp-storage::FlashStorage` (which
-//! implements `embedded-storage` traits) for direct flash access.
+//! Uses `esp-storage::FlashStorage` (which implements `embedded-storage`
+//! traits) for direct flash access.
 //!
 //! # Partition Layout (must match `app/partitions.csv`)
 //!

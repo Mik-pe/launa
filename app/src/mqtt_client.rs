@@ -77,8 +77,7 @@ const DEFAULT_KEEP_ALIVE_SECS: u16 = 30;
 pub struct MqttClient {
     transport: Option<TcpTransport>,
     stack: &'static Stack<'static>,
-    /// TCP socket buffers allocated once and reused across reconnects.
-    /// Without this, each reconnect leaks 2 KiB of static memory (32 KiB heap).
+    /// TCP socket buffers reused across reconnects to avoid leaking static memory.
     socket_rx_buf: &'static mut [u8; 1024],
     socket_tx_buf: &'static mut [u8; 1024],
     pub device_id: String,
@@ -141,8 +140,7 @@ impl MqttClient {
         stack: &'static Stack<'static>,
         config: &AppConfig,
     ) -> Result<Self, MqttError> {
-        // Allocate socket buffers once — reused across reconnects to avoid
-        // leaking static memory on the 32 KiB heap.
+        // Allocate socket buffers once — reused across reconnects.
         let socket_rx_buf = mk_static!([u8; 1024], [0u8; 1024]);
         let socket_tx_buf = mk_static!([u8; 1024], [0u8; 1024]);
 
