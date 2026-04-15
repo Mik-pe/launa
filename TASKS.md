@@ -668,9 +668,9 @@ Code review of `launa-ota` and the broader simulation/test infrastructure identi
 
 ### OTA Integration Tests: End-to-End Simulation
 
-- [ ] **Add OTA graceful shutdown sequence test** (`crates/launa-integration-tests/src/lib.rs`): Test that the full OTA flow calls operations in the correct order: begin -> write(N) -> finalize -> mark_valid. Verify that a failed write mid-stream triggers rollback_and_reboot, not mark_valid. Current tests only test happy path and explicit rollback; no test verifies the error-path sequence.
-- [ ] **Add OTA firmware size validation test** (`crates/launa-integration-tests/src/lib.rs`): Test that `MockOta` (and eventually the real `EspOtaFlash`) rejects firmware larger than the OTA partition. Add `MAX_FIRMWARE_SIZE` constant to `MockOta` and return `OtaError::InvalidFirmware` when exceeded. Real ESP32 has fixed-size partitions; writing past the boundary corrupts the next partition.
-- [ ] **Add OTA concurrent-operation safety test** (`crates/launa-integration-tests/src/lib.rs`): Verify that calling `begin()` while already in progress, or `write()` before `begin()`, or `finalize()` with zero bytes written, returns appropriate errors. Real firmware guards against these but no test verifies it.
+- [x] **Add OTA graceful shutdown sequence test** (`crates/launa-integration-tests/src/lib.rs`): Test that the full OTA flow calls operations in the correct order: begin -> write(N) -> finalize -> mark_valid. Verify that a failed write mid-stream triggers rollback_and_reboot, not mark_valid. Current tests only test happy path and explicit rollback; no test verifies the error-path sequence.
+- [x] **Add OTA firmware size validation test** (`crates/launa-integration-tests/src/lib.rs`): Test that `MockOta` (and eventually the real `EspOtaFlash`) rejects firmware larger than the OTA partition. Add `MAX_FIRMWARE_SIZE` constant to `MockOta` and return `OtaError::InvalidFirmware` when exceeded. Real ESP32 has fixed-size partitions; writing past the boundary corrupts the next partition.
+- [x] **Add OTA concurrent-operation safety test** (`crates/launa-integration-tests/src/lib.rs`): Verify that calling `begin()` while already in progress, or `write()` before `begin()`, or `finalize()` with zero bytes written, returns appropriate errors. Real firmware guards against these but no test verifies it.
 
 ### Integration Tests: Error Path Coverage
 

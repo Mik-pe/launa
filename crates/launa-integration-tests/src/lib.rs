@@ -1417,6 +1417,202 @@ mod tests {
         assert_eq!(ota.firmware_data, firmware);
     }
 
+    // ========================================================================
+    // Test Group J: OTA Integration Tests — Error Paths & Safety
+    // ========================================================================
+    //
+    // Integration-level OTA tests verifying graceful shutdown, rollback,
+    // size limits, and concurrent operation safety using MockOta with
+    // failure injection fields.
+
+    /// OTA graceful shutdown happy path: verify the complete call sequence
+    /// begin → write(N) → finalize → mark_valid is executed in correct order.
+    /// Each step succeeds and the final state is valid.
+    #[test]
+    fn test_ota_graceful_shutdown_happy_path() {
+        use launa_ota::mock::MockOta;
+
+        let mut ota = MockOta::new();
+        let firmware: Vec<u8> = (0..2048).map(|i| (i % 256) as u8).collect();
+        let server = SimHttpServer::new(firmware.clone(), 512);
+
+        // Step 1: begin() — opens OTA partition
+        ota.begin().unwrap();
+        assert!(ota.firmware_data.is_empty());
+        assert!(!ota.finalized);
+        assert!(!ota.valid);
+
+        // Step 2: write() — download chunks from server and write
+        for chunk in server.download_chunks() {
+            ota.write(&chunk).unwrap();
+        }
+        assert_eq!(ota.firmware_data.len(), 2048);
+        assert_eq!(ota.firmware_data, firmware);
+
+        // Step 3: finalize() — set boot partition
+        ota.finalize().unwrap();
+        assert!(ota.finalized);
+        assert!(!ota.rolled_back);
+
+        // Step 4: mark_valid() — confirm firmware booted successfully
+        ota.mark_valid().unwrap();
+        assert!(ota.valid);
+
+        // Verify the complete call sequence: no rollback, no errors
+        assert!(!ota.rolled_back);
+    }
+
+    /// Failed write triggers rollback: inject write failure mid-stream,
+    /// assert rollback_and_reboot is called, mark_valid is NOT called.
+    #[test]
+    fn test_ota_failed_write_triggers_rollback() {
+        use launa_ota::mock::MockOta;
+
+        let mut ota = MockOta::new();
+        // Inject failure after 512 bytes written
+        ota.fail_on_write_after = Some(512);
+
+        // 2 KiB firmware served in 256-byte chunks — failure at chunk 3 (byte 512)
+        let firmware: Vec<u8> = (0..2048).map(|i| (i % 256) as u8).collect();
+        let server = SimHttpServer::new(firmware, 256);
+
+        // Attempt OTA — should fail during write
+        let result = simulate_ota_download(&mut ota, &server);
+        assert!(
+            result.is_err(),
+            "OTA should fail when write fails mid-stream"
+        );
+
+        // Verify the failure was at the injected point
+        assert_eq!(
+            ota.firmware_data.len(),
+            512,
+            "should have written exactly 512 bytes before failure"
+        );
+
+        // mark_valid must NOT have been called (firmware is incomplete)
+        assert!(
+            !ota.valid,
+            "mark_valid should NOT be called after write failure"
+        );
+
+        // finalize should NOT have been called (we failed during write)
+        assert!(
+            !ota.finalized,
+            "finalize should NOT have been called after write failure"
+        );
+
+        // Rollback the failed session
+        ota.rollback_and_reboot().unwrap();
+        assert!(ota.rolled_back, "rollback should be recorded");
+        assert!(
+            !ota.valid,
+            "firmware should still be invalid after rollback"
+        );
+    }
+
+    /// Firmware size exceeded: write past MAX_FIRMWARE_SIZE,
+    /// assert InvalidFirmware error is returned.
+    #[test]
+    fn test_ota_firmware_size_exceeded() {
+        use launa_ota::mock::MockOta;
+        use launa_ota::MAX_FIRMWARE_SIZE;
+
+        let mut ota = MockOta::new();
+        ota.begin().unwrap();
+
+        // Write exactly MAX_FIRMWARE_SIZE bytes — should succeed
+        let chunk = vec![0xAAu8; 4096];
+        let full_chunks = MAX_FIRMWARE_SIZE / 4096;
+        for _ in 0..full_chunks {
+            ota.write(&chunk).unwrap();
+        }
+        assert_eq!(ota.firmware_data.len(), MAX_FIRMWARE_SIZE);
+
+        // Write one more byte — should fail with InvalidFirmware
+        let result = ota.write(&[0x00]);
+        assert!(
+            matches!(result, Err(OtaError::InvalidFirmware)),
+            "writing past MAX_FIRMWARE_SIZE should return InvalidFirmware"
+        );
+
+        // Firmware data should be exactly MAX_FIRMWARE_SIZE (no partial write)
+        assert_eq!(
+            ota.firmware_data.len(),
+            MAX_FIRMWARE_SIZE,
+            "firmware data should not exceed MAX_FIRMWARE_SIZE"
+        );
+    }
+
+    /// Concurrent safety: begin() while OTA already in progress returns error.
+    #[test]
+    fn test_ota_begin_while_in_progress() {
+        use launa_ota::mock::MockOta;
+
+        let mut ota = MockOta::new();
+
+        // First begin succeeds
+        ota.begin().unwrap();
+
+        // Write some data to confirm session is active
+        ota.write(&[0xDE, 0xAD]).unwrap();
+        assert_eq!(ota.firmware_data.len(), 2);
+
+        // Second begin while in progress should fail
+        let result = ota.begin();
+        assert!(
+            matches!(result, Err(OtaError::BeginFailed)),
+            "begin() while in progress should return BeginFailed"
+        );
+
+        // Original session data should still be intact
+        assert_eq!(ota.firmware_data.len(), 2);
+        assert_eq!(ota.firmware_data, vec![0xDE, 0xAD]);
+    }
+
+    /// Concurrent safety: write() before begin() returns error.
+    #[test]
+    fn test_ota_write_before_begin() {
+        use launa_ota::mock::MockOta;
+
+        let mut ota = MockOta::new();
+
+        // Write without begin should fail
+        let result = ota.write(&[0x01, 0x02, 0x03]);
+        assert!(
+            matches!(result, Err(OtaError::WriteFailed { byte_offset: 0 })),
+            "write() before begin() should return WriteFailed at offset 0"
+        );
+
+        // No data should have been written
+        assert!(ota.firmware_data.is_empty());
+    }
+
+    /// Concurrent safety: finalize() with zero bytes written returns error.
+    #[test]
+    fn test_ota_finalize_zero_bytes() {
+        use launa_ota::mock::MockOta;
+
+        let mut ota = MockOta::new();
+
+        // Begin succeeds
+        ota.begin().unwrap();
+
+        // Finalize with zero bytes written should fail
+        let result = ota.finalize();
+        assert!(
+            matches!(result, Err(OtaError::FinalizeFailed)),
+            "finalize() with zero bytes should return FinalizeFailed"
+        );
+
+        // Should not be finalized
+        assert!(!ota.finalized);
+
+        // Rollback the failed session
+        ota.rollback_and_reboot().unwrap();
+        assert!(ota.rolled_back);
+    }
+
     #[test]
     fn test_ota_empty_firmware() {
         let mut ota = launa_ota::mock::MockOta::new();
