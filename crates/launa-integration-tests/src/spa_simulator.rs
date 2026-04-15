@@ -14,12 +14,12 @@ pub struct SpaState {
     pub temp_scale_celsius: bool,
     pub is_heating: bool,
     pub temp_range_high: bool,
-    pub pump1: u8,             // 0=off, 1=low, 2=high
-    pub pump2: u8,
-    pub pump3: u8,
+    /// Pump states (indexed 0-5, where index 0 = Pump 1). Values: 0=off, 1=low, 2=high.
+    pub pumps: [u8; 6],
     pub circ_pump: bool,
     pub blower: bool,
-    pub light1: bool,
+    /// Light states (indexed 0-1, where index 0 = Light 1).
+    pub lights: [bool; 2],
     pub mister: bool,
     pub hour: u8,
     pub minute: u8,
@@ -36,12 +36,10 @@ impl Default for SpaState {
             temp_scale_celsius: false,
             is_heating: true,
             temp_range_high: true,
-            pump1: 0,
-            pump2: 0,
-            pump3: 0,
+            pumps: [0; 6],
             circ_pump: false,
             blower: false,
-            light1: false,
+            lights: [false; 2],
             mister: false,
             hour: 14,
             minute: 30,
@@ -114,10 +112,15 @@ impl SpaSimulator {
         }
 
         // Offset 11: pump status (PP byte)
-        // pump1 bits 0-1, pump2 bits 2-3, pump3 bits 4-5
-        payload[11] = (self.state.pump1 & 0x03)
-            | ((self.state.pump2 & 0x03) << 2)
-            | ((self.state.pump3 & 0x03) << 4);
+        // pump1 bits 0-1, pump2 bits 2-3, pump3 bits 4-5, pump4 bits 6-7
+        payload[11] = (self.state.pumps[0] & 0x03)
+            | ((self.state.pumps[1] & 0x03) << 2)
+            | ((self.state.pumps[2] & 0x03) << 4)
+            | ((self.state.pumps[3] & 0x03) << 6);
+
+        // Offset 12: pump5 bits 0-1, pump6 bits 2-3
+        payload[12] = (self.state.pumps[4] & 0x03)
+            | ((self.state.pumps[5] & 0x03) << 2);
 
         // Offset 13: circ pump (bit 1), blower (bits 2-3)
         if self.state.circ_pump {
@@ -127,9 +130,12 @@ impl SpaSimulator {
             payload[13] |= 0x0C;
         }
 
-        // Offset 14: light1 (bits 0-1)
-        if self.state.light1 {
+        // Offset 14: light1 (bits 0-1), light2 (bits 2-3)
+        if self.state.lights[0] {
             payload[14] |= 0x03;
+        }
+        if self.state.lights[1] {
+            payload[14] |= 0x0C;
         }
 
         // Offset 15: mister (0=off, 1=on)
@@ -353,19 +359,31 @@ impl SpaSimulator {
         match item_code {
             0x04 => {
                 // Pump1 toggle: off→low→high→off
-                self.state.pump1 = (self.state.pump1 + 1) % 3;
+                self.state.pumps[0] = (self.state.pumps[0] + 1) % 3;
             }
             0x05 => {
-                self.state.pump2 = (self.state.pump2 + 1) % 3;
+                self.state.pumps[1] = (self.state.pumps[1] + 1) % 3;
             }
             0x06 => {
-                self.state.pump3 = (self.state.pump3 + 1) % 3;
+                self.state.pumps[2] = (self.state.pumps[2] + 1) % 3;
+            }
+            0x07 => {
+                self.state.pumps[3] = (self.state.pumps[3] + 1) % 3;
+            }
+            0x08 => {
+                self.state.pumps[4] = (self.state.pumps[4] + 1) % 3;
+            }
+            0x09 => {
+                self.state.pumps[5] = (self.state.pumps[5] + 1) % 3;
             }
             0x0C => {
                 self.state.blower = !self.state.blower;
             }
             0x11 => {
-                self.state.light1 = !self.state.light1;
+                self.state.lights[0] = !self.state.lights[0];
+            }
+            0x12 => {
+                self.state.lights[1] = !self.state.lights[1];
             }
             0x3C => {
                 self.state.hold = !self.state.hold;

@@ -199,7 +199,7 @@ fn test_full_spa_lifecycle() {
         &Command::ToggleItem(ToggleItem::Pump1),
         &mut controller, &mut transport, &mut spa,
     );
-    assert_eq!(spa.state.pump1, PumpState::Low);
+    assert_eq!(spa.state.pumps[0], PumpState::Low);
 
     // Phase 4: Verify pump shows in next status
     let events = run_tick(&mut spa, &mut transport, &mut controller);
@@ -207,7 +207,7 @@ fn test_full_spa_lifecycle() {
         ControllerEvent::StatusUpdate(s) => Some(s.clone()),
         _ => None,
     }).expect("should have status");
-    assert_eq!(status_event.pump1, PumpState::Low);
+    assert_eq!(status_event.pumps[0], PumpState::Low);
 }
 
 // ============================================================================
@@ -362,23 +362,23 @@ fn test_toggle_pump1_round_trip() {
     complete_registration(&mut spa, &mut transport, &mut controller);
     run_tick(&mut spa, &mut transport, &mut controller);
 
-    assert_eq!(spa.state.pump1, PumpState::Off);
+    assert_eq!(spa.state.pumps[0], PumpState::Off);
 
     send_command(&Command::ToggleItem(ToggleItem::Pump1), &mut controller, &mut transport, &mut spa);
-    assert_eq!(spa.state.pump1, PumpState::Low);
+    assert_eq!(spa.state.pumps[0], PumpState::Low);
 
     let events = run_tick(&mut spa, &mut transport, &mut controller);
     let status = events.iter().find_map(|e| match e {
         ControllerEvent::StatusUpdate(s) => Some(s.clone()),
         _ => None,
     }).unwrap();
-    assert_eq!(status.pump1, PumpState::Low);
+    assert_eq!(status.pumps[0], PumpState::Low);
 
     send_command(&Command::ToggleItem(ToggleItem::Pump1), &mut controller, &mut transport, &mut spa);
-    assert_eq!(spa.state.pump1, PumpState::High);
+    assert_eq!(spa.state.pumps[0], PumpState::High);
 
     send_command(&Command::ToggleItem(ToggleItem::Pump1), &mut controller, &mut transport, &mut spa);
-    assert_eq!(spa.state.pump1, PumpState::Off);
+    assert_eq!(spa.state.pumps[0], PumpState::Off);
 }
 
 #[test]
@@ -390,13 +390,13 @@ fn test_toggle_light_round_trip() {
     complete_registration(&mut spa, &mut transport, &mut controller);
     run_tick(&mut spa, &mut transport, &mut controller);
 
-    assert!(!spa.state.light1);
+    assert!(!spa.state.lights[0]);
 
     send_command(&Command::ToggleItem(ToggleItem::Light1), &mut controller, &mut transport, &mut spa);
-    assert!(spa.state.light1);
+    assert!(spa.state.lights[0]);
 
     send_command(&Command::ToggleItem(ToggleItem::Light1), &mut controller, &mut transport, &mut spa);
-    assert!(!spa.state.light1);
+    assert!(!spa.state.lights[0]);
 }
 
 #[test]
@@ -449,8 +449,8 @@ fn test_toggle_multiple_items_independently() {
     send_command(&Command::ToggleItem(ToggleItem::Light1), &mut controller, &mut transport, &mut spa);
     send_command(&Command::ToggleItem(ToggleItem::Blower), &mut controller, &mut transport, &mut spa);
 
-    assert_eq!(spa.state.pump1, PumpState::Low);
-    assert!(spa.state.light1);
+    assert_eq!(spa.state.pumps[0], PumpState::Low);
+    assert!(spa.state.lights[0]);
     assert!(spa.state.blower);
 
     let events = run_tick(&mut spa, &mut transport, &mut controller);
@@ -458,8 +458,8 @@ fn test_toggle_multiple_items_independently() {
         ControllerEvent::StatusUpdate(s) => Some(s.clone()),
         _ => None,
     }).unwrap();
-    assert_eq!(status.pump1, PumpState::Low);
-    assert!(status.light1);
+    assert_eq!(status.pumps[0], PumpState::Low);
+    assert!(status.lights[0]);
     assert!(status.blower);
 }
 
@@ -584,14 +584,14 @@ fn test_mqtt_command_to_spa_via_controller() {
     ).expect("should parse");
 
     send_command(&cmd, &mut controller, &mut transport, &mut spa);
-    assert_eq!(spa.state.pump1, PumpState::Low);
+    assert_eq!(spa.state.pumps[0], PumpState::Low);
 
     let events = run_tick(&mut spa, &mut transport, &mut controller);
     let status = events.iter().find_map(|e| match e {
         ControllerEvent::StatusUpdate(s) => Some(s.clone()),
         _ => None,
     }).unwrap();
-    assert_eq!(status.pump1, PumpState::Low);
+    assert_eq!(status.pumps[0], PumpState::Low);
 }
 
 #[test]
@@ -631,7 +631,7 @@ fn test_ha_discovery_via_broker() {
     broker.publish_availability(true);
 
     let discoveries = broker.discovery_payloads();
-    assert_eq!(discoveries.len(), 14, "should have 14 discovery configs");
+    assert_eq!(discoveries.len(), 18, "should have 18 discovery configs");
 
     for payload in &discoveries {
         let _: serde_json::Value = serde_json::from_str(payload)
@@ -665,7 +665,7 @@ fn test_full_mqtt_pipeline_with_discovery() {
         }
     }
 
-    assert_eq!(broker.discovery_payloads().len(), 14);
+    assert_eq!(broker.discovery_payloads().len(), 18);
     assert!(broker.last_state().is_some());
 
     let state = broker.last_state().unwrap();
@@ -811,12 +811,10 @@ fn test_custom_spa_state() {
         temp_scale: TemperatureScale::Fahrenheit,
         is_heating: false,
         temp_range: TempRange::Low,
-        pump1: PumpState::High,
-        pump2: PumpState::Low,
-        pump3: PumpState::Off,
+        pumps: [PumpState::High, PumpState::Low, PumpState::Off, PumpState::Off, PumpState::Off, PumpState::Off],
         circ_pump: true,
         blower: true,
-        light1: true,
+        lights: [true, false],
         mister: true,
         hour: 22,
         minute: 0,
@@ -898,12 +896,12 @@ fn test_interleaved_commands_and_status() {
     assert!(events.iter().any(|e| matches!(e, ControllerEvent::StatusUpdate(_))));
 
     send_command(&Command::ToggleItem(ToggleItem::Pump2), &mut controller, &mut transport, &mut spa);
-    assert_eq!(spa.state.pump2, PumpState::Low);
+    assert_eq!(spa.state.pumps[1], PumpState::Low);
 
     let events = run_tick(&mut spa, &mut transport, &mut controller);
     let status = events.iter().find_map(|e| match e {
         ControllerEvent::StatusUpdate(s) => Some(s.clone()),
         _ => None,
     }).unwrap();
-    assert_eq!(status.pump2, PumpState::Low);
+    assert_eq!(status.pumps[1], PumpState::Low);
 }

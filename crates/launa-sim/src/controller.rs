@@ -90,36 +90,29 @@ impl PumpTimer {
 
 /// Manages pump timers for all pumps.
 struct PumpTimerManager {
-    pump1: PumpTimer,
-    pump2: PumpTimer,
-    pump3: PumpTimer,
+    timers: [PumpTimer; 6],
 }
 
 impl PumpTimerManager {
     fn new() -> Self {
         PumpTimerManager {
-            pump1: PumpTimer::new(ToggleItem::Pump1),
-            pump2: PumpTimer::new(ToggleItem::Pump2),
-            pump3: PumpTimer::new(ToggleItem::Pump3),
+            timers: [
+                PumpTimer::new(ToggleItem::Pump1),
+                PumpTimer::new(ToggleItem::Pump2),
+                PumpTimer::new(ToggleItem::Pump3),
+                PumpTimer::new(ToggleItem::Pump4),
+                PumpTimer::new(ToggleItem::Pump5),
+                PumpTimer::new(ToggleItem::Pump6),
+            ],
         }
     }
 
-    fn tick_all(
-        &mut self,
-        now: u64,
-        pump1: PumpState,
-        pump2: PumpState,
-        pump3: PumpState,
-    ) -> Vec<Command> {
+    fn tick_all(&mut self, now: u64, pumps: &[PumpState; 6]) -> Vec<Command> {
         let mut commands = Vec::new();
-        if let Some(cmd) = self.pump1.tick(now, pump1) {
-            commands.push(cmd);
-        }
-        if let Some(cmd) = self.pump2.tick(now, pump2) {
-            commands.push(cmd);
-        }
-        if let Some(cmd) = self.pump3.tick(now, pump3) {
-            commands.push(cmd);
+        for (i, timer) in self.timers.iter_mut().enumerate() {
+            if let Some(cmd) = timer.tick(now, pumps[i]) {
+                commands.push(cmd);
+            }
         }
         commands
     }
@@ -209,9 +202,7 @@ impl SpaController {
                     self.tick_count += 1;
                     let expired = self.pump_timers.tick_all(
                         self.tick_count,
-                        status.pump1,
-                        status.pump2,
-                        status.pump3,
+                        &status.pumps,
                     );
                     for cmd in expired {
                         events.push(ControllerEvent::PumpExpired(cmd));
@@ -249,32 +240,48 @@ impl SpaController {
     /// Start a pump timer (for P1 mode auto-off after 20 minutes).
     /// Call this when the user enables P1 mode via MQTT.
     pub fn start_pump_timer(&mut self, pump: ToggleItem) {
-        match pump {
-            ToggleItem::Pump1 => self.pump_timers.pump1.start(self.tick_count),
-            ToggleItem::Pump2 => self.pump_timers.pump2.start(self.tick_count),
-            ToggleItem::Pump3 => self.pump_timers.pump3.start(self.tick_count),
-            _ => {}
+        let idx = match pump {
+            ToggleItem::Pump1 => 0,
+            ToggleItem::Pump2 => 1,
+            ToggleItem::Pump3 => 2,
+            ToggleItem::Pump4 => 3,
+            ToggleItem::Pump5 => 4,
+            ToggleItem::Pump6 => 5,
+            _ => return,
+        };
+        if idx < self.pump_timers.timers.len() {
+            self.pump_timers.timers[idx].start(self.tick_count);
         }
     }
 
     /// Cancel a pump timer.
     pub fn cancel_pump_timer(&mut self, pump: ToggleItem) {
-        match pump {
-            ToggleItem::Pump1 => self.pump_timers.pump1.cancel(),
-            ToggleItem::Pump2 => self.pump_timers.pump2.cancel(),
-            ToggleItem::Pump3 => self.pump_timers.pump3.cancel(),
-            _ => {}
+        let idx = match pump {
+            ToggleItem::Pump1 => 0,
+            ToggleItem::Pump2 => 1,
+            ToggleItem::Pump3 => 2,
+            ToggleItem::Pump4 => 3,
+            ToggleItem::Pump5 => 4,
+            ToggleItem::Pump6 => 5,
+            _ => return,
+        };
+        if idx < self.pump_timers.timers.len() {
+            self.pump_timers.timers[idx].cancel();
         }
     }
 
     /// Check if a pump timer is running.
     pub fn is_pump_timer_running(&self, pump: ToggleItem) -> bool {
-        match pump {
-            ToggleItem::Pump1 => self.pump_timers.pump1.is_running(),
-            ToggleItem::Pump2 => self.pump_timers.pump2.is_running(),
-            ToggleItem::Pump3 => self.pump_timers.pump3.is_running(),
-            _ => false,
-        }
+        let idx = match pump {
+            ToggleItem::Pump1 => 0,
+            ToggleItem::Pump2 => 1,
+            ToggleItem::Pump3 => 2,
+            ToggleItem::Pump4 => 3,
+            ToggleItem::Pump5 => 4,
+            ToggleItem::Pump6 => 5,
+            _ => return false,
+        };
+        idx < self.pump_timers.timers.len() && self.pump_timers.timers[idx].is_running()
     }
 
     /// Force the controller into a registered state.

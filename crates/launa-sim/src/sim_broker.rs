@@ -47,7 +47,7 @@ impl SimBroker {
     pub fn publish_state(&mut self, status: &launa_protocol::status::StatusUpdate) {
         let topics = TopicBuilder::new(&self.device_id);
         let topic = topics.state_topic();
-        let json = launa_mqtt::state::status_to_json(status, None);
+        let json = launa_mqtt::state::status_to_json(status, None, None);
         self.published.push((topic, json));
     }
 
@@ -111,13 +111,11 @@ mod tests {
             filter_mode: 0,
             is_heating: true,
             temp_range: TempRange::High,
-            pump1: PumpState::Off,
-            pump2: PumpState::Off,
-            pump3: PumpState::Off,
+            pumps: [PumpState::Off; 6],
             circ_pump: false,
             blower: false,
             mister: false,
-            light1: false,
+            lights: [false; 2],
             is_priming: false,
             is_hold: false,
         }
@@ -139,7 +137,7 @@ mod tests {
         broker.publish_discovery("test_spa");
 
         let discoveries = broker.discovery_payloads();
-        assert_eq!(discoveries.len(), 14);
+        assert_eq!(discoveries.len(), 18);
     }
 
     #[test]

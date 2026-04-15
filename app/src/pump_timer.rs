@@ -87,42 +87,41 @@ impl PumpTimer {
 }
 
 pub struct PumpTimerManager {
-    pump1: PumpTimer,
-    pump2: PumpTimer,
-    pump3: PumpTimer,
+    timers: [PumpTimer; 6],
 }
 
 impl PumpTimerManager {
     pub fn new() -> Self {
         PumpTimerManager {
-            pump1: PumpTimer::new(ToggleItem::Pump1),
-            pump2: PumpTimer::new(ToggleItem::Pump2),
-            pump3: PumpTimer::new(ToggleItem::Pump3),
+            timers: [
+                PumpTimer::new(ToggleItem::Pump1),
+                PumpTimer::new(ToggleItem::Pump2),
+                PumpTimer::new(ToggleItem::Pump3),
+                PumpTimer::new(ToggleItem::Pump4),
+                PumpTimer::new(ToggleItem::Pump5),
+                PumpTimer::new(ToggleItem::Pump6),
+            ],
         }
     }
 
-    pub fn tick_all(
-        &mut self,
-        p1: PumpState,
-        p2: PumpState,
-        p3: PumpState,
-    ) -> Vec<Command> {
+    pub fn tick_all(&mut self, pumps: &[PumpState; 6]) -> Vec<Command> {
         let mut cmds = Vec::new();
-        if let Some(c) = self.pump1.tick(p1) { cmds.push(c); }
-        if let Some(c) = self.pump2.tick(p2) { cmds.push(c); }
-        if let Some(c) = self.pump3.tick(p3) { cmds.push(c); }
+        for (i, timer) in self.timers.iter_mut().enumerate() {
+            if let Some(c) = timer.tick(pumps[i]) {
+                cmds.push(c);
+            }
+        }
         cmds
     }
 
-    /// Start a pump timer by pump index (1-3) for the given duration in minutes.
+    /// Start a pump timer by pump index (1-6) for the given duration in minutes.
     /// Returns the toggle command to turn the pump on, or None for invalid index.
     pub fn start_timer(&mut self, pump_index: u8, minutes: u32) -> Option<Command> {
-        match pump_index {
-            1 => Some(self.pump1.start_with_minutes(minutes)),
-            2 => Some(self.pump2.start_with_minutes(minutes)),
-            3 => Some(self.pump3.start_with_minutes(minutes)),
-            _ => None,
+        let i = (pump_index as usize).checked_sub(1)?;
+        if i >= self.timers.len() {
+            return None;
         }
+        Some(self.timers[i].start_with_minutes(minutes))
     }
 }
 

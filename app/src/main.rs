@@ -353,7 +353,7 @@ async fn handle_frame(
                 send_frame(msg_type, &payload).await;
             }
 
-            let expired = pump_timers.tick_all(status.pump1, status.pump2, status.pump3);
+            let expired = pump_timers.tick_all(&status.pumps);
             for cmd in expired {
                 let (msg_type, payload) = cmd.encode();
                 send_frame(msg_type, &payload).await;

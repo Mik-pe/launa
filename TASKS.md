@@ -95,7 +95,7 @@ The hand-rolled MQTT client in `app/src/mqtt_client.rs` had multiple protocol bu
 
 - [ ] **Make `cargo +esp check` work for `app/`**: Running `cargo +esp check` (or `cargo check --target xtensa-esp32-none-elf`) from `app/` should compile-check the ESP32 firmware without a full build. This requires: (1) the `xtensa-esp32-none-elf` toolchain installed via `rustup`, (2) correct `[target.xtensa-esp32-none-elf]` runner/linker config in `app/.cargo/config.toml` or `.cargo/config.toml`, (3) all `app/` dependencies resolving for the target. Currently the app may not `cargo check` cleanly due to API mismatches or missing target setup. Fix whatever is needed so `cd app && cargo +esp check` exits 0.
 
-- [x] **Add `src/lib.rs` stub to `launa-esp-ota`**: Resolved — `crates/launa-esp-ota/src/lib.rs` now contains the full OTA implementation (17KB, 11 tests passing). All 289 workspace tests pass.
+- [x] **Add `src/lib.rs` stub to `launa-esp-ota`**: Resolved — `crates/launa-esp-ota/src/lib.rs` now contains the full OTA implementation (17KB, 11 tests passing). All 301 workspace tests pass.
 
 ## P1: MQTT / HA Discovery Correctness (Fixed)
 
@@ -120,20 +120,59 @@ The hand-rolled MQTT client in `app/src/mqtt_client.rs` had multiple protocol bu
 
 - [x] **Wire pump timers to MQTT commands**: Added `pump1_timer`, `pump2_timer`, `pump3_timer` subtopics to `command_parser.rs` allowlist. Added `ParseResult::TimerPump` variant. `mqtt_client.rs` maps it to `MqttAction::StartPumpTimer`. Main loop receives timer commands via `PUMP_TIMER_CHANNEL` and calls `PumpTimerManager::start_timer()`.
 
+## P0: Production Blockers
+
+These must be fixed before field deployment. The firmware runs headless at the spa with no serial debug access -- all observability must be via MQTT.
+
+### OTA / Boot
+
+- [ ] **OTA HTTP download over embassy-net TCP** (`app/src/ota.rs`): `perform_ota_update()` is a stub -- it parses the URL but logs "not yet implemented". Implement: (1) create TCP socket, (2) HTTP GET the firmware URL, (3) write chunks to alternate OTA partition via `EspOtaFlash::write()`, (4) finalize and reboot. Without this, remote firmware updates are impossible.
+- [ ] **Graceful shutdown before OTA reboot**: When OTA triggers, there is no MQTT DISCONNECT, no UART flush, no availability "offline" publish. The spa could be mid-command. Fix: (1) publish "offline" to availability, (2) send MQTT DISCONNECT packet, (3) flush UART TX, (4) then reboot.
+- [ ] **Fix NVS partition size mismatch**: `partitions.csv` allocates `0x4000` (16 KiB) for NVS, but `config.rs` hardcodes `Nvs::new(0x9000, 0x6000, flash)` (24 KiB). This reads/writes beyond NVS into `phy_init`. Fix one to match the other.
+- [ ] **Add factory app partition to partition table**: The partition table has no factory app at `0x10000`. First flash via `espflash` may fail or write to wrong offset. Standard ESP32 tables have a factory app at `0x10000` with OTA slots after.
+
+### Discovery / HA Integration
+
+- [ ] **Unify app/ discovery with library -- app has 14 entities, library has 18**: `mqtt_client.rs::publish_discovery()` is missing Pump4-6 and Light2. The command parser already handles these subtopics, so MQTT commands will be accepted but HA won't show the entities. Sync the app's hand-rolled discovery to match `DiscoveryBuilder`'s 18 entities.
+- [ ] **Fix app/ discovery `payload_on`/`payload_off` format**: The hand-rolled `format!()` strings embed raw JSON booleans (`"payload_on":true`). HA MQTT discovery expects **strings** (`"payload_on": "true"`). The `launa-mqtt` library uses string values correctly. Switch the app to `"\"true\""` in the format strings.
+- [x] **Add firmware version to app/ discovery and state JSON**: Added `firmware_version` field to `status_to_json()`. Discovery includes `sw_version` via `env!("CARGO_PKG_VERSION")` in `launa-mqtt` builder.
+
+### Connectivity / Robustness
+
+- [ ] **Re-register on bus reset**: If the spa reboots, it re-broadcasts `FE BF 00`. `main.rs` only logs `NewClientQuery` -- no re-registration. After bus reset, the firmware loses its client ID and can never send commands again until physically rebooted. Fix: call `registration.reset()` and re-enter registration flow.
+- [ ] **Registration timeout**: If the spa sends `FE BF 00` but never replies with the ID assignment, the state machine is stuck in `WaitingForAssignment` forever. Add a timeout (e.g., 5 seconds) that resets back to `WaitingForQuery` so it can try again on the next broadcast cycle.
+- [ ] **WiFi reconnect triggers MQTT reconnect**: `connection_task` handles WiFi disconnect/reconnect, but `mqtt_task` only detects MQTT-level connection loss. If WiFi drops and reconnects, the old TCP socket may be in a zombie state. Fix: share a signal between `connection_task` and `mqtt_task` so WiFi reconnect triggers MQTT reconnect proactively.
+- [ ] **Stale-status detection and alerting**: If the spa stops broadcasting (power cycle, fault, cable disconnect), HA keeps showing the last state with no indication. Fix: track time since last valid status frame. If >5s, send `ConfigurationRequest` to provoke a response. If >30s, publish "stale" to a `launa/<device_id>/alert` topic and change availability to "stale" so HA shows the device as unavailable.
+- [ ] **CommandTracker bounded capacity**: `pending: Vec<PendingCommand>` grows without bound. A burst of MQTT commands could exhaust the 32 KiB heap. Cap at e.g., 8 pending commands and reject new ones when full.
+
+### MQTT-based Alerting
+
+The firmware runs headless -- serial debug is inaccessible in production. All diagnostics must be published to MQTT so HA or the operator can detect problems remotely.
+
+- [ ] **Add `launa/<device_id>/diagnostics` MQTT topic**: Publish a JSON payload every 60 seconds (or on significant events) with: `free_heap`, `uptime_secs`, `frames_received`, `frames_crc_errors`, `commands_sent`, `commands_failed`, `mqtt_reconnects`, `wifi_disconnects`, `registration_state`, `last_status_age_secs`. This is the primary observability mechanism.
+- [ ] **Add `launa/<device_id>/alert` MQTT topic**: Publish alerts for conditions that need operator attention: heap below 4 KiB, spa communication lost (>30s stale), registration failure, MQTT reconnect loop (>3 failures), OTA failure. Each alert is a JSON object: `{"level":"warn"|"error","message":"...","timestamp":<uptime_secs>}`. Subscribe HA to this topic as a sensor so alerts surface in the UI.
+- [ ] **Add diagnostics HA discovery entity**: Add a `sensor` entity for diagnostics and a `sensor` entity for alerts in both `DiscoveryBuilder` and app/ discovery. The diagnostics sensor shows the last diagnostics payload; the alert sensor shows the last alert message. This gives the operator a dashboard without needing raw MQTT tools.
+- [ ] **Heap monitoring with MQTT alert**: 32 KiB heap with no tracking. Periodically call `esp_alloc::get_free_heap()`. Publish free heap in diagnostics. If below 4 KiB, publish an alert. If below 1 KiB, publish a critical alert and refuse new command allocations to prevent OOM panic.
+- [ ] **Frame CRC error counter in diagnostics**: Track CRC-mismatched frames in `FrameDecoder` (increment an `AtomicU32`). Publish in diagnostics. A rising CRC error count indicates RS-485 bus problems (bad wiring, noise, impedance mismatch).
+- [ ] **Counters for MQTT reconnects, WiFi disconnects, command failures**: Add `AtomicU32` counters in `main.rs` for: `mqtt_reconnect_count`, `wifi_disconnect_count`, `command_retry_count`, `command_drop_count`. Publish in diagnostics. Rising counts indicate systemic issues.
+
 ## P2: Missing Firmware Features
 
 - [ ] **Add sniffer firmware feature** (`#[cfg(feature = "sniff")]` in `app/src/main.rs`): Phase 3 of TASKS.md describes this but no code exists. Need: add `[features]` section to `app/Cargo.toml` with `sniff = []`, then gate the sniffer-only main loop behind it (no registration, no commands, just passive frame publishing to MQTT).
 - [ ] **Add hw-test feature** (`#[cfg(feature = "hw-test")]` in `app/src/main.rs`): `cargo xtask self-test` references this feature but it doesn't exist in `app/Cargo.toml`. Need: add `hw-test = []` feature, implement a test mode that exercises UART loopback, WiFi connect, NVS read/write, and prints `TEST_PASS`/`TEST_FAIL` to serial.
-- [ ] **Add `ToggleItem` variants for Light2, Pump4-6**: Real BP6013G1 configurations can have up to 6 pumps and 2 lights. `ToggleItem` only covers Pump1-3 and Light1. Protocol codes: Pump4=0x07, Pump5=0x08, Pump6=0x09, Light2=0x12 (from community docs). Add to enum, `code()`, command parser allowlist, discovery builder, and state JSON.
-- [ ] **Add periodic status request / stale detection**: The firmware is purely reactive -- if the spa stops broadcasting (fault, power cycle), HA goes stale with no indication. Fix: track time since last status update, if >5 seconds send a `ConfigurationRequest` to provoke a response, if >30 seconds publish "stale" availability.
-- [ ] **Add heap monitoring**: 32KB heap with no usage tracking. Add periodic `esp_alloc::get_free_heap()` logging and an OOM hook. If heap drops below 4KB, log a warning; if below 1KB, publish an alert to MQTT.
-- [ ] **Add graceful shutdown before OTA reboot**: When OTA triggers, there's no MQTT disconnect, UART flush, or cleanup. The spa could be mid-command. Fix: (1) publish "offline" to availability, (2) send MQTT DISCONNECT packet, (3) flush UART TX, (4) then reboot.
-- [ ] **Add firmware version to state JSON and discovery**: The `launa-mqtt` `DiscoveryBuilder` includes `sw_version` via `env!("CARGO_PKG_VERSION")`, but the `app/` hand-rolled discovery omits it. Add version to both discovery and state JSON so HA can display it and OTA can check for downgrade.
+- [x] **Add `ToggleItem` variants for Light2, Pump4-6**: Refactored to use `pumps: [PumpState; 6]` and `lights: [bool; 2]` arrays across all crates. Added `pump_index()`, `light_index()`, `from_pump_index()`, `from_light_index()` helpers to `ToggleItem`. Discovery now generates 18 entities (6 pumps + 2 lights).
 - [x] **Remove TLS from architecture**: All communication is on private WiFi (MQTT to local broker, OTA from local PC). No TLS needed. Removed `esp-mbedtls` from dependency map. Saves flash space and CPU cycles on ESP32.
 - [x] **Fix `uart_task` write implementation**: `transport.rs` now properly handles partial writes with a loop in `write_all()`, keeping the DE pin asserted for the entire operation. Calls `flush()` before releasing DE to ensure TX shift register is fully drained. Separate `write()` returns actual bytes written for the trait contract, `write_all()` handles retry on partial writes.
 - [x] **Wire `parse_set_temperature_validated` into MQTT command flow**: `mqtt_client.rs::parse_command()` now accepts optional `scale`/`range` parameters from the last status update. When available, `SetTemperature` commands are validated via `validate_set_temperature()` before being accepted. The `mqtt_task` tracks `last_scale_range` from state updates and passes it through.
 - [x] **Handle `circ_pump` and `mister` commands in command parser**: Removed `command_topic` from `circ_pump` and `mister` discovery configs since the spa protocol doesn't support toggling them directly (they're status-only). HA now shows them as read-only switches.
-- [x] **Add `last_fault` tracking in state JSON**: `status_to_json()` now accepts an optional `last_fault` parameter. `main.rs` tracks the last fault from `FaultLogResponse` messages (formatted with fault code, age, time, set temp). `STATE_CHANNEL` carries `(StatusUpdate, Option<String>)` tuple to propagate fault state to the MQTT task. `publish_state()` passes it through. 290 tests pass including new `test_status_to_json_with_fault`.
+- [x] **Add `last_fault` tracking in state JSON**: `status_to_json()` now accepts an optional `last_fault` parameter. `main.rs` tracks the last fault from `FaultLogResponse` messages (formatted with fault code, age, time, set temp). `STATE_CHANNEL` carries `(StatusUpdate, Option<String>)` tuple to propagate fault state to the MQTT task. `publish_state()` passes it through. 301 tests pass including new `test_status_to_json_with_fault`.
+
+## P2: Code Quality / Architecture Cleanup
+
+- [ ] **Consolidate duplicate simulators**: `launa-integration-tests/src/spa_simulator.rs` (`SpaSimulator`) and `launa-sim/src/spa_sim.rs` (`SpaSim`) do the same thing with different abstractions. The old one uses raw `u8`/`bool` fields and is missing pump4/5/6, light2, and mister toggle handling. Migrate all integration tests in `lib.rs` to use `SpaSim` from `launa-sim`, then remove the duplicate `SpaSimulator`.
+- [ ] **Extend `PumpTimerManager` to cover all 6 pumps**: Currently only pump1/2/3 have timers. The command parser already handles `pump4_timer` through `pump6_timer` subtopics, but `start_pump_timer`/`cancel_pump_timer`/`is_pump_timer_running` silently ignore pump4/5/6. Add timers for all 6 pumps (or make it generic over `ToggleItem`).
+- [ ] **Remove unused `client_id` binding in `encode_command`**: `controller.rs` line 149 does `let _client_id = self.registration.client_id()?;` but never uses it (only `NothingToSend` embeds client_id in the message type). Either remove the binding or add a comment explaining why it's fetched but unused.
+- [ ] **Gate default temperature parsing behind validation**: `parse_set_temperature()` accepts 0-255 without range checking. The validated variant `parse_set_temperature_validated()` exists but isn't the default path. Consider making the unvalidated path opt-in (behind a feature flag or explicit caller decision) to prevent accidental `SetTemperature(255)` being sent to the spa.
 
 ## P2: Documentation Cleanup
 
@@ -148,7 +187,7 @@ The hand-rolled MQTT client in `app/src/mqtt_client.rs` had multiple protocol bu
 
 - [x] **OTA partition table for `app/`**: Created `app/partitions.csv` with dual OTA slots (ota_0 at 0x20000/1.75MB, ota_1 at 0x1E0000/1.75MB, otadata at 0x10000). Required for OTA. First flash via USB must use `--partition-table partitions.csv`.
 - [x] **`launa-esp-ota` crate**: Custom ESP32 OTA implementation replacing `esp-hal-ota` (broken with nightly >=1.90 due to removed `concat_idents` feature). Uses `esp-storage` directly for flash writes via `embedded-storage` NorFlash traits. Implements: partition table constants matching `partitions.csv`, otadata sequence number management for boot partition selection, CRC-32/MPEG-2 for otadata entries, sector erase + word-aligned write, `mark_valid()` for rollback prevention, `rollback_and_reboot()`. Generic over `NorFlash + ReadNorFlash` for testability. 11 desktop tests covering full OTA cycle, rollback, overflow protection, boundary cases. Added as `crates/launa-esp-ota/` with `OtaUpdate` trait impl from `launa-ota`. `app/src/ota.rs` now uses `EspOtaFlash<esp_storage::FlashStorage>` instead of stubs.
-- [ ] **OTA real implementation**: Use `launa-esp-ota` with `esp_storage::FlashStorage`. HTTP download via embassy-net, write chunks to alternate partition, verify CRC, reboot. OTA module has URL parsing and partition write skeleton; HTTP download over embassy-net TCP still pending.
+
 - [x] **OTA HTTP server on dev PC** (`cargo xtask ota-serve`): Already implemented in xtask. Serves firmware .bin files over HTTP for ESP32 to download.
 - [x] **OTA trigger via MQTT**: MQTT subscribes to `launa/<device_id>/ota` topic. Accepts JSON with firmware URL (`{"url":"http://..."}`). Simple JSON parser extracts URL. OTA update initiated from MQTT task. Auto-rollback if new firmware is broken.
 - [x] **One-command remote flash script** (`cargo xtask ota-flash`): Already implemented in xtask. Build + serve + trigger OTA remotely.
@@ -299,7 +338,7 @@ PC (Python script simulating spa)
 - [x] **Status parser byte offsets corrected** (`crates/launa-protocol/src/status.rs`): Fixed all byte offsets to match real Balboa BP6013G1 hardware (verified against NorthernMan54/esp32_balboa_spa). Hold=offset 0, Priming=offset 1, Heating Mode=offset 5, flags=offset 9/10, pumps=offset 11, circ/blower=offset 13, lights=offset 14, mister=offset 15.
 - [x] **HDLC byte stuffing** (`crates/launa-protocol/src/frame.rs`): Added escape handling for `0x7E` and `0x7D` bytes in frame encoder/decoder to prevent CRC/data bytes from being interpreted as frame markers.
 - [x] **Spa simulator offsets corrected** (`crates/launa-sim/src/spa_sim.rs`, `crates/launa-integration-tests/src/spa_simulator.rs`): Updated `generate_status_frame()` to use correct real-hardware byte offsets.
-- [x] **All 289 tests passing** (18 HAL + 54 integration + 30 sim + 44 MQTT + 67 protocol + 27 fuzz + 17 property + 21 sim-unit + 11 esp-ota)
+- [x] **All 301 tests passing** (18 HAL + 54 integration + 30 sim + 44 MQTT + 67 protocol + 27 fuzz + 17 property + 21 sim-unit + 11 esp-ota)
 - [x] **Temperature safety clamping** (`crates/launa-protocol/src/command.rs`): Added `validate_set_temperature()` with Balboa-safe ranges and hard upper limit (108°F / 42°C). 13 new tests.
 - [x] **Command allowlist + ParseResult** (`crates/launa-mqtt/src/command_parser.rs`): `parse_command()` now returns `ParseResult` with `Valid`, `TemperatureOutOfRange`, `UnknownSubtopic`, `InvalidPayload` variants. `parse_command_ok()` for backward compat. 10 new tests.
 - [x] **Discovery retain support** (`crates/launa-mqtt/src/discovery.rs`): Added `DiscoveryMessage` struct and `build_with_retain()`. 4 new tests (retain, topics, unique_ids, command_topics).
@@ -322,4 +361,6 @@ PC (Python script simulating spa)
 - [x] **UART framing error handling** (`app/src/transport.rs`): Logs specific UART error info before mapping to TransportError.
 - [x] **Fix CommandTracker instant-confirm** (`app/src/command_tracker.rs`): Toggle commands (HoldMode, HeatingMode, TempRange) now track pre-command state and verify it changed. Added `LightToggled` variant for proper Light1 verification.
 - [x] **Wire pump timers to MQTT** (`app/src/main.rs`, `command_parser.rs`, `pump_timer.rs`): Added `pump1_timer`/`pump2_timer`/`pump3_timer` subtopics with `ParseResult::TimerPump` variant. `MqttAction` enum routes commands vs timers. `PUMP_TIMER_CHANNEL` and `PumpTimerManager::start_timer()` activate timed pump mode from MQTT.
-- [x] **All 289 workspace tests passing** after all changes.
+- [x] **All 301 workspace tests passing** after all changes.
+- [x] **Refactor pumps/lights to arrays**: `StatusUpdate` uses `pumps: [PumpState; 6]` and `lights: [bool; 2]` (indexed from 0). `SpaConfig` uses `lights: [bool; 2]`. `SpaState` in both `launa-sim` and `launa-integration-tests` uses `pumps` and `lights` arrays. `ToggleItem` has `pump_index()`/`light_index()` helpers. Discovery, command parser, state JSON, command tracker, pump timers all updated. 301 tests passing.
+- [x] **Light2 and Pump4-6 support**: Added `ToggleItem::Pump4` (0x07), `Pump5` (0x08), `Pump6` (0x09), `Light2` (0x12). Protocol codes from community docs. Added to command parser allowlist, discovery builder (18 entities total), state JSON, and simulators.

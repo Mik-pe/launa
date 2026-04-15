@@ -3,8 +3,7 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpaConfig {
     pub pump_configs: [PumpConfig; 6],
-    pub light1: bool,
-    pub light2: bool,
+    pub lights: [bool; 2],
     pub circ_pump: bool,
     pub blower: bool,
     pub mister: bool,
@@ -48,8 +47,10 @@ impl SpaConfig {
 
         Ok(SpaConfig {
             pump_configs,
-            light1: (payload[7] & 0x03) != 0,
-            light2: (payload[7] & 0x0C) != 0,
+            lights: [
+                (payload[7] & 0x03) != 0,   // light1
+                (payload[7] & 0x0C) != 0,   // light2
+            ],
             circ_pump: (payload[8] & 0x80) != 0,
             blower: (payload[8] & 0x03) != 0,
             mister: (payload[9] & 0x30) != 0,
@@ -84,6 +85,6 @@ mod tests {
         assert_eq!(config.pump_configs[1], PumpConfig::SingleSpeed);
         assert!(config.circ_pump);
         assert!(config.blower);
-        assert!(config.light1);
+        assert!(config.lights[0]);
     }
 }

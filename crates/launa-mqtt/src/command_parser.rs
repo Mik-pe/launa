@@ -13,10 +13,17 @@ const ALLOWED_SUBTOPICS: &[&str] = &[
     "pump1",
     "pump2",
     "pump3",
+    "pump4",
+    "pump5",
+    "pump6",
     "pump1_timer",
     "pump2_timer",
     "pump3_timer",
+    "pump4_timer",
+    "pump5_timer",
+    "pump6_timer",
     "light1",
+    "light2",
     "blower",
     "heat_mode",
     "temp_range",
@@ -73,13 +80,41 @@ pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8]) -> P
     };
 
     match subtopic {
-        "pump1" => parse_toggle(payload_str, ToggleItem::Pump1),
-        "pump2" => parse_toggle(payload_str, ToggleItem::Pump2),
-        "pump3" => parse_toggle(payload_str, ToggleItem::Pump3),
-        "pump1_timer" => parse_pump_timer(payload_str, 1),
-        "pump2_timer" => parse_pump_timer(payload_str, 2),
-        "pump3_timer" => parse_pump_timer(payload_str, 3),
-        "light1" => parse_toggle(payload_str, ToggleItem::Light1),
+        s if s.starts_with("pump") && s.ends_with("_timer") => {
+            // "pump<N>_timer" → parse N and delegate
+            let num_str = &s[4..s.len() - 6]; // strip "pump" prefix and "_timer" suffix
+            let idx: u8 = match num_str.parse() {
+                Ok(n) if n >= 1 && n <= 6 => n,
+                _ => return ParseResult::UnknownSubtopic(subtopic.to_string()),
+            };
+            parse_pump_timer(payload_str, idx)
+        }
+        s if s.starts_with("pump") => {
+            // "pump<N>" → parse N and map to ToggleItem via from_pump_index
+            let num_str = &s[4..];
+            let idx: usize = match num_str.parse() {
+                Ok(n) if n >= 1 && n <= 6 => n,
+                _ => return ParseResult::UnknownSubtopic(subtopic.to_string()),
+            };
+            if let Some(item) = ToggleItem::from_pump_index(idx - 1) {
+                parse_toggle(payload_str, item)
+            } else {
+                ParseResult::UnknownSubtopic(subtopic.to_string())
+            }
+        }
+        s if s.starts_with("light") => {
+            // "light<N>" → parse N and map to ToggleItem via from_light_index
+            let num_str = &s[5..];
+            let idx: usize = match num_str.parse() {
+                Ok(n) if n >= 1 && n <= 2 => n,
+                _ => return ParseResult::UnknownSubtopic(subtopic.to_string()),
+            };
+            if let Some(item) = ToggleItem::from_light_index(idx - 1) {
+                parse_toggle(payload_str, item)
+            } else {
+                ParseResult::UnknownSubtopic(subtopic.to_string())
+            }
+        }
         "blower" => parse_toggle(payload_str, ToggleItem::Blower),
         "heat_mode" => parse_toggle(payload_str, ToggleItem::HeatingMode),
         "temp_range" => parse_toggle(payload_str, ToggleItem::TemperatureRange),

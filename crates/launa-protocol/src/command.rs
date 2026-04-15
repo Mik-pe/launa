@@ -76,8 +76,12 @@ pub enum ToggleItem {
     Pump1,
     Pump2,
     Pump3,
+    Pump4,
+    Pump5,
+    Pump6,
     Blower,
     Light1,
+    Light2,
     HoldMode,
     HeatingMode,
     TemperatureRange,
@@ -89,11 +93,59 @@ impl ToggleItem {
             ToggleItem::Pump1 => 0x04,
             ToggleItem::Pump2 => 0x05,
             ToggleItem::Pump3 => 0x06,
+            ToggleItem::Pump4 => 0x07,
+            ToggleItem::Pump5 => 0x08,
+            ToggleItem::Pump6 => 0x09,
             ToggleItem::Blower => 0x0C,
             ToggleItem::Light1 => 0x11,
+            ToggleItem::Light2 => 0x12,
             ToggleItem::HoldMode => 0x3C,
             ToggleItem::HeatingMode => 0x51,
             ToggleItem::TemperatureRange => 0x50,
+        }
+    }
+
+    /// Get the 0-based pump index (0-5), or None if not a pump.
+    pub fn pump_index(self) -> Option<usize> {
+        match self {
+            ToggleItem::Pump1 => Some(0),
+            ToggleItem::Pump2 => Some(1),
+            ToggleItem::Pump3 => Some(2),
+            ToggleItem::Pump4 => Some(3),
+            ToggleItem::Pump5 => Some(4),
+            ToggleItem::Pump6 => Some(5),
+            _ => None,
+        }
+    }
+
+    /// Get the 0-based light index (0-1), or None if not a light.
+    pub fn light_index(self) -> Option<usize> {
+        match self {
+            ToggleItem::Light1 => Some(0),
+            ToggleItem::Light2 => Some(1),
+            _ => None,
+        }
+    }
+
+    /// Create a ToggleItem from a pump index (0-5).
+    pub fn from_pump_index(i: usize) -> Option<Self> {
+        match i {
+            0 => Some(ToggleItem::Pump1),
+            1 => Some(ToggleItem::Pump2),
+            2 => Some(ToggleItem::Pump3),
+            3 => Some(ToggleItem::Pump4),
+            4 => Some(ToggleItem::Pump5),
+            5 => Some(ToggleItem::Pump6),
+            _ => None,
+        }
+    }
+
+    /// Create a ToggleItem from a light index (0-1).
+    pub fn from_light_index(i: usize) -> Option<Self> {
+        match i {
+            0 => Some(ToggleItem::Light1),
+            1 => Some(ToggleItem::Light2),
+            _ => None,
         }
     }
 }

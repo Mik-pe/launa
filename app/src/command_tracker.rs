@@ -23,7 +23,7 @@ enum ExpectedChange {
     PumpOn { item: ToggleItem },
     PumpOff { item: ToggleItem },
     TemperatureSet { temp: u8 },
-    LightToggled { pre_state: bool },
+    LightToggled { item: ToggleItem, pre_state: bool },
     HoldModeToggled { pre_state: bool },
     HeatingModeToggled { pre_mode: HeatingMode },
     TempRangeToggled { pre_range: TempRange },
@@ -34,44 +34,29 @@ impl ExpectedChange {
         match cmd {
             Command::ToggleItem(item) => {
                 // Toggle means we expect the opposite state
-                match item {
-                    ToggleItem::Pump1 => {
-                        let is_on = matches!(pre_status.pump1, PumpState::Low | PumpState::High);
-                        Some(if is_on {
-                            ExpectedChange::PumpOff { item: *item }
-                        } else {
-                            ExpectedChange::PumpOn { item: *item }
-                        })
+                if let Some(idx) = item.pump_index() {
+                    let is_on = matches!(pre_status.pumps[idx], PumpState::Low | PumpState::High);
+                    Some(if is_on {
+                        ExpectedChange::PumpOff { item: *item }
+                    } else {
+                        ExpectedChange::PumpOn { item: *item }
+                    })
+                } else if let Some(idx) = item.light_index() {
+                    Some(ExpectedChange::LightToggled { item: *item, pre_state: pre_status.lights[idx] })
+                } else {
+                    match item {
+                        ToggleItem::Blower => {
+                            Some(if pre_status.blower {
+                                ExpectedChange::PumpOff { item: *item }
+                            } else {
+                                ExpectedChange::PumpOn { item: *item }
+                            })
+                        }
+                        ToggleItem::HoldMode => Some(ExpectedChange::HoldModeToggled { pre_state: pre_status.is_hold }),
+                        ToggleItem::HeatingMode => Some(ExpectedChange::HeatingModeToggled { pre_mode: pre_status.heating_mode }),
+                        ToggleItem::TemperatureRange => Some(ExpectedChange::TempRangeToggled { pre_range: pre_status.temp_range }),
+                        _ => None,
                     }
-                    ToggleItem::Pump2 => {
-                        let is_on = matches!(pre_status.pump2, PumpState::Low | PumpState::High);
-                        Some(if is_on {
-                            ExpectedChange::PumpOff { item: *item }
-                        } else {
-                            ExpectedChange::PumpOn { item: *item }
-                        })
-                    }
-                    ToggleItem::Pump3 => {
-                        let is_on = matches!(pre_status.pump3, PumpState::Low | PumpState::High);
-                        Some(if is_on {
-                            ExpectedChange::PumpOff { item: *item }
-                        } else {
-                            ExpectedChange::PumpOn { item: *item }
-                        })
-                    }
-                    ToggleItem::Light1 => {
-                        Some(ExpectedChange::LightToggled { pre_state: pre_status.light1 })
-                    }
-                    ToggleItem::Blower => {
-                        Some(if pre_status.blower {
-                            ExpectedChange::PumpOff { item: *item }
-                        } else {
-                            ExpectedChange::PumpOn { item: *item }
-                        })
-                    }
-                    ToggleItem::HoldMode => Some(ExpectedChange::HoldModeToggled { pre_state: pre_status.is_hold }),
-                    ToggleItem::HeatingMode => Some(ExpectedChange::HeatingModeToggled { pre_mode: pre_status.heating_mode }),
-                    ToggleItem::TemperatureRange => Some(ExpectedChange::TempRangeToggled { pre_range: pre_status.temp_range }),
                 }
             }
             Command::SetTemperature(temp) => Some(ExpectedChange::TemperatureSet { temp: *temp }),
@@ -162,22 +147,24 @@ impl CommandTracker {
     fn is_confirmed(expected: &ExpectedChange, status: &StatusUpdate) -> bool {
         match expected {
             ExpectedChange::PumpOn { item } => {
-                let is_on = match item {
-                    ToggleItem::Pump1 => matches!(status.pump1, PumpState::Low | PumpState::High),
-                    ToggleItem::Pump2 => matches!(status.pump2, PumpState::Low | PumpState::High),
-                    ToggleItem::Pump3 => matches!(status.pump3, PumpState::Low | PumpState::High),
-                    ToggleItem::Blower => status.blower,
-                    _ => false,
+                let is_on = if let Some(idx) = item.pump_index() {
+                    matches!(status.pumps[idx], PumpState::Low | PumpState::High)
+                } else {
+                    match item {
+                        ToggleItem::Blower => status.blower,
+                        _ => false,
+                    }
                 };
                 is_on
             }
             ExpectedChange::PumpOff { item } => {
-                let is_off = match item {
-                    ToggleItem::Pump1 => status.pump1 == PumpState::Off,
-                    ToggleItem::Pump2 => status.pump2 == PumpState::Off,
-                    ToggleItem::Pump3 => status.pump3 == PumpState::Off,
-                    ToggleItem::Blower => !status.blower,
-                    _ => false,
+                let is_off = if let Some(idx) = item.pump_index() {
+                    status.pumps[idx] == PumpState::Off
+                } else {
+                    match item {
+                        ToggleItem::Blower => !status.blower,
+                        _ => false,
+                    }
                 };
                 is_off
             }
@@ -185,8 +172,12 @@ impl CommandTracker {
                 // Set temperature is stored as raw value in status
                 (status.set_temp as u8) == *temp
             }
-            ExpectedChange::LightToggled { pre_state } => {
-                status.light1 != *pre_state
+            ExpectedChange::LightToggled { item, pre_state } => {
+                if let Some(idx) = item.light_index() {
+                    status.lights[idx] != *pre_state
+                } else {
+                    status.lights[0] != *pre_state
+                }
             }
             ExpectedChange::HoldModeToggled { pre_state } => {
                 status.is_hold != *pre_state

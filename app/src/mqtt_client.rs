@@ -466,64 +466,75 @@ impl MqttClient {
             device_id
         );
 
-        let configs: Vec<(&str, &str, String)> = alloc::vec![
-            ("sensor", "temperature", format!(
+        let mut configs: Vec<(String, String, String)> = alloc::vec![
+            ("sensor".into(), "temperature".into(), format!(
                 r#"{{"device":{},"name":"Water Temperature","unique_id":"{}_temperature","device_class":"temperature","unit_of_measurement":"°F","state_topic":"{}","value_template":"{{{{value_json.current_temp}}}}","availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, avail_topic
             )),
-            ("number", "set_temperature", format!(
+            ("number".into(), "set_temperature".into(), format!(
                 r#"{{"device":{},"name":"Set Temperature","unique_id":"{}_set_temp","device_class":"temperature","unit_of_measurement":"°F","min":50,"max":104,"step":1,"state_topic":"{}","command_topic":"{}/set_temperature","value_template":"{{{{value_json.set_temp}}}}","availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            ("binary_sensor", "heating", format!(
+            ("binary_sensor".into(), "heating".into(), format!(
                 r#"{{"device":{},"name":"Heating","unique_id":"{}_heating","device_class":"heat","state_topic":"{}","value_template":"{{{{value_json.is_heating}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, avail_topic
             )),
-            ("switch", "pump1", format!(
-                r#"{{"device":{},"name":"Pump 1","unique_id":"{}_pump1","state_topic":"{}","command_topic":"{}/pump1","value_template":"{{{{value_json.pump1_on}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
-                device_info, device_id, state_topic, cmd_topic, avail_topic
-            )),
-            ("switch", "pump2", format!(
-                r#"{{"device":{},"name":"Pump 2","unique_id":"{}_pump2","state_topic":"{}","command_topic":"{}/pump2","value_template":"{{{{value_json.pump2_on}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
-                device_info, device_id, state_topic, cmd_topic, avail_topic
-            )),
-            ("switch", "pump3", format!(
-                r#"{{"device":{},"name":"Pump 3","unique_id":"{}_pump3","state_topic":"{}","command_topic":"{}/pump3","value_template":"{{{{value_json.pump3_on}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
-                device_info, device_id, state_topic, cmd_topic, avail_topic
-            )),
-            ("light", "light1", format!(
-                r#"{{"device":{},"name":"Spa Light","unique_id":"{}_light1","state_topic":"{}","command_topic":"{}/light1","value_template":"{{{{value_json.light1}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
-                device_info, device_id, state_topic, cmd_topic, avail_topic
-            )),
-            ("fan", "blower", format!(
+        ];
+
+        // Pumps 1-6
+        for i in 1..=6u8 {
+            let name = format!("Pump {}", i);
+            let unique_id = format!("{}_pump{}", device_id, i);
+            let value_template = format!("{{{{value_json.pump{}_on}}}}", i);
+            let payload = format!(
+                r#"{{"device":{},"name":"{}","unique_id":"{}","state_topic":"{}","command_topic":"{}/pump{}","value_template":"{}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
+                device_info, name, unique_id, state_topic, cmd_topic, i, value_template, avail_topic
+            );
+            configs.push(("switch".into(), format!("pump{}", i), payload));
+        }
+
+        // Lights 1-2
+        for i in 1..=2u8 {
+            let name = if i == 1 { "Spa Light".to_string() } else { format!("Light {}", i) };
+            let unique_id = format!("{}_light{}", device_id, i);
+            let value_template = format!("{{{{value_json.light{} }}}}", i);
+            let payload = format!(
+                r#"{{"device":{},"name":"{}","unique_id":"{}","state_topic":"{}","command_topic":"{}/light{}","value_template":"{}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
+                device_info, name, unique_id, state_topic, cmd_topic, i, value_template, avail_topic
+            );
+            configs.push(("light".into(), format!("light{}", i), payload));
+        }
+
+        configs.extend_from_slice(&[
+            ("fan".into(), "blower".into(), format!(
                 r#"{{"device":{},"name":"Blower","unique_id":"{}_blower","state_topic":"{}","command_topic":"{}/blower","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            ("select", "heat_mode", format!(
+            ("select".into(), "heat_mode".into(), format!(
                 r#"{{"device":{},"name":"Heat Mode","unique_id":"{}_heat_mode","state_topic":"{}","command_topic":"{}/heat_mode","value_template":"{{{{value_json.heating_mode}}}}","options":["ready","rest","ready_in_rest"],"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            ("switch", "circ_pump", format!(
+            ("switch".into(), "circ_pump".into(), format!(
                 r#"{{"device":{},"name":"Circulation Pump","unique_id":"{}_circ_pump","state_topic":"{}","value_template":"{{{{value_json.circ_pump}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, avail_topic
             )),
-            ("select", "temp_range", format!(
+            ("select".into(), "temp_range".into(), format!(
                 r#"{{"device":{},"name":"Temperature Range","unique_id":"{}_temp_range","state_topic":"{}","command_topic":"{}/temp_range","value_template":"{{{{value_json.temp_range}}}}","options":["high","low"],"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            ("switch", "hold_mode", format!(
+            ("switch".into(), "hold_mode".into(), format!(
                 r#"{{"device":{},"name":"Hold Mode","unique_id":"{}_hold_mode","state_topic":"{}","command_topic":"{}/hold_mode","value_template":"{{{{value_json.hold_mode}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            ("switch", "mister", format!(
+            ("switch".into(), "mister".into(), format!(
                 r#"{{"device":{},"name":"Mister","unique_id":"{}_mister","state_topic":"{}","value_template":"{{{{value_json.mister}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, avail_topic
             )),
-            ("sensor", "fault", format!(
+            ("sensor".into(), "fault".into(), format!(
                 r#"{{"device":{},"name":"Last Fault","unique_id":"{}_fault","state_topic":"{}","value_template":"{{{{value_json.last_fault}}}}","availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, avail_topic
             )),
-        ];
+        ]);
 
         for (component, object_id, payload) in &configs {
             let topic = format!("homeassistant/{}/{}/{}/config", component, device_id, object_id);

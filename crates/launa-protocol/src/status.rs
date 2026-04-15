@@ -11,13 +11,11 @@ pub struct StatusUpdate {
     pub filter_mode: u8,
     pub is_heating: bool,
     pub temp_range: TempRange,
-    pub pump1: PumpState,
-    pub pump2: PumpState,
-    pub pump3: PumpState,
+    pub pumps: [PumpState; 6],
     pub circ_pump: bool,
     pub blower: bool,
     pub mister: bool,
-    pub light1: bool,
+    pub lights: [bool; 2],
     pub is_priming: bool,
     pub is_hold: bool,
 }
@@ -112,9 +110,17 @@ impl StatusUpdate {
 
         // Offset 11 (P1): pump status (pumps 1-4, 2 bits each)
         let pp = payload[11];
-        let pump1 = decode_pump_state(pp & 0x03);
-        let pump2 = decode_pump_state((pp >> 2) & 0x03);
-        let pump3 = decode_pump_state((pp >> 4) & 0x03);
+
+        // Offset 12 (P2): pump5 bits 0-1, pump6 bits 2-3
+        let p2 = payload[12];
+        let pumps = [
+            decode_pump_state(pp & 0x03),           // pump1
+            decode_pump_state((pp >> 2) & 0x03),    // pump2
+            decode_pump_state((pp >> 4) & 0x03),    // pump3
+            decode_pump_state((pp >> 6) & 0x03),    // pump4
+            decode_pump_state(p2 & 0x03),           // pump5
+            decode_pump_state((p2 >> 2) & 0x03),    // pump6
+        ];
 
         // Offset 13 (CB): circ pump, blower
         let circ_blower = payload[13];
@@ -148,13 +154,14 @@ impl StatusUpdate {
             filter_mode: (payload[9] >> 2) & 0x03,
             is_heating,
             temp_range,
-            pump1,
-            pump2,
-            pump3,
+            pumps,
             circ_pump,
             blower,
             mister,
-            light1: payload[14] & 0x03 != 0,
+            lights: [
+                payload[14] & 0x03 != 0,   // light1
+                payload[14] & 0x0C != 0,   // light2
+            ],
             is_priming: payload[1] == 0x01,
             is_hold: payload[0] == 0x05,
         })
@@ -201,8 +208,8 @@ mod tests {
         assert_eq!(status.hour, 14);
         assert_eq!(status.minute, 30);
         assert_eq!(status.temperature_scale, TemperatureScale::Fahrenheit);
-        assert_eq!(status.pump1, PumpState::Low);
-        assert!(status.light1);
+        assert_eq!(status.pumps[0], PumpState::Low);
+        assert!(status.lights[0]);
         assert!(status.is_heating);
         assert_eq!(status.temp_range, TempRange::High);
     }
@@ -263,9 +270,9 @@ mod tests {
         payload[20] = 104;
 
         let status = StatusUpdate::parse(&payload).unwrap();
-        assert_eq!(status.pump1, PumpState::Low);
-        assert_eq!(status.pump2, PumpState::Off);
-        assert_eq!(status.pump3, PumpState::High);
+        assert_eq!(status.pumps[0], PumpState::Low);
+        assert_eq!(status.pumps[1], PumpState::Off);
+        assert_eq!(status.pumps[2], PumpState::High);
         assert!(status.circ_pump);
         assert!(status.blower);
         assert!(status.mister);

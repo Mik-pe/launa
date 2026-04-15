@@ -117,7 +117,7 @@ impl DiscoveryBuilder {
         ));
 
         // Pump switches
-        for i in 1..=3 {
+        for i in 1..=6 {
             configs.push(Self::make_switch(
                 &topics, &self.device_id, &device_info, &origin, &state_topic, &avail_topic,
                 &format!("pump{}", i), &format!("Pump {}", i),
@@ -126,23 +126,26 @@ impl DiscoveryBuilder {
             ));
         }
 
-        // Light
-        configs.push(DiscoveryMessage {
-            topic: topics.discovery_topic("light", "light1"),
-            payload: json!({
-                "device": device_info,
-                "origin": origin,
-                "name": "Spa Light",
-                "unique_id": format!("{}_light1", self.device_id),
-                "state_topic": state_topic,
-                "command_topic": format!("{}/light1", cmd_topic),
-                "value_template": "{{ value_json.light1 }}",
-                "payload_on": "true",
-                "payload_off": "false",
-                "availability_topic": avail_topic,
-            }).to_string(),
-            retain: false,
-        });
+        // Lights
+        for i in 1..=2 {
+            let name = if i == 1 { "Spa Light".to_string() } else { format!("Spa Light {}", i) };
+            configs.push(DiscoveryMessage {
+                topic: topics.discovery_topic("light", &format!("light{}", i)),
+                payload: json!({
+                    "device": device_info,
+                    "origin": origin,
+                    "name": name,
+                    "unique_id": format!("{}_light{}", self.device_id, i),
+                    "state_topic": state_topic,
+                    "command_topic": format!("{}/light{}", cmd_topic, i),
+                    "value_template": format!("{{{{ value_json.light{} }}}}", i),
+                    "payload_on": "true",
+                    "payload_off": "false",
+                    "availability_topic": avail_topic,
+                }).to_string(),
+                retain: false,
+            });
+        }
 
         // Blower fan
         configs.push(DiscoveryMessage {
@@ -351,7 +354,7 @@ mod tests {
         let builder = DiscoveryBuilder::new("test_spa_001");
         let configs = builder.build();
 
-        assert_eq!(configs.len(), 14);
+        assert_eq!(configs.len(), 18);
 
         for (topic, json_str) in &configs {
             let _: serde_json::Value = serde_json::from_str(json_str)
@@ -364,7 +367,7 @@ mod tests {
         let builder = DiscoveryBuilder::new("test_spa_001");
         let messages = builder.build_with_retain();
 
-        assert_eq!(messages.len(), 14);
+        assert_eq!(messages.len(), 18);
         for msg in &messages {
             assert!(msg.retain, "discovery messages should have retain=true");
             let _: serde_json::Value = serde_json::from_str(&msg.payload)

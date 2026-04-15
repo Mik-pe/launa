@@ -219,9 +219,9 @@ fn test_status_all_pump_state_combinations() {
                     _ => PumpState::Off,
                 };
 
-                assert_eq!(status.pump1, expected_p1, "pump1: p1={}", p1);
-                assert_eq!(status.pump2, expected_p2, "pump2: p2={}", p2);
-                assert_eq!(status.pump3, expected_p3, "pump3: p3={}", p3);
+                assert_eq!(status.pumps[0], expected_p1, "pump1: p1={}", p1);
+                assert_eq!(status.pumps[1], expected_p2, "pump2: p2={}", p2);
+                assert_eq!(status.pumps[2], expected_p3, "pump3: p3={}", p3);
             }
         }
     }

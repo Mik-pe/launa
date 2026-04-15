@@ -28,18 +28,14 @@ pub struct SpaState {
     pub is_heating: bool,
     /// Temperature range (high/low).
     pub temp_range: TempRange,
-    /// Pump 1 state.
-    pub pump1: PumpState,
-    /// Pump 2 state.
-    pub pump2: PumpState,
-    /// Pump 3 state.
-    pub pump3: PumpState,
+    /// Pump states (indexed 0-5, where index 0 = Pump 1).
+    pub pumps: [PumpState; 6],
     /// Circulation pump on/off.
     pub circ_pump: bool,
     /// Blower on/off.
     pub blower: bool,
-    /// Light on/off.
-    pub light1: bool,
+    /// Light states (indexed 0-1, where index 0 = Light 1).
+    pub lights: [bool; 2],
     /// Mister on/off.
     pub mister: bool,
     /// Clock hour (0-23).
@@ -61,12 +57,10 @@ impl Default for SpaState {
             temp_scale: TemperatureScale::Fahrenheit,
             is_heating: true,
             temp_range: TempRange::High,
-            pump1: PumpState::Off,
-            pump2: PumpState::Off,
-            pump3: PumpState::Off,
+            pumps: [PumpState::Off; 6],
             circ_pump: false,
             blower: false,
-            light1: false,
+            lights: [false; 2],
             mister: false,
             hour: 14,
             minute: 30,
@@ -291,9 +285,14 @@ impl SpaSim {
         }
 
         // Offset 11: Pumps 1-4 (2 bits each)
-        payload[11] = pump_state_to_bits(self.state.pump1)
-            | (pump_state_to_bits(self.state.pump2) << 2)
-            | (pump_state_to_bits(self.state.pump3) << 4);
+        payload[11] = pump_state_to_bits(self.state.pumps[0])
+            | (pump_state_to_bits(self.state.pumps[1]) << 2)
+            | (pump_state_to_bits(self.state.pumps[2]) << 4)
+            | (pump_state_to_bits(self.state.pumps[3]) << 6);
+
+        // Offset 12: Pump5 bits 0-1, Pump6 bits 2-3
+        payload[12] = pump_state_to_bits(self.state.pumps[4])
+            | (pump_state_to_bits(self.state.pumps[5]) << 2);
 
         // Offset 13: Circ pump (bit 1), Blower (bits 2-3)
         if self.state.circ_pump {
@@ -302,9 +301,12 @@ impl SpaSim {
         if self.state.blower {
             payload[13] |= 0x0C;
         }
-        // Offset 14: Lights (bits 0-1 = Light1)
-        if self.state.light1 {
+        // Offset 14: Lights (bits 0-1 = Light1, bits 2-3 = Light2)
+        if self.state.lights[0] {
             payload[14] |= 0x03;
+        }
+        if self.state.lights[1] {
+            payload[14] |= 0x0C;
         }
         // Offset 15: Mister (0=off, 1=on)
         if self.state.mister {
@@ -400,11 +402,15 @@ impl SpaSim {
     /// This is the boundary where raw bytes → Rust type mutations.
     fn handle_toggle_by_code(&mut self, item_code: u8) {
         match item_code {
-            0x04 => self.state.pump1 = cycle_pump(self.state.pump1),
-            0x05 => self.state.pump2 = cycle_pump(self.state.pump2),
-            0x06 => self.state.pump3 = cycle_pump(self.state.pump3),
+            0x04..=0x09 => {
+                let idx = (item_code - 0x04) as usize;
+                if idx < 6 {
+                    self.state.pumps[idx] = cycle_pump(self.state.pumps[idx]);
+                }
+            }
             0x0C => self.state.blower = !self.state.blower,
-            0x11 => self.state.light1 = !self.state.light1,
+            0x11 => self.state.lights[0] = !self.state.lights[0],
+            0x12 => self.state.lights[1] = !self.state.lights[1],
             0x3C => self.state.hold = !self.state.hold,
             0x51 => self.state.heating_mode = cycle_heating_mode(self.state.heating_mode),
             0x50 => self.state.temp_range = flip_temp_range(self.state.temp_range),
@@ -518,7 +524,7 @@ mod tests {
         let encoded = FrameEncoder::encode(mt, &payload);
 
         sim.process_incoming_bytes(&encoded);
-        assert_eq!(sim.state.pump1, PumpState::Low);
+        assert_eq!(sim.state.pumps[0], PumpState::Low);
     }
 
     #[test]

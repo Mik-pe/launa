@@ -73,7 +73,7 @@ mod tests {
                 assert_eq!(config.pump_configs[1], PumpConfig::TwoSpeed);
                 assert!(config.circ_pump);
                 assert!(config.blower);
-                assert!(config.light1);
+                assert!(config.lights[0]);
             }
             _ => panic!("Expected ControlConfiguration, got {:?}", msg),
         }
@@ -159,7 +159,7 @@ mod tests {
     #[test]
     fn test_toggle_pump1_command() {
         let mut sim = SpaSimulator::new();
-        assert_eq!(sim.state.pump1, 0);
+        assert_eq!(sim.state.pumps[0], 0);
 
         let (mt, payload) = Command::ToggleItem(ToggleItem::Pump1).encode();
         let encoded = FrameEncoder::encode(mt, &payload);
@@ -168,19 +168,19 @@ mod tests {
         let frame = &frames[0];
 
         sim.process_incoming(frame);
-        assert_eq!(sim.state.pump1, 1);
+        assert_eq!(sim.state.pumps[0], 1);
 
         sim.process_incoming(frame);
-        assert_eq!(sim.state.pump1, 2);
+        assert_eq!(sim.state.pumps[0], 2);
 
         sim.process_incoming(frame);
-        assert_eq!(sim.state.pump1, 0);
+        assert_eq!(sim.state.pumps[0], 0);
     }
 
     #[test]
     fn test_toggle_light_command() {
         let mut sim = SpaSimulator::new();
-        assert!(!sim.state.light1);
+        assert!(!sim.state.lights[0]);
 
         let (mt, payload) = Command::ToggleItem(ToggleItem::Light1).encode();
         let encoded = FrameEncoder::encode(mt, &payload);
@@ -189,10 +189,10 @@ mod tests {
         let frame = &frames[0];
 
         sim.process_incoming(frame);
-        assert!(sim.state.light1);
+        assert!(sim.state.lights[0]);
 
         sim.process_incoming(frame);
-        assert!(!sim.state.light1);
+        assert!(!sim.state.lights[0]);
     }
 
     #[test]
@@ -288,7 +288,7 @@ mod tests {
 
         match msg {
             IncomingMessage::StatusUpdate(status) => {
-                let json_str = launa_mqtt::state::status_to_json(&status, None);
+                let json_str = launa_mqtt::state::status_to_json(&status, None, None);
                 let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
                 assert_eq!(parsed["current_temp"], 100.0);
@@ -319,14 +319,14 @@ mod tests {
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
         sim.process_incoming(&frames[0]);
-        assert_eq!(sim.state.pump1, 1);
+        assert_eq!(sim.state.pumps[0], 1);
 
         let status_encoded = sim.generate_status_frame();
         let status_frames = decoder.feed_slice(&status_encoded);
         let msg = dispatch_frame(&status_frames[0]);
         match msg {
             IncomingMessage::StatusUpdate(s) => {
-                assert_eq!(s.pump1, PumpState::Low);
+                assert_eq!(s.pumps[0], PumpState::Low);
             }
             _ => panic!("Expected StatusUpdate"),
         }
@@ -422,7 +422,7 @@ mod tests {
         let builder = launa_mqtt::discovery::DiscoveryBuilder::new("test_spa_001");
         let configs = builder.build();
 
-        assert_eq!(configs.len(), 14);
+        assert_eq!(configs.len(), 18);
 
         for (topic, json_str) in &configs {
             let _: serde_json::Value = serde_json::from_str(json_str)
@@ -840,9 +840,9 @@ mod tests {
             sim.process_incoming(&frames[0]);
         }
 
-        assert_eq!(sim.state.pump1, 1);
-        assert_eq!(sim.state.pump2, 1);
-        assert_eq!(sim.state.pump3, 1);
+        assert_eq!(sim.state.pumps[0], 1);
+        assert_eq!(sim.state.pumps[1], 1);
+        assert_eq!(sim.state.pumps[2], 1);
 
         let (mt, payload) = Command::ToggleItem(ToggleItem::Blower).encode();
         let encoded = FrameEncoder::encode(mt, &payload);
@@ -956,12 +956,12 @@ mod tests {
         let mut sim = SpaSimulator::new();
         sim.state.current_temp = 100;
         sim.state.set_temp = 104;
-        sim.state.pump1 = 1; // Low
-        sim.state.pump2 = 0;
-        sim.state.pump3 = 0;
+        sim.state.pumps[0] = 1; // Low
+        sim.state.pumps[1] = 0;
+        sim.state.pumps[2] = 0;
         sim.state.circ_pump = true;
         sim.state.blower = false;
-        sim.state.light1 = true;
+        sim.state.lights[0] = true;
         sim.state.mister = false;
         sim.state.is_heating = true;
         sim.state.hold = false;
@@ -974,7 +974,7 @@ mod tests {
         let msg = dispatch_frame(&frames[0]);
         match msg {
             IncomingMessage::StatusUpdate(status) => {
-                let json_str = launa_mqtt::state::status_to_json(&status, None);
+                let json_str = launa_mqtt::state::status_to_json(&status, None, None);
                 let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
                 // Verify JSON fields match simulator state
@@ -999,7 +999,7 @@ mod tests {
     #[test]
     fn test_command_round_trip_pump_toggle() {
         let mut sim = SpaSimulator::new();
-        assert_eq!(sim.state.pump1, 0);
+        assert_eq!(sim.state.pumps[0], 0);
 
         // Parse MQTT command
         let cmd = launa_mqtt::command_parser::parse_command_ok(
@@ -1018,14 +1018,14 @@ mod tests {
         sim.process_incoming(&frames[0]);
 
         // Verify state change
-        assert_eq!(sim.state.pump1, 1, "pump1 should be on after toggle");
+        assert_eq!(sim.state.pumps[0], 1, "pump1 should be on after toggle");
 
         // Generate new status and verify JSON reflects change
         let status_bytes = sim.generate_status_frame();
         let status_frames = decoder.feed_slice(&status_bytes);
         let msg = dispatch_frame(&status_frames[0]);
         if let IncomingMessage::StatusUpdate(s) = msg {
-            let json_str = launa_mqtt::state::status_to_json(&s, None);
+            let json_str = launa_mqtt::state::status_to_json(&s, None, None);
             let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
             assert_eq!(parsed["pump1_on"], true);
         } else {
@@ -1063,7 +1063,7 @@ mod tests {
         let builder = launa_mqtt::discovery::DiscoveryBuilder::new("test_spa");
         let configs = builder.build();
 
-        assert_eq!(configs.len(), 14, "should produce exactly 14 discovery configs");
+        assert_eq!(configs.len(), 18, "should produce exactly 18 discovery configs");
 
         let mut topics_seen = std::collections::HashSet::new();
 
