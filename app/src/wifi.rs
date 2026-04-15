@@ -56,7 +56,7 @@ impl WifiStack {
         spawner: Spawner,
         radio_ctrl: esp_radio::Controller<'static>,
         wifi_peripheral: esp_hal::peripherals::WIFI<'static>,
-        _rng: Rng,
+        rng: Rng,
         ssid: &str,
         password: &str,
     ) -> Self {
@@ -85,7 +85,7 @@ impl WifiStack {
         let wifi_interface = interfaces.sta;
 
         let net_config = NetConfig::dhcpv4(Default::default());
-        let seed = 12345;
+        let seed = ((rng.random() as u64) << 32) | (rng.random() as u64);
 
         let (stack, runner) = embassy_net::new(
             wifi_interface,

@@ -41,7 +41,7 @@ use esp_backtrace as _;
 // ── Diagnostic counters (static, accessible from all tasks) ───────────
 
 static MQTT_RECONNECT_COUNT: AtomicU32 = AtomicU32::new(0);
-static WIFI_DISCONNECT_COUNT: AtomicU32 = AtomicU32::new(0);
+static MQTT_LOSS_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// Boot timestamp in seconds (lower 32 bits of millis/1000), set once in main().
 /// Used for uptime calculation. AtomicU32 is used because AtomicU64 is not
@@ -289,13 +289,11 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
             None => {
                 warn!("MQTT connection lost, attempting reconnect...");
                 MQTT_RECONNECT_COUNT.fetch_add(1, Ordering::Relaxed);
-                // WiFi disconnect is approximated by MQTT connection loss;
-                // a failed reconnect likely indicates WiFi is down.
-                WIFI_DISCONNECT_COUNT.fetch_add(1, Ordering::Relaxed);
-                let mut reconnect_attempts: u32 = 0;
+                MQTT_LOSS_COUNT.fetch_add(1, Ordering::Relaxed);
+                let mut attempt: u32 = 0;
                 let mut last_alert_time: Option<Instant> = None;
                 loop {
-                    reconnect_attempts += 1;
+                    attempt += 1;
                     match mqtt.reconnect().await {
                         Ok(()) => {
                             info!("MQTT reconnected, re-publishing...");
@@ -305,9 +303,14 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                             break;
                         }
                         Err(e) => {
-                            error!("MQTT reconnect failed: {:?}, retrying in 5s", e);
+                            // Exponential backoff: 5s, 10s, 20s, 40s, 60s, 60s, ...
+                            let backoff_secs = (5u64 << attempt.saturating_sub(1).min(4)).min(60);
+                            error!(
+                                "MQTT reconnect attempt {} failed: {:?}, retrying in {}s",
+                                attempt, e, backoff_secs
+                            );
                             // Publish alert after 3 attempts, throttled to once per 60s
-                            if reconnect_attempts > 3 {
+                            if attempt > 3 {
                                 let now = Instant::now();
                                 let should_alert = last_alert_time
                                     .map(|t| t.elapsed() >= Duration::from_secs(60))
@@ -315,7 +318,7 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                                 if should_alert {
                                     let json = alloc::format!(
                                         r#"{{"level":"error","message":"mqtt_reconnect_loop","attempts":{},"timestamp":{}}}"#,
-                                        reconnect_attempts,
+                                        attempt,
                                         uptime_secs()
                                     );
                                     let payload = Vec::from(json.as_bytes());
@@ -323,7 +326,10 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                                     last_alert_time = Some(now);
                                 }
                             }
-                            Timer::after(Duration::from_secs(5)).await;
+                            if attempt >= 10 {
+                                error!("MQTT reconnect exceeded 10 attempts, continuing at max backoff");
+                            }
+                            Timer::after(Duration::from_secs(backoff_secs)).await;
                         }
                     }
                 }
@@ -347,15 +353,15 @@ fn publish_diagnostics(
     command_drops: u32,
 ) {
     let mqtt_reconnects = MQTT_RECONNECT_COUNT.load(Ordering::Relaxed);
-    let wifi_disconnects = WIFI_DISCONNECT_COUNT.load(Ordering::Relaxed);
+    let mqtt_losses = MQTT_LOSS_COUNT.load(Ordering::Relaxed);
     let heap_free = esp_alloc::HEAP.free();
 
     let json = alloc::format!(
-        r#"{{"device_id":"{}","uptime_secs":{},"mqtt_reconnect_count":{},"wifi_disconnect_count":{},"command_retry_count":{},"command_drop_count":{},"frames_received":{},"heap_free":{}}}"#,
+        r#"{{"device_id":"{}","uptime_secs":{},"mqtt_reconnect_count":{},"mqtt_loss_count":{},"command_retry_count":{},"command_drop_count":{},"frames_received":{},"heap_free":{}}}"#,
         device_id,
         uptime_secs,
         mqtt_reconnects,
-        wifi_disconnects,
+        mqtt_losses,
         command_retries,
         command_drops,
         frames_received,
@@ -739,6 +745,10 @@ async fn main(spawner: Spawner) {
         info!("Firmware marked valid (boot validation passed)");
     }
 
+    // Allocate OTA TCP socket buffers once — reused across attempts to avoid
+    // leaking 5 KiB of static memory on each failed OTA.
+    let mut ota_buffers = ota::OtaBuffers::new();
+
     // Spawn background tasks
     spawner
         .spawn(mqtt_task(mqtt))
@@ -788,7 +798,7 @@ async fn main(spawner: Spawner) {
         // ── OTA update handling ─────────────────────────────────────
         if let Ok(firmware_url) = ota_rx.try_receive() {
             info!("OTA: starting firmware download from main loop");
-            if let Err(()) = ota::perform_ota_update(wifi_stack.stack, &mut ota, &firmware_url).await {
+            if let Err(()) = ota::perform_ota_update(wifi_stack.stack, &mut ota, &firmware_url, &mut ota_buffers).await {
                 error!("OTA update failed");
                 send_alert("error", "ota_update_failed");
             }

@@ -42,15 +42,38 @@ pub fn create_ota(flash: esp_storage::FlashStorage<'static>) -> EspOta {
 /// Maximum size for HTTP response headers. Prevents OOM from malicious servers.
 const MAX_HEADER_SIZE: usize = 4096;
 
+/// TCP socket buffers for OTA, allocated once and reused across attempts.
+///
+/// Without this, every `perform_ota_update` call would allocate 5 KiB via
+/// `mk_static!` that is never reclaimed on failure (the device doesn't reboot),
+/// permanently shrinking the 32 KiB heap.
+pub struct OtaBuffers {
+    rx_buf: &'static mut [u8; 4096],
+    tx_buf: &'static mut [u8; 1024],
+}
+
+impl OtaBuffers {
+    /// Allocate the OTA TCP socket buffers. Call once at startup.
+    pub fn new() -> Self {
+        let rx_buf = mk_static!([u8; 4096], [0u8; 4096]);
+        let tx_buf = mk_static!([u8; 1024], [0u8; 1024]);
+        Self { rx_buf, tx_buf }
+    }
+}
+
 /// Perform an OTA update by downloading firmware from the given HTTP URL.
 ///
 /// Creates a TCP connection, sends an HTTP GET request, validates the
 /// HTTP status, skips headers, and writes the body to the OTA partition.
 /// On success, finalizes and triggers a software reset.
+///
+/// The `buffers` are reused across calls to avoid leaking static memory
+/// when OTA fails and the device doesn't reboot.
 pub async fn perform_ota_update(
     stack: &'static Stack<'static>,
     ota: &mut EspOta,
     firmware_url: &str,
+    buffers: &mut OtaBuffers,
 ) -> Result<(), ()> {
     let (host, port, path) = match parse_http_url(firmware_url) {
         Some(v) => v,
@@ -62,10 +85,14 @@ pub async fn perform_ota_update(
 
     info!("OTA: downloading from {}:{}{}", host, port, path);
 
-    // Create TCP socket with OTA-sized buffers
-    let rx_buf = mk_static!([u8; 4096], [0u8; 4096]);
-    let tx_buf = mk_static!([u8; 1024], [0u8; 1024]);
-    let mut socket = TcpSocket::new(*stack, rx_buf, tx_buf);
+    // Reuse pre-allocated TCP socket buffers.
+    // SAFETY: We are the only task accessing these buffers. The previous
+    // TcpSocket (if any) was dropped at the end of the last call.
+    let rx: &'static mut [u8] =
+        unsafe { &mut *(buffers.rx_buf as *mut [u8; 4096] as *mut [u8]) };
+    let tx: &'static mut [u8] =
+        unsafe { &mut *(buffers.tx_buf as *mut [u8; 1024] as *mut [u8]) };
+    let mut socket = TcpSocket::new(*stack, rx, tx);
     socket.set_timeout(Some(Duration::from_secs(30)));
 
     // Resolve host IP (no DNS — only dotted-quad IPv4 is supported)
@@ -217,9 +244,6 @@ fn validate_http_status(headers: &[u8]) -> bool {
         return false;
     }
     // Status code is at bytes 9-11 (e.g., "HTTP/1.1 200")
-    if headers.len() < 12 {
-        return false;
-    }
     headers[9] == b'2' && headers[10] == b'0' && headers[11] == b'0'
 }
 

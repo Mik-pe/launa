@@ -159,27 +159,27 @@ Full logical review of all 12 source files in `app/src/`. Issues ordered by seve
 ### Critical
 
 - [ ] **Unsafe aliasing of `mk_static!` socket buffers in `MqttClient`** (`app/src/mqtt_client.rs:197-203, 226-233`): `connect()` and `reconnect()` cast `&'static mut [u8; 1024]` through a raw pointer to create a new `&'static mut [u8]`. This creates a second mutable reference to the same memory while the `StaticCell`'s permanent `&'static mut` still exists — undefined behavior under Rust's aliasing rules. Works in practice due to single-tasked access, but should use `UnsafeCell` wrappers or `MaybeUninit` + manual initialization instead of `StaticCell` for buffers that need reborrowing.
-- [ ] **OTA TCP socket buffer leak on failure** (`app/src/ota.rs:67-69`): Every `perform_ota_update` call allocates 4 KiB + 1 KiB via `mk_static!` (never reclaimed). On OTA failure (device doesn't reboot), 5 KiB is permanently lost from the 32 KiB heap. After one failed OTA, only ~21 KiB remains. Two failures = ~16 KiB.
+- [x] **OTA TCP socket buffer leak on failure** (`app/src/ota.rs`): Introduced `OtaBuffers` struct that holds the 4 KiB rx + 1 KiB tx TCP socket buffers as struct fields, allocated once at startup. `perform_ota_update` reuses the buffers across calls, preventing 5 KiB leak per failed OTA.
 - [ ] **Partition table has only 8 KiB margin** (`app/partitions.csv`): `ota_1` ends at 0x3E0000 in 4 MiB flash (0x400000). Any future partition addition will overflow. Tight but currently correct.
 
 ### High
 
 - [ ] **WiFi reconnect signal fires on initial connect** (`app/src/wifi.rs:56-58`): `WIFI_RECONNECT_SIGNAL.signal(())` is called on every successful WiFi connect, including the very first one. This races with the MQTT task, which may see the signal and disconnect an already-connected MQTT session on boot. The signal should only fire on reconnections, not the first connection.
-- [ ] **MQTT loss reconnect uses fixed 5s backoff, no exponential backoff** (`app/src/main.rs:246-270`): The MQTT-loss `None` arm of `recv()` retries every 5s indefinitely. The WiFi-reconnect path already has exponential backoff (5s→10s→20s→40s→60s cap). Both paths should use the same strategy to avoid hammering a dead broker.
+- [x] **MQTT loss reconnect uses fixed 5s backoff, no exponential backoff** (`app/src/main.rs`): Added exponential backoff (5s→10s→20s→40s→60s cap) matching the WiFi-reconnect strategy, with alert after 3 failures throttled to 60s and max 10 attempts log message.
 - [ ] **`send_connect` reads CONNACK in a single TCP read** (`app/src/mqtt_client.rs:288-291`): Only one `transport.read()` call is issued for CONNACK. If the TCP stack hasn't received the full packet yet, partial data causes a false connection failure. Same issue in `subscribe()` for SUBACK. Should loop until enough bytes are received.
 
 ### Moderate
 
-- [ ] **`config::save` ignores NVS write errors** (`app/src/config.rs:68-75`): All `nvs.set()` results are discarded with `let _ =`. If any write fails (partition full, flash wear), the device silently uses stale/default values on next boot. Should at minimum log warnings on failure.
+- [x] **`config::save` ignores NVS write errors** (`app/src/config.rs`): Added `nvs_set()` helper that logs `warn!()` on failure. All 7 NVS writes now report failures instead of silently discarding errors.
 - [ ] **Heap allocator churn from fault `String` in `STATE_CHANNEL`** (`app/src/main.rs:85, 440`): `(StatusUpdate, Option<String>, bool)` is sent ~1/sec through the channel. The `Option<String>` (fault log) is cloned every time even when `None`. Each `StatusUpdate::clone()` also allocates. On a 32 KiB heap, this allocator churn risks fragmentation over long uptimes.
 - [ ] **Duplicated `TopicBuilder::new()` calls in `mqtt_task`** (`app/src/main.rs:153, 184, 200`): `TopicBuilder` is reconstructed multiple times per loop iteration. `diag_topic` and `cmd_base` are cached but alert topics are rebuilt. Should use a single instance.
-- [ ] **Magic number `12345` as network stack seed** (`app/src/wifi.rs:91`): Hardcoded seed for embassy-net's RNG. The `Rng` peripheral is passed into `connect()` but unused (named `_rng`). A predictable seed weakens DHCP transaction ID randomness and could cause conflicts with multiple ESP32s on the same network.
-- [ ] **`WIFI_DISCONNECT_COUNT` is misleading** (`app/src/main.rs:240`): Counter is incremented on MQTT connection loss (not WiFi disconnect). Name suggests WiFi-level events. Should rename to `MQTT_LOSS_COUNT` or add a comment clarifying the approximation.
-- [ ] **`validate_http_status` has redundant length check** (`app/src/ota.rs:147-151`): `if headers.len() < 12` appears twice in succession. The second check is dead code.
+- [x] **Magic number `12345` as network stack seed** (`app/src/wifi.rs`): Replaced hardcoded seed with `((rng.random() as u64) << 32) | (rng.random() as u64)` using the `Rng` peripheral that was previously unused. Improves DHCP transaction ID randomness.
+- [x] **`WIFI_DISCONNECT_COUNT` is misleading** (`app/src/main.rs`): Renamed to `MQTT_LOSS_COUNT` and updated all references including diagnostics JSON field (`mqtt_loss_count`). Counter was incremented on MQTT connection loss, not WiFi disconnect.
+- [x] **`validate_http_status` has redundant length check** (`app/src/ota.rs`): Removed duplicate `if headers.len() < 12` check that was dead code after the first identical check.
 
 ### Low / Code Quality
 
-- [ ] **`clock.rs` module is dead code** (`app/src/clock.rs`): `EmbassyClock` implements `launa_hal::Clock` but is never imported or used anywhere in `app/`. Remove or wire it up.
+- [x] **`clock.rs` module is dead code** (`app/src/clock.rs`): Verified — `EmbassyClock` IS used in `main.rs` for `SpaApp` construction. Not dead code. No change needed.
 - [ ] **`HeapMonitor` check interval is 60s** (`app/src/heap_monitor.rs:17`): With a 32 KiB heap and multiple concurrent allocators, 60 seconds between checks is long. A burst of allocations could exhaust the heap between checks. Consider reducing to 15-30s.
 - [ ] **`uart_task` write-priority could starve reads** (`app/src/main.rs:106-111`): Outgoing UART data is checked before reading. A constant stream of writes could delay incoming frame processing. Unlikely in practice but worth noting.
 

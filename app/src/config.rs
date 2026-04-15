@@ -77,13 +77,13 @@ impl AppConfig {
 
     pub fn save(&self, nvs: &mut esp_nvs::Nvs<esp_storage::FlashStorage<'static>>) {
         let ns = esp_nvs::Key::from_str(NAMESPACE);
-        let _ = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_WIFI_SSID), self.wifi_ssid.as_str());
-        let _ = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_WIFI_PASS), self.wifi_password.as_str());
-        let _ = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_MQTT_HOST), self.mqtt_host.as_str());
-        let _ = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_MQTT_PORT), self.mqtt_port);
-        let _ = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_MQTT_USER), self.mqtt_user.as_str());
-        let _ = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_MQTT_PASS), self.mqtt_password.as_str());
-        let _ = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_DEVICE_ID), self.device_id.as_str());
+        nvs_set(nvs, &ns, KEY_WIFI_SSID, self.wifi_ssid.as_str());
+        nvs_set(nvs, &ns, KEY_WIFI_PASS, self.wifi_password.as_str());
+        nvs_set(nvs, &ns, KEY_MQTT_HOST, self.mqtt_host.as_str());
+        nvs_set(nvs, &ns, KEY_MQTT_PORT, self.mqtt_port);
+        nvs_set(nvs, &ns, KEY_MQTT_USER, self.mqtt_user.as_str());
+        nvs_set(nvs, &ns, KEY_MQTT_PASS, self.mqtt_password.as_str());
+        nvs_set(nvs, &ns, KEY_DEVICE_ID, self.device_id.as_str());
         info!("Config saved to NVS");
     }
 
@@ -105,4 +105,18 @@ fn nvs_get_str(
     key: &str,
 ) -> Option<String> {
     nvs.get::<String>(namespace, &esp_nvs::Key::from_str(key)).ok()
+}
+
+/// Write a value to NVS, logging a warning on failure.
+fn nvs_set<R>(
+    nvs: &mut esp_nvs::Nvs<esp_storage::FlashStorage<'static>>,
+    namespace: &esp_nvs::Key,
+    key: &str,
+    value: R,
+) where
+    esp_nvs::Nvs<esp_storage::FlashStorage<'static>>: esp_nvs::Set<R>,
+{
+    if let Err(e) = nvs.set(namespace, &esp_nvs::Key::from_str(key), value) {
+        warn!("NVS write failed for key '{}': {:?}", key, e);
+    }
 }
