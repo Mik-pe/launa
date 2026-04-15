@@ -1,0 +1,11 @@
+commands:
+  install: cargo build
+  typecheck: cargo check --workspace
+  build: cargo build --workspace
+  test: cargo test --workspace
+  lint: cargo fmt --check
+  test-protocol: cargo test -p launa-protocol
+  test-ota: cargo test -p launa-ota
+  test-sim: cargo test -p launa-sim
+  test-integration: cargo test -p launa-integration-tests
+  test-core: cargo test -p launa-core
