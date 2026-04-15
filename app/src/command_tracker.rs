@@ -80,12 +80,23 @@ struct PendingCommand {
 /// MAX_RETRIES times. After that, it is dropped and a warning is logged.
 pub struct CommandTracker {
     pending: Vec<PendingCommand>,
+    /// Number of commands that exceeded max retries and were dropped.
+    dropped_count: u32,
+}
+
+/// Result of verifying pending commands against a status update.
+pub struct VerifyResult {
+    /// Commands that timed out and should be retried.
+    pub retries: Vec<Command>,
+    /// Number of commands that exceeded max retries and were dropped this call.
+    pub dropped: u32,
 }
 
 impl CommandTracker {
     pub fn new() -> Self {
         CommandTracker {
             pending: Vec::new(),
+            dropped_count: 0,
         }
     }
 
@@ -108,10 +119,12 @@ impl CommandTracker {
     }
 
     /// Check the current status against all pending commands.
-    /// Returns a list of commands that timed out and should be retried.
-    pub fn verify(&mut self, status: &StatusUpdate) -> Vec<Command> {
+    /// Returns commands that timed out and should be retried, plus a count of
+    /// commands that exceeded max retries and were permanently dropped.
+    pub fn verify(&mut self, status: &StatusUpdate) -> VerifyResult {
         let mut confirmed = alloc::vec![];
         let mut to_retry = alloc::vec![];
+        let mut dropped_this_call: u32 = 0;
 
         for i in (0..self.pending.len()).rev() {
             let pending = &self.pending[i];
@@ -128,6 +141,7 @@ impl CommandTracker {
                 } else {
                     warn!("Command failed after {} retries: {:?}", MAX_RETRIES, pending.command);
                     confirmed.push(i); // Remove it
+                    dropped_this_call += 1;
                 }
             }
         }
@@ -148,7 +162,12 @@ impl CommandTracker {
             self.pending.remove(i);
         }
 
-        retries
+        self.dropped_count += dropped_this_call;
+
+        VerifyResult {
+            retries,
+            dropped: dropped_this_call,
+        }
     }
 
     fn is_confirmed(expected: &ExpectedChange, status: &StatusUpdate) -> bool {
@@ -200,5 +219,10 @@ impl CommandTracker {
 
     pub fn pending_count(&self) -> usize {
         self.pending.len()
+    }
+
+    /// Total number of commands that were dropped after exceeding max retries.
+    pub fn total_dropped(&self) -> u32 {
+        self.dropped_count
     }
 }

@@ -2,11 +2,8 @@
 //!
 //! These tests exercise the full pipeline from simulator → protocol → MQTT.
 
-pub mod spa_simulator;
-
 #[cfg(test)]
 mod tests {
-    use crate::spa_simulator::SpaSimulator;
     use launa_ota::OtaUpdate;
     use launa_protocol::command::{Command, ToggleItem};
     use launa_protocol::config::PumpConfig;
@@ -19,6 +16,7 @@ mod tests {
         RegistrationAction, RegistrationState, RegistrationStateMachine,
     };
     use launa_protocol::status::{HeatingMode, PumpState, TempRange, TemperatureScale};
+    use launa_sim::SpaSim;
 
     // ========================================================================
     // Test Group A: Protocol Round-Trip
@@ -26,7 +24,7 @@ mod tests {
 
     #[test]
     fn test_status_frame_round_trip() {
-        let sim = SpaSimulator::new();
+        let sim = SpaSim::new();
         let encoded = sim.generate_status_frame();
 
         let mut decoder = FrameDecoder::new();
@@ -54,7 +52,7 @@ mod tests {
 
     #[test]
     fn test_config_request_response_round_trip() {
-        let mut sim = SpaSimulator::new();
+        let mut sim = SpaSim::new();
 
         let (mt, payload) = Command::ConfigurationRequest.encode();
         let encoded = FrameEncoder::encode(mt, &payload);
@@ -65,7 +63,7 @@ mod tests {
         let request_frame = &frames[0];
 
         let response = sim
-            .process_incoming(request_frame)
+            .process_frame(request_frame)
             .expect("should return config response");
         let response_frames = decoder.feed_slice(&response);
         assert_eq!(response_frames.len(), 1);
@@ -85,7 +83,7 @@ mod tests {
 
     #[test]
     fn test_information_request_response_round_trip() {
-        let mut sim = SpaSimulator::new();
+        let mut sim = SpaSim::new();
 
         let (mt, payload) = Command::InformationRequest.encode();
         let encoded = FrameEncoder::encode(mt, &payload);
@@ -95,7 +93,7 @@ mod tests {
         let request_frame = &frames[0];
 
         let response = sim
-            .process_incoming(request_frame)
+            .process_frame(request_frame)
             .expect("should return info response");
         let response_frames = decoder.feed_slice(&response);
         let msg = dispatch_frame(&response_frames[0]);
@@ -112,7 +110,7 @@ mod tests {
 
     #[test]
     fn test_fault_log_round_trip() {
-        let mut sim = SpaSimulator::new();
+        let mut sim = SpaSim::new();
 
         let (mt, payload) = Command::FaultLogRequest { entry: 0xFF }.encode();
         let encoded = FrameEncoder::encode(mt, &payload);
@@ -122,7 +120,7 @@ mod tests {
         let request_frame = &frames[0];
 
         let response = sim
-            .process_incoming(request_frame)
+            .process_frame(request_frame)
             .expect("should return fault response");
         let response_frames = decoder.feed_slice(&response);
         let msg = dispatch_frame(&response_frames[0]);
@@ -137,7 +135,7 @@ mod tests {
 
     #[test]
     fn test_filter_cycles_round_trip() {
-        let mut sim = SpaSimulator::new();
+        let mut sim = SpaSim::new();
 
         let (mt, payload) = Command::FilterCyclesRequest.encode();
         let encoded = FrameEncoder::encode(mt, &payload);
@@ -147,7 +145,7 @@ mod tests {
         let request_frame = &frames[0];
 
         let response = sim
-            .process_incoming(request_frame)
+            .process_frame(request_frame)
             .expect("should return filter response");
         let response_frames = decoder.feed_slice(&response);
         let msg = dispatch_frame(&response_frames[0]);
@@ -168,8 +166,8 @@ mod tests {
 
     #[test]
     fn test_toggle_pump1_command() {
-        let mut sim = SpaSimulator::new();
-        assert_eq!(sim.state.pumps[0], 0);
+        let mut sim = SpaSim::new();
+        assert_eq!(sim.state.pumps[0], PumpState::Off);
 
         let (mt, payload) = Command::ToggleItem(ToggleItem::Pump1).encode();
         let encoded = FrameEncoder::encode(mt, &payload);
@@ -177,19 +175,19 @@ mod tests {
         let frames = decoder.feed_slice(&encoded);
         let frame = &frames[0];
 
-        sim.process_incoming(frame);
-        assert_eq!(sim.state.pumps[0], 1);
+        sim.process_frame(frame);
+        assert_eq!(sim.state.pumps[0], PumpState::Low);
 
-        sim.process_incoming(frame);
-        assert_eq!(sim.state.pumps[0], 2);
+        sim.process_frame(frame);
+        assert_eq!(sim.state.pumps[0], PumpState::High);
 
-        sim.process_incoming(frame);
-        assert_eq!(sim.state.pumps[0], 0);
+        sim.process_frame(frame);
+        assert_eq!(sim.state.pumps[0], PumpState::Off);
     }
 
     #[test]
     fn test_toggle_light_command() {
-        let mut sim = SpaSimulator::new();
+        let mut sim = SpaSim::new();
         assert!(!sim.state.lights[0]);
 
         let (mt, payload) = Command::ToggleItem(ToggleItem::Light1).encode();
@@ -198,17 +196,17 @@ mod tests {
         let frames = decoder.feed_slice(&encoded);
         let frame = &frames[0];
 
-        sim.process_incoming(frame);
+        sim.process_frame(frame);
         assert!(sim.state.lights[0]);
 
-        sim.process_incoming(frame);
+        sim.process_frame(frame);
         assert!(!sim.state.lights[0]);
     }
 
     #[test]
     fn test_set_temperature_command() {
-        let mut sim = SpaSimulator::new();
-        assert_eq!(sim.state.set_temp, 104);
+        let mut sim = SpaSim::new();
+        assert_eq!(sim.state.set_temp, 104.0);
 
         let (mt, payload) = Command::SetTemperature(100).encode();
         let encoded = FrameEncoder::encode(mt, &payload);
@@ -216,8 +214,8 @@ mod tests {
         let frames = decoder.feed_slice(&encoded);
         let frame = &frames[0];
 
-        sim.process_incoming(frame);
-        assert_eq!(sim.state.set_temp, 100);
+        sim.process_frame(frame);
+        assert_eq!(sim.state.set_temp, 100.0);
 
         let status_encoded = sim.generate_status_frame();
         let status_frames = decoder.feed_slice(&status_encoded);
@@ -232,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_full_registration_flow() {
-        let mut sim = SpaSimulator::new();
+        let mut sim = SpaSim::new();
         let mut client_sm = RegistrationStateMachine::new();
         let mut decoder = FrameDecoder::new();
 
@@ -256,9 +254,7 @@ mod tests {
         let request_frame = &request_frames[0];
 
         // Simulator processes client request and assigns ID
-        let assignment = sim
-            .process_incoming(request_frame)
-            .expect("should assign ID");
+        let assignment = sim.process_frame(request_frame).expect("should assign ID");
 
         // Step 3: Simulator sends assignment (FE BF 02 <ID>)
         let assignment_frames = decoder.feed_slice(&assignment);
@@ -278,7 +274,7 @@ mod tests {
                 // Step 4: Client sends ack (<ID> BF 03)
                 let ack = FrameEncoder::encode([id, 0xBF], &[0x03]);
                 let ack_frames = decoder.feed_slice(&ack);
-                sim.process_incoming(&ack_frames[0]);
+                sim.process_frame(&ack_frames[0]);
                 assert_eq!(sim.client_id, Some(0x02));
             }
             _ => panic!("Expected ClientIdAssignment"),
@@ -291,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_status_to_mqtt_json() {
-        let sim = SpaSimulator::new();
+        let sim = SpaSim::new();
         let encoded = sim.generate_status_frame();
 
         let mut decoder = FrameDecoder::new();
@@ -316,7 +312,7 @@ mod tests {
 
     #[test]
     fn test_mqtt_command_to_frame_to_simulator() {
-        let mut sim = SpaSimulator::new();
+        let mut sim = SpaSim::new();
 
         let cmd = launa_mqtt::command_parser::parse_command_ok(
             "launa/test_spa/command",
@@ -331,8 +327,8 @@ mod tests {
 
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
-        sim.process_incoming(&frames[0]);
-        assert_eq!(sim.state.pumps[0], 1);
+        sim.process_frame(&frames[0]);
+        assert_eq!(sim.state.pumps[0], PumpState::Low);
 
         let status_encoded = sim.generate_status_frame();
         let status_frames = decoder.feed_slice(&status_encoded);
@@ -347,7 +343,7 @@ mod tests {
 
     #[test]
     fn test_mqtt_set_temperature_pipeline() {
-        let mut sim = SpaSimulator::new();
+        let mut sim = SpaSim::new();
 
         let cmd = launa_mqtt::command_parser::parse_command_ok(
             "launa/test_spa/command",
@@ -362,8 +358,8 @@ mod tests {
 
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
-        sim.process_incoming(&frames[0]);
-        assert_eq!(sim.state.set_temp, 102);
+        sim.process_frame(&frames[0]);
+        assert_eq!(sim.state.set_temp, 102.0);
 
         let status_encoded = sim.generate_status_frame();
         let status_frames = decoder.feed_slice(&status_encoded);
@@ -598,8 +594,8 @@ mod tests {
 
     #[test]
     fn test_status_unknown_temp() {
-        let mut sim = SpaSimulator::new();
-        sim.state.current_temp = 0xFF;
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 255.0;
 
         let encoded = sim.generate_status_frame();
         let mut decoder = FrameDecoder::new();
@@ -616,9 +612,9 @@ mod tests {
 
     #[test]
     fn test_status_max_temp() {
-        let mut sim = SpaSimulator::new();
-        sim.state.current_temp = 0xFE;
-        sim.state.set_temp = 0xFE;
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 254.0;
+        sim.state.set_temp = 254.0;
 
         let encoded = sim.generate_status_frame();
         let mut decoder = FrameDecoder::new();
@@ -636,9 +632,9 @@ mod tests {
 
     #[test]
     fn test_status_min_temp() {
-        let mut sim = SpaSimulator::new();
-        sim.state.current_temp = 0x01;
-        sim.state.set_temp = 0x01;
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 1.0;
+        sim.state.set_temp = 1.0;
 
         let encoded = sim.generate_status_frame();
         let mut decoder = FrameDecoder::new();
@@ -656,10 +652,10 @@ mod tests {
 
     #[test]
     fn test_celsius_status_values() {
-        let mut sim = SpaSimulator::new();
-        sim.state.temp_scale_celsius = true;
-        sim.state.current_temp = 76; // 76/2 = 38°C
-        sim.state.set_temp = 80; // 80/2 = 40°C
+        let mut sim = SpaSim::new();
+        sim.state.temp_scale = TemperatureScale::Celsius;
+        sim.state.current_temp = 38.0; // 38°C → wire: 76
+        sim.state.set_temp = 40.0; // 40°C → wire: 80
 
         let encoded = sim.generate_status_frame();
         let mut decoder = FrameDecoder::new();
@@ -732,7 +728,7 @@ mod tests {
 
     #[test]
     fn test_feed_bytes_one_at_a_time() {
-        let sim = SpaSimulator::new();
+        let sim = SpaSim::new();
         let encoded = sim.generate_status_frame();
 
         let mut decoder = FrameDecoder::new();
@@ -749,10 +745,10 @@ mod tests {
 
     #[test]
     fn test_multiple_concatenated_frames() {
-        let mut sim = SpaSimulator::new();
+        let mut sim = SpaSim::new();
 
         let status1 = sim.generate_status_frame();
-        sim.tick();
+        let _tick_bytes = sim.tick(); // advances physics (returns reg query + status + ready)
         let status2 = sim.generate_status_frame();
         let config = sim.generate_config_response();
 
@@ -772,7 +768,7 @@ mod tests {
 
     #[test]
     fn test_frames_with_noise_bytes_between() {
-        let sim = SpaSimulator::new();
+        let sim = SpaSim::new();
 
         let status = sim.generate_status_frame();
         let config = sim.generate_config_response();
@@ -813,7 +809,7 @@ mod tests {
 
     #[test]
     fn test_simulator_tick_updates_time() {
-        let mut sim = SpaSimulator::new();
+        let mut sim = SpaSim::new();
         assert_eq!(sim.state.hour, 14);
         assert_eq!(sim.state.minute, 30);
 
@@ -829,37 +825,37 @@ mod tests {
 
     #[test]
     fn test_simulator_tick_heating_approaches_set_temp() {
-        let mut sim = SpaSimulator::new();
-        sim.state.current_temp = 95;
-        sim.state.set_temp = 100;
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 95.0;
+        sim.state.set_temp = 100.0;
         sim.state.is_heating = true;
 
         sim.tick();
-        assert_eq!(sim.state.current_temp, 96);
+        assert_eq!(sim.state.current_temp, 96.0);
 
         sim.tick();
-        assert_eq!(sim.state.current_temp, 97);
+        assert_eq!(sim.state.current_temp, 97.0);
 
         for _ in 0..10 {
             sim.tick();
         }
-        assert_eq!(sim.state.current_temp, 100);
+        assert_eq!(sim.state.current_temp, 100.0);
     }
 
     #[test]
     fn test_simulator_tick_cools_down() {
-        let mut sim = SpaSimulator::new();
-        sim.state.current_temp = 100;
-        sim.state.set_temp = 95;
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 100.0;
+        sim.state.set_temp = 95.0;
         sim.state.is_heating = false;
 
         sim.tick();
-        assert_eq!(sim.state.current_temp, 99);
+        assert_eq!(sim.state.current_temp, 99.0);
     }
 
     #[test]
     fn test_toggle_all_items() {
-        let mut sim = SpaSimulator::new();
+        let mut sim = SpaSim::new();
 
         let toggles = [ToggleItem::Pump1, ToggleItem::Pump2, ToggleItem::Pump3];
 
@@ -868,33 +864,33 @@ mod tests {
             let encoded = FrameEncoder::encode(mt, &payload);
             let mut decoder = FrameDecoder::new();
             let frames = decoder.feed_slice(&encoded);
-            sim.process_incoming(&frames[0]);
+            sim.process_frame(&frames[0]);
         }
 
-        assert_eq!(sim.state.pumps[0], 1);
-        assert_eq!(sim.state.pumps[1], 1);
-        assert_eq!(sim.state.pumps[2], 1);
+        assert_eq!(sim.state.pumps[0], PumpState::Low);
+        assert_eq!(sim.state.pumps[1], PumpState::Low);
+        assert_eq!(sim.state.pumps[2], PumpState::Low);
 
         let (mt, payload) = Command::ToggleItem(ToggleItem::Blower).encode();
         let encoded = FrameEncoder::encode(mt, &payload);
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
-        sim.process_incoming(&frames[0]);
+        sim.process_frame(&frames[0]);
         assert!(sim.state.blower);
 
         let (mt, payload) = Command::ToggleItem(ToggleItem::HeatingMode).encode();
         let encoded = FrameEncoder::encode(mt, &payload);
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
-        sim.process_incoming(&frames[0]);
-        assert_eq!(sim.state.heating_mode, 1);
+        sim.process_frame(&frames[0]);
+        assert_eq!(sim.state.heating_mode, HeatingMode::Rest);
 
         let (mt, payload) = Command::ToggleItem(ToggleItem::TemperatureRange).encode();
         let encoded = FrameEncoder::encode(mt, &payload);
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
-        sim.process_incoming(&frames[0]);
-        assert!(!sim.state.temp_range_high);
+        sim.process_frame(&frames[0]);
+        assert_eq!(sim.state.temp_range, TempRange::Low);
     }
 
     #[test]
@@ -977,17 +973,17 @@ mod tests {
     // Phase 2: Desktop end-to-end tests (no HW needed)
     // ========================================================================
 
-    /// Full pipeline integration test: SpaSimulator generates status frame ->
+    /// Full pipeline integration test: SpaSim generates status frame ->
     /// FrameDecoder parses -> StatusUpdate extracted -> status_to_json() produces
     /// MQTT payload -> assert JSON fields match simulator state.
     #[test]
     fn test_full_pipeline_status_frame_to_mqtt_json() {
-        let mut sim = SpaSimulator::new();
-        sim.state.current_temp = 100;
-        sim.state.set_temp = 104;
-        sim.state.pumps[0] = 1; // Low
-        sim.state.pumps[1] = 0;
-        sim.state.pumps[2] = 0;
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 100.0;
+        sim.state.set_temp = 104.0;
+        sim.state.pumps[0] = PumpState::Low;
+        sim.state.pumps[1] = PumpState::Off;
+        sim.state.pumps[2] = PumpState::Off;
         sim.state.circ_pump = true;
         sim.state.blower = false;
         sim.state.lights[0] = true;
@@ -1024,11 +1020,11 @@ mod tests {
     }
 
     /// Command round-trip: MQTT command string -> parse_command() -> Command ->
-    /// encode() -> frame bytes -> SpaSimulator process_incoming -> verify state change.
+    /// encode() -> frame bytes -> SpaSim process_frame -> verify state change.
     #[test]
     fn test_command_round_trip_pump_toggle() {
-        let mut sim = SpaSimulator::new();
-        assert_eq!(sim.state.pumps[0], 0);
+        let mut sim = SpaSim::new();
+        assert_eq!(sim.state.pumps[0], PumpState::Off);
 
         // Parse MQTT command
         let cmd = launa_mqtt::command_parser::parse_command_ok(
@@ -1045,10 +1041,14 @@ mod tests {
         // Feed to simulator
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
-        sim.process_incoming(&frames[0]);
+        sim.process_frame(&frames[0]);
 
         // Verify state change
-        assert_eq!(sim.state.pumps[0], 1, "pump1 should be on after toggle");
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::Low,
+            "pump1 should be on after toggle"
+        );
 
         // Generate new status and verify JSON reflects change
         let status_bytes = sim.generate_status_frame();
@@ -1066,7 +1066,7 @@ mod tests {
     /// Command round-trip for set_temperature.
     #[test]
     fn test_command_round_trip_set_temperature() {
-        let mut sim = SpaSimulator::new();
+        let mut sim = SpaSim::new();
 
         let cmd = launa_mqtt::command_parser::parse_command_ok(
             "launa/spa/command",
@@ -1081,9 +1081,9 @@ mod tests {
 
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
-        sim.process_incoming(&frames[0]);
+        sim.process_frame(&frames[0]);
 
-        assert_eq!(sim.state.set_temp, 100);
+        assert_eq!(sim.state.set_temp, 100.0);
     }
 
     /// HA discovery validation: generate all 14 discovery payloads,

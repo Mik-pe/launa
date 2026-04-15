@@ -19,11 +19,13 @@
 //!   SimBroker (mock MQTT broker for verification)
 //! ```
 
+pub mod clock;
 pub mod controller;
 pub mod sim_broker;
 pub mod sim_transport;
 pub mod spa_sim;
 
+pub use clock::VirtualClock;
 pub use controller::{ControllerEvent, SpaController};
 pub use sim_broker::SimBroker;
 pub use sim_transport::SimTransport;

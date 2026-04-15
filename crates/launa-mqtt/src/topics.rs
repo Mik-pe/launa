@@ -58,6 +58,11 @@ impl TopicBuilder {
     pub fn ha_status_topic(&self) -> String {
         "homeassistant/status".to_string()
     }
+
+    /// Topic for publishing diagnostic counters and uptime.
+    pub fn diagnostics_topic(&self) -> String {
+        alloc::format!("{}/{}/diagnostics", BASE_TOPIC, self.device_id)
+    }
 }
 
 /// MQTT Last Will and Testament (LWT) configuration.
@@ -179,5 +184,11 @@ mod tests {
         assert_eq!(AVAILABILITY_ONLINE, "online");
         assert_eq!(AVAILABILITY_OFFLINE, "offline");
         assert_ne!(AVAILABILITY_ONLINE, AVAILABILITY_OFFLINE);
+    }
+
+    #[test]
+    fn test_diagnostics_topic() {
+        let t = TopicBuilder::new("spa_001");
+        assert_eq!(t.diagnostics_topic(), "launa/spa_001/diagnostics");
     }
 }

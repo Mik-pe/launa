@@ -13,6 +13,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_executor::Spawner;
 use embassy_sync::channel::Channel;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -26,6 +27,7 @@ use launa_protocol::status::StatusUpdate;
 use launa_mqtt::topics::TopicBuilder;
 use log::{debug, error, info, warn};
 
+mod clock;
 mod command_tracker;
 mod config;
 mod heap_monitor;
@@ -36,6 +38,17 @@ mod transport;
 mod wifi;
 
 use esp_backtrace as _;
+
+// ── Diagnostic counters (static, accessible from all tasks) ───────────
+
+static MQTT_RECONNECT_COUNT: AtomicU32 = AtomicU32::new(0);
+static WIFI_DISCONNECT_COUNT: AtomicU32 = AtomicU32::new(0);
+static COMMAND_RETRY_COUNT: AtomicU32 = AtomicU32::new(0);
+static COMMAND_DROP_COUNT: AtomicU32 = AtomicU32::new(0);
+static FRAMES_RECEIVED: AtomicU32 = AtomicU32::new(0);
+
+/// Timestamp of firmware boot, set once in main(). Used for uptime calculation.
+static mut DIAGNOSTICS_START: Option<Instant> = None;
 
 // Heap allocator: 32 KiB (initialized in main)
 fn init_heap() {
@@ -57,6 +70,7 @@ static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, Command, 4> = Channel::
 static UART_TX_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
 static STATE_CHANNEL: Channel<CriticalSectionRawMutex, (StatusUpdate, Option<alloc::string::String>, bool), 2> = Channel::new();
 static PUMP_TIMER_CHANNEL: Channel<CriticalSectionRawMutex, (u8, u32), 4> = Channel::new();
+static DIAGNOSTICS_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 2> = Channel::new();
 
 // ── Combined UART task (reads frames + writes outgoing bytes) ──────────
 
@@ -103,13 +117,23 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
 async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
     let cmd_sender = COMMAND_CHANNEL.sender();
     let state_rx = STATE_CHANNEL.receiver();
+    let diag_rx = DIAGNOSTICS_CHANNEL.receiver();
     let topics = TopicBuilder::new(&mqtt.device_id);
+    let diag_topic = topics.diagnostics_topic();
     let cmd_base = topics.command_topic();
     let mut last_scale_range: Option<(launa_protocol::status::TemperatureScale, launa_protocol::status::TempRange)> = None;
 
     info!("MQTT task started");
 
     loop {
+        // Check for diagnostics payloads to publish (non-blocking)
+        if let Ok(diag_payload) = diag_rx.try_receive() {
+            if let Err(e) = mqtt.publish(&diag_topic, &diag_payload, 0, false).await {
+                warn!("MQTT diagnostics publish failed: {:?}", e);
+            }
+            continue;
+        }
+
         // Check for state updates to publish (non-blocking)
         if let Ok((status, fault, is_stale)) = state_rx.try_receive() {
             last_scale_range = Some((status.temperature_scale, status.temp_range));
@@ -186,6 +210,10 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
             }
             None => {
                 warn!("MQTT connection lost, attempting reconnect...");
+                MQTT_RECONNECT_COUNT.fetch_add(1, Ordering::Relaxed);
+                // WiFi disconnect is approximated by MQTT connection loss;
+                // a failed reconnect likely indicates WiFi is down.
+                WIFI_DISCONNECT_COUNT.fetch_add(1, Ordering::Relaxed);
                 loop {
                     match mqtt.reconnect().await {
                         Ok(()) => {
@@ -211,6 +239,42 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
 async fn send_frame(msg_type: [u8; 2], payload: &[u8]) {
     let encoded = FrameEncoder::encode(msg_type, payload);
     UART_TX_CHANNEL.send(encoded).await;
+}
+
+/// Build a diagnostics JSON payload with all counters and publish via the
+/// diagnostics channel. Called every 60 seconds from the main loop.
+fn publish_diagnostics(device_id: &str) {
+    let uptime_secs = unsafe {
+        DIAGNOSTICS_START
+            .map(|start| start.elapsed().as_secs())
+            .unwrap_or(0)
+    };
+
+    let mqtt_reconnects = MQTT_RECONNECT_COUNT.load(Ordering::Relaxed);
+    let wifi_disconnects = WIFI_DISCONNECT_COUNT.load(Ordering::Relaxed);
+    let command_retries = COMMAND_RETRY_COUNT.load(Ordering::Relaxed);
+    let command_drops = COMMAND_DROP_COUNT.load(Ordering::Relaxed);
+    let frames_received = FRAMES_RECEIVED.load(Ordering::Relaxed);
+    let heap_free = esp_alloc::HEAP.free();
+
+    let json = alloc::format!(
+        r#"{{"device_id":"{}","uptime_secs":{},"mqtt_reconnect_count":{},"wifi_disconnect_count":{},"command_retry_count":{},"command_drop_count":{},"frames_received":{},"heap_free":{}}}"#,
+        device_id,
+        uptime_secs,
+        mqtt_reconnects,
+        wifi_disconnects,
+        command_retries,
+        command_drops,
+        frames_received,
+        heap_free,
+    );
+
+    debug!("Diagnostics: {}", json);
+
+    // Try to send non-blocking; if the channel is full, the diagnostics
+    // update is simply skipped (it will be published next cycle).
+    let payload = Vec::from(json.as_bytes());
+    let _ = DIAGNOSTICS_CHANNEL.try_send(payload);
 }
 
 // ── Sniffer mode (passive RS-485 monitoring) ──────────────────────────
@@ -351,6 +415,9 @@ async fn main(spawner: Spawner) {
     init_heap();
     let peripherals = esp_hal::init(esp_hal::Config::default());
 
+    // Record boot timestamp for diagnostics uptime calculation
+    unsafe { DIAGNOSTICS_START = Some(Instant::now()) };
+
     let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
 
@@ -432,8 +499,10 @@ async fn main(spawner: Spawner) {
     let mut client_id: Option<u8> = None;
     let mut last_status_time: Instant = Instant::now();
     let mut last_probe_time: Instant = Instant::now();
+    let mut last_diag_time: Instant = Instant::now();
     let mut was_stale: bool = false;
     let mut registration_started_at: Option<Instant> = None;
+    let device_id_str: &str = &app_config.device_id;
 
     loop {
         // Wait for a frame from the UART task
@@ -519,6 +588,12 @@ async fn main(spawner: Spawner) {
         if heap_monitor.tick() {
             warn!("Heap critically low — consider reducing allocations");
         }
+
+        // ── Periodic diagnostics publishing (every 60s) ─────────────
+        if last_diag_time.elapsed() >= Duration::from_secs(60) {
+            last_diag_time = Instant::now();
+            publish_diagnostics(device_id_str);
+        }
     }
 }
 
@@ -567,9 +642,14 @@ async fn handle_frame(
                 status.current_temp, status.set_temp, status.is_heating
             );
 
+            // Count received frames (each StatusUpdate = one frame processed)
+            FRAMES_RECEIVED.fetch_add(1, Ordering::Relaxed);
+
             // Verify pending commands against new status
-            let retries = cmd_tracker.verify(&status);
-            for cmd in retries {
+            let result = cmd_tracker.verify(&status);
+            COMMAND_RETRY_COUNT.fetch_add(result.retries.len() as u32, Ordering::Relaxed);
+            COMMAND_DROP_COUNT.fetch_add(result.dropped, Ordering::Relaxed);
+            for cmd in result.retries {
                 let (msg_type, payload) = cmd.encode();
                 send_frame(msg_type, &payload).await;
             }
