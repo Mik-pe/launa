@@ -153,7 +153,7 @@ The firmware runs headless -- serial debug is inaccessible in production. All di
 - [ ] **Add `launa/<device_id>/alert` MQTT topic**: Publish alerts for conditions that need operator attention: heap below 4 KiB, spa communication lost (>30s stale), registration failure, MQTT reconnect loop (>3 failures), OTA failure. Each alert is a JSON object: `{"level":"warn"|"error","message":"...","timestamp":<uptime_secs>}`. Subscribe HA to this topic as a sensor so alerts surface in the UI.
 - [ ] **Add diagnostics HA discovery entity**: Add a `sensor` entity for diagnostics and a `sensor` entity for alerts in both `DiscoveryBuilder` and app/ discovery. The diagnostics sensor shows the last diagnostics payload; the alert sensor shows the last alert message. This gives the operator a dashboard without needing raw MQTT tools.
 - [x] **Heap monitoring with MQTT alert**: `HeapMonitor` in `app/src/heap_monitor.rs` checks free heap every 60s. Logs warning below 4 KiB, critical below 1 KiB. Returns `true` from `tick()` when critically low so the main loop can react.
-- [ ] **Frame CRC error counter in diagnostics**: Track CRC-mismatched frames in `FrameDecoder` (increment an `AtomicU32`). Publish in diagnostics. A rising CRC error count indicates RS-485 bus problems (bad wiring, noise, impedance mismatch).
+- [x] **Frame CRC error counter in diagnostics**: Added `crc_error_count` and `reset_crc_error_count` methods to `FrameDecoder` in `launa-protocol/src/frame.rs`. Counter increments on CRC mismatch; retrievable and resettable for diagnostics publishing. 4 new tests.
 - [ ] **Counters for MQTT reconnects, WiFi disconnects, command failures**: Add `AtomicU32` counters in `main.rs` for: `mqtt_reconnect_count`, `wifi_disconnect_count`, `command_retry_count`, `command_drop_count`. Publish in diagnostics. Rising counts indicate systemic issues.
 
 ## P2: Missing Firmware Features
@@ -174,7 +174,7 @@ The firmware runs headless -- serial debug is inaccessible in production. All di
 - [ ] **Consolidate duplicate simulators**: `launa-integration-tests/src/spa_simulator.rs` (`SpaSimulator`) and `launa-sim/src/spa_sim.rs` (`SpaSim`) do the same thing with different abstractions. The old one uses raw `u8`/`bool` fields and is missing pump4/5/6, light2, and mister toggle handling. Migrate all integration tests in `lib.rs` to use `SpaSim` from `launa-sim`, then remove the duplicate `SpaSimulator`.
 - [x] **Extend `PumpTimerManager` to cover all 6 pumps**: Already implemented — `PumpTimerManager` creates 6 timers (Pump1-6) and `tick_all`/`start_timer` handle all indices.
 - [x] **Remove unused `client_id` binding in `encode_command`**: Changed to `let _ = self.registration.client_id()?;` with comment explaining it's a registration guard that returns `None` if not registered.
-- [ ] **Gate default temperature parsing behind validation**: `parse_set_temperature()` accepts 0-255 without range checking. The validated variant `parse_set_temperature_validated()` exists but isn't the default path. Consider making the unvalidated path opt-in (behind a feature flag or explicit caller decision) to prevent accidental `SetTemperature(255)` being sent to the spa.
+- [x] **Gate default temperature parsing behind validation**: `parse_set_temperature()` in `command_parser.rs` now rejects values above `ABSOLUTE_MAX_TEMP_F` (108°F) with `ParseResult::TemperatureOutOfRange`. Prevents accidental `SetTemperature(255)` while allowing all realistic setpoints (0-108). 4 new tests.
 
 ## P2: Documentation Cleanup
 

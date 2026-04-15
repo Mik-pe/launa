@@ -14,6 +14,26 @@
 | xtask | `xtask/` | Cargo xtask tooling | `src/main.rs` |
 | app | `app/` | ESP32 firmware (NOT in workspace) | `src/main.rs`, `src/transport.rs`, `src/wifi.rs`, `src/mqtt_client.rs`, `src/ota.rs`, `src/config.rs`, `src/command_tracker.rs`, `src/pump_timer.rs`, `src/heap_monitor.rs` |
 
+## Build Commands
+
+| Scope | Command | Notes |
+|-------|---------|-------|
+| Workspace typecheck | `cargo check` | From `C:\dev\launa` |
+| Workspace tests | `cargo test` | From `C:\dev\launa` |
+| Single crate tests | `cargo test -p <crate>` | e.g., `cargo test -p launa-protocol` |
+| ESP32 firmware check | `cd C:\dev\launa\app && cargo +esp check` | Uses `xtensa-esp32-none-elf` target, `esp` toolchain |
+| ESP32 firmware build | `cd C:\dev\launa\app && cargo +esp build` | Full firmware build (slow, use `check` for verification) |
+| ESP32 flash | `cd C:\dev\launa\app && cargo espflash flash --chip esp32 --monitor` | Requires physical ESP32 connected via USB |
+| Format | `cargo fmt` | From `C:\dev\launa` (formats workspace + app) |
+
+### ESP32 Build Details
+
+- **Toolchain**: `esp` (installed via rustup, provides `xtensa-esp32-none-elf` target)
+- **Config**: `app/.cargo/config.toml` sets `target = "xtensa-esp32-none-elf"` and `build-std = ["core", "alloc"]`
+- **No std**: `app/` is fully `no_std` — uses `esp-alloc` for heap, `embassy` for async
+- **Verification**: `cargo +esp check` is the fast path for verifying `app/` compiles. Use `cargo +esp build` only when producing a flashable binary.
+- **Known issue**: `esp-backtrace` version must use `println` feature (not `print-uart` which was removed in 0.16+)
+
 ## Task Category -> Typical Files
 
 ### Protocol parsing tasks

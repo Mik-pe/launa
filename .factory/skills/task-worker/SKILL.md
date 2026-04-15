@@ -20,12 +20,13 @@ generates tasks; this one executes existing tasks.
 
 1. Read `TASKS.md` from `C:\dev\launa\TASKS.md`
 2. Run `git status --porcelain` to check for existing uncommitted work
-3. Identify `[ ]` (unchecked) tasks that are **code-implementable on desktop**:
-   - **Include**: tasks that modify workspace crates (`crates/`), tests, or
-     documentation accessible from the desktop toolchain
-   - **Skip**: tasks requiring ESP32 hardware (flashing, serial testing), tasks
-     requiring physical presence ("Order USB-to-RS485 adapter", "First field
-     session"), tasks blocked on unchecked prerequisites
+3. Identify `[ ]` (unchecked) tasks that are **code-implementable**:
+   - **Include**: tasks that modify workspace crates (`crates/`), tests,
+     documentation, AND the ESP32 firmware (`app/`) — the ESP toolchain is
+     available and `cargo +esp check` can verify `app/` code
+   - **Skip**: tasks requiring physical hardware (flashing, serial testing, RS-485
+     bench testing), tasks requiring physical presence ("Order USB-to-RS485
+     adapter", "First field session"), tasks blocked on unchecked prerequisites
 4. Prioritize by section order in TASKS.md (P0 > P1 > P2) and pick 2-4 tasks
 5. Ensure selected tasks have **no file overlap** -- tasks touching the same
    source files MUST be run sequentially, not in parallel workers
@@ -35,7 +36,7 @@ generates tasks; this one executes existing tasks.
 Prefer tasks that:
 - Have a clear file reference in the task description (e.g., `app/src/ota.rs`)
 - Are self-contained (don't depend on other unchecked tasks)
-- Can be verified with `cargo test` or `cargo check`
+- Can be verified with `cargo test`, `cargo check`, or `cargo +esp check`
 - Are small enough for a single worker to complete in one pass
 
 ## Phase 2: Plan
@@ -49,9 +50,11 @@ Prefer tasks that:
 ### Worker assignment rules
 
 - **Parallel**: Tasks in different crates (e.g., one in `launa-protocol`, one in
-  `launa-mqtt`)
-- **Sequential**: Tasks that both touch `launa-protocol/src/status.rs`, or any
-  task that modifies `TASKS.md` itself
+  `launa-mqtt`), or one in a workspace crate and one in `app/` (they have
+  separate build graphs — workspace uses `cargo check`, `app/` uses
+  `cargo +esp check`)
+- **Sequential**: Tasks that both touch the same source file, or any task that
+  modifies `TASKS.md` itself
 - **Max 4 workers** in a single parallel batch (resource constraint)
 
 ## Phase 3: Implement
@@ -75,7 +78,10 @@ Constraints:
 - All protocol parsers must handle malformed input gracefully (return Result,
   never panic).
 - Mock implementations behind `cfg(feature = "std")` or in test modules.
-- Run `cargo test -p <crate>` after making changes. Fix any failures.
+- Run `cargo test -p <crate>` after making changes to workspace crates. Fix any failures.
+- If modifying `app/` (ESP32 firmware), verify with `cargo +esp check` from
+  `C:\dev\launa\app`. This uses the xtensa-esp32-none-elf target via the `esp`
+  toolchain. The `app/.cargo/config.toml` sets the target automatically.
 
 When done:
 1. Report what you changed (list every file path)
@@ -108,13 +114,22 @@ After all workers complete (or after each batch of parallel workers):
    ```
    No compilation errors.
 
-3. **Run `cargo fmt`**:
+3. **Run `cargo +esp check` for `app/`** (if any `app/` files were modified):
+   ```
+   cd C:\dev\launa\app && cargo +esp check 2>&1
+   ```
+   The ESP32 firmware must compile-check against `xtensa-esp32-none-elf`.
+   This uses the `esp` toolchain installed via rustup. The `app/.cargo/config.toml`
+   sets the target and `build-std` automatically. If this fails, fix before
+   committing -- broken `app/` code blocks firmware builds and OTA deployment.
+
+4. **Run `cargo fmt`**:
    ```
    cargo fmt
    ```
    Format all changed files.
 
-4. If tests fail after a worker's changes, investigate and fix. Common issues:
+5. If tests fail after a worker's changes, investigate and fix. Common issues:
    - Worker changed a struct field name but didn't update all references
    - Worker changed a constant (e.g., entity count) but tests assert the old value
    - Worker added a new test that is incorrect
@@ -169,21 +184,25 @@ If `git status` shows uncommitted changes at the start:
 
 ### Task cannot be implemented
 Some tasks in TASKS.md describe future work that requires:
-- ESP32 toolchain (`cargo +esp check` for `app/`)
 - Physical hardware (USB-to-RS485 adapter, spa controller)
 - External services (MQTT broker, WiFi network)
 
-Skip these tasks and select alternatives. Log what was skipped and why.
+Tasks requiring the ESP32 toolchain CAN be implemented -- `cargo +esp check` is
+available for `app/` code verification. Skip only tasks that need actual hardware
+flashing or physical presence.
 
 ### Cross-crate refactors
 Some tasks touch many crates simultaneously (e.g., "refactor pumps to arrays"
 touched 8+ crates). For these:
 - Do NOT parallelize -- implement sequentially in dependency order:
   1. `launa-protocol` (core types)
-  2. `launa-mqtt` (depends on protocol types)
-  3. `launa-sim` (depends on protocol types)
-  4. `launa-integration-tests` (depends on all above)
-- Run `cargo test` after each crate to catch issues early
+  2. `launa-hal` (depends on protocol types)
+  3. `launa-mqtt` (depends on protocol types)
+  4. `launa-sim` (depends on protocol types)
+  5. `launa-integration-tests` (depends on all above)
+  6. `app/` (depends on all workspace crates, verified with `cargo +esp check`)
+- Run `cargo test` after each workspace crate to catch issues early
+- Run `cargo +esp check` after any change to `app/` or its workspace dependencies
 
 ### Worker modifies file another worker needs
 This is the primary failure mode from past sessions. Prevent it by:

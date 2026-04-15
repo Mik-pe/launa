@@ -5,7 +5,7 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
-use launa_protocol::command::{Command, ToggleItem};
+use launa_protocol::command::{Command, TempError, ToggleItem, ABSOLUTE_MAX_TEMP_F};
 use launa_protocol::status::{TempRange, TemperatureScale};
 
 /// Recognized command subtopics. Anything not in this list is silently rejected.
@@ -137,13 +137,25 @@ pub fn parse_command_ok(command_topic_base: &str, topic: &str, payload: &[u8]) -
     }
 }
 
-/// Parse a set-temperature command with optional validation.
-/// Without scale/range context, we accept any valid u8.
+/// Parse a set-temperature command with hard upper-limit validation.
+///
+/// Without scale/range context we cannot do full range validation, but we
+/// enforce the absolute maximum (108°F wire value) as a safety backstop to
+/// prevent accidental `SetTemperature(255)` being sent to the spa.
+/// Zero is accepted as a valid wire value ("no temp set").
 fn parse_set_temperature(payload: &str) -> ParseResult {
     let temp: u8 = match payload.parse() {
         Ok(t) => t,
         Err(_) => return ParseResult::InvalidPayload(format!("not a number: {:?}", payload)),
     };
+
+    if temp > ABSOLUTE_MAX_TEMP_F {
+        return ParseResult::TemperatureOutOfRange {
+            raw_value: temp,
+            error: TempError::AboveAbsoluteLimit,
+        };
+    }
+
     ParseResult::Valid(Command::SetTemperature(temp))
 }
 
@@ -398,5 +410,58 @@ mod tests {
             parse_command_ok(CMD_BASE, "launa/test_spa_001/command/pump1", b"garbage"),
             None,
         );
+    }
+
+    // --- Absolute max temperature gating tests ---
+
+    #[test]
+    fn test_parse_set_temperature_above_absolute_max() {
+        let result = parse_command(
+            CMD_BASE,
+            "launa/test_spa_001/command/set_temperature",
+            b"200",
+        );
+        assert_eq!(
+            result,
+            ParseResult::TemperatureOutOfRange {
+                raw_value: 200,
+                error: TempError::AboveAbsoluteLimit,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_set_temperature_at_max() {
+        // 108 = ABSOLUTE_MAX_TEMP_F, should be accepted
+        let result = parse_command(
+            CMD_BASE,
+            "launa/test_spa_001/command/set_temperature",
+            b"108",
+        );
+        assert_eq!(result, ParseResult::Valid(Command::SetTemperature(108)));
+    }
+
+    #[test]
+    fn test_parse_set_temperature_just_above_max() {
+        // 109 > ABSOLUTE_MAX_TEMP_F, should be rejected
+        let result = parse_command(
+            CMD_BASE,
+            "launa/test_spa_001/command/set_temperature",
+            b"109",
+        );
+        assert_eq!(
+            result,
+            ParseResult::TemperatureOutOfRange {
+                raw_value: 109,
+                error: TempError::AboveAbsoluteLimit,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_set_temperature_zero() {
+        // 0 is valid wire value ("no temp set")
+        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/set_temperature", b"0");
+        assert_eq!(result, ParseResult::Valid(Command::SetTemperature(0)));
     }
 }
