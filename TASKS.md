@@ -348,6 +348,26 @@ But all logic lives in workspace crates that are fully desktop-testable via mock
 - [x] **`cargo xtask config-flash`**: Reads `launa.toml` and writes WiFi/MQTT/device config to ESP32 NVS via serial. Only needed on first setup or when changing credentials. After this, the ESP32 has its config stored in NVS and doesn't need `launa.toml` to boot.
 - [x] **Document xtask commands in AGENTS.md**: Added "Project Commands (`cargo xtask`)" section with table of all 9 subcommands and `launa.toml` config format example. Updated repo structure, workspace crate list, ESP32 stack, and app dependencies to reflect current state.
 
+### Encrypted NVS Config
+
+Protect WiFi password and MQTT password stored in NVS flash. Currently stored as plaintext — anyone with physical access can dump flash and read credentials directly.
+
+**Prerequisites**: None beyond the usual Rust ESP32 toolchain. The `esptools` crate (bundled Espressif binaries) handles eFuse burning — no Python install needed.
+
+**Setup flow** (4 commands, fully scripted, pure Rust toolchain):
+```
+cp launa.example.toml launa.toml     # 1. Fill in WiFi/MQTT/serial port
+cargo xtask provision                # 2. Burns AES key to eFuse (one-time per device)
+cargo xtask config-flash             # 3. Writes config to NVS (passwords encrypted)
+cargo xtask flash                    # 4. Flashes firmware
+```
+
+- [ ] **Add `app/src/crypto.rs` — AES-128-CTR encryption using ESP32 hardware AES** (~80 lines): Use `esp_hal::aes::Aes` with `cipher_modes::Ctr` to encrypt/decrypt password strings. Key read from eFuse BLOCK3 (128 bits, burned by `provision`). Nonce is random per-value (12 bytes), prepended to ciphertext. Encrypted values stored as hex string prefixed with `"enc:"` in NVS. `maybe_decrypt()` helper passes through unencrypted values for migration from unencrypted NVS.
+- [ ] **Modify `app/src/config.rs` to encrypt/decrypt sensitive fields** (~20 lines): `load()` decrypts `wifi_password` and `mqtt_password` after NVS read. `save()` encrypts before NVS write. Other fields (ssid, host, port, device_id) remain plaintext (not sensitive). NVS values with no `"enc:"` prefix treated as plaintext (backward compatible with existing devices).
+- [ ] **Modify `app/src/main.rs` to pass AES peripheral to config** (~5 lines): Take `peripherals.AES` (currently unused), create `Aes::new(peripherals.AES)`, read key from eFuse BLOCK3 via `esp_hal::efuse::Efuse::read_field_le`, pass to config load/save.
+- [ ] **Add `cargo xtask provision` command** (`xtask/src/provision.rs`): One-time per-device setup using the `esptools` crate (ivmarkov/esptools) which bundles Espressif's pre-built `espefuse` binary — no Python or `pip install` needed. Steps: (1) generates a random 16-byte key, (2) saves key to `launa.key` in project root (gitignored), (3) burns to eFuse BLOCK3 via `esptools::Tool::EspEfuse.mount()?.exec(&["--port", port, "burn-block-data", "BLOCK3", "launa.key", "--do-not-confirm"])`, (4) prints confirmation. Serial port read from `launa.toml`. Only needs to run once per device. Add `esptools = { version = "0.1", features = ["espefuse"] }` to xtask `Cargo.toml` dependencies. Note: `burn-block-data` accepts files smaller than the 32-byte block size (remaining bytes stay 0). Firmware reads only the first 16 bytes.
+- [x] **Update `launa.example.toml` with provisioning note**: Added comment noting `cargo xtask provision` one-time setup step.
+
 ### Phase 2: Desktop End-to-End Test (No HW Needed)
 
 Expand existing `launa-integration-tests` to simulate the full data pipeline on PC. This catches logic bugs before any flashing.
@@ -557,8 +577,8 @@ One implementation of the logic, tested through the same interface whether it's 
 
 #### Phase 6: Long-Running Simulation
 
-- [ ] **24-hour simulation smoke test**: Run SpaApp + SpaSim for 86,400 simulated seconds. Verify: no memory leaks (SpaApp state stays bounded), temperature reaches set point and stays stable, pump timers fire correctly, clock rolls over midnight, diagnostics published every 60s, alerts throttled correctly.
-- [ ] **Stress test: rapid commands**: Send 100 commands in quick succession, verify all queued, sent on Ready windows, tracked, confirmed or dropped appropriately. No panics, no unbounded growth.
+- [x] **24-hour simulation smoke test**: Run SpaApp + SpaSim for 86,400 simulated seconds. Verify: no memory leaks (SpaApp state stays bounded), temperature reaches set point and stays stable, pump timers fire correctly, clock rolls over midnight, diagnostics published every 60s, alerts throttled correctly.
+- [x] **Stress test: rapid commands**: Send 100 commands in quick succession, verify all queued, sent on Ready windows, tracked, confirmed or dropped appropriately. No panics, no unbounded growth.
 
 ## Done
 

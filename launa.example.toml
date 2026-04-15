@@ -5,6 +5,9 @@
 #
 # All xtask commands will fail with a clear error if required fields
 # are missing or still set to placeholder values.
+#
+# Provisioning (one-time per device):
+#   cargo xtask provision    — burns AES-128 key to ESP32 eFuse BLOCK3 for encrypted NVS
 
 [wifi]
 ssid = "YourWiFiName"          # required

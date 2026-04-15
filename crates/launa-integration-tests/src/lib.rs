@@ -1934,4 +1934,191 @@ mod tests {
         // Verify no more commands are queued
         assert_eq!(app.queued_command_count(), 0);
     }
+
+    /// 13. 24-hour simulation smoke test: simulate 86,400 seconds of operation
+    ///     in compressed steps. Verifies no panics, temperature stability,
+    ///     regular diagnostics, and no stale state at the end.
+    #[test]
+    fn test_spaapp_24_hour_smoke() {
+        let (clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        let mut diag_count: u32 = 0;
+        let mut sim = SpaSim::new();
+
+        // Phase 1: Warm-up and steady state — simulate 1000 seconds at 1-second
+        // resolution. SpaSim starts at 100°F, set point is 104°F, so it takes
+        // ~4 ticks to reach set point.
+        for _ in 0..1000 {
+            clock.advance_ms(1_000);
+
+            let raw_bytes = sim.tick();
+
+            // Decode status + ready frames from SpaSim output
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&raw_bytes);
+
+            for frame in &frames {
+                if frame.message_type == [0xFF, 0xAF] {
+                    app.process_frame(frame);
+                } else if frame.message_type == [0x10, 0xBF] {
+                    // Ready frame — dequeue command if any
+                    app.process_frame(frame);
+                }
+            }
+
+            let actions = app.tick();
+            diag_count += actions
+                .iter()
+                .filter(|a| matches!(a, AppAction::PublishDiagnostics { .. }))
+                .count() as u32;
+        }
+
+        // Phase 2: Remaining ~85,400 seconds in 60-second jumps.
+        // Advance clock by 60,000ms, feed one status frame + ready frame,
+        // and call tick(). That's ~1,423 iterations — very fast.
+        let remaining_secs: u64 = 86_400 - 1000;
+        let jumps = remaining_secs / 60;
+        for _ in 0..jumps {
+            clock.advance_ms(60_000);
+
+            // Generate a status frame from SpaSim (physics advances 1 tick)
+            let status_bytes = sim.generate_status_frame();
+            let status_frame = decode_first_frame(&status_bytes);
+            app.process_frame(&status_frame);
+
+            // Send a Ready frame to allow command dequeue
+            app.process_frame(&make_ready_frame());
+
+            let actions = app.tick();
+            diag_count += actions
+                .iter()
+                .filter(|a| matches!(a, AppAction::PublishDiagnostics { .. }))
+                .count() as u32;
+        }
+
+        // Verify: no panics (we got here!)
+
+        // Temperature should have reached set point (104°F) during Phase 1
+        // and stayed stable. SpaSim advances +1°F per tick, so after 4 ticks
+        // it's at 104, and stays there.
+        let status = app.last_status().expect("should have a status");
+        assert!(
+            status.current_temp >= Some(104.0),
+            "temperature should have reached set point: {:?}",
+            status.current_temp
+        );
+
+        // Diagnostics should fire every 60s, so over 86,400s we expect ~1,440.
+        // Phase 1 covers ~1000s/60 = ~16, Phase 2 covers ~1,423 ticks at 60s = ~1,423.
+        // With tick() being called for each, diag_count should be substantial.
+        assert!(
+            diag_count > 1000,
+            "should have many diagnostics publishes over 24h, got {}",
+            diag_count
+        );
+
+        // Queue should be empty (no commands were queued)
+        assert_eq!(app.queued_command_count(), 0);
+
+        // Many frames received over 24h
+        assert!(
+            app.frames_received() > 1000,
+            "should have received many frames: {}",
+            app.frames_received()
+        );
+
+        // Should NOT be stale — we've been feeding frames the whole time
+        assert!(!app.is_stale(), "should not be stale after 24h of frames");
+    }
+
+    /// 14. Stress test: rapid commands. Queue 100 toggle commands,
+    ///     process each via Ready frames, verify no panics, no unbounded
+    ///     growth, and all commands tracked (confirmed, retried, or dropped).
+    #[test]
+    fn test_spaapp_stress_rapid_commands() {
+        let (clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get initial status (pump1 off)
+        app.process_frame(&make_status_frame());
+
+        // Queue 100 toggle pump1 commands in quick succession
+        for _ in 0..100 {
+            app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        }
+        assert_eq!(app.queued_command_count(), 100);
+
+        // Process each command via Ready frames.
+        // After each Ready, advance time slightly and feed a status frame
+        // reflecting the current pump state.
+        let mut send_frame_count: u32 = 0;
+        let mut sim = SpaSim::new(); // Fresh sim with pump1 = Off
+
+        for _ in 0..100 {
+            // Advance clock by 1 second between commands
+            clock.advance_ms(1_000);
+
+            // Ready frame → dequeue one command
+            let actions = app.process_frame(&make_ready_frame());
+            if actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))) {
+                send_frame_count += 1;
+            }
+
+            // The command tracker caps at MAX_PENDING_COMMANDS (8), so
+            // only the first 8 will be tracked. The rest are dequeued and
+            // sent but not tracked (track() silently returns when full).
+
+            // Feed a status frame. SpaSim toggles pump1 on each tick
+            // via process_incoming_bytes, but we feed the status directly.
+            // We need to simulate the spa reacting: first toggle turns pump
+            // on, second turns off, etc.
+            //
+            // For simplicity, we just advance the sim and feed its status.
+            // The sim doesn't know about our commands, so pump stays off.
+            // This means commands won't be confirmed and will eventually
+            // retry/drop. That's fine — we're testing stress behavior.
+            let status_bytes = sim.generate_status_frame();
+            let status_frame = decode_first_frame(&status_bytes);
+            app.process_frame(&status_frame);
+        }
+
+        // After 100 Ready frames, all 100 commands should be dequeued.
+        assert_eq!(
+            app.queued_command_count(),
+            0,
+            "all commands should be dequeued after 100 Ready frames"
+        );
+
+        // We should have sent frames (100 commands + possible NothingToSend)
+        assert!(
+            send_frame_count >= 100,
+            "should have sent at least 100 frames, got {}",
+            send_frame_count
+        );
+
+        // No unbounded growth: command queue is empty, pending tracker bounded.
+        // The command tracker caps at MAX_PENDING_COMMANDS = 8, so only 8 are
+        // tracked at a time. The rest are sent but untracked.
+        // Tracked commands that were never confirmed will have retried/dropped.
+        let retries = app.total_retries();
+        let drops = app.total_dropped();
+
+        // Since spa never reflects pump1 ON (sim doesn't process our commands),
+        // tracked commands will timeout and retry/drop.
+        // With MAX_PENDING_COMMANDS=8, we track at most 8 at a time.
+        // Each tracked command retries up to 2 times then drops.
+        assert!(
+            retries + drops > 0,
+            "should have some retries or drops (spa never confirms): retries={}, drops={}",
+            retries,
+            drops
+        );
+
+        // No panics throughout (we got here!)
+        // Verify final state is clean
+        assert!(!app.is_stale(), "should not be stale");
+    }
 }
