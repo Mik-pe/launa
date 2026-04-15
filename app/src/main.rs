@@ -421,6 +421,7 @@ async fn main(spawner: Spawner) {
     let mut last_status_time: Instant = Instant::now();
     let mut last_probe_time: Instant = Instant::now();
     let mut was_stale: bool = false;
+    let mut registration_started_at: Option<Instant> = None;
 
     loop {
         // Wait for a frame from the UART task
@@ -438,6 +439,7 @@ async fn main(spawner: Spawner) {
             &mut last_status_time,
             &mut last_probe_time,
             &mut was_stale,
+            &mut registration_started_at,
         ).await;
 
         // Drain all available frames
@@ -455,7 +457,19 @@ async fn main(spawner: Spawner) {
                 &mut last_status_time,
                 &mut last_probe_time,
                 &mut was_stale,
+                &mut registration_started_at,
             ).await;
+        }
+
+        // ── Registration timeout ────────────────────────────────────
+        if !registration.is_registered() {
+            if let Some(started) = registration_started_at {
+                if started.elapsed() >= Duration::from_secs(5) {
+                    warn!("Registration timeout (5s), resetting to try again");
+                    registration.reset();
+                    registration_started_at = None;
+                }
+            }
         }
 
         // Drain pump timer commands
@@ -509,6 +523,7 @@ async fn handle_frame(
     last_status_time: &mut Instant,
     last_probe_time: &mut Instant,
     was_stale: &mut bool,
+    registration_started_at: &mut Option<Instant>,
 ) {
     // ── Registration ────────────────────────────────────────────────
     if !registration.is_registered() {
@@ -517,11 +532,13 @@ async fn handle_frame(
             RegistrationAction::SendIdRequest => {
                 send_frame([0xFE, 0xBF], &[0x01, 0x02, 0xF1, 0x73]).await;
                 debug!("Sent registration ID request");
+                *registration_started_at = Some(Instant::now());
             }
             RegistrationAction::SendIdAck { client_id: id } => {
                 send_frame([id, 0xBF], &[0x03]).await;
                 *client_id = Some(id);
                 info!("Registered with client ID: {}", id);
+                *registration_started_at = None;
             }
             RegistrationAction::None => {}
         }
@@ -587,7 +604,9 @@ async fn handle_frame(
             }
         }
         IncomingMessage::NewClientQuery => {
-            debug!("New client query -- may need re-registration");
+            info!("Bus reset detected (NewClientQuery), re-registering");
+            registration.reset();
+            *client_id = None;
         }
         IncomingMessage::ClientIdAssignment { id } => {
             info!("Client ID assigned: {}", id);
