@@ -674,7 +674,7 @@ Code review of `launa-ota` and the broader simulation/test infrastructure identi
 
 ### Integration Tests: Error Path Coverage
 
-- [ ] **Add FrameDecoder stress test with realistic byte streams** (`crates/launa-integration-tests/src/lib.rs`): Feed FrameDecoder with: (1) many 0x7E bytes in a row (bus idle), (2) frames split at every possible byte boundary, (3) corrupted frames interleaved with valid ones, (4) frames with all 0x7D escape bytes in payload. Verifies the decoder never panics, never loses sync, and recovers from corruption to find the next valid frame.
+- [x] **Add FrameDecoder stress test with realistic byte streams** (`crates/launa-integration-tests/src/lib.rs`): Feed FrameDecoder with: (1) many 0x7E bytes in a row (bus idle), (2) frames split at every possible byte boundary, (3) corrupted frames interleaved with valid ones, (4) frames with all 0x7D escape bytes in payload. Verifies the decoder never panics, never loses sync, and recovers from corruption to find the next valid frame.
 - [ ] **Add registration race condition test** (`crates/launa-integration-tests/src/lib.rs`): Test that commands arriving during registration (before client ID assigned) are correctly queued and sent after registration completes. Currently untested — real firmware receives MQTT commands at any time.
 - [ ] **Add multi-command queue drain test** (`crates/launa-integration-tests/src/lib.rs`): Queue 5+ commands, verify they drain one-per-Ready-window in FIFO order. Verify that NothingToSend is sent when queue empties. Test the bounded capacity cap (MAX_PENDING_COMMANDS=8) by queuing 9 commands and verifying the 9th is rejected.
 

@@ -1637,6 +1637,210 @@ mod tests {
     }
 
     // ========================================================================
+    // Test Group J: FrameDecoder Stress Tests
+    // ========================================================================
+    //
+    // Stress tests for FrameDecoder under adverse conditions: bus idle,
+    // split boundaries, corruption, and all-escape payloads.
+
+    /// Bus idle: 1000 consecutive 0x7E bytes → no panic, no spurious frames,
+    /// then a valid frame decoded correctly.
+    #[test]
+    fn test_frame_decoder_bus_idle_0x7e() {
+        let mut decoder = FrameDecoder::new();
+
+        // Feed 1000 consecutive 0x7E bytes (bus idle / flag bytes)
+        let idle_bytes = vec![0x7Eu8; 1000];
+        let frames = decoder.feed_slice(&idle_bytes);
+
+        // No spurious frames produced
+        assert_eq!(
+            frames.len(),
+            0,
+            "1000 idle 0x7E bytes should not produce any frames"
+        );
+
+        // No CRC errors (idle bytes are just flag characters, not corrupt frames)
+        assert_eq!(
+            decoder.crc_error_count(),
+            0,
+            "idle 0x7E bytes should not cause CRC errors"
+        );
+
+        // Now feed a valid frame — should decode correctly
+        let frame = Frame {
+            message_type: [0xFF, 0xAF],
+            payload: vec![0x42; 24],
+        };
+        let encoded = frame.encode();
+        let valid_frames = decoder.feed_slice(&encoded);
+
+        assert_eq!(
+            valid_frames.len(),
+            1,
+            "valid frame after idle should decode"
+        );
+        assert_eq!(valid_frames[0].message_type, [0xFF, 0xAF]);
+        assert_eq!(valid_frames[0].payload, vec![0x42; 24]);
+    }
+
+    /// Split at every byte boundary: frame split at byte 0, 1, 2, ..., len-1
+    /// → all decode successfully.
+    #[test]
+    fn test_frame_decoder_split_every_boundary() {
+        let frame = Frame {
+            message_type: [0xFF, 0xAF],
+            payload: vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08],
+        };
+        let encoded = frame.encode();
+
+        // Try every possible split point
+        for split_at in 0..encoded.len() {
+            let mut decoder = FrameDecoder::new();
+
+            // Feed first part
+            let first_part = &encoded[..split_at];
+            let frames1 = decoder.feed_slice(first_part);
+            // Partial feed should not produce a complete frame (unless the split
+            // happens to fall right after a complete frame's end marker)
+            assert!(
+                frames1.is_empty(),
+                "split_at={}: first part should not yield complete frames",
+                split_at
+            );
+
+            // Feed second part
+            let second_part = &encoded[split_at..];
+            let frames2 = decoder.feed_slice(second_part);
+
+            assert_eq!(
+                frames2.len(),
+                1,
+                "split_at={}: second part should yield exactly one frame",
+                split_at
+            );
+            assert_eq!(
+                frames2[0].message_type,
+                [0xFF, 0xAF],
+                "split_at={}: message type should match",
+                split_at
+            );
+            assert_eq!(
+                frames2[0].payload,
+                vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08],
+                "split_at={}: payload should match",
+                split_at
+            );
+        }
+    }
+
+    /// Corrupt interleaved: corrupt frame (bad CRC) then valid frame →
+    /// corrupt rejected (crc_error_count++), valid decoded.
+    #[test]
+    fn test_frame_decoder_corrupt_then_valid() {
+        let mut decoder = FrameDecoder::new();
+
+        // Build a valid frame, then corrupt the CRC
+        let frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: vec![0x01, 0x02, 0x03],
+        };
+        let mut corrupt_encoded = frame.encode();
+        // Corrupt the CRC byte (second-to-last byte before the end marker)
+        let crc_idx = corrupt_encoded.len() - 2;
+        corrupt_encoded[crc_idx] ^= 0xFF;
+
+        // Feed the corrupt frame
+        let corrupt_frames = decoder.feed_slice(&corrupt_encoded);
+        assert_eq!(
+            corrupt_frames.len(),
+            0,
+            "corrupt frame should not produce a valid frame"
+        );
+        assert_eq!(
+            decoder.crc_error_count(),
+            1,
+            "corrupt frame should increment CRC error count"
+        );
+
+        // Now feed a valid frame — should decode correctly despite prior corruption
+        let valid_frame = Frame {
+            message_type: [0xFF, 0xAF],
+            payload: vec![0xAA, 0xBB, 0xCC],
+        };
+        let valid_encoded = valid_frame.encode();
+        let valid_frames = decoder.feed_slice(&valid_encoded);
+
+        assert_eq!(
+            valid_frames.len(),
+            1,
+            "valid frame after corrupt should decode"
+        );
+        assert_eq!(valid_frames[0].message_type, [0xFF, 0xAF]);
+        assert_eq!(valid_frames[0].payload, vec![0xAA, 0xBB, 0xCC]);
+
+        // CRC error count should remain at 1 (not incremented by valid frame)
+        assert_eq!(
+            decoder.crc_error_count(),
+            1,
+            "CRC error count should still be 1 after valid frame"
+        );
+    }
+
+    /// All-escape payload: frame with payload bytes all needing 0x7D escape
+    /// → decoded with correct unescaped content.
+    #[test]
+    fn test_frame_decoder_all_escape_payload() {
+        // Construct a payload consisting entirely of bytes that need escaping:
+        // 0x7E (frame marker) and 0x7D (escape character)
+        let payload: Vec<u8> = vec![
+            0x7E, 0x7D, 0x7E, 0x7D, 0x7E, 0x7D, 0x7E, 0x7D, 0x7E, 0x7D, 0x7E, 0x7D, 0x7E, 0x7D,
+            0x7E, 0x7D,
+        ];
+
+        let frame = Frame {
+            message_type: [0xFF, 0xAF],
+            payload: payload.clone(),
+        };
+        let encoded = frame.encode();
+
+        // Verify the encoded form actually contains escape sequences
+        assert!(
+            encoded.iter().filter(|&&b| b == 0x7D).count() > 0,
+            "encoded frame should contain escape sequences"
+        );
+
+        // Verify the inner content (between markers) is longer than the
+        // original payload due to escaping
+        let inner = &encoded[1..encoded.len() - 1];
+        let original_inner_len = 1 + 2 + payload.len() + 1; // length + type + payload + crc
+        assert!(
+            inner.len() > original_inner_len,
+            "escaped inner content ({}) should be longer than original ({})",
+            inner.len(),
+            original_inner_len
+        );
+
+        // Decode the frame
+        let mut decoder = FrameDecoder::new();
+        let decoded_frames = decoder.feed_slice(&encoded);
+
+        assert_eq!(decoded_frames.len(), 1, "should decode exactly one frame");
+        assert_eq!(
+            decoded_frames[0].message_type,
+            [0xFF, 0xAF],
+            "message type should match"
+        );
+        assert_eq!(
+            decoded_frames[0].payload, payload,
+            "payload should match original (all escape bytes unescaped correctly)"
+        );
+
+        // No CRC errors
+        assert_eq!(decoder.crc_error_count(), 0);
+    }
+
+    // ========================================================================
     // Test Group I: SpaApp Integration Tests (launa-core)
     // ========================================================================
     //
