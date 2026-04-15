@@ -164,7 +164,7 @@ Full logical review of all 12 source files in `app/src/`. Issues ordered by seve
 
 ### High
 
-- [ ] **WiFi reconnect signal fires on initial connect** (`app/src/wifi.rs:56-58`): `WIFI_RECONNECT_SIGNAL.signal(())` is called on every successful WiFi connect, including the very first one. This races with the MQTT task, which may see the signal and disconnect an already-connected MQTT session on boot. The signal should only fire on reconnections, not the first connection.
+- [x] **WiFi reconnect signal fires on initial connect** (`app/src/wifi.rs:56-58`): Fixed — added `first_connect` flag; `WIFI_RECONNECT_SIGNAL` only signals on reconnections, not the initial connect.
 - [x] **MQTT loss reconnect uses fixed 5s backoff, no exponential backoff** (`app/src/main.rs`): Added exponential backoff (5s→10s→20s→40s→60s cap) matching the WiFi-reconnect strategy, with alert after 3 failures throttled to 60s and max 10 attempts log message.
 - [ ] **`send_connect` reads CONNACK in a single TCP read** (`app/src/mqtt_client.rs:288-291`): Only one `transport.read()` call is issued for CONNACK. If the TCP stack hasn't received the full packet yet, partial data causes a false connection failure. Same issue in `subscribe()` for SUBACK. Should loop until enough bytes are received.
 
@@ -172,7 +172,7 @@ Full logical review of all 12 source files in `app/src/`. Issues ordered by seve
 
 - [x] **`config::save` ignores NVS write errors** (`app/src/config.rs`): Added `nvs_set()` helper that logs `warn!()` on failure. All 7 NVS writes now report failures instead of silently discarding errors.
 - [ ] **Heap allocator churn from fault `String` in `STATE_CHANNEL`** (`app/src/main.rs:85, 440`): `(StatusUpdate, Option<String>, bool)` is sent ~1/sec through the channel. The `Option<String>` (fault log) is cloned every time even when `None`. Each `StatusUpdate::clone()` also allocates. On a 32 KiB heap, this allocator churn risks fragmentation over long uptimes.
-- [ ] **Duplicated `TopicBuilder::new()` calls in `mqtt_task`** (`app/src/main.rs:153, 184, 200`): `TopicBuilder` is reconstructed multiple times per loop iteration. `diag_topic` and `cmd_base` are cached but alert topics are rebuilt. Should use a single instance.
+- [x] **Duplicated `TopicBuilder::new()` calls in `mqtt_task`** (`app/src/main.rs:153, 184, 200`): Fixed — `alert_topic` is now cached alongside `diag_topic` and `cmd_base` at the top of `mqtt_task`. No more per-iteration reconstruction.
 - [x] **Magic number `12345` as network stack seed** (`app/src/wifi.rs`): Replaced hardcoded seed with `((rng.random() as u64) << 32) | (rng.random() as u64)` using the `Rng` peripheral that was previously unused. Improves DHCP transaction ID randomness.
 - [x] **`WIFI_DISCONNECT_COUNT` is misleading** (`app/src/main.rs`): Renamed to `MQTT_LOSS_COUNT` and updated all references including diagnostics JSON field (`mqtt_loss_count`). Counter was incremented on MQTT connection loss, not WiFi disconnect.
 - [x] **`validate_http_status` has redundant length check** (`app/src/ota.rs`): Removed duplicate `if headers.len() < 12` check that was dead code after the first identical check.
@@ -261,7 +261,7 @@ These must be resolved before `cargo xtask ota-flash` can work end-to-end on a r
 
 - [x] **`config-flash` sends text config over serial, but firmware has no serial config parser** (`xtask/src/config_flash.rs`, `app/src/main.rs`): Added serial config receiver to the `hw-test` feature. After hardware tests, the firmware waits for `CONFIG_START`, parses key=value lines, writes to NVS via `AppConfig::save()`, and responds with `CONFIG_OK` or `CONFIG_ERROR:reason`. 30-second timeout. Maps dotted keys (`wifi.ssid`) to NVS keys (`wifi_ssid`).
 - [ ] **No bootstrap path for blank ESP32**: A fresh ESP32 has empty NVS. Firmware boots with placeholder defaults (`YOUR_WIFI_SSID` / `192.168.1.100`) and will never connect to WiFi or MQTT. Need one of: (a) working `config-flash` via serial, (b) `espflash` NVS write, or (c) compile-time config injection for first flash. Without this, the first flash is a brick until serial debug is attached.
-- [ ] **`launa.example.toml` missing `[ota] host` field**: The `[ota]` section in the example config doesn't show the `host` field. Update it so new users know the option exists.
+- [x] **`launa.example.toml` missing `[ota] host` field**: Already present — `host = ""` with comment documented under `[ota]` section.
 
 ### App Build Verification
 

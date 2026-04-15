@@ -24,12 +24,18 @@ pub struct WifiStack {
 
 #[embassy_executor::task]
 async fn connection_task(mut controller: WifiController<'static>) {
+    let mut first_connect = true;
     loop {
         match controller.connect_async().await {
             Ok(()) => {
                 info!("WiFi connected");
                 // Signal WiFi reconnect so MQTT task can force a clean reconnect
-                WIFI_RECONNECT_SIGNAL.signal(());
+                // Only signal on reconnections, not the initial connect, to avoid
+                // racing with MQTT and disconnecting an already-connected session.
+                if !first_connect {
+                    WIFI_RECONNECT_SIGNAL.signal(());
+                }
+                first_connect = false;
                 loop {
                     if !controller.is_connected().unwrap_or(false) {
                         break;

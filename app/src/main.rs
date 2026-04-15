@@ -139,6 +139,7 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
     let topics = TopicBuilder::new(&mqtt.device_id);
     let diag_topic = topics.diagnostics_topic();
     let cmd_base = topics.command_topic();
+    let alert_topic = topics.alert_topic();
     let mut last_scale_range: Option<(launa_protocol::status::TemperatureScale, launa_protocol::status::TempRange)> = None;
 
     info!("MQTT task started");
@@ -204,8 +205,6 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
 
         // Check for alert payloads to publish (non-blocking)
         if let Ok(alert_payload) = alert_rx.try_receive() {
-            let topics = TopicBuilder::new(&mqtt.device_id);
-            let alert_topic = topics.alert_topic();
             if let Err(e) = mqtt.publish(&alert_topic, &alert_payload, 1, false).await {
                 warn!("MQTT alert publish failed: {:?}", e);
             }
