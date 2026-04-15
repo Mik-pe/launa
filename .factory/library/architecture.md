@@ -31,6 +31,6 @@ AppAction::PublishAlert/Diag    → MQTT publish
 - All workspace crates except `launa-sim` are `#![no_std]` with `extern crate alloc`; `launa-sim` is a desktop-only `std` crate
 - All tests run on desktop via `cargo test --workspace`
 - SpaSim defaults produce deterministic output (new features default to off)
-- CommandTracker bounded at MAX_PENDING_COMMANDS=8
+- CommandTracker bounded at MAX_PENDING_COMMANDS=8; command queue drain order is LIFO (Vec::pop — last queued command sent first)
 - Temperature validation: hard upper limit 108°F / 42°C
 - FrameDecoder: CRC-8 + HDLC byte stuffing for 0x7E/0x7D, configurable max_buffer_size (default 512) with overflow protection

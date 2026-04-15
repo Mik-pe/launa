@@ -1,0 +1,79 @@
+{
+  "milestone": "integration-tests",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "cargo test --workspace",
+      "exitCode": 0,
+      "observation": "436 tests passed across all crates (launa-core 17, launa-esp-ota 11, launa-hal 18, launa-integration-tests 86+30, launa-mqtt 53, launa-ota 14, launa-protocol 79+27+17, launa-sim 63, xtask 0, doc-tests 2). 0 failures."
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "cargo check --workspace",
+      "exitCode": 0,
+      "observation": "Workspace compiles cleanly. One pre-existing warning: dead_code for SpaApp::device_id field (launa-core)."
+    },
+    "lint": {
+      "passed": true,
+      "command": "cargo fmt --check",
+      "exitCode": 0,
+      "observation": "No formatting issues found."
+    }
+  },
+  "reviewsSummary": {
+    "total": 4,
+    "passed": 3,
+    "failed": 1,
+    "failedFeatures": ["integration-command-queue-tests"]
+  },
+  "blockingIssues": [],
+  "nonBlockingIssues": [
+    {
+      "featureId": "integration-command-queue-tests",
+      "severity": "non_blocking",
+      "description": "test_multi_command_fifo_drain function name says 'FIFO' but the actual drain order is LIFO (Vec::pop). The test correctly verifies LIFO behavior and the doc comment mentions it, but the function name is misleading. Should be renamed to test_multi_command_lifo_drain or test_multi_command_drain."
+    },
+    {
+      "featureId": "integration-command-queue-tests",
+      "severity": "non_blocking",
+      "description": "test_bounded_command_queue_cap cannot directly verify MAX_PENDING_COMMANDS cap because SpaApp does not expose CommandTracker's pending_count(). The test verifies all 9 commands are sent (command_queue is uncapped) and documents the expected tracker behavior in comments. Value is limited — it primarily verifies no panic and no unbounded growth rather than the actual cap."
+    },
+    {
+      "featureId": "integration-ota-tests",
+      "severity": "non_blocking",
+      "description": "test_ota_graceful_shutdown_happy_path manually calls begin()/write()/finalize()/mark_valid() rather than using the simulate_ota_download helper. Intentional for intermediate state verification."
+    },
+    {
+      "featureId": "integration-ota-tests",
+      "severity": "non_blocking",
+      "description": "test_ota_firmware_size_exceeded allocates ~1.75 MiB for MAX_FIRMWARE_SIZE bytes. Consistent with existing unit test pattern but notably slow."
+    },
+    {
+      "featureId": "integration-frame-decoder-stress",
+      "severity": "non_blocking",
+      "description": "test_frame_decoder_bus_idle_0x7e function name slightly differs from verificationSteps which says test_frame_decoder_bus_idle. Name is actually more descriptive."
+    },
+    {
+      "featureId": "workspace-regression-check",
+      "severity": "non_blocking",
+      "description": "TASKS.md has 3 unchecked items (lines 687, 693, 694) that are stale duplicates of completed protocol-cleanup work. Should be checked off."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Added note about SpaApp command queue drain order (LIFO via Vec::pop) to architecture.md invariants section.",
+      "sourceFeature": "integration-command-queue-tests"
+    }
+  ],
+  "suggestedGuidanceUpdates": [],
+  "rejectedObservations": [
+    {
+      "observation": "SpaApp lacks public accessor for CommandTracker pending_count, making cap behavior untestable in integration tests.",
+      "reason": "already-documented — this is a known API design choice, not a documentation gap. Adding an accessor would change the production API for test-only purposes."
+    }
+  ],
+  "previousRound": null
+}
