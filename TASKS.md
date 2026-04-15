@@ -158,7 +158,7 @@ Full logical review of all 12 source files in `app/src/`. Issues ordered by seve
 
 ### Critical
 
-- [ ] **Unsafe aliasing of `mk_static!` socket buffers in `MqttClient`** (`app/src/mqtt_client.rs:197-203, 226-233`): `connect()` and `reconnect()` cast `&'static mut [u8; 1024]` through a raw pointer to create a new `&'static mut [u8]`. This creates a second mutable reference to the same memory while the `StaticCell`'s permanent `&'static mut` still exists — undefined behavior under Rust's aliasing rules. Works in practice due to single-tasked access, but should use `UnsafeCell` wrappers or `MaybeUninit` + manual initialization instead of `StaticCell` for buffers that need reborrowing.
+- [x] **Unsafe aliasing of `mk_static!` socket buffers in `MqttClient`** (`app/src/mqtt_client.rs`): Replaced raw pointer casts with `UnsafeCell<[u8; 1024]>` wrappers. Struct fields changed from `&'static mut [u8; 1024]` to `&'static UnsafeCell<[u8; 1024]>`. Both `connect()` and `reconnect()` use `UnsafeCell::get()` instead of raw pointer aliasing.
 - [x] **OTA TCP socket buffer leak on failure** (`app/src/ota.rs`): Introduced `OtaBuffers` struct that holds the 4 KiB rx + 1 KiB tx TCP socket buffers as struct fields, allocated once at startup. `perform_ota_update` reuses the buffers across calls, preventing 5 KiB leak per failed OTA.
 - [ ] **Partition table has only 8 KiB margin** (`app/partitions.csv`): `ota_1` ends at 0x3E0000 in 4 MiB flash (0x400000). Any future partition addition will overflow. Tight but currently correct.
 
@@ -171,7 +171,7 @@ Full logical review of all 12 source files in `app/src/`. Issues ordered by seve
 ### Moderate
 
 - [x] **`config::save` ignores NVS write errors** (`app/src/config.rs`): Added `nvs_set()` helper that logs `warn!()` on failure. All 7 NVS writes now report failures instead of silently discarding errors.
-- [ ] **Heap allocator churn from fault `String` in `STATE_CHANNEL`** (`app/src/main.rs:85, 440`): `(StatusUpdate, Option<String>, bool)` is sent ~1/sec through the channel. The `Option<String>` (fault log) is cloned every time even when `None`. Each `StatusUpdate::clone()` also allocates. On a 32 KiB heap, this allocator churn risks fragmentation over long uptimes.
+- [x] **Heap allocator churn from fault `String` in `STATE_CHANNEL`** (`app/src/main.rs`): Replaced `Option<alloc::string::String>` with `FaultBuf` — a fixed `[u8; 64]` buffer with length prefix. `FaultBuf` implements `Copy`/`Clone` (zero heap allocation). STATE_CHANNEL now carries `(StatusUpdate, FaultBuf, bool)` instead of `(StatusUpdate, Option<String>, bool)`. Eliminates ~1 heap alloc/free per second on the 32 KiB heap.
 - [x] **Duplicated `TopicBuilder::new()` calls in `mqtt_task`** (`app/src/main.rs:153, 184, 200`): Fixed — `alert_topic` is now cached alongside `diag_topic` and `cmd_base` at the top of `mqtt_task`. No more per-iteration reconstruction.
 - [x] **Magic number `12345` as network stack seed** (`app/src/wifi.rs`): Replaced hardcoded seed with `((rng.random() as u64) << 32) | (rng.random() as u64)` using the `Rng` peripheral that was previously unused. Improves DHCP transaction ID randomness.
 - [x] **`WIFI_DISCONNECT_COUNT` is misleading** (`app/src/main.rs`): Renamed to `MQTT_LOSS_COUNT` and updated all references including diagnostics JSON field (`mqtt_loss_count`). Counter was incremented on MQTT connection loss, not WiFi disconnect.
@@ -266,7 +266,7 @@ These must be resolved before `cargo xtask ota-flash` can work end-to-end on a r
 ### App Build Verification
 
 - [ ] **Verify `app/` compiles for `xtensa-esp32-none-elf`**: The app has never been cross-compiled on this machine. Need to install the Xtensa toolchain (`rustup target add xtensa-esp32-none-elf` via esp-rs/rust-build) and run `cd app && cargo +esp build` successfully. This is the real "does it link" gate.
-- [ ] **Ensure `app/.cargo/config.toml` has target triple**: `espflash` and `cargo build` need `[build] target = "xtensa-esp32-none-elf"` in `app/.cargo/config.toml`. If missing, both `cargo xtask flash` and `cargo xtask ota-flash` will fail.
+- [x] **Ensure `app/.cargo/config.toml` has target triple**: Already present — `[build] target = "xtensa-esp32-none-elf"` with `build-std = ["core", "alloc"]`. Verified.
 - [ ] **Install `cargo-espflash` and USB drivers**: Phase 0 prerequisite. Install CP210x or CH340 VCP driver for the ESP-WROOM-32 dev board. Run `cargo install cargo-espflash --locked`. Verify with `cargo espflash board-info --chip esp32`.
 
 ## P2: Documentation Cleanup
@@ -533,7 +533,7 @@ One implementation of the logic, tested through the same interface whether it's 
 
 #### Phase 4: Desktop Integration Tests via `SpaApp`
 
-- [ ] **Replace `SpaController` with `SpaApp` in integration tests**: The current `launa-sim/src/controller.rs` `SpaController` is a simplified parallel implementation. Replace it with the real `SpaApp`. Tests now exercise the exact same code path as the ESP32.
+- [x] **Replace `SpaController` with `SpaApp` in integration tests**: Added Test Group I with 12 new tests in `launa-integration-tests` using `SpaApp` from `launa-core`. Tests cover: command ACK/confirm, retry/drop, stale detection, hold mode timeout, pump timer expiry, diagnostics, registration timeout, bus reset re-registration, temperature (not validated in SpaApp), concurrent operations, fault log capture, Ready-window queuing. Total integration tests: 71 (59 existing + 12 new).
 - [ ] **Test: command ACK and confirmation**: Send toggle → verify `AppAction::SendFrame` → spa applies toggle → next status → verify no retry.
 - [ ] **Test: command retry on spa ignore**: Send toggle → spa does NOT apply → advance time past 5s → verify retry `AppAction::SendFrame` → still ignored → advance again → verify second retry → still ignored → verify command dropped.
 - [ ] **Test: stale detection flow**: Normal operation → stop sending spa ticks → advance time 5s → verify `AppAction::SendFrame` (config probe) → advance to 30s → verify `AppAction::PublishAvailability { stale }` + `AppAction::PublishAlert` → resume ticks → verify `AppAction::PublishAvailability { online }` recovery.

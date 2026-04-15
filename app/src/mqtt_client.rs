@@ -10,6 +10,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::format;
 use alloc::string::ToString;
+use core::cell::UnsafeCell;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{IpAddress, IpEndpoint, Ipv4Address, Stack};
 use embassy_time::{Duration, Instant, Timer};
@@ -78,8 +79,10 @@ pub struct MqttClient {
     transport: Option<TcpTransport>,
     stack: &'static Stack<'static>,
     /// TCP socket buffers reused across reconnects to avoid leaking static memory.
-    socket_rx_buf: &'static mut [u8; 1024],
-    socket_tx_buf: &'static mut [u8; 1024],
+    /// Wrapped in `UnsafeCell` so we can safely reborrow the interior via `get_mut()`
+    /// after dropping the previous `TcpSocket`, without raw-pointer aliasing UB.
+    socket_rx_buf: &'static UnsafeCell<[u8; 1024]>,
+    socket_tx_buf: &'static UnsafeCell<[u8; 1024]>,
     pub device_id: String,
     keep_alive: u16,
     config_host: String,
@@ -140,15 +143,16 @@ impl MqttClient {
         stack: &'static Stack<'static>,
         config: &AppConfig,
     ) -> Result<Self, MqttError> {
-        // Allocate socket buffers once — reused across reconnects.
-        let socket_rx_buf = mk_static!([u8; 1024], [0u8; 1024]);
-        let socket_tx_buf = mk_static!([u8; 1024], [0u8; 1024]);
+        // Allocate socket buffers once — wrapped in UnsafeCell so we can safely
+        // reborrow across reconnects without raw-pointer aliasing UB.
+        let socket_rx_buf = mk_static!(UnsafeCell<[u8; 1024]>, UnsafeCell::new([0u8; 1024]));
+        let socket_tx_buf = mk_static!(UnsafeCell<[u8; 1024]>, UnsafeCell::new([0u8; 1024]));
 
-        // SAFETY: This is the first and only borrow of these buffers at this
-        // point. The TcpSocket borrows them, and when it's dropped in
-        // reconnect(), we'll reborrow from the stored fields.
-        let rx: &'static mut [u8] = unsafe { &mut *(socket_rx_buf as *mut [u8; 1024] as *mut [u8]) };
-        let tx: &'static mut [u8] = unsafe { &mut *(socket_tx_buf as *mut [u8; 1024] as *mut [u8]) };
+        // SAFETY: This is the first and only borrow of these buffers. The
+        // TcpSocket borrows them, and when it's dropped in reconnect(), we'll
+        // reborrow from the stored UnsafeCell fields via get_mut().
+        let rx: &'static mut [u8] = unsafe { &mut *socket_rx_buf.get() };
+        let tx: &'static mut [u8] = unsafe { &mut *socket_tx_buf.get() };
         let mut socket = TcpSocket::new(*stack, rx, tx);
         socket.set_timeout(Some(Duration::from_secs(10)));
 
@@ -256,13 +260,10 @@ impl MqttClient {
         self.transport.take();
 
         // SAFETY: The old TcpSocket was dropped above. We are the only task
-        // accessing these buffers. Reborrow them for the new socket.
-        let rx: &'static mut [u8] = unsafe {
-            &mut *(self.socket_rx_buf as *mut [u8; 1024] as *mut [u8])
-        };
-        let tx: &'static mut [u8] = unsafe {
-            &mut *(self.socket_tx_buf as *mut [u8; 1024] as *mut [u8])
-        };
+        // accessing these buffers. Use UnsafeCell::get() to obtain a fresh
+        // mutable reference without raw-pointer aliasing UB.
+        let rx: &'static mut [u8] = unsafe { &mut *self.socket_rx_buf.get() };
+        let tx: &'static mut [u8] = unsafe { &mut *self.socket_tx_buf.get() };
         let mut socket = TcpSocket::new(*self.stack, rx, tx);
         socket.set_timeout(Some(Duration::from_secs(10)));
 

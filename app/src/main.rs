@@ -14,6 +14,33 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
+
+/// Fixed-size fault string buffer to avoid heap allocation in STATE_CHANNEL.
+/// Fault log messages are typically ~40 chars; 64 bytes is sufficient.
+#[derive(Debug, Clone, Copy)]
+struct FaultBuf {
+    data: [u8; 64],
+    len: u8,
+}
+
+impl FaultBuf {
+    const EMPTY: FaultBuf = FaultBuf { data: [0u8; 64], len: 0 };
+
+    fn from_str(s: &str) -> Self {
+        let to_copy = s.len().min(63);
+        let mut buf = [0u8; 64];
+        buf[..to_copy].copy_from_slice(&s.as_bytes()[..to_copy]);
+        FaultBuf { data: buf, len: to_copy as u8 }
+    }
+
+    fn as_str(&self) -> Option<&str> {
+        if self.len == 0 {
+            None
+        } else {
+            core::str::from_utf8(&self.data[..self.len as usize]).ok()
+        }
+    }
+}
 use embassy_executor::Spawner;
 use embassy_sync::channel::Channel;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -76,7 +103,7 @@ fn init_heap() {
 static FRAME_CHANNEL: Channel<CriticalSectionRawMutex, Frame, 4> = Channel::new();
 static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
 static UART_TX_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
-static STATE_CHANNEL: Channel<CriticalSectionRawMutex, (StatusUpdate, Option<alloc::string::String>, bool), 2> = Channel::new();
+static STATE_CHANNEL: Channel<CriticalSectionRawMutex, (StatusUpdate, FaultBuf, bool), 2> = Channel::new();
 static PUMP_TIMER_CHANNEL: Channel<CriticalSectionRawMutex, (u8, u32), 4> = Channel::new();
 static DIAGNOSTICS_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 2> = Channel::new();
 static OTA_CHANNEL: Channel<CriticalSectionRawMutex, alloc::string::String, 1> = Channel::new();
@@ -214,7 +241,7 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
         // Check for state updates to publish (non-blocking)
         if let Ok((status, fault, is_stale)) = state_rx.try_receive() {
             last_scale_range = Some((status.temperature_scale, status.temp_range));
-            if let Err(e) = mqtt.publish_state(&status, fault.as_deref()).await {
+            if let Err(e) = mqtt.publish_state(&status, fault.as_str()).await {
                 warn!("MQTT state publish failed: {:?}", e);
             }
             if is_stale {
@@ -405,7 +432,8 @@ async fn execute_actions(actions: &[AppAction], device_id: &str) {
                 fault,
                 recovering_from_stale,
             } => {
-                let _ = STATE_CHANNEL.try_send((status.clone(), fault.clone(), *recovering_from_stale));
+                let fb = fault.as_ref().map_or(FaultBuf::EMPTY, |s| FaultBuf::from_str(s));
+                let _ = STATE_CHANNEL.try_send((status.clone(), fb, *recovering_from_stale));
             }
             AppAction::PublishStaleAvailability => {
                 // Stale availability is handled by the MQTT task when it sees

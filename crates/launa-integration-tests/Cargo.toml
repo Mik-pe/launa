@@ -9,6 +9,7 @@ launa-mqtt = { path = "../launa-mqtt", features = ["std"] }
 launa-ota = { path = "../launa-ota" }
 launa-sim = { path = "../launa-sim" }
 launa-hal = { path = "../launa-hal", features = ["std"] }
+launa-core = { path = "../launa-core" }
 serde_json = { workspace = true }
 
 [[test]]

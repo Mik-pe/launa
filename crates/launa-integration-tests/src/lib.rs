@@ -1433,4 +1433,505 @@ mod tests {
         assert!(ota.valid);
         assert!(ota.firmware_data.is_empty());
     }
+
+    // ========================================================================
+    // Test Group I: SpaApp Integration Tests (launa-core)
+    // ========================================================================
+    //
+    // These tests use `launa_core::SpaApp` — the REAL extracted firmware logic —
+    // instead of `launa_sim::SpaController`. Tests exercise the exact same code
+    // path as the ESP32 main loop: feed frames, advance virtual time, assert on
+    // returned `Vec<AppAction>`.
+
+    use launa_core::{AppAction, SpaApp};
+    use launa_sim::VirtualClock;
+
+    /// Helper: create a leaked VirtualClock + SpaApp pair for testing.
+    /// The clock is leaked to satisfy the `'static` lifetime needed by SpaApp.
+    fn make_spaapp() -> (&'static VirtualClock, SpaApp<'static>) {
+        let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
+        let app = SpaApp::new("test_spa", clock);
+        (clock, app)
+    }
+
+    /// Helper: a standard status frame (0xFF 0xAF) with 24-byte payload.
+    fn make_status_frame() -> Frame {
+        let mut payload = vec![0u8; 24];
+        payload[2] = 100; // current temp
+        payload[20] = 104; // set temp
+        Frame {
+            message_type: [0xFF, 0xAF],
+            payload,
+        }
+    }
+
+    /// Helper: a Ready frame (0x10 0xBF).
+    fn make_ready_frame() -> Frame {
+        Frame {
+            message_type: [0x10, 0xBF],
+            payload: vec![0x06],
+        }
+    }
+
+    /// Helper: a NewClientQuery frame (0xFE 0xBF 0x00).
+    fn make_new_client_query_frame() -> Frame {
+        Frame {
+            message_type: [0xFE, 0xBF],
+            payload: vec![0x00],
+        }
+    }
+
+    /// Helper: a ClientIdAssignment frame (0xFE 0xBF 0x02 <id>).
+    fn make_client_id_assignment_frame(id: u8) -> Frame {
+        Frame {
+            message_type: [0xFE, 0xBF],
+            payload: vec![0x02, id],
+        }
+    }
+
+    /// Helper: decode raw bytes from SpaSim into parsed Frame.
+    fn decode_first_frame(bytes: &[u8]) -> Frame {
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(bytes);
+        assert!(!frames.is_empty(), "expected at least one frame");
+        frames.into_iter().next().unwrap()
+    }
+
+    /// 1. Command ack and confirmation: send toggle via on_mqtt_command() →
+    ///    verify AppAction::SendFrame on Ready → spa applies toggle in next status →
+    ///    verify no retry.
+    #[test]
+    fn test_spaapp_command_ack_and_confirmation() {
+        let (_clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get an initial status so the tracker has a pre_status
+        app.process_frame(&make_status_frame());
+
+        // Queue toggle pump1 via MQTT
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Ready arrives → command is dequeued and sent
+        let actions = app.process_frame(&make_ready_frame());
+        let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(has_send, "should send command on Ready");
+        assert_eq!(app.queued_command_count(), 0);
+
+        // Simulate spa applying the toggle: status with pump1 = Low
+        let mut sim = SpaSim::new();
+        sim.state.pumps[0] = PumpState::Low;
+        let status_frame = decode_first_frame(&sim.generate_status_frame());
+
+        let actions = app.process_frame(&status_frame);
+        // Should publish state; no retry since the command is confirmed
+        let has_state = actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishState { .. }));
+        assert!(has_state);
+        assert_eq!(
+            app.total_retries(),
+            0,
+            "no retries expected on confirmation"
+        );
+        assert_eq!(app.total_dropped(), 0, "no drops expected on confirmation");
+    }
+
+    /// 2. Command retry on ignore: send toggle → spa does NOT apply (same status) →
+    ///    advance time past 5s → verify retry SendFrame → still ignored →
+    ///    advance again → verify second retry → still ignored →
+    ///    verify command dropped (check app.total_drops() > 0).
+    #[test]
+    fn test_spaapp_command_retry_on_ignore() {
+        let (clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Initial status (pump off)
+        app.process_frame(&make_status_frame());
+
+        // Queue and send toggle pump1 on Ready
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        app.process_frame(&make_ready_frame());
+
+        // Advance past 5s timeout, but spa returns same status (pump still off)
+        clock.advance_ms(6_000);
+        let actions = app.process_frame(&make_status_frame());
+
+        // Should have retried: look for SendFrame action
+        let has_retry_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(has_retry_send, "should retry on first timeout");
+        assert!(app.total_retries() > 0);
+
+        // Advance again past 5s, still same status → second retry
+        clock.advance_ms(6_000);
+        let actions = app.process_frame(&make_status_frame());
+        let has_second_retry = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(has_second_retry, "should retry on second timeout");
+
+        // Advance again past 5s, still same status → max retries exceeded, command dropped
+        clock.advance_ms(6_000);
+        app.process_frame(&make_status_frame());
+        assert!(
+            app.total_dropped() > 0,
+            "command should be dropped after max retries"
+        );
+    }
+
+    /// 3. Stale detection flow: normal operation → stop sending spa frames →
+    ///    advance time 5s → call tick() → verify AppAction::SendFrame (config probe) →
+    ///    advance to 30s → verify AppAction::PublishStaleAvailability + AppAction::PublishAlert →
+    ///    resume status frames → verify recovery.
+    #[test]
+    fn test_spaapp_stale_detection_flow() {
+        let (clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Normal operation: receive status
+        app.process_frame(&make_status_frame());
+        assert!(!app.is_stale());
+
+        // Stop sending frames, advance 6s → probe
+        clock.advance_ms(6_000);
+        let actions = app.tick();
+        let has_probe = actions
+            .iter()
+            .any(|a| matches!(a, AppAction::SendFrame(bytes) if !bytes.is_empty()));
+        assert!(has_probe, "should send config probe at 5s");
+
+        // Advance to 31s total since last status → stale
+        clock.advance_ms(25_000);
+        let actions = app.tick();
+        let has_stale_avail = actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishStaleAvailability));
+        let has_alert = actions.iter().any(|a| {
+            matches!(
+                a,
+                AppAction::PublishAlert { message, .. } if message == "spa_communication_lost"
+            )
+        });
+        assert!(has_stale_avail, "should publish stale availability at 30s");
+        assert!(has_alert, "should publish stale alert at 30s");
+        assert!(app.is_stale());
+
+        // Resume status frames → recover
+        let actions = app.process_frame(&make_status_frame());
+        assert!(!app.is_stale());
+        let recovering = actions.iter().any(|a| {
+            matches!(
+                a,
+                AppAction::PublishState {
+                    recovering_from_stale: true,
+                    ..
+                }
+            )
+        });
+        assert!(recovering, "should indicate stale recovery");
+    }
+
+    /// 4. Hold mode safety timeout: enter hold mode → advance 60 minutes via
+    ///    VirtualClock → verify AppAction::SendFrame (hold toggle to clear).
+    #[test]
+    fn test_spaapp_hold_mode_safety_timeout() {
+        let (clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Normal status first (no hold)
+        app.process_frame(&make_status_frame());
+
+        // Status with hold mode active (payload[0] == 0x05)
+        let mut hold_frame = make_status_frame();
+        hold_frame.payload[0] = 0x05;
+        app.process_frame(&hold_frame);
+
+        // Advance past 60 min hold timeout
+        clock.advance_ms(61 * 60 * 1000);
+
+        // Send another status with hold still active → timer should fire
+        let actions = app.process_frame(&hold_frame);
+        let has_toggle = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(
+            has_toggle,
+            "should send hold toggle after 60 min safety timeout"
+        );
+    }
+
+    /// 5. Pump timer expiry: start pump timer → advance virtual time →
+    ///    verify auto-off toggle sent at exact duration.
+    #[test]
+    fn test_spaapp_pump_timer_expiry() {
+        let (clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Start pump 1 timer for 1 minute
+        let actions = app.start_pump_timer(1, 1);
+        assert!(
+            actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))),
+            "start_pump_timer should return toggle-on action"
+        );
+
+        // Status with pump1 running (Low)
+        let mut status = make_status_frame();
+        status.payload[11] = 0x01; // Pump 1 = Low
+        app.process_frame(&status);
+
+        // Advance past 1 minute
+        clock.advance_ms(61_000);
+
+        // Next status should trigger auto-off toggle
+        let actions = app.process_frame(&status);
+        let has_auto_off = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(has_auto_off, "should auto-off pump after timer expiry");
+    }
+
+    /// 6. Diagnostics periodic: run app with clock advanced past 60s →
+    ///    verify AppAction::PublishDiagnostics fires with correct counter values.
+    #[test]
+    fn test_spaapp_diagnostics_periodic() {
+        let (clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Receive a few status frames to increment counters
+        app.process_frame(&make_status_frame());
+        app.process_frame(&make_status_frame());
+        assert_eq!(app.frames_received(), 2);
+
+        // Advance past diagnostics interval (60s)
+        clock.advance_ms(61_000);
+
+        let actions = app.tick();
+        let diag = actions.iter().find_map(|a| match a {
+            AppAction::PublishDiagnostics {
+                uptime_secs,
+                frames_received,
+                command_retries,
+                command_drops,
+            } => Some((
+                *uptime_secs,
+                *frames_received,
+                *command_retries,
+                *command_drops,
+            )),
+            _ => None,
+        });
+        assert!(diag.is_some(), "should publish diagnostics at 60s");
+        let (uptime, frames, retries, drops) = diag.unwrap();
+        assert_eq!(uptime, 61);
+        assert_eq!(frames, 2);
+        assert_eq!(retries, 0);
+        assert_eq!(drops, 0);
+    }
+
+    /// 7. Registration timeout: start registration → no spa response →
+    ///    advance 5s → verify AppAction::PublishAlert (registration_timeout) and state reset.
+    #[test]
+    fn test_spaapp_registration_timeout() {
+        let (clock, app) = make_spaapp();
+        let mut app = app;
+
+        // Start registration by receiving a NewClientQuery
+        let actions = app.process_frame(&make_new_client_query_frame());
+        assert!(
+            actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))),
+            "should send ID request on NewClientQuery"
+        );
+        assert!(!app.is_registered());
+
+        // Advance past registration timeout (5s)
+        clock.advance_ms(6_000);
+
+        let actions = app.tick();
+        let has_timeout_alert = actions.iter().any(|a| {
+            matches!(
+                a,
+                AppAction::PublishAlert { message, .. } if message == "registration_timeout"
+            )
+        });
+        assert!(
+            has_timeout_alert,
+            "should publish registration_timeout alert"
+        );
+        assert!(!app.is_registered());
+    }
+
+    /// 8. Bus reset re-registration: fully registered and running →
+    ///    spa sends NewClientQuery frame → verify SpaApp resets registration.
+    #[test]
+    fn test_spaapp_bus_reset_reregistration() {
+        let (_clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+        assert!(app.is_registered());
+        assert_eq!(app.client_id(), Some(0x03));
+
+        // Receive a status to confirm normal operation
+        app.process_frame(&make_status_frame());
+
+        // Bus reset: spa sends NewClientQuery
+        let actions = app.process_frame(&make_new_client_query_frame());
+        assert!(!app.is_registered(), "should reset registration");
+        assert_eq!(app.client_id(), None, "client_id should be cleared");
+        // No SendFrame is produced at this point (it goes through dispatch,
+        // which resets registration). The next NewClientQuery triggers re-registration.
+        assert!(actions.is_empty());
+
+        // Re-registration: next NewClientQuery starts the flow
+        let actions = app.process_frame(&make_new_client_query_frame());
+        let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(has_send, "should send ID request on re-registration");
+    }
+
+    /// 9. Temperature validation rejection: SpaApp doesn't validate temperature
+    ///    bounds internally — validation happens at the MQTT command parser level.
+    ///    This test verifies that SpaApp accepts any temperature from on_mqtt_command
+    ///    and queues it without validation.
+    #[test]
+    fn test_spaapp_temperature_not_validated_in_app() {
+        let (_clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get initial status
+        app.process_frame(&make_status_frame());
+
+        // SetTemperature(106) — out of typical range but SpaApp accepts it
+        app.on_mqtt_command(Command::SetTemperature(106));
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Ready → sends the command without validation
+        let actions = app.process_frame(&make_ready_frame());
+        let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(
+            has_send,
+            "SpaApp should send SetTemperature without validation"
+        );
+    }
+
+    /// 10. Concurrent operations: toggle pump + set temp + change heating mode →
+    ///     verify all tracked, all confirmed when status reflects changes.
+    #[test]
+    fn test_spaapp_concurrent_operations() {
+        let (_clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Initial status (pump off, set temp 104, heating mode Ready)
+        app.process_frame(&make_status_frame());
+
+        // Queue 3 concurrent commands
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        app.on_mqtt_command(Command::SetTemperature(102));
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::HeatingMode));
+        assert_eq!(app.queued_command_count(), 3);
+
+        // Each is sent one per Ready window
+        let actions1 = app.process_frame(&make_ready_frame());
+        assert!(actions1
+            .iter()
+            .any(|a| matches!(a, AppAction::SendFrame(_))));
+        assert_eq!(app.queued_command_count(), 2);
+
+        let actions2 = app.process_frame(&make_ready_frame());
+        assert!(actions2
+            .iter()
+            .any(|a| matches!(a, AppAction::SendFrame(_))));
+        assert_eq!(app.queued_command_count(), 1);
+
+        let actions3 = app.process_frame(&make_ready_frame());
+        assert!(actions3
+            .iter()
+            .any(|a| matches!(a, AppAction::SendFrame(_))));
+        assert_eq!(app.queued_command_count(), 0);
+
+        // Status arrives reflecting all changes: pump1=Low, set_temp=102, heating_mode=Rest
+        let mut sim = SpaSim::new();
+        sim.state.pumps[0] = PumpState::Low;
+        sim.state.set_temp = 102.0;
+        sim.state.heating_mode = HeatingMode::Rest;
+        let status_frame = decode_first_frame(&sim.generate_status_frame());
+
+        let actions = app.process_frame(&status_frame);
+        // All commands should be confirmed (no retries, no drops)
+        assert_eq!(app.total_retries(), 0, "no retries expected");
+        assert_eq!(app.total_dropped(), 0, "no drops expected");
+        let has_state = actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishState { .. }));
+        assert!(has_state, "should publish state after confirmation");
+    }
+
+    /// 11. Fault log captured: send fault log frame → verify last_fault() returns
+    ///     a fault string, and the next PublishState includes the fault.
+    #[test]
+    fn test_spaapp_fault_log_captured() {
+        let (_clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get a status first
+        app.process_frame(&make_status_frame());
+
+        // Simulate fault log response from spa
+        let fault_frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: vec![
+                0x28, 0x03, 0x01, 0x1B, 0x02, 0x0E, 0x1E, 0x04, 0x68, 0x68, 0x66,
+            ],
+        };
+        app.process_frame(&fault_frame);
+        assert!(app.last_fault().is_some(), "should capture fault log");
+
+        // Next status should include fault in PublishState
+        let actions = app.process_frame(&make_status_frame());
+        let has_fault_in_state = actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishState { fault: Some(_), .. }));
+        assert!(
+            has_fault_in_state,
+            "next PublishState should include fault string"
+        );
+    }
+
+    /// 12. Ready window command queuing: queue 3 commands → verify only one sent
+    ///     per Ready → verify NothingToSend when queue empty.
+    #[test]
+    fn test_spaapp_ready_window_command_queuing() {
+        let (_clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get initial status
+        app.process_frame(&make_status_frame());
+
+        // Queue 3 commands
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump2));
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump3));
+        assert_eq!(app.queued_command_count(), 3);
+
+        // First Ready → send pump1, queue now has 2
+        app.process_frame(&make_ready_frame());
+        assert_eq!(app.queued_command_count(), 2);
+
+        // Second Ready → send pump2, queue now has 1
+        app.process_frame(&make_ready_frame());
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Third Ready → send pump3, queue now has 0
+        app.process_frame(&make_ready_frame());
+        assert_eq!(app.queued_command_count(), 0);
+
+        // Fourth Ready → send NothingToSend (no commands left)
+        let actions = app.process_frame(&make_ready_frame());
+        let has_nts = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(has_nts, "should send NothingToSend when queue is empty");
+        // Verify no more commands are queued
+        assert_eq!(app.queued_command_count(), 0);
+    }
 }
