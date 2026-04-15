@@ -100,6 +100,7 @@ pub struct FrameDecoder {
     in_frame: bool,
     escape_next: bool,
     crc_error_count: u32,
+    max_buffer_size: usize,
 }
 
 impl FrameDecoder {
@@ -109,7 +110,19 @@ impl FrameDecoder {
             in_frame: false,
             escape_next: false,
             crc_error_count: 0,
+            max_buffer_size: 512,
         }
+    }
+
+    /// Builder method to set a custom max buffer size.
+    pub fn with_max_buffer(mut self, size: usize) -> Self {
+        self.max_buffer_size = size;
+        self
+    }
+
+    /// Returns the configured max buffer size.
+    pub fn max_buffer_size(&self) -> usize {
+        self.max_buffer_size
     }
 
     /// Feed a single byte. Returns `Some(Frame)` when a complete frame is decoded.
@@ -143,6 +156,15 @@ impl FrameDecoder {
             } else {
                 self.buffer.push(byte);
             }
+
+            // Check buffer overflow after pushing
+            if self.buffer.len() > self.max_buffer_size {
+                self.buffer.clear();
+                self.in_frame = false;
+                self.escape_next = false;
+                self.crc_error_count += 1;
+            }
+
             None
         } else {
             None
@@ -309,6 +331,89 @@ mod tests {
         // Reset and verify return value + counter reset
         let returned = decoder.reset_crc_error_count();
         assert_eq!(returned, 2);
+        assert_eq!(decoder.crc_error_count(), 0);
+    }
+
+    #[test]
+    fn test_decoder_default_max_buffer() {
+        let decoder = FrameDecoder::new();
+        assert_eq!(decoder.max_buffer_size(), 512);
+    }
+
+    #[test]
+    fn test_decoder_custom_max_buffer() {
+        let decoder = FrameDecoder::new().with_max_buffer(256);
+        assert_eq!(decoder.max_buffer_size(), 256);
+    }
+
+    #[test]
+    fn test_decoder_buffer_overflow_resets() {
+        let mut decoder = FrameDecoder::new().with_max_buffer(10);
+
+        // Start a frame with 0x7E, then feed garbage data beyond the limit
+        decoder.feed(FRAME_MARKER);
+        for i in 0..12 {
+            decoder.feed(0x40 + (i % 10) as u8); // non-marker, non-escape bytes
+        }
+
+        // Buffer should have been cleared on overflow, state reset, crc_error_count incremented
+        assert_eq!(decoder.crc_error_count(), 1);
+    }
+
+    #[test]
+    fn test_decoder_overflow_then_valid_frame() {
+        let mut decoder = FrameDecoder::new().with_max_buffer(10);
+
+        // Trigger overflow with garbage data
+        decoder.feed(FRAME_MARKER);
+        for i in 0..12 {
+            decoder.feed(0x40 + (i % 10) as u8);
+        }
+        assert_eq!(decoder.crc_error_count(), 1);
+
+        // Now feed a valid frame — should decode successfully
+        let frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: vec![0x04],
+        };
+        let encoded = frame.encode();
+
+        let mut results = Vec::new();
+        for &byte in &encoded {
+            if let Some(f) = decoder.feed(byte) {
+                results.push(f);
+            }
+        }
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].message_type, [0x0A, 0xBF]);
+        assert_eq!(results[0].payload, vec![0x04]);
+    }
+
+    #[test]
+    fn test_decoder_exact_buffer_fill_works() {
+        // Create a frame whose inner content (between markers) is exactly 8 bytes
+        // Frame inner: [length, type_hi, type_lo, payload..., crc] = 8 bytes
+        // payload = 8 - 4 = 4 bytes
+        let frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: vec![0x01, 0x02, 0x03, 0x04],
+        };
+        let encoded = frame.encode();
+
+        // Set max buffer to exactly the inner frame size
+        // Count inner bytes (between markers)
+        let inner_len = encoded.len() - 2; // strip start and end markers
+        let mut decoder = FrameDecoder::new().with_max_buffer(inner_len);
+
+        // Feed the encoded frame — should decode fine since buffer.len() == max (not >)
+        let mut results = Vec::new();
+        for &byte in &encoded {
+            if let Some(f) = decoder.feed(byte) {
+                results.push(f);
+            }
+        }
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], frame);
         assert_eq!(decoder.crc_error_count(), 0);
     }
 }
