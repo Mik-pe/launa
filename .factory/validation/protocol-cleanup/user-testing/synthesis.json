@@ -1,0 +1,86 @@
+{
+  "milestone": "protocol-cleanup",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 9,
+    "passed": 9,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-PROTO-001",
+    "VAL-PROTO-002",
+    "VAL-PROTO-003",
+    "VAL-PROTO-004",
+    "VAL-PROTO-005",
+    "VAL-PROTO-006",
+    "VAL-PROTO-007",
+    "VAL-PROTO-008",
+    "VAL-PROTO-009"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null,
+  "evidence": {
+    "VAL-PROTO-001": {
+      "tool": "cargo check + grep",
+      "commands": [
+        { "command": "cargo check --workspace", "exitCode": 0, "observation": "Workspace compiles cleanly with no errors" },
+        { "command": "rg MessageType crates/", "exitCode": 1, "observation": "Zero hits - MessageType fully removed from all crates" }
+      ]
+    },
+    "VAL-PROTO-002": {
+      "tool": "cargo test -p launa-protocol + code inspection",
+      "commands": [
+        { "command": "cargo test -p launa-protocol -- test_dispatch_warns_on_status_parse_failure test_dispatch_warns_on_config_parse_failure", "exitCode": 0, "observation": "Both warn-on-parse-failure tests pass" }
+      ],
+      "codeEvidence": "10 log::warn! calls found in dispatcher.rs, covering every Err(_) arm in dispatch_frame()"
+    },
+    "VAL-PROTO-003": {
+      "tool": "cargo test -p launa-protocol",
+      "commands": [
+        { "command": "cargo test -p launa-protocol", "exitCode": 0, "observation": "All 79 unit + 27 fuzz + 17 property = 123 tests pass without modification" }
+      ]
+    },
+    "VAL-PROTO-004": {
+      "tool": "cargo test -p launa-protocol",
+      "commands": [
+        { "command": "cargo test -p launa-protocol -- test_decoder_default_max_buffer test_decoder_custom_max_buffer", "exitCode": 0, "observation": "Default 512 and custom 256 buffer tests pass" }
+      ]
+    },
+    "VAL-PROTO-005": {
+      "tool": "cargo test -p launa-protocol",
+      "commands": [
+        { "command": "cargo test -p launa-protocol -- test_decoder_buffer_overflow_resets test_decoder_overflow_then_valid_frame", "exitCode": 0, "observation": "Overflow resets buffer and increments crc_error_count; valid frame decoded after overflow" }
+      ]
+    },
+    "VAL-PROTO-006": {
+      "tool": "cargo test -p launa-protocol",
+      "commands": [
+        { "command": "cargo test -p launa-protocol", "exitCode": 0, "observation": "All existing frame::tests pass without modification (79 unit tests pass)" }
+      ]
+    },
+    "VAL-PROTO-007": {
+      "tool": "cargo test -p launa-protocol + code inspection",
+      "commands": [
+        { "command": "cargo test -p launa-protocol -- test_parse_config_pump5_correct_bits", "exitCode": 0, "observation": "Pump5 correctly reads bits 2-3 (TwoSpeed, SingleSpeed, None all verified)" }
+      ],
+      "codeEvidence": "config.rs line 46: pump_configs[5] = decode_pump((payload[6] >> 2) & 0x03)"
+    },
+    "VAL-PROTO-008": {
+      "tool": "cargo test -p launa-protocol + grep",
+      "commands": [
+        { "command": "cargo test -p launa-protocol -- test_parse_status_pumps_and_circ_blower", "exitCode": 0, "observation": "Test passes with dead code removed" },
+        { "command": "rg 'payload[11] = 0x09' crates/launa-protocol/src/status.rs", "exitCode": 1, "observation": "Zero hits - dead code line removed" }
+      ]
+    },
+    "VAL-PROTO-009": {
+      "tool": "cargo test -p launa-protocol",
+      "commands": [
+        { "command": "cargo test -p launa-protocol", "exitCode": 0, "observation": "All 123 tests pass (79 unit + 27 fuzz + 17 property), no regressions" }
+      ]
+    }
+  }
+}
