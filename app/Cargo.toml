@@ -35,8 +35,6 @@ embassy-futures = "0.1"
 
 embedded-io-async = "0.6"
 
-rust-mqtt = { version = "0.5", default-features = false, features = ["v5", "alloc", "log-level-info"] }
-
 static_cell = "2"
 log = "0.4"
 

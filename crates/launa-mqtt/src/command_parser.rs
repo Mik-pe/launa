@@ -13,6 +13,9 @@ const ALLOWED_SUBTOPICS: &[&str] = &[
     "pump1",
     "pump2",
     "pump3",
+    "pump1_timer",
+    "pump2_timer",
+    "pump3_timer",
     "light1",
     "blower",
     "heat_mode",
@@ -32,6 +35,8 @@ pub enum ParseResult {
     UnknownSubtopic(String),
     /// The payload could not be parsed.
     InvalidPayload(String),
+    /// A pump timer command: start pump N for M minutes.
+    TimerPump { minutes: u32, pump_index: u8 },
 }
 
 /// Parse an incoming MQTT message into a `Command` with allowlist enforcement.
@@ -71,6 +76,9 @@ pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8]) -> P
         "pump1" => parse_toggle(payload_str, ToggleItem::Pump1),
         "pump2" => parse_toggle(payload_str, ToggleItem::Pump2),
         "pump3" => parse_toggle(payload_str, ToggleItem::Pump3),
+        "pump1_timer" => parse_pump_timer(payload_str, 1),
+        "pump2_timer" => parse_pump_timer(payload_str, 2),
+        "pump3_timer" => parse_pump_timer(payload_str, 3),
         "light1" => parse_toggle(payload_str, ToggleItem::Light1),
         "blower" => parse_toggle(payload_str, ToggleItem::Blower),
         "heat_mode" => parse_toggle(payload_str, ToggleItem::HeatingMode),
@@ -122,6 +130,20 @@ fn parse_toggle(payload: &str, item: ToggleItem) -> ParseResult {
     match payload {
         "true" | "false" => ParseResult::Valid(Command::ToggleItem(item)),
         _ => ParseResult::InvalidPayload(format!("expected 'true' or 'false', got: {:?}", payload)),
+    }
+}
+
+fn parse_pump_timer(payload: &str, pump_index: u8) -> ParseResult {
+    match payload.parse::<u32>() {
+        Ok(minutes) if minutes > 0 && minutes <= 120 => {
+            ParseResult::TimerPump { minutes, pump_index }
+        }
+        Ok(minutes) => {
+            ParseResult::InvalidPayload(format!(
+                "timer minutes must be 1-120, got: {}", minutes
+            ))
+        }
+        Err(_) => ParseResult::InvalidPayload(format!("not a number: {:?}", payload)),
     }
 }
 

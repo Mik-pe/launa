@@ -1,4 +1,8 @@
-//! MQTT v5 client over embassy-net TCP using rust-mqtt.
+//! MQTT v5 client over embassy-net TCP.
+//!
+//! Hand-rolled MQTT v5 protocol implementation. Handles: connect with
+//! username/password, publish (QoS 0/1), subscribe, keepalive PINGREQ,
+//! incoming PUBACK, packet reassembly, and reconnect.
 
 extern crate alloc;
 
@@ -7,7 +11,7 @@ use alloc::vec::Vec;
 use alloc::format;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{IpAddress, IpEndpoint, Ipv4Address, Stack};
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use embedded_io_async::{self, Read, Write, ErrorType};
 use launa_mqtt::topics::TopicBuilder;
 use launa_mqtt::command_parser::{self, ParseResult};
@@ -17,6 +21,14 @@ use launa_protocol::status::StatusUpdate;
 use log::{info, warn, debug, error};
 
 use crate::config::AppConfig;
+
+// ── MQTT action type (command vs timer) ────────────────────────────────
+
+#[derive(Debug)]
+pub enum MqttAction {
+    Command(Command),
+    StartPumpTimer { pump: u8, minutes: u32 },
+}
 
 // ── TCP transport wrapper ──────────────────────────────────────────────
 
@@ -57,9 +69,20 @@ impl Write for TcpTransport {
 
 // ── MQTT client ────────────────────────────────────────────────────────
 
+const DEFAULT_KEEP_ALIVE_SECS: u16 = 30;
+
 pub struct MqttClient {
     transport: TcpTransport,
+    stack: &'static Stack<'static>,
     device_id: String,
+    keep_alive: u16,
+    config_host: String,
+    config_port: u16,
+    config_user: String,
+    config_password: String,
+    next_packet_id: u16,
+    last_outgoing: Instant,
+    rx_buffer: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -71,10 +94,13 @@ pub enum MqttError {
 }
 
 /// Parse incoming MQTT command using launa-mqtt's command parser.
-/// Returns a Command only for valid commands; logs and drops invalid ones.
-pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8]) -> Option<Command> {
+pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8]) -> Option<MqttAction> {
     match command_parser::parse_command(command_topic_base, topic, payload) {
-        ParseResult::Valid(cmd) => Some(cmd),
+        ParseResult::Valid(cmd) => Some(MqttAction::Command(cmd)),
+        ParseResult::TimerPump { minutes, pump_index } => {
+            info!("MQTT pump timer: pump {} for {} min", pump_index, minutes);
+            Some(MqttAction::StartPumpTimer { pump: pump_index, minutes })
+        }
         ParseResult::TemperatureOutOfRange { raw_value, .. } => {
             warn!("MQTT command rejected: temperature {} out of range", raw_value);
             None
@@ -95,7 +121,6 @@ impl MqttClient {
         stack: &'static Stack<'static>,
         config: &AppConfig,
     ) -> Result<Self, MqttError> {
-        // 1. Allocate TCP socket with buffers
         let mut rx_buf = [0u8; 1024];
         let mut tx_buf = [0u8; 1024];
         let mut socket = TcpSocket::new(stack, &mut rx_buf, &mut tx_buf);
@@ -114,80 +139,142 @@ impl MqttClient {
 
         let transport = TcpTransport::new(socket);
 
-        // 2. Send MQTT CONNECT packet (v5)
         let mut client = MqttClient {
             transport,
+            stack,
             device_id: config.device_id.clone(),
+            keep_alive: DEFAULT_KEEP_ALIVE_SECS,
+            config_host: config.mqtt_host.clone(),
+            config_port: config.mqtt_port,
+            config_user: config.mqtt_user.clone(),
+            config_password: config.mqtt_password.clone(),
+            next_packet_id: 1,
+            last_outgoing: Instant::now(),
+            rx_buffer: Vec::new(),
         };
 
         let client_id = format!("launa_{}", config.device_id);
         let topics = TopicBuilder::new(&config.device_id);
         let avail_topic = topics.availability_topic();
+        let username = if client.config_user.is_empty() { None } else { Some(client.config_user.as_str()) };
+        let password = if client.config_password.is_empty() { None } else { Some(client.config_password.as_str()) };
 
-        // MQTT v5 CONNECT: fixed header + variable header + payload
-        // We build the raw bytes manually for minimal dependencies
-        client.send_connect(&client_id, &avail_topic).await?;
+        client.send_connect(&client_id, &avail_topic, username, password).await?;
 
         info!("MQTT connected to {}:{}", config.mqtt_host, config.mqtt_port);
         Ok(client)
+    }
+
+    fn allocate_packet_id(&mut self) -> u16 {
+        let id = self.next_packet_id;
+        self.next_packet_id = self.next_packet_id.wrapping_add(1);
+        if self.next_packet_id == 0 {
+            self.next_packet_id = 1;
+        }
+        id
+    }
+
+    async fn send_bytes(&mut self, data: &[u8]) -> Result<(), MqttError> {
+        self.transport.write_all(data).await.map_err(|_| MqttError::PublishFailed)?;
+        self.last_outgoing = Instant::now();
+        Ok(())
+    }
+
+    pub async fn maybe_ping(&mut self) -> Result<(), MqttError> {
+        let half_keepalive = Duration::from_secs(self.keep_alive as u64 / 2);
+        if self.last_outgoing.elapsed() >= half_keepalive {
+            debug!("MQTT sending PINGREQ (keepalive)");
+            self.send_bytes(&[0xC0, 0x00]).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn reconnect(&mut self) -> Result<(), MqttError> {
+        info!("MQTT reconnecting to {}:{}...", self.config_host, self.config_port);
+
+        let mut rx_buf = [0u8; 1024];
+        let mut tx_buf = [0u8; 1024];
+        let mut socket = TcpSocket::new(self.stack, &mut rx_buf, &mut tx_buf);
+        socket.set_timeout(Some(Duration::from_secs(10)));
+
+        let addr = parse_ip(&self.config_host).unwrap_or([192, 168, 1, 100]);
+        let endpoint = IpEndpoint {
+            addr: IpAddress::Ipv4(Ipv4Address::from_bytes(&addr)),
+            port: self.config_port,
+        };
+
+        socket.connect(endpoint).await.map_err(|e| {
+            error!("MQTT reconnect TCP failed: {:?}", e);
+            MqttError::ConnectionFailed
+        })?;
+
+        self.transport = TcpTransport::new(socket);
+        self.rx_buffer.clear();
+        self.next_packet_id = 1;
+        self.last_outgoing = Instant::now();
+
+        let client_id = format!("launa_{}", self.device_id);
+        let topics = TopicBuilder::new(&self.device_id);
+        let avail_topic = topics.availability_topic();
+        let username = if self.config_user.is_empty() { None } else { Some(self.config_user.as_str()) };
+        let password = if self.config_password.is_empty() { None } else { Some(self.config_password.as_str()) };
+
+        self.send_connect(&client_id, &avail_topic, username, password).await?;
+
+        info!("MQTT reconnected to {}:{}", self.config_host, self.config_port);
+        Ok(())
     }
 
     async fn send_connect(
         &mut self,
         client_id: &str,
         lwt_topic: &str,
+        username: Option<&str>,
+        password: Option<&str>,
     ) -> Result<(), MqttError> {
-        // MQTT v5 CONNECT packet
-        let connect_flags = 0x02 // Clean start
-            | (1 << 2) // Will flag
-            | (1 << 3) // Will retain
-            | (1 << 4); // Will QoS 1
-        let keep_alive: u16 = 30;
+        let mut connect_flags = 0x02u8
+            | (1 << 2)
+            | (1 << 3)
+            | (1 << 4);
 
-        // Variable header: protocol name + level + connect flags + keep alive + properties
+        if username.is_some() { connect_flags |= 1 << 7; }
+        if password.is_some() { connect_flags |= 1 << 6; }
+
+        let keep_alive = self.keep_alive;
         let mut var_header = Vec::new();
-        // Protocol name: "MQTT"
         var_header.extend_from_slice(&[0x00, 0x04]);
         var_header.extend_from_slice(b"MQTT");
-        var_header.push(0x05); // Protocol level 5
+        var_header.push(0x05);
         var_header.push(connect_flags);
         var_header.extend_from_slice(&keep_alive.to_be_bytes());
-        // Properties length = 0
         var_header.push(0x00);
 
-        // Payload: client ID + LWT topic + LWT properties + LWT payload
         let mut payload = Vec::new();
-        // Client ID
-        let id_bytes = client_id.as_bytes();
-        payload.extend_from_slice(&(id_bytes.len() as u16).to_be_bytes());
-        payload.extend_from_slice(id_bytes);
-        // Will topic
-        let topic_bytes = lwt_topic.as_bytes();
-        payload.extend_from_slice(&(topic_bytes.len() as u16).to_be_bytes());
-        payload.extend_from_slice(topic_bytes);
-        // Will properties length = 0
+        append_lp_string(&mut payload, client_id);
+        append_lp_string(&mut payload, lwt_topic);
         payload.push(0x00);
-        // Will payload: "offline"
         let will_payload = b"offline";
         payload.extend_from_slice(&(will_payload.len() as u16).to_be_bytes());
         payload.extend_from_slice(will_payload);
+        if let Some(user) = username { append_lp_string(&mut payload, user); }
+        if let Some(pass) = password { append_lp_string(&mut payload, pass); }
 
         let remaining_len = var_header.len() + payload.len();
         let mut packet = Vec::new();
-        packet.push(0x10); // CONNECT packet type
+        packet.push(0x10);
         encode_remaining_length(&mut packet, remaining_len);
         packet.extend_from_slice(&var_header);
         packet.extend_from_slice(&payload);
 
-        self.transport.write_all(&packet).await.map_err(|_| MqttError::ConnectionFailed)?;
+        self.send_bytes(&packet).await.map_err(|_| MqttError::ConnectionFailed)?;
 
-        // Read CONNACK
         let mut buf = [0u8; 64];
         let n = self.transport.read(&mut buf).await.map_err(|_| MqttError::ConnectionFailed)?;
         if n < 4 || buf[0] != 0x20 {
             error!("MQTT CONNACK unexpected: {:?}", &buf[..n]);
             return Err(MqttError::ConnectionFailed);
         }
+        self.last_outgoing = Instant::now();
         Ok(())
     }
 
@@ -201,112 +288,142 @@ impl MqttClient {
         let retain_flag = if retain { 0x01 } else { 0x00 };
         let qos_flag = (qos & 0x03) << 1;
         let mut packet = Vec::new();
-        packet.push(0x30 | qos_flag | retain_flag); // PUBLISH
+        packet.push(0x30 | qos_flag | retain_flag);
 
         let topic_bytes = topic.as_bytes();
-        let mut remaining = 2 + topic_bytes.len() + payload.len();
-        if qos > 0 {
-            remaining += 2; // packet identifier
-        }
+        let mut remaining = 2 + topic_bytes.len() + 1 + payload.len();
+        if qos > 0 { remaining += 2; }
         encode_remaining_length(&mut packet, remaining);
-
-        // Topic
         packet.extend_from_slice(&(topic_bytes.len() as u16).to_be_bytes());
         packet.extend_from_slice(topic_bytes);
 
-        // Properties length = 0 (MQTT v5)
-        packet.push(0x00);
+        if qos > 0 {
+            let pkt_id = self.allocate_packet_id();
+            packet.extend_from_slice(&pkt_id.to_be_bytes());
+        }
 
-        // Payload
+        packet.push(0x00);
         packet.extend_from_slice(payload);
 
-        self.transport.write_all(&packet).await.map_err(|_| MqttError::PublishFailed)?;
-        Ok(())
+        self.send_bytes(&packet).await
     }
 
     pub async fn subscribe(&mut self, topic: &str) -> Result<(), MqttError> {
         let mut packet = Vec::new();
-        packet.push(0x82); // SUBSCRIBE
+        packet.push(0x82);
 
         let topic_bytes = topic.as_bytes();
-        let remaining = 2 + 1 + 2 + topic_bytes.len() + 1; // pkt id + prop len + topic filter + sub options
+        let remaining = 2 + 1 + 2 + topic_bytes.len() + 1;
         encode_remaining_length(&mut packet, remaining);
 
-        // Packet identifier
-        packet.extend_from_slice(&1u16.to_be_bytes());
-        // Properties length = 0
+        let pkt_id = self.allocate_packet_id();
+        packet.extend_from_slice(&pkt_id.to_be_bytes());
         packet.push(0x00);
-        // Topic filter
         packet.extend_from_slice(&(topic_bytes.len() as u16).to_be_bytes());
         packet.extend_from_slice(topic_bytes);
-        // Subscription options: QoS 1, no no-local, retain as published, retain handling 0
         packet.push(0x01);
 
-        self.transport.write_all(&packet).await.map_err(|_| MqttError::SubscribeFailed)?;
+        self.send_bytes(&packet).await.map_err(|_| MqttError::SubscribeFailed)?;
 
-        // Read SUBACK (skip)
         let mut buf = [0u8; 32];
         let _ = self.transport.read(&mut buf).await;
-
+        self.last_outgoing = Instant::now();
         Ok(())
     }
 
-    /// Read next incoming PUBLISH message. Returns (topic, payload).
-    /// Handles PINGREQ/PINGRESP internally.
     pub async fn recv(&mut self) -> Option<(String, Vec<u8>)> {
-        let mut buf = [0u8; 512];
         loop {
+            if let Err(e) = self.maybe_ping().await {
+                error!("MQTT keepalive ping failed: {:?}", e);
+                return None;
+            }
+
+            if let Some(packet) = self.try_extract_packet() {
+                return self.process_packet(&packet).await;
+            }
+
+            let mut buf = [0u8; 512];
             let n = match self.transport.read(&mut buf).await {
-                Ok(0) => continue,
+                Ok(0) => {
+                    Timer::after(Duration::from_millis(10)).await;
+                    continue;
+                }
                 Ok(n) => n,
                 Err(_) => return None,
             };
 
-            if n == 0 {
-                continue;
-            }
+            self.rx_buffer.extend_from_slice(&buf[..n]);
+        }
+    }
 
-            let packet_type = buf[0] >> 4;
+    fn try_extract_packet(&mut self) -> Option<Vec<u8>> {
+        if self.rx_buffer.len() < 2 { return None; }
+        let (remaining_len, header_size) = decode_remaining_length(&self.rx_buffer)?;
+        let total_size = header_size + remaining_len;
+        if self.rx_buffer.len() >= total_size {
+            let packet = Vec::from(&self.rx_buffer[..total_size]);
+            self.rx_buffer = Vec::from(&self.rx_buffer[total_size..]);
+            Some(packet)
+        } else {
+            None
+        }
+    }
 
-            match packet_type {
-                // PUBLISH
-                3 => {
-                    let (_header, remaining_start) = decode_remaining_length(&buf);
-                    if remaining_start >= n {
-                        continue;
+    async fn process_packet(&mut self, packet: &[u8]) -> Option<(String, Vec<u8>)> {
+        if packet.is_empty() { return None; }
+        let packet_type = packet[0] >> 4;
+
+        match packet_type {
+            3 => {
+                let first_byte = packet[0];
+                let qos = (first_byte >> 1) & 0x03;
+                let (_remaining, header_size) = decode_remaining_length(packet)?;
+                let mut idx = header_size;
+
+                if idx + 2 > packet.len() { return None; }
+                let topic_len = u16::from_be_bytes([packet[idx], packet[idx + 1]]) as usize;
+                idx += 2;
+                if idx + topic_len > packet.len() { return None; }
+                let topic = String::from(core::str::from_utf8(&packet[idx..idx + topic_len]).unwrap_or(""));
+                idx += topic_len;
+
+                let mut pkt_id: Option<u16> = None;
+                if qos > 0 {
+                    if idx + 2 > packet.len() { return None; }
+                    pkt_id = Some(u16::from_be_bytes([packet[idx], packet[idx + 1]]));
+                    idx += 2;
+                }
+
+                if idx >= packet.len() { return None; }
+                let props_len = packet[idx] as usize;
+                idx += 1 + props_len;
+
+                let payload = if idx < packet.len() {
+                    Vec::from(&packet[idx..])
+                } else {
+                    Vec::new()
+                };
+
+                if qos >= 1 {
+                    if let Some(id) = pkt_id {
+                        let puback = [0x40, 0x02, (id >> 8) as u8, (id & 0xFF) as u8];
+                        if let Err(e) = self.send_bytes(&puback).await {
+                            warn!("Failed to send PUBACK: {:?}", e);
+                        }
                     }
-                    let topic_len = u16::from_be_bytes([buf[remaining_start], buf[remaining_start + 1]]) as usize;
-                    let topic_start = remaining_start + 2;
-                    let topic_end = topic_start + topic_len;
-                    if topic_end > n {
-                        continue;
-                    }
-                    let topic = String::from(core::str::from_utf8(&buf[topic_start..topic_end]).unwrap_or(""));
-                    // Skip properties length byte
-                    let payload_start = topic_end + 1; // skip MQTT v5 properties length
-                    let payload = if payload_start < n {
-                        Vec::from(&buf[payload_start..n])
-                    } else {
-                        Vec::new()
-                    };
-                    return Some((topic, payload));
                 }
-                // PINGRESP
-                13 => {
-                    debug!("MQTT PINGRESP");
-                    continue;
-                }
-                // PINGREQ -> respond with PINGRESP
-                12 => {
-                    let pingresp = [0xD0, 0x00];
-                    let _ = self.transport.write_all(&pingresp).await;
-                    continue;
-                }
-                _ => {
-                    debug!("MQTT packet type {}", packet_type);
-                    continue;
-                }
+
+                Some((topic, payload))
             }
+            4 => { debug!("MQTT PUBACK received"); None }
+            9 => { debug!("MQTT SUBACK received"); None }
+            13 => { debug!("MQTT PINGRESP"); None }
+            12 => {
+                let _ = self.send_bytes(&[0xD0, 0x00]).await;
+                None
+            }
+            14 => { warn!("MQTT DISCONNECT received"); None }
+            _ => { debug!("MQTT packet type {} (unhandled)", packet_type); None }
         }
     }
 
@@ -331,79 +448,64 @@ impl MqttClient {
         let avail_topic = topics.availability_topic();
         let cmd_topic = topics.command_topic();
 
-        // Build common device info JSON fragment
         let device_info = format!(
             r#"{{"identifiers":["{}"],"name":"Launa Spa","manufacturer":"Launa","model":"BP6013G1"}}"#,
             device_id
         );
 
         let configs: Vec<(&str, &str, String)> = alloc::vec![
-            // Temperature sensor
             ("sensor", "temperature", format!(
                 r#"{{"device":{},"name":"Water Temperature","unique_id":"{}_temperature","device_class":"temperature","unit_of_measurement":"°F","state_topic":"{}","value_template":"{{{{value_json.current_temp}}}}","availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, avail_topic
             )),
-            // Set temperature number
             ("number", "set_temperature", format!(
                 r#"{{"device":{},"name":"Set Temperature","unique_id":"{}_set_temp","device_class":"temperature","unit_of_measurement":"°F","min":50,"max":104,"step":1,"state_topic":"{}","command_topic":"{}/set_temperature","value_template":"{{{{value_json.set_temp}}}}","availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            // Heating binary sensor
             ("binary_sensor", "heating", format!(
-                r#"{{"device":{},"name":"Heating","unique_id":"{}_heating","device_class":"heat","state_topic":"{}","value_template":"{{{{value_json.is_heating}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                r#"{{"device":{},"name":"Heating","unique_id":"{}_heating","device_class":"heat","state_topic":"{}","value_template":"{{{{value_json.is_heating}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, avail_topic
             )),
-            // Pump 1 switch
             ("switch", "pump1", format!(
-                r#"{{"device":{},"name":"Pump 1","unique_id":"{}_pump1","state_topic":"{}","command_topic":"{}/pump1","value_template":"{{{{value_json.pump1_on}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                r#"{{"device":{},"name":"Pump 1","unique_id":"{}_pump1","state_topic":"{}","command_topic":"{}/pump1","value_template":"{{{{value_json.pump1_on}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            // Pump 2 switch
             ("switch", "pump2", format!(
-                r#"{{"device":{},"name":"Pump 2","unique_id":"{}_pump2","state_topic":"{}","command_topic":"{}/pump2","value_template":"{{{{value_json.pump2_on}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                r#"{{"device":{},"name":"Pump 2","unique_id":"{}_pump2","state_topic":"{}","command_topic":"{}/pump2","value_template":"{{{{value_json.pump2_on}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            // Pump 3 switch
             ("switch", "pump3", format!(
-                r#"{{"device":{},"name":"Pump 3","unique_id":"{}_pump3","state_topic":"{}","command_topic":"{}/pump3","value_template":"{{{{value_json.pump3_on}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                r#"{{"device":{},"name":"Pump 3","unique_id":"{}_pump3","state_topic":"{}","command_topic":"{}/pump3","value_template":"{{{{value_json.pump3_on}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            // Light
             ("light", "light1", format!(
-                r#"{{"device":{},"name":"Spa Light","unique_id":"{}_light1","state_topic":"{}","command_topic":"{}/light1","value_template":"{{{{value_json.light1}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                r#"{{"device":{},"name":"Spa Light","unique_id":"{}_light1","state_topic":"{}","command_topic":"{}/light1","value_template":"{{{{value_json.light1}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            // Blower fan
             ("fan", "blower", format!(
-                r#"{{"device":{},"name":"Blower","unique_id":"{}_blower","state_topic":"{}","command_topic":"{}/blower","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                r#"{{"device":{},"name":"Blower","unique_id":"{}_blower","state_topic":"{}","command_topic":"{}/blower","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            // Heat Mode select
             ("select", "heat_mode", format!(
                 r#"{{"device":{},"name":"Heat Mode","unique_id":"{}_heat_mode","state_topic":"{}","command_topic":"{}/heat_mode","value_template":"{{{{value_json.heating_mode}}}}","options":["ready","rest","ready_in_rest"],"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            // Circulation Pump switch
             ("switch", "circ_pump", format!(
-                r#"{{"device":{},"name":"Circulation Pump","unique_id":"{}_circ_pump","state_topic":"{}","command_topic":"{}/circ_pump","value_template":"{{{{value_json.circ_pump}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                r#"{{"device":{},"name":"Circulation Pump","unique_id":"{}_circ_pump","state_topic":"{}","command_topic":"{}/circ_pump","value_template":"{{{{value_json.circ_pump}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            // Temperature Range select
             ("select", "temp_range", format!(
                 r#"{{"device":{},"name":"Temperature Range","unique_id":"{}_temp_range","state_topic":"{}","command_topic":"{}/temp_range","value_template":"{{{{value_json.temp_range}}}}","options":["high","low"],"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            // Hold Mode switch
             ("switch", "hold_mode", format!(
-                r#"{{"device":{},"name":"Hold Mode","unique_id":"{}_hold_mode","state_topic":"{}","command_topic":"{}/hold_mode","value_template":"{{{{value_json.hold_mode}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                r#"{{"device":{},"name":"Hold Mode","unique_id":"{}_hold_mode","state_topic":"{}","command_topic":"{}/hold_mode","value_template":"{{{{value_json.hold_mode}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            // Mister switch
             ("switch", "mister", format!(
-                r#"{{"device":{},"name":"Mister","unique_id":"{}_mister","state_topic":"{}","command_topic":"{}/mister","value_template":"{{{{value_json.mister}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                r#"{{"device":{},"name":"Mister","unique_id":"{}_mister","state_topic":"{}","command_topic":"{}/mister","value_template":"{{{{value_json.mister}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            // Fault sensor
             ("sensor", "fault", format!(
                 r#"{{"device":{},"name":"Last Fault","unique_id":"{}_fault","state_topic":"{}","value_template":"{{{{value_json.last_fault}}}}","availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, avail_topic
@@ -411,10 +513,7 @@ impl MqttClient {
         ];
 
         for (component, object_id, payload) in &configs {
-            let topic = format!(
-                "homeassistant/{}/{}/{}/config",
-                component, device_id, object_id
-            );
+            let topic = format!("homeassistant/{}/{}/{}/config", component, device_id, object_id);
             if let Err(e) = self.publish(topic, payload.as_bytes(), 1, true).await {
                 warn!("Failed to publish discovery for {}: {:?}", object_id, e);
             }
@@ -427,17 +526,14 @@ impl MqttClient {
     pub async fn subscribe_commands(&mut self) -> Result<(), MqttError> {
         let topics = TopicBuilder::new(&self.device_id);
 
-        // Subscribe to command wildcard
         let cmd_topic = format!("{}/#", topics.command_topic());
         self.subscribe(&cmd_topic).await?;
         info!("Subscribed to command topic: {}", cmd_topic);
 
-        // Subscribe to OTA topic
         let ota_topic = topics.ota_topic();
         self.subscribe(&ota_topic).await?;
         info!("Subscribed to OTA topic: {}", ota_topic);
 
-        // Subscribe to HA status for re-publishing discovery on HA restart
         let ha_status_topic = topics.ha_status_topic();
         self.subscribe(&ha_status_topic).await?;
         info!("Subscribed to HA status topic: {}", ha_status_topic);
@@ -445,30 +541,23 @@ impl MqttClient {
         Ok(())
     }
 
-    /// Check if a received topic is the OTA topic
     pub fn is_ota_topic(&self, topic: &str) -> bool {
         let topics = TopicBuilder::new(&self.device_id);
         topic == topics.ota_topic()
     }
 
-    /// Check if a received topic is the HA status topic
     pub fn is_ha_status_topic(&self, topic: &str) -> bool {
         topic == "homeassistant/status"
     }
 
-    /// Extract firmware URL from OTA payload. Payload is expected to be JSON: {"url":"http://..."}
     pub fn parse_ota_url(payload: &[u8]) -> Option<String> {
         let s = core::str::from_utf8(payload).ok()?;
-        // Simple JSON parsing: find "url" key
         if let Some(start) = s.find(r#""url""#) {
             let after_key = &s[start + 5..];
-            // Skip whitespace and colon
             let after_key = after_key.trim_start();
             let after_key = after_key.strip_prefix(':')?;
             let after_key = after_key.trim_start();
-            // Find the opening quote
             let after_key = after_key.strip_prefix('"')?;
-            // Find the closing quote
             if let Some(end) = after_key.find('"') {
                 return Some(String::from(&after_key[..end]));
             }
@@ -477,39 +566,41 @@ impl MqttClient {
     }
 }
 
-// ── MQTT encoding helpers ──────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────
+
+fn append_lp_string(buf: &mut Vec<u8>, s: &str) {
+    let bytes = s.as_bytes();
+    buf.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+    buf.extend_from_slice(bytes);
+}
 
 fn encode_remaining_length(buf: &mut Vec<u8>, mut len: usize) {
     loop {
         let mut byte = (len & 0x7F) as u8;
         len >>= 7;
-        if len > 0 {
-            byte |= 0x80;
-        }
+        if len > 0 { byte |= 0x80; }
         buf.push(byte);
-        if len == 0 {
-            break;
-        }
+        if len == 0 { break; }
     }
 }
 
-fn decode_remaining_length(buf: &[u8]) -> (usize, usize) {
-    let mut multiplier = 1;
-    let mut value = 0;
+fn decode_remaining_length(buf: &[u8]) -> Option<(usize, usize)> {
+    if buf.is_empty() { return None; }
+    let mut multiplier = 1usize;
+    let mut value = 0usize;
     let mut idx = 1;
     loop {
+        if idx >= buf.len() { return None; }
         let byte = buf[idx];
         value += ((byte & 0x7F) as usize) * multiplier;
         multiplier *= 128;
         idx += 1;
-        if (byte & 0x80) == 0 {
-            break;
-        }
+        if (byte & 0x80) == 0 { break; }
+        if multiplier > 128 * 128 * 128 * 128 { return None; }
     }
-    (value, idx)
+    Some((value, idx))
 }
 
-/// Parse a dotted IPv4 address string into [u8; 4].
 fn parse_ip(s: &str) -> Option<[u8; 4]> {
     let parts: Vec<u8> = s.split('.')
         .filter_map(|p| p.parse::<u8>().ok())

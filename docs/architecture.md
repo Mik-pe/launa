@@ -84,13 +84,16 @@ OTA firmware update support.
 
 ### `app/` (ESP32 firmware binary)
 
-The final firmware binary. Excluded from the main workspace due to ESP-IDF
-build requirements.
+The final firmware binary. Excluded from the main workspace because it targets
+`xtensa-esp32-none-elf` with `esp-hal` + `embassy` (pure Rust, no_std, no ESP-IDF C SDK).
 
 - ESP32-specific hardware implementations of `launa-hal` traits
-- UART/RS-485 transport
-- WiFi connectivity
-- Main event loop
+- UART/RS-485 transport (esp-hal UART with optional DE pin)
+- WiFi connectivity (esp-radio + embassy-net)
+- MQTT v5 client (hand-rolled over embassy-net TCP)
+- OTA partition management (launa-esp-ota with esp-storage)
+- NVS config storage (esp-nvs)
+- Embassy async main loop with inter-task channels
 
 ## Desktop Testing Strategy
 
@@ -114,11 +117,15 @@ Uses MQTT auto-discovery to automatically create entities in Home Assistant:
 |--------|-------------|-------------|
 | Water Temperature | `sensor` | Current water temp |
 | Set Temperature | `number` | Target temperature |
-| Heat Mode | `select` | Ready / Rest / Ready-in-Rest |
+| Heating State | `binary_sensor` | Is the heater active |
 | Pump 1/2/3 | `switch` | On/Off toggle |
 | Light | `light` | On/Off |
 | Blower | `fan` | On/Off |
-| Heating State | `binary_sensor` | Is the heater active |
+| Heat Mode | `select` | Ready / Rest / Ready-in-Rest |
+| Circulation Pump | `switch` | Circ pump status |
+| Temperature Range | `select` | High / Low |
+| Hold Mode | `switch` | Hold mode toggle |
+| Mister | `switch` | Mister status |
 | Fault | `sensor` | Last fault code |
 
 ## OTA Update Flow

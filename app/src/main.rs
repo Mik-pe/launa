@@ -3,6 +3,9 @@
 //! Embassy-based async runtime over esp-hal (pure Rust, no_std).
 //! Reads Balboa spa protocol over RS-485 UART, publishes state to
 //! Home Assistant via MQTT over WiFi.
+//!
+//! Commands are only sent on the RS-485 bus when the spa sends a Ready
+//! message, per the Balboa protocol requirements.
 
 #![no_std]
 #![no_main]
@@ -21,7 +24,6 @@ use launa_protocol::frame::{Frame, FrameDecoder, FrameEncoder};
 use launa_protocol::registration::{RegistrationAction, RegistrationStateMachine};
 use launa_protocol::status::StatusUpdate;
 use launa_mqtt::topics::TopicBuilder;
-use launa_mqtt::state::status_to_json;
 use log::{debug, error, info, warn};
 
 mod command_tracker;
@@ -41,6 +43,7 @@ static FRAME_CHANNEL: Channel<CriticalSectionRawMutex, Frame, 4> = Channel::new(
 static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
 static UART_TX_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
 static STATE_CHANNEL: Channel<CriticalSectionRawMutex, StatusUpdate, 2> = Channel::new();
+static PUMP_TIMER_CHANNEL: Channel<CriticalSectionRawMutex, (u8, u32), 4> = Channel::new();
 
 // ── Combined UART task (reads frames + writes outgoing bytes) ──────────
 
@@ -98,10 +101,10 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
             if let Err(e) = mqtt.publish_state(&status).await {
                 warn!("MQTT state publish failed: {:?}", e);
             }
-            continue; // Prioritize draining state queue
+            continue;
         }
 
-        // Check for incoming MQTT messages (non-blocking via small timeout)
+        // Check for incoming MQTT messages
         match mqtt.recv().await {
             Some((topic, payload)) => {
                 debug!("MQTT received: {} ({} bytes)", topic, payload.len());
@@ -128,15 +131,37 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                     continue;
                 }
 
-                // Handle regular commands
-                if let Some(cmd) = mqtt_client::parse_command(&cmd_base, &topic, &payload) {
-                    info!("MQTT command: {:?}", cmd);
-                    cmd_sender.send(cmd).await;
+                // Handle commands and pump timers
+                if let Some(action) = mqtt_client::parse_command(&cmd_base, &topic, &payload) {
+                    match action {
+                        mqtt_client::MqttAction::Command(cmd) => {
+                            info!("MQTT command: {:?}", cmd);
+                            cmd_sender.send(cmd).await;
+                        }
+                        mqtt_client::MqttAction::StartPumpTimer { pump, minutes } => {
+                            info!("MQTT pump timer: pump {} for {} min", pump, minutes);
+                            PUMP_TIMER_CHANNEL.send((pump, minutes)).await;
+                        }
+                    }
                 }
             }
             None => {
-                warn!("MQTT connection lost");
-                Timer::after(Duration::from_secs(5)).await;
+                warn!("MQTT connection lost, attempting reconnect...");
+                loop {
+                    match mqtt.reconnect().await {
+                        Ok(()) => {
+                            info!("MQTT reconnected, re-publishing...");
+                            let _ = mqtt.publish_availability(true).await;
+                            let _ = mqtt.publish_discovery().await;
+                            let _ = mqtt.subscribe_commands().await;
+                            break;
+                        }
+                        Err(e) => {
+                            error!("MQTT reconnect failed: {:?}, retrying in 5s", e);
+                            Timer::after(Duration::from_secs(5)).await;
+                        }
+                    }
+                }
             }
         }
     }
@@ -155,8 +180,6 @@ async fn send_frame(msg_type: [u8; 2], payload: &[u8]) {
 async fn main(spawner: Spawner) {
     let peripherals = esp_hal::init(esp_hal::Config::default());
 
-    // Embassy timer + scheduler init (TIMG0 timer0)
-    // On xtensa (ESP32), esp_rtos::start() takes only the timer
     let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
 
@@ -167,7 +190,7 @@ async fn main(spawner: Spawner) {
     let app_config = config::AppConfig::load(&mut nvs);
     info!("Config loaded: device_id={}", app_config.device_id);
 
-    // ── Initialize RS-485 UART (UART1, 115200 baud, TX=GPIO17, RX=GPIO16) ──
+    // ── Initialize RS-485 UART ──────────────────────────────────────
     let uart_config = esp_hal::uart::Config::default().with_baudrate(115200);
     let uart = esp_hal::uart::Uart::new(peripherals.UART1, uart_config)
         .expect("Failed to create UART")
@@ -178,7 +201,7 @@ async fn main(spawner: Spawner) {
     let uart_transport = transport::Rs485Transport::new(uart, Some(peripherals.GPIO4.into()));
     info!("RS-485 UART initialized");
 
-    // ── Initialize esp-radio (required before WiFi) ──────────────────
+    // ── Initialize esp-radio ────────────────────────────────────────
     let radio_ctrl = esp_radio::init().expect("Failed to init esp-radio");
 
     // ── Connect WiFi ────────────────────────────────────────────────
@@ -202,13 +225,11 @@ async fn main(spawner: Spawner) {
         }
     };
 
-    // Publish availability + discovery + subscribe
     let _ = mqtt.publish_availability(true).await;
     let _ = mqtt.publish_discovery().await;
     let _ = mqtt.subscribe_commands().await;
 
     // Mark firmware as valid (boot successful: WiFi + MQTT connected).
-    // If we crash before reaching this point, bootloader auto-rolls back.
     let mut ota = ota::create_ota();
     if let Err(e) = ota.mark_valid() {
         warn!("Failed to mark firmware valid: {:?}", e);
@@ -229,36 +250,49 @@ async fn main(spawner: Spawner) {
 
     let frame_rx = FRAME_CHANNEL.receiver();
     let cmd_rx = COMMAND_CHANNEL.receiver();
+    let pump_timer_rx = PUMP_TIMER_CHANNEL.receiver();
 
     let mut registration = RegistrationStateMachine::new();
     let mut pump_timers = pump_timer::PumpTimerManager::new();
     let mut hold_timer = pump_timer::HoldModeTimer::new();
     let mut cmd_tracker = command_tracker::CommandTracker::new();
     let mut last_status: Option<launa_protocol::status::StatusUpdate> = None;
+    let mut client_id: Option<u8> = None;
 
     loop {
-        // Wait for either a frame or a command
-        let frame_fut = frame_rx.receive();
-        let cmd_fut = cmd_rx.receive();
-        embassy_futures::select::select(frame_fut, cmd_fut).await;
+        // Wait for a frame from the UART task
+        let frame = frame_rx.receive().await;
+        handle_frame(
+            &frame,
+            &mut registration,
+            &mut pump_timers,
+            &mut hold_timer,
+            &mut cmd_tracker,
+            &mut last_status,
+            &mut client_id,
+            &cmd_rx,
+        ).await;
 
         // Drain all available frames
         while let Ok(frame) = frame_rx.try_receive() {
-            handle_frame(&frame, &mut registration, &mut pump_timers, &mut hold_timer, &mut cmd_tracker, &mut last_status).await;
+            handle_frame(
+                &frame,
+                &mut registration,
+                &mut pump_timers,
+                &mut hold_timer,
+                &mut cmd_tracker,
+                &mut last_status,
+                &mut client_id,
+                &cmd_rx,
+            ).await;
         }
 
-        // Drain all available commands
-        while let Ok(cmd) = cmd_rx.try_receive() {
-            if registration.is_registered() {
+        // Drain pump timer commands
+        while let Ok((pump_index, minutes)) = pump_timer_rx.try_receive() {
+            if let Some(cmd) = pump_timers.start_timer(pump_index, minutes) {
                 let (msg_type, payload) = cmd.encode();
                 send_frame(msg_type, &payload).await;
-                debug!("Sent command: {:?}", cmd);
-                // Track for ACK verification
-                if let Some(ref pre_status) = last_status {
-                    cmd_tracker.track(cmd.clone(), pre_status);
-                }
-            } else {
-                warn!("Cannot send command: not registered");
+                info!("Started pump {} timer for {} min", pump_index, minutes);
             }
         }
     }
@@ -271,6 +305,8 @@ async fn handle_frame(
     hold_timer: &mut pump_timer::HoldModeTimer,
     cmd_tracker: &mut command_tracker::CommandTracker,
     last_status: &mut Option<launa_protocol::status::StatusUpdate>,
+    client_id: &mut Option<u8>,
+    cmd_rx: &embassy_sync::channel::Receiver<CriticalSectionRawMutex, Command, 4>,
 ) {
     // ── Registration ────────────────────────────────────────────────
     if !registration.is_registered() {
@@ -280,9 +316,10 @@ async fn handle_frame(
                 send_frame([0xFE, 0xBF], &[0x01, 0x02, 0xF1, 0x73]).await;
                 debug!("Sent registration ID request");
             }
-            RegistrationAction::SendIdAck { client_id } => {
-                send_frame([client_id, 0xBF], &[0x03]).await;
-                info!("Registered with client ID: {}", client_id);
+            RegistrationAction::SendIdAck { client_id: id } => {
+                send_frame([id, 0xBF], &[0x03]).await;
+                *client_id = Some(id);
+                info!("Registered with client ID: {}", id);
             }
             RegistrationAction::None => {}
         }
@@ -318,20 +355,33 @@ async fn handle_frame(
                 send_frame(msg_type, &payload).await;
             }
 
-            // Save for command tracking context
             *last_status = Some(status.clone());
 
-            // Publish state to MQTT via state channel
             STATE_CHANNEL.send(status).await;
         }
         IncomingMessage::Ready => {
-            debug!("Spa ready");
+            debug!("Spa ready -- sending queued command or NothingToSend");
+
+            // Try to dequeue a command from MQTT
+            if let Ok(cmd) = cmd_rx.try_receive() {
+                let (msg_type, payload) = cmd.encode();
+                send_frame(msg_type, &payload).await;
+                debug!("Sent command on Ready: {:?}", cmd);
+                if let Some(ref pre_status) = last_status {
+                    cmd_tracker.track(cmd.clone(), pre_status);
+                }
+            } else if let Some(cid) = client_id {
+                // No command queued, send NothingToSend to keep the bus alive
+                let (msg_type, payload) = Command::NothingToSend { client_id: cid }.encode();
+                send_frame(msg_type, &payload).await;
+            }
         }
         IncomingMessage::NewClientQuery => {
             debug!("New client query -- may need re-registration");
         }
         IncomingMessage::ClientIdAssignment { id } => {
             info!("Client ID assigned: {}", id);
+            *client_id = Some(id);
         }
         IncomingMessage::ConfigurationResponse(_) => {
             info!("Spa configuration received");

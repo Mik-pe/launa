@@ -113,6 +113,17 @@ impl PumpTimerManager {
         if let Some(c) = self.pump3.tick(p3) { cmds.push(c); }
         cmds
     }
+
+    /// Start a pump timer by pump index (1-3) for the given duration in minutes.
+    /// Returns the toggle command to turn the pump on, or None for invalid index.
+    pub fn start_timer(&mut self, pump_index: u8, minutes: u32) -> Option<Command> {
+        match pump_index {
+            1 => Some(self.pump1.start_with_minutes(minutes)),
+            2 => Some(self.pump2.start_with_minutes(minutes)),
+            3 => Some(self.pump3.start_with_minutes(minutes)),
+            _ => None,
+        }
+    }
 }
 
 /// Hold mode safety timer. If the spa enters hold mode, auto-clears it

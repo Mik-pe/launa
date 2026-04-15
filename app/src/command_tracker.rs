@@ -9,7 +9,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use embassy_time::{Duration, Instant};
 use launa_protocol::command::{Command, ToggleItem};
-use launa_protocol::status::{PumpState, StatusUpdate};
+use launa_protocol::status::{HeatingMode, PumpState, StatusUpdate, TempRange};
 use log::{info, warn, debug};
 
 /// How long to wait for a command to be reflected in status before timing out.
@@ -23,9 +23,10 @@ enum ExpectedChange {
     PumpOn { item: ToggleItem },
     PumpOff { item: ToggleItem },
     TemperatureSet { temp: u8 },
-    HoldModeToggled,
-    HeatingModeToggled,
-    TempRangeToggled,
+    LightToggled { pre_state: bool },
+    HoldModeToggled { pre_state: bool },
+    HeatingModeToggled { pre_mode: HeatingMode },
+    TempRangeToggled { pre_range: TempRange },
 }
 
 impl ExpectedChange {
@@ -59,8 +60,7 @@ impl ExpectedChange {
                         })
                     }
                     ToggleItem::Light1 => {
-                        // Light is a toggle - we can't easily verify since state is boolean
-                        Some(ExpectedChange::HoldModeToggled) // reuse for generic toggle
+                        Some(ExpectedChange::LightToggled { pre_state: pre_status.light1 })
                     }
                     ToggleItem::Blower => {
                         Some(if pre_status.blower {
@@ -69,9 +69,9 @@ impl ExpectedChange {
                             ExpectedChange::PumpOn { item: *item }
                         })
                     }
-                    ToggleItem::HoldMode => Some(ExpectedChange::HoldModeToggled),
-                    ToggleItem::HeatingMode => Some(ExpectedChange::HeatingModeToggled),
-                    ToggleItem::TemperatureRange => Some(ExpectedChange::TempRangeToggled),
+                    ToggleItem::HoldMode => Some(ExpectedChange::HoldModeToggled { pre_state: pre_status.is_hold }),
+                    ToggleItem::HeatingMode => Some(ExpectedChange::HeatingModeToggled { pre_mode: pre_status.heating_mode }),
+                    ToggleItem::TemperatureRange => Some(ExpectedChange::TempRangeToggled { pre_range: pre_status.temp_range }),
                 }
             }
             Command::SetTemperature(temp) => Some(ExpectedChange::TemperatureSet { temp: *temp }),
@@ -185,13 +185,18 @@ impl CommandTracker {
                 // Set temperature is stored as raw value in status
                 (status.set_temp as u8) == *temp
             }
-            ExpectedChange::HoldModeToggled => {
-                // For generic toggles, we just check that some time has passed
-                // and consider it confirmed (the spa doesn't always echo toggles)
-                true
+            ExpectedChange::LightToggled { pre_state } => {
+                status.light1 != *pre_state
             }
-            ExpectedChange::HeatingModeToggled => true,
-            ExpectedChange::TempRangeToggled => true,
+            ExpectedChange::HoldModeToggled { pre_state } => {
+                status.is_hold != *pre_state
+            }
+            ExpectedChange::HeatingModeToggled { pre_mode } => {
+                status.heating_mode != *pre_mode
+            }
+            ExpectedChange::TempRangeToggled { pre_range } => {
+                status.temp_range != *pre_range
+            }
         }
     }
 

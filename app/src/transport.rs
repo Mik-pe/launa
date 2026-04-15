@@ -39,7 +39,10 @@ impl ErrorType for Rs485Transport {
 
 impl Read for Rs485Transport {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        self.uart.read(buf).await.map_err(|_| TransportError)
+        self.uart.read(buf).await.map_err(|e| {
+            log::warn!("UART read error: {:?}", e);
+            TransportError
+        })
     }
 }
 
