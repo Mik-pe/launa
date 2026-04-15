@@ -1,0 +1,21 @@
+{
+  "featureId": "protocol-fix-pump5-and-dead-code",
+  "reviewedAt": "2026-04-15T20:50:00.000Z",
+  "commitId": "edddafe",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Two targeted fixes correctly implemented: (1) pump_configs[5] bit decode bug fixed from bits 6-7 to bits 2-3 of payload[6], matching the sequential 2-bit packing pattern used by pumps 0-4. New test covers all three PumpConfig variants (None, SingleSpeed, TwoSpeed) and verifies pump4 (bits 0-1) is unaffected. (2) Dead code line `payload[11] = 0x09` removed from test_parse_status_pumps_and_circ_blower — it was immediately overwritten by the next line. Both fixes are minimal, correct, and well-tested.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "Protocol documentation (docs/protocol.md lines 108-109) only documents Pump 5 at bits 0-1 and Pump 6 at bits 6-7 of payload byte 6, but does NOT document bits 2-5 of that byte. The sequential 2-bit packing pattern (pump0=bits 0-1 through pump3=bits 6-7 of payload[5], pump4=bits 0-1, pump5=bits 2-3 of payload[6]) is a reasonable inference but the protocol doc has a gap — bits 2-5 of byte 6 are undocumented. This should be noted in .factory/library/ or docs/protocol.md to prevent future confusion.",
+      "evidence": "docs/protocol.md:108-109 shows '6 | 0-1 | Pump 5' and '6 | 6-7 | Pump 6' with bits 2-5 of byte 6 completely undocumented. The fix uses bits 2-3 for pump5 (previously used bits 6-7 which conflict with documented Pump 6)."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. Both fixes are correct and well-implemented. The pump5 bit decode bug fix (bits 2-3 instead of 6-7) matches the sequential 2-bit packing pattern. The new test thoroughly covers all PumpConfig variants. The dead code removal is clean. Worker followed TDD discipline (RED→GREEN→REFACTOR) and the rust-worker skill procedure. All 368 workspace tests pass. One minor observation: the protocol documentation has a gap where bits 2-5 of config byte 6 are undocumented."
+}

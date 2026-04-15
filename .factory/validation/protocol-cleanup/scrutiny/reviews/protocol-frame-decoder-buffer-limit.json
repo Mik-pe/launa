@@ -1,0 +1,33 @@
+{
+  "featureId": "protocol-frame-decoder-buffer-limit",
+  "reviewedAt": "2026-04-15T22:50:00.000Z",
+  "commitId": "f2a4432",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean implementation of configurable max_buffer_size for FrameDecoder with proper overflow protection. The worker correctly deviated from the spec's '>= max_buffer_size' to '> max_buffer_size' because using >= would prevent frames that exactly fill the buffer from being decoded (the end marker hasn't arrived yet when the check fires). All 5 required tests are present and pass. Implementation follows TDD (red-green cycle confirmed in transcript).",
+    "issues": [
+      {
+        "file": "crates/launa-protocol/src/frame.rs",
+        "line": 172,
+        "severity": "non_blocking",
+        "description": "The overflow check fires after every single byte push into the buffer, even when the buffer is far below the limit. This is a minor performance concern on embedded (ESP32) where every cycle counts, but is negligible in practice since it's a simple usize comparison. Could be optimized to only check when buffer.len() approaches max_buffer_size, but this is not a real issue."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The architecture.md library file documents FrameDecoder as having 'CRC-8 + HDLC byte stuffing for 0x7E/0x7D' but does not mention the new max_buffer_size field or overflow protection. This should be updated to reflect the new buffer protection invariant.",
+      "evidence": "architecture.md 'Invariants' section lists 'FrameDecoder: CRC-8 + HDLC byte stuffing for 0x7E/0x7D' but does not mention the buffer size limit or overflow behavior."
+    },
+    {
+      "area": "skills",
+      "observation": "The rust-worker skill procedure was followed correctly: TDD red-green cycle, cargo test -p <crate>, cargo test --workspace, cargo fmt, TASKS.md update, commit. Worker's skillFeedback.followedProcedure is true and deviations are empty.",
+      "evidence": "Transcript shows: write tests → verify failure → implement → verify pass → workspace tests → fmt → commit. Matches SKILL.md procedure exactly."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS — Implementation correctly adds max_buffer_size to FrameDecoder with default 512, builder method, overflow protection, and 5 comprehensive tests. The worker made a justified deviation from the spec (using > instead of >= for overflow check) which was self-discovered during TDD when the exact-buffer-fill test failed. This is a sound engineering decision: the frame's end marker (0x7E) hasn't been seen yet when the buffer reaches max size, so triggering overflow only when exceeding the limit allows frames that exactly fill the buffer to complete normally. All tests pass, no regressions."
+}

@@ -1,0 +1,47 @@
+{
+  "milestone": "protocol-cleanup",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": { "passed": true, "command": "cargo test --workspace", "exitCode": 0 },
+    "typecheck": { "passed": true, "command": "cargo check --workspace", "exitCode": 0 },
+    "lint": { "passed": true, "command": "cargo fmt --check", "exitCode": 0 }
+  },
+  "reviewsSummary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Updated architecture.md FrameDecoder invariant to include max_buffer_size (default 512) with overflow protection",
+      "sourceFeature": "protocol-frame-decoder-buffer-limit"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Add note: CaptureLogger pattern (thread_local + RefCell<Vec<String>> + std::sync::Once for log::set_logger) is used in launa-protocol dispatcher tests for verifying log output. Workers writing tests for log::warn! calls should reuse this pattern.",
+      "evidence": "protocol-dispatcher-warn-logging feature introduced CaptureLogger in dispatcher.rs lines 535-585. Other crates with log::warn! in library code may need the same pattern for testing.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "rust-worker skill doesn't account for deletion-only features where TDD doesn't apply",
+      "reason": "Edge case; the worker handled it correctly with followedProcedure=true. Not worth a skill change for one rare scenario."
+    },
+    {
+      "observation": "Protocol documentation gap: bits 2-5 of config byte 6 are undocumented",
+      "reason": "This is a documentation improvement, not a codebase convention or operational concern. Should be tracked in TASKS.md or docs/ if needed, not in factory library."
+    },
+    {
+      "observation": "FrameDecoder overflow check fires on every byte push (minor perf concern on ESP32)",
+      "reason": "Already noted as non_blocking by reviewer. Simple usize comparison is negligible even on ESP32. Not actionable."
+    }
+  ],
+  "previousRound": null
+}

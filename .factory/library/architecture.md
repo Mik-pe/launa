@@ -33,4 +33,4 @@ AppAction::PublishAlert/Diag    → MQTT publish
 - SpaSim defaults produce deterministic output (new features default to off)
 - CommandTracker bounded at MAX_PENDING_COMMANDS=8
 - Temperature validation: hard upper limit 108°F / 42°C
-- FrameDecoder: CRC-8 + HDLC byte stuffing for 0x7E/0x7D
+- FrameDecoder: CRC-8 + HDLC byte stuffing for 0x7E/0x7D, configurable max_buffer_size (default 512) with overflow protection

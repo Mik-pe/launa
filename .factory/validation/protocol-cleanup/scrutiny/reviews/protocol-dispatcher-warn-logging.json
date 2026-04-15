@@ -1,0 +1,21 @@
+{
+  "featureId": "protocol-dispatcher-warn-logging",
+  "reviewedAt": "2026-04-15T22:50:00.000Z",
+  "commitId": "241152d",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "All 9 Err(_) arms in dispatch_frame() now have log::warn! calls before returning IncomingMessage::Unknown. Each warning includes the message type bytes ([{:#04X}, {:#04X}]) and payload length. Return values and function signatures are completely unchanged. Two new tests verify warnings are emitted on parse failure using a clean thread-local CaptureLogger infrastructure.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The CaptureLogger pattern (thread_local + RefCell<Vec<String>> + std::sync::Once for log::set_logger) is a reusable test utility for verifying log output in Rust tests. This pattern avoids the one-time-only limitation of log::set_logger and works well for no_std crates that use `log` crate in library code but need `std` in test cfg. Could be documented in .factory/library/ for reuse across the project.",
+      "evidence": "crates/launa-protocol/src/dispatcher.rs lines 535-585 — CaptureLogger struct, thread_local WARN_BUFFER, install_capture_logger(), with_warn_capture() helper"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Feature is fully implemented and correct. All 9 Err(_) arms in dispatch_frame() have log::warn! with message type bytes and payload length. Return values are unchanged. Two tests with CaptureLogger verify warnings are emitted. The implementation is clean, follows project conventions (no_std library code, std only in #[cfg(test)]), and all workspace tests pass."
+}
