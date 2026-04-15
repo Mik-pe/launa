@@ -155,6 +155,14 @@ pub struct SpaSim {
     ready_countdown: u64,
     /// PRNG state for ready interval randomization.
     ready_rng_state: u64,
+
+    // Partial frame injection
+    /// If set, the next tick() will emit only the first N bytes of the status frame,
+    /// and the tick after that will emit the remainder + Ready frame. One-shot: resets after firing.
+    partial_frame_split: Option<usize>,
+    /// If set, contains the remainder bytes from a partial frame split that should be
+    /// emitted at the beginning of the next tick() output, followed by a Ready frame.
+    partial_frame_remainder: Option<Vec<u8>>,
 }
 
 impl SpaSim {
@@ -179,6 +187,9 @@ impl SpaSim {
             ready_interval_range: (1, 1),
             ready_countdown: 1,
             ready_rng_state: 0,
+
+            partial_frame_split: None,
+            partial_frame_remainder: None,
         }
     }
 
@@ -219,6 +230,19 @@ impl SpaSim {
     /// The status frame bytes will be emitted twice in a single tick.
     pub fn inject_duplicate_frame(&mut self) {
         self.duplicate_next = true;
+    }
+
+    /// Inject a partial frame split at the given byte position.
+    ///
+    /// Causes the next `tick()` to emit only the first `split_point` bytes of the
+    /// status frame. The following `tick()` emits the remainder plus a Ready frame.
+    /// One-shot — resets after firing (subsequent ticks are normal).
+    ///
+    /// If `split_point` is 0, the first tick emits the full status frame and the
+    /// second tick emits just the Ready frame.
+    pub fn inject_partial_frame_at(&mut self, split_point: usize) {
+        self.partial_frame_split = Some(split_point);
+        self.partial_frame_remainder = None;
     }
 
     /// Set the maximum number of random padding bytes to add before the status frame.
@@ -322,6 +346,7 @@ impl SpaSim {
     /// - Bus silence suppresses all output
     /// - Spontaneous events are applied before frame generation
     /// - Duplicate frame injection doubles the status frame
+    /// - Partial frame injection splits status frame across two ticks
     pub fn tick(&mut self) -> Vec<u8> {
         self.tick_count += 1;
 
@@ -332,6 +357,17 @@ impl SpaSim {
         if self.bus_silence_remaining > 0 {
             self.bus_silence_remaining -= 1;
             return Vec::new();
+        }
+
+        // Partial frame injection — second tick: emit remainder + Ready
+        if let Some(remainder) = self.partial_frame_remainder.take() {
+            let mut output = remainder;
+
+            // Always include Ready frame on the remainder tick
+            output.extend_from_slice(&self.generate_ready_frame());
+            self.ready_countdown = self.next_ready_interval();
+
+            return output;
         }
 
         let mut output = Vec::new();
@@ -356,22 +392,54 @@ impl SpaSim {
         // Send status update
         let status_bytes = self.generate_status_frame();
 
-        // Duplicate frame injection: send status frame twice
-        if self.duplicate_next {
+        // Partial frame injection — first tick: split the status frame
+        if let Some(split_point) = self.partial_frame_split.take() {
+            if split_point == 0 {
+                // Split at 0: emit full status frame now, remainder (empty) next tick + Ready
+                output.extend_from_slice(&status_bytes);
+                self.partial_frame_remainder = Some(Vec::new());
+            } else if split_point >= status_bytes.len() {
+                // Split point past end: emit full frame normally (edge case)
+                output.extend_from_slice(&status_bytes);
+
+                // Send ready indicator at randomized intervals
+                if self.ready_countdown > 0 {
+                    self.ready_countdown -= 1;
+                }
+                if self.ready_countdown == 0 {
+                    output.extend_from_slice(&self.generate_ready_frame());
+                    self.ready_countdown = self.next_ready_interval();
+                }
+            } else {
+                // Split in the middle: emit first N bytes now, store remainder for next tick
+                output.extend_from_slice(&status_bytes[..split_point]);
+                self.partial_frame_remainder = Some(status_bytes[split_point..].to_vec());
+            }
+        } else if self.duplicate_next {
+            // Duplicate frame injection: send status frame twice
             self.duplicate_next = false;
             output.extend_from_slice(&status_bytes);
             output.extend_from_slice(&status_bytes);
+
+            // Send ready indicator at randomized intervals
+            if self.ready_countdown > 0 {
+                self.ready_countdown -= 1;
+            }
+            if self.ready_countdown == 0 {
+                output.extend_from_slice(&self.generate_ready_frame());
+                self.ready_countdown = self.next_ready_interval();
+            }
         } else {
             output.extend_from_slice(&status_bytes);
-        }
 
-        // Send ready indicator at randomized intervals
-        if self.ready_countdown > 0 {
-            self.ready_countdown -= 1;
-        }
-        if self.ready_countdown == 0 {
-            output.extend_from_slice(&self.generate_ready_frame());
-            self.ready_countdown = self.next_ready_interval();
+            // Send ready indicator at randomized intervals
+            if self.ready_countdown > 0 {
+                self.ready_countdown -= 1;
+            }
+            if self.ready_countdown == 0 {
+                output.extend_from_slice(&self.generate_ready_frame());
+                self.ready_countdown = self.next_ready_interval();
+            }
         }
 
         output
@@ -1297,6 +1365,151 @@ mod tests {
             PumpState::Low,
             "deferred command applied after latency ticks"
         );
+    }
+
+    // -- Partial frame injection tests --
+
+    #[test]
+    fn test_partial_frame_split_reassembly() {
+        // Split status frame at midpoint; tick1 emits first N bytes, tick2 emits remainder + Ready.
+        // FrameDecoder should reassemble the split frame across two feeds.
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        // Generate the expected status frame to find its length
+        let status_bytes = sim.generate_status_frame();
+        let split_point = status_bytes.len() / 2;
+
+        sim.inject_partial_frame_at(split_point);
+
+        // Tick 1: should emit only first `split_point` bytes of status frame (no Ready)
+        let tick1_bytes = sim.tick();
+        assert!(
+            tick1_bytes.len() < status_bytes.len(),
+            "tick1 should emit fewer bytes than a full status frame"
+        );
+
+        // Tick 2: should emit remainder of status frame + Ready frame
+        let tick2_bytes = sim.tick();
+        assert!(
+            !tick2_bytes.is_empty(),
+            "tick2 should produce remainder bytes"
+        );
+
+        // Feed both halves to a FrameDecoder — should decode the complete status frame
+        let mut decoder = FrameDecoder::new();
+        let frames1 = decoder.feed_slice(&tick1_bytes);
+        let frames2 = decoder.feed_slice(&tick2_bytes);
+
+        // First feed should not produce any complete frames (partial only)
+        assert!(
+            frames1.is_empty(),
+            "first half should not produce complete frames, got {}",
+            frames1.len()
+        );
+
+        // Second feed should produce at least the status frame + Ready
+        assert!(
+            frames2.len() >= 2,
+            "second half should produce status + ready frames, got {}",
+            frames2.len()
+        );
+        assert_eq!(
+            frames2[0].message_type,
+            [0xFF, 0xAF],
+            "first decoded frame should be status"
+        );
+        assert_eq!(
+            frames2[1].message_type,
+            [0x10, 0xBF],
+            "second decoded frame should be ready"
+        );
+    }
+
+    #[test]
+    fn test_partial_frame_split_at_zero() {
+        // Split at 0: the full status frame is the "remainder", so tick1 should emit
+        // the full status frame (no partial), and tick2 emits Ready.
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        sim.inject_partial_frame_at(0);
+
+        // Tick 1: full status frame (split at 0 means no bytes split off)
+        let tick1_bytes = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let frames1 = decoder.feed_slice(&tick1_bytes);
+
+        // Should have decoded the status frame
+        assert!(
+            frames1.len() >= 1,
+            "tick1 with split_at=0 should produce the full status frame"
+        );
+        assert_eq!(
+            frames1[0].message_type,
+            [0xFF, 0xAF],
+            "should be status frame"
+        );
+
+        // Tick 2: Ready frame (remainder is empty, so just Ready)
+        let tick2_bytes = sim.tick();
+        let mut decoder2 = FrameDecoder::new();
+        let frames2 = decoder2.feed_slice(&tick2_bytes);
+        assert!(
+            frames2.len() >= 1,
+            "tick2 should produce at least the ready frame"
+        );
+        assert_eq!(
+            frames2[0].message_type,
+            [0x10, 0xBF],
+            "should be ready frame"
+        );
+    }
+
+    #[test]
+    fn test_partial_frame_oneshot_reset() {
+        // After partial frame fires (two ticks), subsequent ticks produce normal unsplit output.
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        // Get a reference normal tick output (after registration, no injection)
+        let normal_bytes = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let normal_frames = decoder.feed_slice(&normal_bytes);
+        assert_eq!(normal_frames.len(), 2, "normal tick: status + ready");
+
+        // Reset sim for controlled test
+        let mut sim2 = SpaSim::new();
+        sim2.registered = true;
+
+        let status_bytes = sim2.generate_status_frame();
+        let split_point = status_bytes.len() / 2;
+        sim2.inject_partial_frame_at(split_point);
+
+        // Tick 1: partial frame
+        let _tick1 = sim2.tick();
+        // Tick 2: remainder + ready
+        let _tick2 = sim2.tick();
+
+        // Tick 3: should be normal (no split)
+        let tick3_bytes = sim2.tick();
+        let mut decoder3 = FrameDecoder::new();
+        let tick3_frames = decoder3.feed_slice(&tick3_bytes);
+
+        // Should be a normal tick: status + ready
+        assert_eq!(
+            tick3_frames.len(),
+            2,
+            "third tick should produce normal 2 frames (status + ready)"
+        );
+        assert_eq!(tick3_frames[0].message_type, [0xFF, 0xAF], "status frame");
+        assert_eq!(tick3_frames[1].message_type, [0x10, 0xBF], "ready frame");
+
+        // Tick 4: also normal
+        let tick4_bytes = sim2.tick();
+        let mut decoder4 = FrameDecoder::new();
+        let tick4_frames = decoder4.feed_slice(&tick4_bytes);
+        assert_eq!(tick4_frames.len(), 2, "fourth tick should also be normal");
     }
 
     #[test]
