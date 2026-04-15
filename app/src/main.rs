@@ -17,6 +17,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_executor::Spawner;
 use embassy_sync::channel::Channel;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
 use embedded_io_async::{Read as _, Write as _};
 use launa_protocol::command::Command;
@@ -71,6 +72,14 @@ static UART_TX_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::
 static STATE_CHANNEL: Channel<CriticalSectionRawMutex, (StatusUpdate, Option<alloc::string::String>, bool), 2> = Channel::new();
 static PUMP_TIMER_CHANNEL: Channel<CriticalSectionRawMutex, (u8, u32), 4> = Channel::new();
 static DIAGNOSTICS_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 2> = Channel::new();
+static OTA_CHANNEL: Channel<CriticalSectionRawMutex, alloc::string::String, 1> = Channel::new();
+
+/// Signal set when WiFi reconnects after a disconnect. MQTT task checks this
+/// to force a clean MQTT reconnect (old TCP socket may be stale).
+pub static WIFI_RECONNECT_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Channel for sending alert payloads from the main loop to the MQTT task.
+static ALERT_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
 
 // ── Combined UART task (reads frames + writes outgoing bytes) ──────────
 
@@ -118,6 +127,8 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
     let cmd_sender = COMMAND_CHANNEL.sender();
     let state_rx = STATE_CHANNEL.receiver();
     let diag_rx = DIAGNOSTICS_CHANNEL.receiver();
+    let alert_rx = ALERT_CHANNEL.receiver();
+    let ota_tx = OTA_CHANNEL.sender();
     let topics = TopicBuilder::new(&mqtt.device_id);
     let diag_topic = topics.diagnostics_topic();
     let cmd_base = topics.command_topic();
@@ -126,10 +137,39 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
     info!("MQTT task started");
 
     loop {
+        // Check for WiFi reconnect signal — force MQTT reconnect
+        if WIFI_RECONNECT_SIGNAL.try_take().is_some() {
+            warn!("WiFi reconnect detected, forcing MQTT reconnect");
+            MQTT_RECONNECT_COUNT.fetch_add(1, Ordering::Relaxed);
+            loop {
+                match mqtt.reconnect().await {
+                    Ok(()) => {
+                        let _ = mqtt.publish_availability(true).await;
+                        let _ = mqtt.publish_discovery().await;
+                        let _ = mqtt.subscribe_commands().await;
+                        break;
+                    }
+                    Err(_) => {
+                        Timer::after(Duration::from_secs(5)).await;
+                    }
+                }
+            }
+        }
+
         // Check for diagnostics payloads to publish (non-blocking)
         if let Ok(diag_payload) = diag_rx.try_receive() {
             if let Err(e) = mqtt.publish(&diag_topic, &diag_payload, 0, false).await {
                 warn!("MQTT diagnostics publish failed: {:?}", e);
+            }
+            continue;
+        }
+
+        // Check for alert payloads to publish (non-blocking)
+        if let Ok(alert_payload) = alert_rx.try_receive() {
+            let topics = TopicBuilder::new(&mqtt.device_id);
+            let alert_topic = topics.alert_topic();
+            if let Err(e) = mqtt.publish(&alert_topic, &alert_payload, 1, false).await {
+                warn!("MQTT alert publish failed: {:?}", e);
             }
             continue;
         }
@@ -171,8 +211,8 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                         }
                         // Allow time for in-flight UART bytes to complete
                         Timer::after(Duration::from_millis(50)).await;
-                        info!("OTA: shutdown complete, starting update...");
-                        ota::perform_ota_update(&url).await;
+                        info!("OTA: shutdown complete, sending URL to main loop");
+                        ota_tx.send(url).await;
                     } else {
                         warn!("Invalid OTA payload");
                     }
@@ -214,7 +254,9 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 // WiFi disconnect is approximated by MQTT connection loss;
                 // a failed reconnect likely indicates WiFi is down.
                 WIFI_DISCONNECT_COUNT.fetch_add(1, Ordering::Relaxed);
+                let mut reconnect_attempts: u32 = 0;
                 loop {
+                    reconnect_attempts += 1;
                     match mqtt.reconnect().await {
                         Ok(()) => {
                             info!("MQTT reconnected, re-publishing...");
@@ -225,6 +267,20 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                         }
                         Err(e) => {
                             error!("MQTT reconnect failed: {:?}, retrying in 5s", e);
+                            if reconnect_attempts > 3 {
+                                // Publish alert via the alert channel (best-effort)
+                                let uptime_secs = unsafe {
+                                    DIAGNOSTICS_START
+                                        .map(|start| start.elapsed().as_secs())
+                                        .unwrap_or(0)
+                                };
+                                let json = alloc::format!(
+                                    r#"{{"level":"error","message":"mqtt_reconnect_loop","timestamp":{}}}"#,
+                                    uptime_secs
+                                );
+                                let payload = Vec::from(json.as_bytes());
+                                let _ = ALERT_CHANNEL.try_send(payload);
+                            }
                             Timer::after(Duration::from_secs(5)).await;
                         }
                     }
@@ -275,6 +331,26 @@ fn publish_diagnostics(device_id: &str) {
     // update is simply skipped (it will be published next cycle).
     let payload = Vec::from(json.as_bytes());
     let _ = DIAGNOSTICS_CHANNEL.try_send(payload);
+}
+
+/// Format and send an alert through the alert channel.
+/// Called from the main loop for conditions requiring operator attention.
+fn send_alert(level: &str, message: &str) {
+    let uptime_secs = unsafe {
+        DIAGNOSTICS_START
+            .map(|start| start.elapsed().as_secs())
+            .unwrap_or(0)
+    };
+
+    let json = alloc::format!(
+        r#"{{"level":"{}","message":"{}","timestamp":{}}}"#,
+        level, message, uptime_secs
+    );
+
+    // Try to send non-blocking; if the channel is full, the alert is dropped
+    // (alerts are best-effort and should not block the main loop).
+    let payload = Vec::from(json.as_bytes());
+    let _ = ALERT_CHANNEL.try_send(payload);
 }
 
 // ── Sniffer mode (passive RS-485 monitoring) ──────────────────────────
@@ -547,10 +623,25 @@ async fn main(spawner: Spawner) {
             if let Some(started) = registration_started_at {
                 if started.elapsed() >= Duration::from_secs(5) {
                     warn!("Registration timeout (5s), resetting to try again");
+                    send_alert("warn", "registration_timeout");
                     registration.reset();
                     registration_started_at = None;
                 }
             }
+        }
+
+        // ── OTA update handling ─────────────────────────────────────
+        let ota_rx = OTA_CHANNEL.receiver();
+        if let Ok(firmware_url) = ota_rx.try_receive() {
+            info!("OTA: starting firmware download from main loop");
+            if let Err(()) = ota::perform_ota_update(wifi_stack.stack, &mut ota, &firmware_url).await {
+                error!("OTA update failed");
+                send_alert("error", "ota_update_failed");
+            }
+            // If we get here without resetting, something went very wrong
+            error!("OTA: device did not reset after update, rolling back");
+            let _ = ota.rollback_and_reboot();
+            esp_hal::system::software_reset();
         }
 
         // Drain pump timer commands
@@ -577,6 +668,7 @@ async fn main(spawner: Spawner) {
             if !was_stale {
                 warn!("No status update for 30s, publishing stale availability");
                 was_stale = true;
+                send_alert("warn", "spa_communication_lost");
                 // Only publish stale if we have a known status (never received = just booting)
                 if let Some(ref stale_status) = last_status {
                     let _ = STATE_CHANNEL.try_send((stale_status.clone(), last_fault.clone(), true));
@@ -587,6 +679,7 @@ async fn main(spawner: Spawner) {
         // Check heap usage (logs warning if low)
         if heap_monitor.tick() {
             warn!("Heap critically low — consider reducing allocations");
+            send_alert("error", "heap_critically_low");
         }
 
         // ── Periodic diagnostics publishing (every 60s) ─────────────

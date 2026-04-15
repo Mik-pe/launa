@@ -474,6 +474,24 @@ impl MqttClient {
         self.publish(&avail_topic, b"stale", 1, true).await
     }
 
+    /// Publish an alert message to the alert topic.
+    /// `level` should be "warn" or "error". `message` describes the alert condition.
+    /// `uptime_secs` is the device uptime in seconds.
+    pub async fn publish_alert(
+        &mut self,
+        level: &str,
+        message: &str,
+        uptime_secs: u64,
+    ) -> Result<(), MqttError> {
+        let topics = TopicBuilder::new(&self.device_id);
+        let alert_topic = topics.alert_topic();
+        let json = format!(
+            r#"{{"level":"{}","message":"{}","timestamp":{}}}"#,
+            level, message, uptime_secs
+        );
+        self.publish(&alert_topic, json.as_bytes(), 1, false).await
+    }
+
     pub async fn publish_discovery(&mut self) -> Result<(), MqttError> {
         let device_id = self.device_id.clone();
         let topics = TopicBuilder::new(&device_id);

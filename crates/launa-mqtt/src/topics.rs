@@ -63,6 +63,11 @@ impl TopicBuilder {
     pub fn diagnostics_topic(&self) -> String {
         alloc::format!("{}/{}/diagnostics", BASE_TOPIC, self.device_id)
     }
+
+    /// Topic for publishing alert messages (warnings/errors requiring operator attention).
+    pub fn alert_topic(&self) -> String {
+        alloc::format!("{}/{}/alert", BASE_TOPIC, self.device_id)
+    }
 }
 
 /// MQTT Last Will and Testament (LWT) configuration.
@@ -190,5 +195,11 @@ mod tests {
     fn test_diagnostics_topic() {
         let t = TopicBuilder::new("spa_001");
         assert_eq!(t.diagnostics_topic(), "launa/spa_001/diagnostics");
+    }
+
+    #[test]
+    fn test_alert_topic() {
+        let t = TopicBuilder::new("spa_001");
+        assert_eq!(t.alert_topic(), "launa/spa_001/alert");
     }
 }

@@ -126,7 +126,7 @@ These must be fixed before field deployment. The firmware runs headless at the s
 
 ### OTA / Boot
 
-- [ ] **OTA HTTP download over embassy-net TCP** (`app/src/ota.rs`): `perform_ota_update()` is a stub -- it parses the URL but logs "not yet implemented". Implement: (1) create TCP socket, (2) HTTP GET the firmware URL, (3) write chunks to alternate OTA partition via `EspOtaFlash::write()`, (4) finalize and reboot. Without this, remote firmware updates are impossible.
+- [x] **OTA HTTP download over embassy-net TCP** (`app/src/ota.rs`): Implemented full HTTP download: TCP socket creation, HTTP GET request, header/body parsing, OTA flash writing via `EspOtaFlash::write()`, finalize + software reset. Rollback on failure. OTA URL passed through `OTA_CHANNEL` from mqtt_task to main loop (where OTA updater and stack are available).
 - [x] **Graceful shutdown before OTA reboot**: On OTA trigger: publish "offline" to availability, send MQTT DISCONNECT, drain UART TX channel, wait 50ms for in-flight bytes, then reboot.
 - [x] **Fix NVS partition size mismatch**: Fixed `partitions.csv` NVS size from `0x4000` to `0x6000` (24 KiB) to match `config.rs`. Adjusted `phy_init` offset accordingly.
 - [x] **Add factory app partition to partition table**: Added factory app partition at `0x20000` (1.25 MiB). Three equal app partitions (factory + ota_0 + ota_1) fit within 4MB flash. Updated `launa-esp-ota` constants to match.
@@ -141,7 +141,7 @@ These must be fixed before field deployment. The firmware runs headless at the s
 
 - [x] **Re-register on bus reset**: `NewClientQuery` handler now calls `registration.reset()` and clears `client_id`, allowing re-registration after spa reboot.
 - [x] **Registration timeout**: Added 5-second timeout tracking. If stuck in `WaitingForAssignment`, resets back to `WaitingForQuery` for retry on next broadcast cycle.
-- [ ] **WiFi reconnect triggers MQTT reconnect**: `connection_task` handles WiFi disconnect/reconnect, but `mqtt_task` only detects MQTT-level connection loss. If WiFi drops and reconnects, the old TCP socket may be in a zombie state. Fix: share a signal between `connection_task` and `mqtt_task` so WiFi reconnect triggers MQTT reconnect proactively.
+- [x] **WiFi reconnect triggers MQTT reconnect**: Added `WIFI_RECONNECT_SIGNAL` (embassy `Signal`) that `connection_task` sets on WiFi reconnect. `mqtt_task` checks the signal before each `recv()` and forces MQTT reconnect proactively when WiFi has reconnected, preventing zombie TCP sockets.
 - [x] **Stale-status detection and alerting**: Track time since last valid status frame. If >5s, send `ConfigurationRequest` to provoke a response. If >30s, publish "stale" to availability topic so HA shows the device as unavailable. Recovery is automatic when a valid status frame arrives.
 - [x] **CommandTracker bounded capacity**: Added `MAX_PENDING_COMMANDS = 8` cap. `track()` rejects new commands with a warning log when full, preventing heap exhaustion.
 
@@ -150,11 +150,15 @@ These must be fixed before field deployment. The firmware runs headless at the s
 The firmware runs headless -- serial debug is inaccessible in production. All diagnostics must be published to MQTT so HA or the operator can detect problems remotely.
 
 - [x] **Add `launa/<device_id>/diagnostics` MQTT topic**: Publishes JSON payload every 60 seconds with: `free_heap`, `uptime_secs`, `frames_received`, `mqtt_reconnects`, `wifi_disconnects`, `command_retries`, `command_drops`. Uses `DIAGNOSTICS_CHANNEL` from main loop to MQTT task. `TopicBuilder::diagnostics_topic()` added to `launa-mqtt`.
-- [ ] **Add `launa/<device_id>/alert` MQTT topic**: Publish alerts for conditions that need operator attention: heap below 4 KiB, spa communication lost (>30s stale), registration failure, MQTT reconnect loop (>3 failures), OTA failure. Each alert is a JSON object: `{"level":"warn"|"error","message":"...","timestamp":<uptime_secs>}`. Subscribe HA to this topic as a sensor so alerts surface in the UI.
+- [x] **Add `launa/<device_id>/alert` MQTT topic**: Publishes JSON alerts via `ALERT_CHANNEL` for: heap critically low, spa communication lost (>30s), registration timeout, MQTT reconnect loop (>3 failures), OTA failure. Each alert: `{"level":"warn"|"error","message":"...","timestamp":<uptime_secs>}`. `TopicBuilder::alert_topic()` added to `launa-mqtt`.
 - [ ] **Add diagnostics HA discovery entity**: Add a `sensor` entity for diagnostics and a `sensor` entity for alerts in both `DiscoveryBuilder` and app/ discovery. The diagnostics sensor shows the last diagnostics payload; the alert sensor shows the last alert message. This gives the operator a dashboard without needing raw MQTT tools.
 - [x] **Heap monitoring with MQTT alert**: `HeapMonitor` in `app/src/heap_monitor.rs` checks free heap every 60s. Logs warning below 4 KiB, critical below 1 KiB. Returns `true` from `tick()` when critically low so the main loop can react.
 - [x] **Frame CRC error counter in diagnostics**: Added `crc_error_count` and `reset_crc_error_count` methods to `FrameDecoder` in `launa-protocol/src/frame.rs`. Counter increments on CRC mismatch; retrievable and resettable for diagnostics publishing. 4 new tests.
 - [x] **Counters for MQTT reconnects, WiFi disconnects, command failures**: Added 5 `AtomicU32` counters (`MQTT_RECONNECT_COUNT`, `WIFI_DISCONNECT_COUNT`, `COMMAND_RETRY_COUNT`, `COMMAND_DROP_COUNT`, `FRAMES_RECEIVED`). Published via `launa/<device_id>/diagnostics` topic every 60s with uptime and heap info. `CommandTracker.verify()` now returns `VerifyResult` with retry/drop counts.
+
+## P2: OTA Integration Simulation
+
+- [ ] **Add OTA simulation to `launa-sim`**: The OTA logic is well-tested at the unit level (`launa-esp-ota` has 11 tests with a `MockFlash`), but there's no integration-level OTA test. Add a simulation that tests the full OTA flow end-to-end on desktop: (1) simulate HTTP firmware download (serve chunks from memory), (2) write through `OtaUpdate` trait via `MockOta`, (3) verify partition switching / boot selection logic, (4) test rollback scenario (crash before `mark_valid`), (5) test graceful OTA shutdown (MQTT offline, UART drain). This would live in `launa-integration-tests` alongside the existing spa protocol tests.
 
 ## P2: Missing Firmware Features
 

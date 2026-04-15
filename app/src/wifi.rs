@@ -15,6 +15,10 @@ use esp_radio::wifi::{
 };
 use log::{info, warn};
 
+/// Signal set when WiFi reconnects after a disconnect.
+/// Declared in main.rs as `WIFI_RECONNECT_SIGNAL`.
+use crate::WIFI_RECONNECT_SIGNAL;
+
 macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
         static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
@@ -34,6 +38,8 @@ async fn connection_task(mut controller: WifiController<'static>) {
         match controller.connect_async().await {
             Ok(()) => {
                 info!("WiFi connected");
+                // Signal WiFi reconnect so MQTT task can force a clean reconnect
+                WIFI_RECONNECT_SIGNAL.signal(());
                 loop {
                     if !controller.is_connected().unwrap_or(false) {
                         break;
