@@ -124,10 +124,10 @@ The hand-rolled MQTT client in `app/src/mqtt_client.rs` had multiple protocol bu
 
 ### Critical
 
-- [ ] **OTA: unbounded `header_buf` can OOM the 32 KiB heap** (`app/src/ota.rs`): `header_buf: Vec` grows without limit until `\r\n\r\n` is found. A malicious/buggy HTTP server that never sends the header terminator will exhaust the heap and panic. Add a size cap (e.g., 4 KiB — headers should never be that large).
-- [ ] **OTA: no HTTP status code validation** (`app/src/ota.rs`): The code skips headers but never checks the HTTP response status line. A 404, 500, or redirect response body would be flashed as "firmware," potentially bricking the device. Must verify `HTTP/1.1 200` before proceeding.
-- [ ] **OTA: `begin()` erases entire partition before download completes** (`app/src/ota.rs`): `ota.begin()` wipes the full 1.25 MiB target partition before any firmware bytes are downloaded. If the TCP connection drops mid-download, the device has a wiped partition. Consider erasing sectors incrementally as data arrives, or at minimum validate the HTTP response before erasing.
-- [ ] **OTA: `rollback_and_reboot()` does not actually reboot** (`launa-esp-ota`): The method name says "and reboot" but it only writes otadata. Callers in `ota.rs` error paths invoke it then `return Err(())`, so execution falls through to the caller without resetting. In `main.rs` the fallback `software_reset()` exists but only at the outermost level. Error paths inside `perform_ota_update` that call `rollback_and_reboot()` followed by `return Err(())` leave the device running with a partially-rolled-back state.
+- [x] **OTA: unbounded `header_buf` can OOM the 32 KiB heap** (`app/src/ota.rs`): Added 4 KiB header size cap (`MAX_HEADER_SIZE`). Headers exceeding this limit cause the OTA to abort before any flash writes.
+- [x] **OTA: no HTTP status code validation** (`app/src/ota.rs`): Added `validate_http_status()` — verifies `HTTP/1.x 200` status line before proceeding. Non-200 responses are rejected with the status line logged for diagnostics.
+- [x] **OTA: `begin()` erases entire partition before download completes** (`app/src/ota.rs`): Reordered: HTTP response is now fully validated (status + headers) before `ota.begin()` erases the target partition. If the server returns an error or the connection drops during headers, no flash is modified.
+- [x] **OTA: `rollback_and_reboot()` does not actually reboot** (`launa-esp-ota`, `app/src/ota.rs`): Added `ota_rollback()` helper in `ota.rs` that calls `rollback_and_reboot()` then `software_reset()`. All error paths in `perform_ota_update` use this helper, ensuring the device always reboots after a failed OTA.
 
 ### Moderate
 
@@ -140,10 +140,10 @@ The hand-rolled MQTT client in `app/src/mqtt_client.rs` had multiple protocol bu
 
 ### Minor
 
-- [ ] **Duplicate `mk_static!` macro in 3 files** (`app/src/ota.rs`, `app/src/mqtt_client.rs`, `app/src/wifi.rs`): The `mk_static!` macro is copy-pasted into three separate files. Should be a shared module to prevent divergence.
-- [ ] **Duplicate `parse_ip()` function in 2 files** (`app/src/ota.rs`, `app/src/mqtt_client.rs`): Identical `parse_ip()` logic copy-pasted. Should be a shared utility.
-- [ ] **`ota_rx` receiver recreated inside main loop every iteration** (`app/src/main.rs`): `let ota_rx = OTA_CHANNEL.receiver();` is inside the loop. Other receivers (`frame_rx`, `cmd_rx`) are created before the loop for consistency.
-- [ ] **`parse_ip` accepts malformed input** (`app/src/ota.rs`, `app/src/mqtt_client.rs`): `filter_map(|p| p.parse::<u8>().ok())` silently drops invalid octets, so `"1.2.3.4.5"` matches `[1,2,3,4]` and `"999.1.1.1"` matches `[1,1,1]`. Should validate exactly 4 dot-separated octets in range 0-255.
+- [x] **Duplicate `mk_static!` macro in 3 files** (`app/src/ota.rs`, `app/src/mqtt_client.rs`, `app/src/wifi.rs`): Consolidated into `app/src/macros.rs`. All three files now import via `use crate::mk_static`.
+- [x] **Duplicate `parse_ip()` function in 2 files** (`app/src/ota.rs`, `app/src/mqtt_client.rs`): Moved to `app/src/net_util.rs`. Both files now use `net_util::parse_ip`.
+- [x] **`ota_rx` receiver recreated inside main loop every iteration** (`app/src/main.rs`): Moved to before the loop alongside `frame_rx` and `cmd_rx`.
+- [x] **`parse_ip` accepts malformed input** (`app/src/ota.rs`, `app/src/mqtt_client.rs`): Fixed — now validates exactly 4 dot-separated octets via `split('.')` count check instead of `filter_map`. `"1.2.3.4.5"` and `"999.1.1.1"` are correctly rejected.
 - [ ] **Registration timeout `registration_started_at` leak** (`app/src/main.rs`): If `registration_started_at` is set but `is_registered()` becomes true between checks, the `Some` value persists indefinitely. Harmless in practice since `SendIdAck` clears it, but inconsistent.
 
 ## P0: Production Blockers

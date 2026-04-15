@@ -347,7 +347,7 @@ where
     fn rollback_and_reboot(&mut self) -> Result<(), OtaError> {
         info!("OTA: rolling back to {:?}", self.running);
         self.set_boot_partition(self.running)?;
-        info!("OTA: otadata updated for rollback. Reboot required.");
+        info!("OTA: otadata updated for rollback. Caller must reset.");
         Ok(())
     }
 }

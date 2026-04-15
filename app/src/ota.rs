@@ -19,16 +19,10 @@ use launa_esp_ota::{EspOtaFlash, Partition};
 use launa_ota::OtaUpdate;
 use log::{error, info};
 
-pub type EspOta = EspOtaFlash<esp_storage::FlashStorage<'static>>;
+use crate::mk_static;
+use crate::net_util;
 
-macro_rules! mk_static {
-    ($t:ty,$val:expr) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
-        #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit().write(($val));
-        x
-    }};
-}
+pub type EspOta = EspOtaFlash<esp_storage::FlashStorage<'static>>;
 
 /// Create a new OTA updater from an existing FlashStorage.
 /// Detects the actual running partition from otadata instead of hardcoding.
@@ -39,11 +33,14 @@ pub fn create_ota(flash: esp_storage::FlashStorage<'static>) -> EspOta {
     EspOtaFlash::new(storage, running)
 }
 
+/// Maximum size for HTTP response headers. Prevents OOM from malicious servers.
+const MAX_HEADER_SIZE: usize = 4096;
+
 /// Perform an OTA update by downloading firmware from the given HTTP URL.
 ///
-/// Creates a TCP connection, sends an HTTP GET request, skips headers,
-/// and writes the body to the OTA partition. On success, finalizes and
-/// triggers a software reset to apply the new firmware.
+/// Creates a TCP connection, sends an HTTP GET request, validates the
+/// HTTP status, skips headers, and writes the body to the OTA partition.
+/// On success, finalizes and triggers a software reset.
 pub async fn perform_ota_update(
     stack: &'static Stack<'static>,
     ota: &mut EspOta,
@@ -66,7 +63,7 @@ pub async fn perform_ota_update(
     socket.set_timeout(Some(Duration::from_secs(30)));
 
     // Resolve host IP
-    let addr = match parse_ip(&host) {
+    let addr = match net_util::parse_ip(&host) {
         Some(a) => a,
         None => {
             error!("OTA: cannot resolve host IP: {}", host);
@@ -97,62 +94,89 @@ pub async fn perform_ota_update(
         return Err(());
     }
 
-    // Begin OTA update (erase target partition)
-    if let Err(e) = ota.begin() {
-        error!("OTA: begin failed: {:?}", e);
-        return Err(());
-    }
-
-    // Read response, skip HTTP headers, write body to OTA
+    // Read response headers and validate HTTP status before erasing partition
     let mut buf = [0u8; 1024];
-    let mut header_end = false;
-    let mut total_written: u32 = 0;
     let mut header_buf = Vec::new();
+    let mut total_written: u32 = 0;
 
+    // Phase 1: Read headers and validate HTTP status
     loop {
         let n = match socket.read(&mut buf).await {
-            Ok(0) => break, // Connection closed by server
+            Ok(0) => {
+                error!("OTA: connection closed before headers complete");
+                return Err(());
+            }
             Ok(n) => n,
             Err(e) => {
-                error!("OTA: read error: {:?}", e);
-                let _ = ota.rollback_and_reboot();
+                error!("OTA: read error during headers: {:?}", e);
                 return Err(());
             }
         };
 
-        if !header_end {
-            // Accumulate data until we find the header/body boundary
-            header_buf.extend_from_slice(&buf[..n]);
+        // Cap header size to prevent OOM on the 32 KiB heap
+        if header_buf.len() + n > MAX_HEADER_SIZE {
+            error!(
+                "OTA: headers exceed {} bytes, aborting",
+                MAX_HEADER_SIZE
+            );
+            return Err(());
+        }
+        header_buf.extend_from_slice(&buf[..n]);
 
-            if let Some(pos) = find_header_end(&header_buf) {
-                header_end = true;
-                let body_start = pos + 4;
-                if body_start < header_buf.len() {
-                    if let Err(e) = ota.write(&header_buf[body_start..]) {
-                        error!("OTA: write failed: {:?}", e);
-                        let _ = ota.rollback_and_reboot();
-                        return Err(());
-                    }
-                    total_written += (header_buf.len() - body_start) as u32;
-                }
-                header_buf.clear(); // Free the memory
-            }
-            // else: still reading headers, continue accumulating
-        } else {
-            // Past headers — write body directly to OTA
-            if let Err(e) = ota.write(&buf[..n]) {
-                error!("OTA: write failed: {:?}", e);
-                let _ = ota.rollback_and_reboot();
+        if let Some(pos) = find_header_end(&header_buf) {
+            // Validate HTTP status line before proceeding
+            if !validate_http_status(&header_buf) {
+                let status_line = extract_status_line(&header_buf);
+                error!("OTA: HTTP status not 200: {}", status_line);
                 return Err(());
             }
-            total_written += n as u32;
+
+            // HTTP response validated — now safe to erase target partition
+            info!("OTA: HTTP 200 OK, erasing target partition");
+            if let Err(e) = ota.begin() {
+                error!("OTA: begin failed: {:?}", e);
+                return Err(());
+            }
+
+            // Write any body data that arrived with the headers
+            let body_start = pos + 4;
+            if body_start < header_buf.len() {
+                if let Err(e) = ota.write(&header_buf[body_start..]) {
+                    error!("OTA: write failed: {:?}", e);
+                    ota_rollback(ota);
+                    return Err(());
+                }
+                total_written += (header_buf.len() - body_start) as u32;
+            }
+            header_buf.clear();
+            break;
         }
+    }
+
+    // Phase 2: Read remaining body and write to OTA partition
+    loop {
+        let n = match socket.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                error!("OTA: read error: {:?}", e);
+                ota_rollback(ota);
+                return Err(());
+            }
+        };
+
+        if let Err(e) = ota.write(&buf[..n]) {
+            error!("OTA: write failed: {:?}", e);
+            ota_rollback(ota);
+            return Err(());
+        }
+        total_written += n as u32;
     }
 
     // Finalize the OTA update
     if let Err(e) = ota.finalize() {
         error!("OTA: finalize failed: {:?}", e);
-        let _ = ota.rollback_and_reboot();
+        ota_rollback(ota);
         return Err(());
     }
 
@@ -161,8 +185,42 @@ pub async fn perform_ota_update(
         total_written
     );
 
-    // Software reset to apply new firmware
     esp_hal::system::software_reset()
+}
+
+/// Roll back OTA and immediately reboot. Used on download/write failures
+/// to ensure the device doesn't continue running with a wiped partition.
+fn ota_rollback(ota: &mut EspOta) {
+    error!("OTA: rolling back and rebooting");
+    let _ = ota.rollback_and_reboot();
+    esp_hal::system::software_reset()
+}
+
+/// Validate that the HTTP response status line indicates success (200).
+fn validate_http_status(headers: &[u8]) -> bool {
+    // Status line format: "HTTP/1.x 200 ..."
+    if headers.len() < 12 {
+        return false;
+    }
+    if !headers.starts_with(b"HTTP/1.") {
+        return false;
+    }
+    // Status code is at bytes 9-11 (e.g., "HTTP/1.1 200")
+    if headers.len() < 12 {
+        return false;
+    }
+    headers[9] == b'2' && headers[10] == b'0' && headers[11] == b'0'
+}
+
+/// Extract the status line from HTTP headers for error logging.
+fn extract_status_line(headers: &[u8]) -> alloc::string::String {
+    if let Some(pos) = headers.iter().position(|&b| b == b'\r' || b == b'\n') {
+        alloc::string::String::from_utf8_lossy(&headers[..pos]).into_owned()
+    } else if headers.len() > 40 {
+        alloc::string::String::from_utf8_lossy(&headers[..40]).into_owned() + "..."
+    } else {
+        alloc::string::String::from_utf8_lossy(headers).into_owned()
+    }
 }
 
 /// Find the end of HTTP headers (`\r\n\r\n`) in a byte buffer.
@@ -194,17 +252,4 @@ fn parse_http_url(url: &str) -> Option<(String, u16, String)> {
     };
 
     Some((host, port, String::from(path)))
-}
-
-/// Parse an IPv4 address string into [u8; 4].
-fn parse_ip(s: &str) -> Option<[u8; 4]> {
-    let parts: Vec<u8> = s
-        .split('.')
-        .filter_map(|p| p.parse::<u8>().ok())
-        .collect();
-    if parts.len() == 4 {
-        Some([parts[0], parts[1], parts[2], parts[3]])
-    } else {
-        None
-    }
 }

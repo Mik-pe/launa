@@ -15,18 +15,8 @@ use esp_radio::wifi::{
 };
 use log::{info, warn};
 
-/// Signal set when WiFi reconnects after a disconnect.
-/// Declared in main.rs as `WIFI_RECONNECT_SIGNAL`.
 use crate::WIFI_RECONNECT_SIGNAL;
-
-macro_rules! mk_static {
-    ($t:ty,$val:expr) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
-        #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit().write(($val));
-        x
-    }};
-}
+use crate::mk_static;
 
 pub struct WifiStack {
     pub stack: &'static Stack<'static>,

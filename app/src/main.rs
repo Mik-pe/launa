@@ -32,7 +32,9 @@ mod clock;
 mod command_tracker;
 mod config;
 mod heap_monitor;
+mod macros;
 mod mqtt_client;
+mod net_util;
 mod ota;
 mod pump_timer;
 mod transport;
@@ -564,6 +566,7 @@ async fn main(spawner: Spawner) {
     let frame_rx = FRAME_CHANNEL.receiver();
     let cmd_rx = COMMAND_CHANNEL.receiver();
     let pump_timer_rx = PUMP_TIMER_CHANNEL.receiver();
+    let ota_rx = OTA_CHANNEL.receiver();
 
     let mut registration = RegistrationStateMachine::new();
     let mut pump_timers = pump_timer::PumpTimerManager::new();
@@ -631,7 +634,6 @@ async fn main(spawner: Spawner) {
         }
 
         // ── OTA update handling ─────────────────────────────────────
-        let ota_rx = OTA_CHANNEL.receiver();
         if let Ok(firmware_url) = ota_rx.try_receive() {
             info!("OTA: starting firmware download from main loop");
             if let Err(()) = ota::perform_ota_update(wifi_stack.stack, &mut ota, &firmware_url).await {

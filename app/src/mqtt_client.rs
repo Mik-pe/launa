@@ -22,15 +22,8 @@ use launa_protocol::status::{TemperatureScale, TempRange, StatusUpdate};
 use log::{info, warn, debug, error};
 
 use crate::config::AppConfig;
-
-macro_rules! mk_static {
-    ($t:ty,$val:expr) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
-        #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit().write(($val));
-        x
-    }};
-}
+use crate::mk_static;
+use crate::net_util;
 
 // ── MQTT action type (command vs timer) ────────────────────────────────
 
@@ -149,7 +142,7 @@ impl MqttClient {
         let mut socket = TcpSocket::new(*stack, rx_buf, tx_buf);
         socket.set_timeout(Some(Duration::from_secs(10)));
 
-        let addr = parse_ip(&config.mqtt_host).unwrap_or([192, 168, 1, 100]);
+        let addr = net_util::parse_ip(&config.mqtt_host).unwrap_or([192, 168, 1, 100]);
         let endpoint = IpEndpoint {
             addr: IpAddress::Ipv4(Ipv4Address::from_octets(addr)),
             port: config.mqtt_port,
@@ -222,7 +215,7 @@ impl MqttClient {
         let mut socket = TcpSocket::new(*self.stack, rx_buf, tx_buf);
         socket.set_timeout(Some(Duration::from_secs(10)));
 
-        let addr = parse_ip(&self.config_host).unwrap_or([192, 168, 1, 100]);
+        let addr = net_util::parse_ip(&self.config_host).unwrap_or([192, 168, 1, 100]);
         let endpoint = IpEndpoint {
             addr: IpAddress::Ipv4(Ipv4Address::from_octets(addr)),
             port: self.config_port,
@@ -689,13 +682,3 @@ fn decode_remaining_length(buf: &[u8]) -> Option<(usize, usize)> {
     Some((value, idx))
 }
 
-fn parse_ip(s: &str) -> Option<[u8; 4]> {
-    let parts: Vec<u8> = s.split('.')
-        .filter_map(|p| p.parse::<u8>().ok())
-        .collect();
-    if parts.len() == 4 {
-        Some([parts[0], parts[1], parts[2], parts[3]])
-    } else {
-        None
-    }
-}
