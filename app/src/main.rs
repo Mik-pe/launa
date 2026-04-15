@@ -16,7 +16,7 @@ use alloc::vec::Vec;
 use embassy_executor::Spawner;
 use embassy_sync::channel::Channel;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use embedded_io_async::Write as _;
 use launa_protocol::command::Command;
 use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
@@ -28,6 +28,7 @@ use log::{debug, error, info, warn};
 
 mod command_tracker;
 mod config;
+mod heap_monitor;
 mod mqtt_client;
 mod ota;
 mod pump_timer;
@@ -42,7 +43,7 @@ esp_alloc::heap_allocator!(size: 32 * 1024);
 static FRAME_CHANNEL: Channel<CriticalSectionRawMutex, Frame, 4> = Channel::new();
 static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
 static UART_TX_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
-static STATE_CHANNEL: Channel<CriticalSectionRawMutex, (StatusUpdate, Option<alloc::string::String>), 2> = Channel::new();
+static STATE_CHANNEL: Channel<CriticalSectionRawMutex, (StatusUpdate, Option<alloc::string::String>, bool), 2> = Channel::new();
 static PUMP_TIMER_CHANNEL: Channel<CriticalSectionRawMutex, (u8, u32), 4> = Channel::new();
 
 // ── Combined UART task (reads frames + writes outgoing bytes) ──────────
@@ -98,10 +99,18 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
 
     loop {
         // Check for state updates to publish (non-blocking)
-        if let Ok((status, fault)) = state_rx.try_receive() {
+        if let Ok((status, fault, is_stale)) = state_rx.try_receive() {
             last_scale_range = Some((status.temperature_scale, status.temp_range));
             if let Err(e) = mqtt.publish_state(&status, fault.as_deref()).await {
                 warn!("MQTT state publish failed: {:?}", e);
+            }
+            if is_stale {
+                if let Err(e) = mqtt.publish_availability_stale().await {
+                    warn!("MQTT stale availability publish failed: {:?}", e);
+                }
+            } else {
+                // Status received after being stale — publish recovery
+                let _ = mqtt.publish_availability(true).await;
             }
             continue;
         }
@@ -115,6 +124,18 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 if mqtt.is_ota_topic(&topic) {
                     if let Some(url) = mqtt_client::MqttClient::parse_ota_url(&payload) {
                         info!("OTA firmware URL: {}", url);
+                        // Graceful shutdown before OTA reboot
+                        info!("OTA: graceful shutdown — publishing offline...");
+                        let _ = mqtt.publish_availability(false).await;
+                        info!("OTA: sending MQTT DISCONNECT...");
+                        mqtt.disconnect().await;
+                        info!("OTA: draining UART TX channel...");
+                        while UART_TX_CHANNEL.try_receive().is_ok() {
+                            // Drain pending UART writes
+                        }
+                        // Allow time for in-flight UART bytes to complete
+                        Timer::after(Duration::from_millis(50)).await;
+                        info!("OTA: shutdown complete, starting update...");
                         ota::perform_ota_update(&url).await;
                     } else {
                         warn!("Invalid OTA payload");
@@ -180,8 +201,139 @@ async fn send_frame(msg_type: [u8; 2], payload: &[u8]) {
     UART_TX_CHANNEL.send(encoded).await;
 }
 
+// ── Sniffer mode (passive RS-485 monitoring) ──────────────────────────
+
+#[cfg(feature = "sniff")]
+#[esp_rtos::main]
+async fn main(spawner: Spawner) {
+    let peripherals = esp_hal::init(esp_hal::Config::default());
+
+    let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
+    esp_rtos::start(timg0.timer0);
+
+    info!("Launa ESP32 sniffer mode starting...");
+
+    // ── Load config from NVS ────────────────────────────────────────
+    let mut nvs = config::AppConfig::open_nvs();
+    let app_config = config::AppConfig::load(&mut nvs);
+    let device_id = app_config.device_id.clone();
+    info!("Config loaded: device_id={}", device_id);
+
+    // ── Initialize RS-485 UART ──────────────────────────────────────
+    let uart_config = esp_hal::uart::Config::default().with_baudrate(115200);
+    let uart = esp_hal::uart::Uart::new(peripherals.UART1, uart_config)
+        .expect("Failed to create UART")
+        .with_tx(peripherals.GPIO17)
+        .with_rx(peripherals.GPIO16)
+        .into_async();
+
+    let mut transport = transport::Rs485Transport::new(uart, Some(peripherals.GPIO4.into()));
+    info!("RS-485 UART initialized");
+
+    // ── Initialize esp-radio ────────────────────────────────────────
+    let radio_ctrl = esp_radio::init().expect("Failed to init esp-radio");
+
+    // ── Connect WiFi ────────────────────────────────────────────────
+    let rng = esp_hal::rng::Rng::new(peripherals.RNG);
+    let wifi_stack = wifi::WifiStack::connect(
+        spawner,
+        radio_ctrl,
+        peripherals.WIFI,
+        rng,
+        &app_config.wifi_ssid,
+        &app_config.wifi_password,
+    )
+    .await;
+
+    // ── Connect MQTT ────────────────────────────────────────────────
+    let mut mqtt = match mqtt_client::MqttClient::connect(wifi_stack.stack, &app_config).await {
+        Ok(m) => m,
+        Err(e) => {
+            error!("MQTT connect failed: {:?}", e);
+            panic!("MQTT connect failed")
+        }
+    };
+
+    let _ = mqtt.publish_availability(true).await;
+    let _ = mqtt.subscribe_commands().await;
+
+    let topics = TopicBuilder::new(&device_id);
+    let sniff_topic = topics.sniff_topic();
+
+    info!("Sniffer mode active - listening passively on RS-485");
+
+    let mut decoder = FrameDecoder::new();
+    let mut buf = [0u8; 256];
+
+    loop {
+        match transport.read(&mut buf).await {
+            Ok(n) if n > 0 => {
+                let frames = decoder.feed_slice(&buf[..n]);
+                for frame in &frames {
+                    let hex: alloc::string::String = frame.payload.iter()
+                        .map(|b| alloc::format!("{:02X}", b))
+                        .collect();
+                    let mt = alloc::format!("{:02X}{:02X}", frame.message_type[0], frame.message_type[1]);
+
+                    // Re-parse to get CRC status
+                    let crc_ok = Frame::parse(&frame.payload).is_ok();
+
+                    let json = alloc::format!(
+                        r#"{{"raw":"{}","type":"{}","len":{},"crc_ok":{}}}"#,
+                        hex, mt, frame.payload.len(), crc_ok
+                    );
+                    info!("Sniff: {}", json);
+                    let _ = mqtt.publish(&sniff_topic, json.as_bytes(), 0, false).await;
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                warn!("Sniffer read error: {:?}", e);
+                Timer::after(Duration::from_millis(100)).await;
+            }
+        }
+    }
+}
+
+// ── Hardware test mode ─────────────────────────────────────────────────
+
+#[cfg(feature = "hw-test")]
+#[esp_rtos::main]
+async fn main(_spawner: Spawner) {
+    let peripherals = esp_hal::init(esp_hal::Config::default());
+
+    let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
+    esp_rtos::start(timg0.timer0);
+
+    info!("HW test mode");
+
+    // Test 1: UART
+    let uart_config = esp_hal::uart::Config::default().with_baudrate(115200);
+    let _uart = esp_hal::uart::Uart::new(peripherals.UART1, uart_config)
+        .expect("Failed to create UART")
+        .with_tx(peripherals.GPIO17)
+        .with_rx(peripherals.GPIO16)
+        .into_async();
+    info!("TEST_PASS:uart_init");
+
+    // Test 2: Timer
+    Timer::after(Duration::from_millis(100)).await;
+    info!("TEST_PASS:timer");
+
+    // Test 3: Heap
+    let free = esp_alloc::get_free_heap();
+    if free > 1000 {
+        info!("TEST_PASS:heap_free={}", free);
+    } else {
+        info!("TEST_FAIL:heap_low={}", free);
+    }
+
+    info!("TEST_PASS:all");
+}
+
 // ── Main entry point ──────────────────────────────────────────────────
 
+#[cfg(not(any(feature = "sniff", feature = "hw-test")))]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
     let peripherals = esp_hal::init(esp_hal::Config::default());
@@ -262,9 +414,13 @@ async fn main(spawner: Spawner) {
     let mut pump_timers = pump_timer::PumpTimerManager::new();
     let mut hold_timer = pump_timer::HoldModeTimer::new();
     let mut cmd_tracker = command_tracker::CommandTracker::new();
+    let mut heap_monitor = heap_monitor::HeapMonitor::new();
     let mut last_status: Option<launa_protocol::status::StatusUpdate> = None;
     let mut last_fault: Option<alloc::string::String> = None;
     let mut client_id: Option<u8> = None;
+    let mut last_status_time: Instant = Instant::now();
+    let mut last_probe_time: Instant = Instant::now();
+    let mut was_stale: bool = false;
 
     loop {
         // Wait for a frame from the UART task
@@ -279,6 +435,9 @@ async fn main(spawner: Spawner) {
             &mut last_fault,
             &mut client_id,
             &cmd_rx,
+            &mut last_status_time,
+            &mut last_probe_time,
+            &mut was_stale,
         ).await;
 
         // Drain all available frames
@@ -293,6 +452,9 @@ async fn main(spawner: Spawner) {
                 &mut last_fault,
                 &mut client_id,
                 &cmd_rx,
+                &mut last_status_time,
+                &mut last_probe_time,
+                &mut was_stale,
             ).await;
         }
 
@@ -303,6 +465,33 @@ async fn main(spawner: Spawner) {
                 send_frame(msg_type, &payload).await;
                 info!("Started pump {} timer for {} min", pump_index, minutes);
             }
+        }
+
+        // ── Stale detection ─────────────────────────────────────────
+        let elapsed = last_status_time.elapsed();
+
+        // If no status for 5s, send configuration request to provoke response
+        if elapsed >= Duration::from_secs(5) && last_probe_time.elapsed() >= Duration::from_secs(5) {
+            warn!("No status update for 5s, sending configuration request");
+            send_frame([0x0A, 0xBF], &[0x04]).await;
+            last_probe_time = Instant::now(); // Avoid spamming probes
+        }
+
+        // If no status for 30s, mark as stale and notify MQTT
+        if elapsed >= Duration::from_secs(30) {
+            if !was_stale {
+                warn!("No status update for 30s, publishing stale availability");
+                was_stale = true;
+                // Only publish stale if we have a known status (never received = just booting)
+                if let Some(ref stale_status) = last_status {
+                    let _ = STATE_CHANNEL.try_send((stale_status.clone(), last_fault.clone(), true));
+                }
+            }
+        }
+
+        // Check heap usage (logs warning if low)
+        if heap_monitor.tick() {
+            warn!("Heap critically low — consider reducing allocations");
         }
     }
 }
@@ -317,6 +506,9 @@ async fn handle_frame(
     last_fault: &mut Option<alloc::string::String>,
     client_id: &mut Option<u8>,
     cmd_rx: &embassy_sync::channel::Receiver<CriticalSectionRawMutex, Command, 4>,
+    last_status_time: &mut Instant,
+    last_probe_time: &mut Instant,
+    was_stale: &mut bool,
 ) {
     // ── Registration ────────────────────────────────────────────────
     if !registration.is_registered() {
@@ -366,8 +558,16 @@ async fn handle_frame(
             }
 
             *last_status = Some(status.clone());
+            *last_status_time = Instant::now();
+            *last_probe_time = Instant::now(); // Reset probe timer on valid status
 
-            STATE_CHANNEL.send((status, last_fault.clone())).await;
+            // If we were stale, publish recovery availability
+            let recovering = *was_stale;
+            if recovering {
+                *was_stale = false;
+            }
+
+            STATE_CHANNEL.send((status, last_fault.clone(), recovering)).await;
         }
         IncomingMessage::Ready => {
             debug!("Spa ready -- sending queued command or NothingToSend");

@@ -3,6 +3,11 @@ name = "launa-app"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+sniff = []
+hw-test = []
+
 [profile.release]
 opt-level = "s"
 

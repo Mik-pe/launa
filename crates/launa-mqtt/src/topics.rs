@@ -42,6 +42,11 @@ impl TopicBuilder {
         alloc::format!("{}/{}/ota", BASE_TOPIC, self.device_id)
     }
 
+    /// Topic for raw sniffer frames (passive RS-485 monitoring).
+    pub fn sniff_topic(&self) -> String {
+        alloc::format!("{}/{}/sniff", BASE_TOPIC, self.device_id)
+    }
+
     /// Topic for subscribing to Home Assistant status (online/offline).
     /// Used to re-publish discovery when HA restarts.
     pub fn ha_status_topic(&self) -> String {
@@ -123,6 +128,12 @@ mod tests {
     fn test_topic_builder_ota() {
         let t = TopicBuilder::new("spa_001");
         assert_eq!(t.ota_topic(), "launa/spa_001/ota");
+    }
+
+    #[test]
+    fn test_topic_builder_sniff() {
+        let t = TopicBuilder::new("spa_001");
+        assert_eq!(t.sniff_topic(), "launa/spa_001/sniff");
     }
 
     #[test]

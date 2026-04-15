@@ -454,6 +454,12 @@ impl MqttClient {
         self.publish(&avail_topic, payload.as_bytes(), 1, true).await
     }
 
+    pub async fn publish_availability_stale(&mut self) -> Result<(), MqttError> {
+        let topics = TopicBuilder::new(&self.device_id);
+        let avail_topic = topics.availability_topic();
+        self.publish(&avail_topic, b"stale", 1, true).await
+    }
+
     pub async fn publish_discovery(&mut self) -> Result<(), MqttError> {
         let topics = TopicBuilder::new(&self.device_id);
         let device_id = &self.device_id;
@@ -572,6 +578,13 @@ impl MqttClient {
 
     pub fn is_ha_status_topic(&self, topic: &str) -> bool {
         topic == "homeassistant/status"
+    }
+
+    /// Send MQTT DISCONNECT packet and flush the transport.
+    /// Call this before OTA reboot to notify the broker cleanly.
+    pub async fn disconnect(&mut self) {
+        let _ = self.send_bytes(&[0xE0, 0x00]).await;
+        info!("MQTT DISCONNECT sent");
     }
 
     pub fn parse_ota_url(payload: &[u8]) -> Option<String> {
