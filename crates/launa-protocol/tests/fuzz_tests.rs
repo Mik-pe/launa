@@ -3,11 +3,11 @@
 //! Tests resilience against random/edge-case inputs. Verifies that parsers
 //! never panic on arbitrary input.
 
-use launa_protocol::{Frame, FrameDecoder, StatusUpdate, dispatch_frame, IncomingMessage};
 use launa_protocol::config::SpaConfig;
-use launa_protocol::information::InformationResponse;
 use launa_protocol::fault::FaultLogEntry;
 use launa_protocol::filter::FilterCycles;
+use launa_protocol::information::InformationResponse;
+use launa_protocol::{dispatch_frame, Frame, FrameDecoder, IncomingMessage, StatusUpdate};
 
 // ── Helper: simple deterministic PRNG (xorshift32) ──────────────────────
 
@@ -168,7 +168,7 @@ fn test_status_all_bytes_0xff() {
     let payload = [0xFFu8; 24];
     let status = StatusUpdate::parse(&payload).unwrap();
     assert_eq!(status.current_temp, None); // 0xFF = unknown
-    // Other fields just shouldn't panic
+                                           // Other fields just shouldn't panic
 }
 
 #[test]

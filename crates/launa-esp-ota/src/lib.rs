@@ -8,8 +8,9 @@
 //!
 //! ```text
 //! otadata:  offset 0x10000, size 0x2000 (8 KiB)
-//! ota_0:    offset 0x20000, size 0x1C0000 (1.75 MiB)
-//! ota_1:    offset 0x1E0000, size 0x1C0000 (1.75 MiB)
+//! factory:  offset 0x20000, size 0x140000 (1.25 MiB)
+//! ota_0:    offset 0x160000, size 0x140000 (1.25 MiB)
+//! ota_1:    offset 0x2A0000, size 0x140000 (1.25 MiB)
 //! ```
 //!
 //! # OTA Data Format
@@ -35,10 +36,10 @@ use log::{debug, info, warn};
 // ── Partition table constants (must match app/partitions.csv) ──────────
 
 const OTADATA_OFFSET: u32 = 0x10000;
-const OTA_0_OFFSET: u32 = 0x20000;
-const OTA_0_SIZE: u32 = 0x1C0000;
-const OTA_1_OFFSET: u32 = 0x1E0000;
-const OTA_1_SIZE: u32 = 0x1C0000;
+const OTA_0_OFFSET: u32 = 0x160000;
+const OTA_0_SIZE: u32 = 0x140000;
+const OTA_1_OFFSET: u32 = 0x2A0000;
+const OTA_1_SIZE: u32 = 0x140000;
 
 const SECTOR_SIZE: u32 = 4096;
 const WORD_SIZE: u32 = 4;
@@ -179,7 +180,11 @@ where
 
         // Treat 0xFFFFFFFF (erased flash) as empty/0
         fn sanitize(raw: u32) -> u32 {
-            if raw == 0xFFFFFFFF { 0 } else { raw }
+            if raw == 0xFFFFFFFF {
+                0
+            } else {
+                raw
+            }
         }
 
         Ok((sanitize(raw_0), sanitize(raw_1)))
@@ -194,10 +199,18 @@ where
 
         let new_seq = match partition {
             Partition::Ota0 => {
-                if seq_0 == 0 { 1 } else { seq_0 + 1 }
+                if seq_0 == 0 {
+                    1
+                } else {
+                    seq_0 + 1
+                }
             }
             Partition::Ota1 => {
-                if seq_1 == 0 { 1 } else { seq_1 + 1 }
+                if seq_1 == 0 {
+                    1
+                } else {
+                    seq_1 + 1
+                }
             }
         };
 

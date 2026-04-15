@@ -48,8 +48,8 @@ impl SpaConfig {
         Ok(SpaConfig {
             pump_configs,
             lights: [
-                (payload[7] & 0x03) != 0,   // light1
-                (payload[7] & 0x0C) != 0,   // light2
+                (payload[7] & 0x03) != 0, // light1
+                (payload[7] & 0x0C) != 0, // light2
             ],
             circ_pump: (payload[8] & 0x80) != 0,
             blower: (payload[8] & 0x03) != 0,

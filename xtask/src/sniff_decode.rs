@@ -30,10 +30,14 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     mqttoptions.set_keep_alive(Duration::from_secs(5));
 
     let (client, mut connection) = rumqttc::Client::new(mqttoptions, 10);
-    client.subscribe("launa/+/sniff", rumqttc::QoS::AtLeastOnce)
+    client
+        .subscribe("launa/+/sniff", rumqttc::QoS::AtLeastOnce)
         .context("Failed to subscribe to sniff topic")?;
 
-    println!("Connected to MQTT broker at {}:{} (Ctrl+C to stop)", host, port);
+    println!(
+        "Connected to MQTT broker at {}:{} (Ctrl+C to stop)",
+        host, port
+    );
     println!("Subscribed to: launa/+/sniff");
     println!();
 
@@ -102,9 +106,17 @@ struct SniffEntry {
     parsed: Option<String>,
 }
 
-fn handle_json_sniff(decoder: &mut FrameDecoder, device_id: &str, json: &serde_json::Value) -> SniffEntry {
-    let timestamp = json.get("ts").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let raw_hex = json.get("raw")
+fn handle_json_sniff(
+    decoder: &mut FrameDecoder,
+    device_id: &str,
+    json: &serde_json::Value,
+) -> SniffEntry {
+    let timestamp = json
+        .get("ts")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let raw_hex = json
+        .get("raw")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
@@ -113,7 +125,10 @@ fn handle_json_sniff(decoder: &mut FrameDecoder, device_id: &str, json: &serde_j
     let frames = decoder.feed_slice(&raw_bytes);
 
     if let Some(frame) = frames.first() {
-        let msg_type = format!("{:02X} {:02X}", frame.message_type[0], frame.message_type[1]);
+        let msg_type = format!(
+            "{:02X} {:02X}",
+            frame.message_type[0], frame.message_type[1]
+        );
         let crc_ok = true; // FrameDecoder already validated CRC
         let parsed = describe_frame(frame);
         let entry = SniffEntry {
@@ -145,7 +160,10 @@ fn handle_raw_sniff(decoder: &mut FrameDecoder, device_id: &str, text: &str) -> 
     let frames = decoder.feed_slice(&raw_bytes);
 
     if let Some(frame) = frames.first() {
-        let msg_type = format!("{:02X} {:02X}", frame.message_type[0], frame.message_type[1]);
+        let msg_type = format!(
+            "{:02X} {:02X}",
+            frame.message_type[0], frame.message_type[1]
+        );
         let parsed = describe_frame(frame);
         let entry = SniffEntry {
             device_id: device_id.to_string(),
@@ -197,7 +215,9 @@ fn describe_frame(frame: &launa_protocol::Frame) -> String {
             }
             match frame.payload[0] {
                 0x04 => "Config request".to_string(),
-                0x11 if frame.payload.len() >= 2 => format!("Toggle item 0x{:02X}", frame.payload[1]),
+                0x11 if frame.payload.len() >= 2 => {
+                    format!("Toggle item 0x{:02X}", frame.payload[1])
+                }
                 0x20 if frame.payload.len() >= 2 => format!("Set temperature {}", frame.payload[1]),
                 0x22 => "Settings request".to_string(),
                 0x23 => "Filter cycles request".to_string(),
@@ -216,19 +236,27 @@ fn describe_frame(frame: &launa_protocol::Frame) -> String {
             match frame.payload[0] {
                 0x00 => "Registration query".to_string(),
                 0x01 => "Registration request".to_string(),
-                0x02 if frame.payload.len() >= 2 => format!("Client ID assigned: {}", frame.payload[1]),
+                0x02 if frame.payload.len() >= 2 => {
+                    format!("Client ID assigned: {}", frame.payload[1])
+                }
                 other => format!("Registration sub-type 0x{:02X}", other),
             }
         }
         [0x10, 0xBF] => "Ready (bus free)".to_string(),
-        _ => format!("Unknown type {:02X} {:02X}", frame.message_type[0], frame.message_type[1]),
+        _ => format!(
+            "Unknown type {:02X} {:02X}",
+            frame.message_type[0], frame.message_type[1]
+        ),
     }
 }
 
 fn print_entry(entry: &SniffEntry) {
     let ts = entry.timestamp.as_deref().unwrap_or("?");
     let crc = if entry.crc_ok { "OK" } else { "FAIL" };
-    println!("[{}] device={} type={} crc={}", ts, entry.device_id, entry.message_type, crc);
+    println!(
+        "[{}] device={} type={} crc={}",
+        ts, entry.device_id, entry.message_type, crc
+    );
     if let Some(ref parsed) = entry.parsed {
         println!("  {}", parsed);
     }

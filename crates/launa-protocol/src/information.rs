@@ -5,7 +5,6 @@
 /// Offset: 0  1  2  3  4-11     12 13-16     17-18  19-20
 /// Field:  SI SI SV SV SM(8B)   SU CS(4B)    HT HT  DS DS
 /// ```
-
 extern crate alloc;
 use alloc::format;
 use alloc::string::String;
@@ -111,10 +110,7 @@ impl InformationResponse {
         let heater_type = HeaterType::from_byte(payload[18]);
 
         // Bytes 19-20: DIP Switch Settings (2 bytes as binary string)
-        let dip_switches = format!(
-            "{:08b}{:08b}",
-            payload[19], payload[20]
-        );
+        let dip_switches = format!("{:08b}{:08b}", payload[19], payload[20]);
 
         Ok(InformationResponse {
             software_id,
@@ -137,12 +133,12 @@ mod tests {
         // Example from protocol doc:
         // 64dc 1100 4246425032302020 01 3d12382e 010a 0400
         let payload: &[u8] = &[
-            0x64, 0xDC, 0x11, 0x00,                         // SI SI SV SV
+            0x64, 0xDC, 0x11, 0x00, // SI SI SV SV
             0x42, 0x46, 0x42, 0x50, 0x32, 0x30, 0x20, 0x20, // SM: "BFBP20  "
-            0x01,                                             // SU
-            0x3D, 0x12, 0x38, 0x2E,                         // CS
-            0x01, 0x0A,                                       // HT: voltage=240V, type=Standard
-            0x04, 0x00,                                       // DS
+            0x01, // SU
+            0x3D, 0x12, 0x38, 0x2E, // CS
+            0x01, 0x0A, // HT: voltage=240V, type=Standard
+            0x04, 0x00, // DS
         ];
 
         let info = InformationResponse::parse(payload).unwrap();

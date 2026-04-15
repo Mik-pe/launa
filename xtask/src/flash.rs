@@ -50,7 +50,9 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         println!("  Port: {}", p);
     }
 
-    let status = cmd.status().context("Failed to run cargo espflash. Is cargo-espflash installed?")?;
+    let status = cmd
+        .status()
+        .context("Failed to run cargo espflash. Is cargo-espflash installed?")?;
 
     if status.success() {
         println!("Flash successful.");

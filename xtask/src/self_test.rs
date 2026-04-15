@@ -34,7 +34,16 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     println!("Building and flashing self-test firmware...");
     let app_dir = project_root().join("app");
     let status = Command::new("cargo")
-        .args(&["espflash", "flash", "--chip", "esp32", "--features", "hw-test", "-p", &port_name])
+        .args(&[
+            "espflash",
+            "flash",
+            "--chip",
+            "esp32",
+            "--features",
+            "hw-test",
+            "-p",
+            &port_name,
+        ])
         .current_dir(&app_dir)
         .status()
         .context("Failed to run cargo espflash")?;

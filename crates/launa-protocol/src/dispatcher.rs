@@ -1,5 +1,4 @@
 /// Message dispatcher that takes a parsed `Frame` and returns a typed `IncomingMessage`.
-
 extern crate alloc;
 use alloc::vec::Vec;
 
@@ -21,7 +20,9 @@ pub enum IncomingMessage {
     ControlConfiguration(SpaConfig),
     Ready,
     NewClientQuery,
-    ClientIdAssignment { id: u8 },
+    ClientIdAssignment {
+        id: u8,
+    },
     Unknown {
         message_type: [u8; 2],
         payload: Vec<u8>,
@@ -32,20 +33,16 @@ pub enum IncomingMessage {
 pub fn dispatch_frame(frame: &Frame) -> IncomingMessage {
     match frame.message_type {
         // Status update: FF AF
-        [0xFF, 0xAF] => {
-            match StatusUpdate::parse(&frame.payload) {
-                Ok(status) => IncomingMessage::StatusUpdate(status),
-                Err(_) => IncomingMessage::Unknown {
-                    message_type: frame.message_type,
-                    payload: frame.payload.clone(),
-                },
-            }
-        }
+        [0xFF, 0xAF] => match StatusUpdate::parse(&frame.payload) {
+            Ok(status) => IncomingMessage::StatusUpdate(status),
+            Err(_) => IncomingMessage::Unknown {
+                message_type: frame.message_type,
+                payload: frame.payload.clone(),
+            },
+        },
 
         // Ready indicator: 10 BF
-        [0x10, 0xBF] => {
-            IncomingMessage::Ready
-        }
+        [0x10, 0xBF] => IncomingMessage::Ready,
 
         // Registration messages: FE BF
         [0xFE, 0xBF] => {
@@ -218,26 +215,22 @@ pub fn dispatch_frame(frame: &Frame) -> IncomingMessage {
                 }
 
                 // 0x2E → Control configuration
-                0x2E => {
-                    match SpaConfig::parse(&frame.payload[1..]) {
-                        Ok(config) => IncomingMessage::ControlConfiguration(config),
-                        Err(_) => IncomingMessage::Unknown {
-                            message_type: frame.message_type,
-                            payload: frame.payload.clone(),
-                        },
-                    }
-                }
+                0x2E => match SpaConfig::parse(&frame.payload[1..]) {
+                    Ok(config) => IncomingMessage::ControlConfiguration(config),
+                    Err(_) => IncomingMessage::Unknown {
+                        message_type: frame.message_type,
+                        payload: frame.payload.clone(),
+                    },
+                },
 
                 // 0x94 → Configuration response
-                0x94 => {
-                    match SpaConfig::parse(&frame.payload[1..]) {
-                        Ok(config) => IncomingMessage::ConfigurationResponse(config),
-                        Err(_) => IncomingMessage::Unknown {
-                            message_type: frame.message_type,
-                            payload: frame.payload.clone(),
-                        },
-                    }
-                }
+                0x94 => match SpaConfig::parse(&frame.payload[1..]) {
+                    Ok(config) => IncomingMessage::ConfigurationResponse(config),
+                    Err(_) => IncomingMessage::Unknown {
+                        message_type: frame.message_type,
+                        payload: frame.payload.clone(),
+                    },
+                },
 
                 // Unknown 0A BF sub-type
                 _ => IncomingMessage::Unknown {
@@ -318,12 +311,8 @@ mod tests {
         // 0x24 sub-type, followed by 21 bytes of info data
         let mut payload = vec![0x24];
         payload.extend_from_slice(&[
-            0x64, 0xDC, 0x11, 0x00,
-            0x42, 0x46, 0x42, 0x50, 0x32, 0x30, 0x20, 0x20,
-            0x01,
-            0x3D, 0x12, 0x38, 0x2E,
-            0x01, 0x0A,
-            0x04, 0x00,
+            0x64, 0xDC, 0x11, 0x00, 0x42, 0x46, 0x42, 0x50, 0x32, 0x30, 0x20, 0x20, 0x01, 0x3D,
+            0x12, 0x38, 0x2E, 0x01, 0x0A, 0x04, 0x00,
         ]);
 
         let frame = Frame {
@@ -345,8 +334,7 @@ mod tests {
     fn test_dispatch_fault_log_response() {
         // 0x28 sub-type, followed by 10 bytes of fault data
         let payload = vec![
-            0x28,
-            0x03, 0x01, 0x1B, 0x02, 0x0E, 0x1E, 0x04, 0x68, 0x68, 0x66,
+            0x28, 0x03, 0x01, 0x1B, 0x02, 0x0E, 0x1E, 0x04, 0x68, 0x68, 0x66,
         ];
 
         let frame = Frame {
@@ -367,11 +355,7 @@ mod tests {
     #[test]
     fn test_dispatch_filter_cycles_response() {
         // 0x23 sub-type, followed by 8 bytes of filter data
-        let payload = vec![
-            0x23,
-            0x08, 0x00, 0x04, 0x00,
-            0x90, 0x00, 0x02, 0x00,
-        ];
+        let payload = vec![0x23, 0x08, 0x00, 0x04, 0x00, 0x90, 0x00, 0x02, 0x00];
 
         let frame = Frame {
             message_type: [0x0A, 0xBF],
@@ -436,7 +420,10 @@ mod tests {
 
         let msg = dispatch_frame(&frame);
         match msg {
-            IncomingMessage::Unknown { message_type, payload } => {
+            IncomingMessage::Unknown {
+                message_type,
+                payload,
+            } => {
                 assert_eq!(message_type, [0xAB, 0xCD]);
                 assert_eq!(payload, vec![0x01, 0x02, 0x03]);
             }

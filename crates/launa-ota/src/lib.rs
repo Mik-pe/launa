@@ -32,7 +32,7 @@ pub enum OtaError {
 
 #[cfg(any(test, feature = "mock"))]
 pub mod mock {
-    use super::{OtaUpdate, OtaError, alloc::vec::Vec};
+    use super::{alloc::vec::Vec, OtaError, OtaUpdate};
 
     /// Mock OTA updater for desktop testing.
     pub struct MockOta {

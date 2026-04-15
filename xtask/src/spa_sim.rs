@@ -31,7 +31,10 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         .open()
         .with_context(|| format!("Failed to open serial port {}", port_name))?;
 
-    println!("Spa simulator on {} for {}s (respond={})", port_name, duration_secs, respond);
+    println!(
+        "Spa simulator on {} for {}s (respond={})",
+        port_name, duration_secs, respond
+    );
     println!("Sending Balboa status frames at 1Hz...");
     println!();
 

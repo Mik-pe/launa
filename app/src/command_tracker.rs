@@ -18,6 +18,9 @@ const COMMAND_ACK_TIMEOUT_SECS: u64 = 5;
 /// Maximum number of retries for a failed command.
 const MAX_RETRIES: u8 = 2;
 
+/// Maximum number of pending commands to prevent heap exhaustion on the ESP32.
+const MAX_PENDING_COMMANDS: usize = 8;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExpectedChange {
     PumpOn { item: ToggleItem },
@@ -89,6 +92,10 @@ impl CommandTracker {
     /// Record a command that was just sent, along with the pre-command status
     /// so we know what state change to expect.
     pub fn track(&mut self, command: Command, pre_status: &StatusUpdate) {
+        if self.pending.len() >= MAX_PENDING_COMMANDS {
+            warn!("CommandTracker full ({} pending), dropping command: {:?}", MAX_PENDING_COMMANDS, command);
+            return;
+        }
         if let Some(expected) = ExpectedChange::from_command(&command, pre_status) {
             debug!("Tracking command: {:?} expecting {:?}", command, expected);
             self.pending.push(PendingCommand {

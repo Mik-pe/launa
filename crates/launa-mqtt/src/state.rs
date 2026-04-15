@@ -2,9 +2,9 @@
 
 extern crate alloc;
 
-use alloc::string::String;
 use alloc::format;
-use launa_protocol::status::{StatusUpdate, HeatingMode, TemperatureScale, TempRange, PumpState};
+use alloc::string::String;
+use launa_protocol::status::{HeatingMode, PumpState, StatusUpdate, TempRange, TemperatureScale};
 
 /// Serialize a `StatusUpdate` into a JSON string suitable for publishing
 /// to the Home Assistant state topic.
@@ -13,7 +13,11 @@ use launa_protocol::status::{StatusUpdate, HeatingMode, TemperatureScale, TempRa
 /// the discovery configuration so that HA can extract each value.
 ///
 /// This implementation builds JSON manually (no serde) so it works in no_std.
-pub fn status_to_json(status: &StatusUpdate, last_fault: Option<&str>, firmware_version: Option<&str>) -> String {
+pub fn status_to_json(
+    status: &StatusUpdate,
+    last_fault: Option<&str>,
+    firmware_version: Option<&str>,
+) -> String {
     let current_temp = match status.current_temp {
         Some(t) => format!("{}", t),
         None => String::from("null"),
@@ -24,7 +28,11 @@ pub fn status_to_json(status: &StatusUpdate, last_fault: Option<&str>, firmware_
     // Generate pump fields in a loop
     let mut pump_parts = Vec::new();
     for (i, pump) in status.pumps.iter().enumerate() {
-        let val = if matches!(pump, PumpState::Low | PumpState::High) { "true" } else { "false" };
+        let val = if matches!(pump, PumpState::Low | PumpState::High) {
+            "true"
+        } else {
+            "false"
+        };
         pump_parts.push(alloc::format!("\"pump{}_on\":{}", i + 1, val));
     }
     let pump_fields = pump_parts.join(",");
@@ -87,7 +95,7 @@ pub fn status_to_json(status: &StatusUpdate, last_fault: Option<&str>, firmware_
 mod tests {
     use super::*;
     use launa_protocol::status::{
-        StatusUpdate, HeatingMode, TemperatureScale, TempRange, PumpState, TimeFormat,
+        HeatingMode, PumpState, StatusUpdate, TempRange, TemperatureScale, TimeFormat,
     };
     use serde_json;
 
@@ -103,7 +111,14 @@ mod tests {
             filter_mode: 0,
             is_heating: true,
             temp_range: TempRange::High,
-            pumps: [PumpState::Low, PumpState::Off, PumpState::Off, PumpState::Off, PumpState::Off, PumpState::Off],
+            pumps: [
+                PumpState::Low,
+                PumpState::Off,
+                PumpState::Off,
+                PumpState::Off,
+                PumpState::Off,
+                PumpState::Off,
+            ],
             circ_pump: false,
             blower: false,
             mister: false,

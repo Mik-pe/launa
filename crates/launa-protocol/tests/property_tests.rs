@@ -2,8 +2,10 @@
 //!
 //! Uses manual property-style testing (no proptest dependency).
 
-use launa_protocol::{Frame, FrameDecoder, FrameEncoder, StatusUpdate, dispatch_frame, IncomingMessage};
 use launa_protocol::crc8;
+use launa_protocol::{
+    dispatch_frame, Frame, FrameDecoder, FrameEncoder, IncomingMessage, StatusUpdate,
+};
 
 // ── Helper: simple deterministic PRNG (xorshift32) ──────────────────────
 
@@ -21,7 +23,9 @@ fn random_bytes(state: &mut u32, len: usize) -> Vec<u8> {
     for _ in 0..len {
         // Avoid 0x7E (frame marker) and 0x7D (escape char) in payload
         let mut b = xorshift32(state) as u8;
-        if b == 0x7E || b == 0x7D { b = 0x7F; }
+        if b == 0x7E || b == 0x7D {
+            b = 0x7F;
+        }
         out.push(b);
     }
     out
@@ -38,10 +42,22 @@ fn round_trip_frame(msg_type: [u8; 2], payload: &[u8]) {
     };
 
     // Verify message type doesn't contain frame marker or escape char
-    assert_ne!(msg_type[0], 0x7E, "message type byte 0 must not be frame marker");
-    assert_ne!(msg_type[1], 0x7E, "message type byte 1 must not be frame marker");
-    assert_ne!(msg_type[0], 0x7D, "message type byte 0 must not be escape char");
-    assert_ne!(msg_type[1], 0x7D, "message type byte 1 must not be escape char");
+    assert_ne!(
+        msg_type[0], 0x7E,
+        "message type byte 0 must not be frame marker"
+    );
+    assert_ne!(
+        msg_type[1], 0x7E,
+        "message type byte 1 must not be frame marker"
+    );
+    assert_ne!(
+        msg_type[0], 0x7D,
+        "message type byte 0 must not be escape char"
+    );
+    assert_ne!(
+        msg_type[1], 0x7D,
+        "message type byte 1 must not be escape char"
+    );
 
     // Verify payload doesn't contain frame marker or escape char
     for (i, &b) in payload.iter().enumerate() {
@@ -64,19 +80,34 @@ fn round_trip_frame(msg_type: [u8; 2], payload: &[u8]) {
         }
     }
     assert_eq!(results.len(), 1, "decoder should produce exactly one frame");
-    assert_eq!(results[0], frame, "streaming decoded frame should match original");
+    assert_eq!(
+        results[0], frame,
+        "streaming decoded frame should match original"
+    );
 }
 
 #[test]
 fn test_frame_round_trip_empty_payload() {
-    for &msg_type in &[[0xFFu8, 0xAF], [0x0A, 0xBF], [0xFE, 0xBF], [0x10, 0xBF], [0xAB, 0xCD]] {
+    for &msg_type in &[
+        [0xFFu8, 0xAF],
+        [0x0A, 0xBF],
+        [0xFE, 0xBF],
+        [0x10, 0xBF],
+        [0xAB, 0xCD],
+    ] {
         round_trip_frame(msg_type, &[]);
     }
 }
 
 #[test]
 fn test_frame_round_trip_1byte_payload() {
-    for &msg_type in &[[0xFF, 0xAF], [0x0A, 0xBF], [0xFE, 0xBF], [0x10, 0xBF], [0xAB, 0xCD]] {
+    for &msg_type in &[
+        [0xFF, 0xAF],
+        [0x0A, 0xBF],
+        [0xFE, 0xBF],
+        [0x10, 0xBF],
+        [0xAB, 0xCD],
+    ] {
         round_trip_frame(msg_type, &[0x42]);
     }
 }
@@ -84,7 +115,13 @@ fn test_frame_round_trip_1byte_payload() {
 #[test]
 fn test_frame_round_trip_100byte_payload() {
     let payload: Vec<u8> = (0..100).collect();
-    for &msg_type in &[[0xFF, 0xAF], [0x0A, 0xBF], [0xFE, 0xBF], [0x10, 0xBF], [0xAB, 0xCD]] {
+    for &msg_type in &[
+        [0xFF, 0xAF],
+        [0x0A, 0xBF],
+        [0xFE, 0xBF],
+        [0x10, 0xBF],
+        [0xAB, 0xCD],
+    ] {
         round_trip_frame(msg_type, &payload);
     }
 }
@@ -100,7 +137,13 @@ fn test_frame_round_trip_max_payload() {
         .take(253)
         .collect();
     assert_eq!(payload.len(), 253);
-    for &msg_type in &[[0xFF, 0xAF], [0x0A, 0xBF], [0xFE, 0xBF], [0x10, 0xBF], [0xAB, 0xCD]] {
+    for &msg_type in &[
+        [0xFF, 0xAF],
+        [0x0A, 0xBF],
+        [0xFE, 0xBF],
+        [0x10, 0xBF],
+        [0xAB, 0xCD],
+    ] {
         round_trip_frame(msg_type, &payload);
     }
 }
@@ -252,7 +295,11 @@ fn test_status_temp_values_0_to_254_return_some() {
             "temp value {} should return Some",
             temp
         );
-        assert_eq!(status.current_temp.unwrap(), temp as f32, "temp should match byte value");
+        assert_eq!(
+            status.current_temp.unwrap(),
+            temp as f32,
+            "temp should match byte value"
+        );
     }
 }
 
@@ -260,9 +307,9 @@ fn test_status_temp_values_0_to_254_return_some() {
 fn test_status_celsius_temp_division() {
     // In Celsius mode, temps are divided by 2
     let mut payload = [0u8; 24];
-    payload[2] = 76;       // current temp raw = 76 → 38.0°C
-    payload[9] = 0x01;     // Celsius flag (offset 9 per real hardware)
-    payload[20] = 80;      // set temp raw = 80 → 40.0°C
+    payload[2] = 76; // current temp raw = 76 → 38.0°C
+    payload[9] = 0x01; // Celsius flag (offset 9 per real hardware)
+    payload[20] = 80; // set temp raw = 80 → 40.0°C
 
     let status = StatusUpdate::parse(&payload).unwrap();
     assert_eq!(status.current_temp, Some(38.0));
@@ -277,9 +324,9 @@ fn test_status_celsius_temp_division() {
 fn test_status_fahrenheit_temp_no_division() {
     // In Fahrenheit mode, temps are NOT divided (divisor = 1)
     let mut payload = [0u8; 24];
-    payload[2] = 104;      // current temp = 104°F
-    payload[8] = 0x00;     // Fahrenheit
-    payload[20] = 106;     // set temp = 106°F
+    payload[2] = 104; // current temp = 104°F
+    payload[8] = 0x00; // Fahrenheit
+    payload[20] = 106; // set temp = 106°F
 
     let status = StatusUpdate::parse(&payload).unwrap();
     assert_eq!(status.current_temp, Some(104.0));
@@ -305,12 +352,16 @@ fn test_frame_encoder_matches_frame_encode() {
         let msg_type_bytes = [
             {
                 let mut b = (xorshift32(&mut rng) % 256) as u8;
-                if b == 0x7E || b == 0x7D { b = 0x7F; }
+                if b == 0x7E || b == 0x7D {
+                    b = 0x7F;
+                }
                 b
             },
             {
                 let mut b = (xorshift32(&mut rng) % 256) as u8;
-                if b == 0x7E || b == 0x7D { b = 0x7F; }
+                if b == 0x7E || b == 0x7D {
+                    b = 0x7F;
+                }
                 b
             },
         ];
@@ -322,7 +373,10 @@ fn test_frame_encoder_matches_frame_encode() {
         let frame_encoded = frame.encode();
         let encoder_encoded = FrameEncoder::encode(msg_type_bytes, &payload);
 
-        assert_eq!(frame_encoded, encoder_encoded, "FrameEncoder should produce same output as Frame::encode");
+        assert_eq!(
+            frame_encoded, encoder_encoded,
+            "FrameEncoder should produce same output as Frame::encode"
+        );
     }
 }
 
@@ -334,7 +388,7 @@ fn test_frame_encoder_matches_frame_encode() {
 fn test_dispatch_valid_status_roundtrip() {
     // Build a valid status frame, encode it, decode it via dispatcher
     let mut payload_bytes = [0u8; 24];
-    payload_bytes[2] = 100;  // current temp
+    payload_bytes[2] = 100; // current temp
     payload_bytes[20] = 104; // set temp
 
     let frame = Frame {

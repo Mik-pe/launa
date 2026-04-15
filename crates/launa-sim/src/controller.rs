@@ -5,7 +5,7 @@
 //! `SpaSim` and observing the emitted `ControllerEvent`s.
 
 use launa_protocol::command::{Command, ToggleItem};
-use launa_protocol::dispatcher::{IncomingMessage, dispatch_frame};
+use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
 use launa_protocol::frame::FrameDecoder;
 use launa_protocol::registration::{RegistrationAction, RegistrationStateMachine};
 use launa_protocol::status::{PumpState, StatusUpdate};
@@ -45,8 +45,8 @@ pub enum ControllerEvent {
 /// we track elapsed time via `tick()` calls.
 struct PumpTimer {
     pump: ToggleItem,
-    started_at: Option<u64>,       // tick when started
-    duration_secs: u64,            // duration in simulated seconds
+    started_at: Option<u64>, // tick when started
+    duration_secs: u64,      // duration in simulated seconds
 }
 
 const DEFAULT_PUMP_DURATION_SECS: u64 = 20 * 60; // 20 minutes
@@ -170,10 +170,9 @@ impl SpaController {
 
             // Handle registration
             if !self.registration.is_registered() {
-                let action = self.registration.process(
-                    frame.message_type,
-                    &frame.payload,
-                );
+                let action = self
+                    .registration
+                    .process(frame.message_type, &frame.payload);
                 match action {
                     RegistrationAction::SendIdRequest => {
                         let encoded = launa_protocol::frame::FrameEncoder::encode(
@@ -183,10 +182,8 @@ impl SpaController {
                         events.push(ControllerEvent::RegistrationSend { bytes: encoded });
                     }
                     RegistrationAction::SendIdAck { client_id } => {
-                        let encoded = launa_protocol::frame::FrameEncoder::encode(
-                            [client_id, 0xBF],
-                            &[0x03],
-                        );
+                        let encoded =
+                            launa_protocol::frame::FrameEncoder::encode([client_id, 0xBF], &[0x03]);
                         events.push(ControllerEvent::Registered { client_id });
                         events.push(ControllerEvent::RegistrationSend { bytes: encoded });
                     }
@@ -200,10 +197,7 @@ impl SpaController {
                 IncomingMessage::StatusUpdate(status) => {
                     // Tick pump timers
                     self.tick_count += 1;
-                    let expired = self.pump_timers.tick_all(
-                        self.tick_count,
-                        &status.pumps,
-                    );
+                    let expired = self.pump_timers.tick_all(self.tick_count, &status.pumps);
                     for cmd in expired {
                         events.push(ControllerEvent::PumpExpired(cmd));
                     }
@@ -231,10 +225,13 @@ impl SpaController {
     /// Returns `None` if not registered. Otherwise returns the encoded bytes
     /// to write to the transport.
     pub fn encode_command(&self, cmd: &Command) -> Option<Vec<u8>> {
-        let _client_id = self.registration.client_id()?;
+        // Used as a registration guard: returns None if not registered
+        let _ = self.registration.client_id()?;
 
         let (msg_type, payload) = cmd.encode();
-        Some(launa_protocol::frame::FrameEncoder::encode(msg_type, &payload))
+        Some(launa_protocol::frame::FrameEncoder::encode(
+            msg_type, &payload,
+        ))
     }
 
     /// Start a pump timer (for P1 mode auto-off after 20 minutes).

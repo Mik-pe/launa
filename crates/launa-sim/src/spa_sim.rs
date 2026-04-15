@@ -8,7 +8,7 @@
 //! bytes at the frame generation boundary.
 
 use launa_protocol::frame::{Frame, FrameDecoder, FrameEncoder};
-use launa_protocol::status::{HeatingMode, TemperatureScale, TempRange, PumpState};
+use launa_protocol::status::{HeatingMode, PumpState, TempRange, TemperatureScale};
 
 /// Simulated spa state using native Rust types.
 ///
@@ -180,7 +180,8 @@ impl SpaSim {
                     0x20 => {
                         if frame.payload.len() >= 2 {
                             let raw_temp = frame.payload[1];
-                            self.state.set_temp = SpaState::decode_temp(raw_temp, self.state.temp_scale);
+                            self.state.set_temp =
+                                SpaState::decode_temp(raw_temp, self.state.temp_scale);
                         }
                         None
                     }
@@ -378,9 +379,7 @@ impl SpaSim {
 
     /// Generate a fault log response.
     pub fn generate_fault_log_response(&self) -> Vec<u8> {
-        let fault_data: [u8; 10] = [
-            0x03, 0x01, 0x1B, 0x02, 0x0E, 0x1E, 0x04, 0x68, 0x68, 0x66,
-        ];
+        let fault_data: [u8; 10] = [0x03, 0x01, 0x1B, 0x02, 0x0E, 0x1E, 0x04, 0x68, 0x68, 0x66];
         let mut full_payload = vec![0x28];
         full_payload.extend_from_slice(&fault_data);
         FrameEncoder::encode([0x0A, 0xBF], &full_payload)
@@ -388,10 +387,7 @@ impl SpaSim {
 
     /// Generate a filter cycles response.
     pub fn generate_filter_cycles_response(&self) -> Vec<u8> {
-        let filter_data: [u8; 8] = [
-            0x08, 0x00, 0x04, 0x00,
-            0x90, 0x00, 0x02, 0x00,
-        ];
+        let filter_data: [u8; 8] = [0x08, 0x00, 0x04, 0x00, 0x90, 0x00, 0x02, 0x00];
         let mut full_payload = vec![0x23];
         full_payload.extend_from_slice(&filter_data);
         FrameEncoder::encode([0x0A, 0xBF], &full_payload)
@@ -469,7 +465,10 @@ mod tests {
 
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&bytes);
-        assert!(frames.len() >= 2, "tick should produce at least 2 frames (status + ready)");
+        assert!(
+            frames.len() >= 2,
+            "tick should produce at least 2 frames (status + ready)"
+        );
     }
 
     #[test]
@@ -497,10 +496,16 @@ mod tests {
             sim.simulate_physics();
         }
         assert_eq!(sim.state.current_temp, 100.0);
-        assert!(sim.state.is_heating, "still heating on the tick that reaches target");
+        assert!(
+            sim.state.is_heating,
+            "still heating on the tick that reaches target"
+        );
 
         sim.simulate_physics();
-        assert!(!sim.state.is_heating, "should stop heating once at set temp");
+        assert!(
+            !sim.state.is_heating,
+            "should stop heating once at set temp"
+        );
     }
 
     #[test]
@@ -519,8 +524,9 @@ mod tests {
         let mut sim = SpaSim::new();
 
         let (mt, payload) = launa_protocol::command::Command::ToggleItem(
-            launa_protocol::command::ToggleItem::Pump1
-        ).encode();
+            launa_protocol::command::ToggleItem::Pump1,
+        )
+        .encode();
         let encoded = FrameEncoder::encode(mt, &payload);
 
         sim.process_incoming_bytes(&encoded);
@@ -530,8 +536,14 @@ mod tests {
     #[test]
     fn test_cycle_heating_mode_enums() {
         assert_eq!(cycle_heating_mode(HeatingMode::Ready), HeatingMode::Rest);
-        assert_eq!(cycle_heating_mode(HeatingMode::Rest), HeatingMode::ReadyInRest);
-        assert_eq!(cycle_heating_mode(HeatingMode::ReadyInRest), HeatingMode::Ready);
+        assert_eq!(
+            cycle_heating_mode(HeatingMode::Rest),
+            HeatingMode::ReadyInRest
+        );
+        assert_eq!(
+            cycle_heating_mode(HeatingMode::ReadyInRest),
+            HeatingMode::Ready
+        );
     }
 
     #[test]
@@ -543,8 +555,14 @@ mod tests {
 
     #[test]
     fn test_temp_encoding_fahrenheit() {
-        assert_eq!(SpaState::encode_temp(100.0, TemperatureScale::Fahrenheit), 100);
-        assert_eq!(SpaState::encode_temp(104.0, TemperatureScale::Fahrenheit), 104);
+        assert_eq!(
+            SpaState::encode_temp(100.0, TemperatureScale::Fahrenheit),
+            100
+        );
+        assert_eq!(
+            SpaState::encode_temp(104.0, TemperatureScale::Fahrenheit),
+            104
+        );
     }
 
     #[test]

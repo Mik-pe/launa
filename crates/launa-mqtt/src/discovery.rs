@@ -1,9 +1,9 @@
 //! Home Assistant MQTT auto-discovery message generation.
 
+use crate::topics::TopicBuilder;
+use serde_json::json;
 use std::string::String;
 use std::vec::Vec;
-use serde_json::json;
-use crate::topics::TopicBuilder;
 
 /// A discovery config payload with its topic and retain flag.
 #[derive(Debug, Clone)]
@@ -45,7 +45,8 @@ impl DiscoveryBuilder {
     /// Generate all discovery config payloads for the spa device.
     /// Returns a vec of (topic, json_payload) pairs with retain=false (backward compat).
     pub fn build(&self) -> Vec<(String, String)> {
-        self.build_messages().into_iter()
+        self.build_messages()
+            .into_iter()
             .map(|m| (m.topic, m.payload))
             .collect()
     }
@@ -54,8 +55,12 @@ impl DiscoveryBuilder {
     /// HA auto-discovery messages should be published with retain so they
     /// survive broker restarts.
     pub fn build_with_retain(&self) -> Vec<DiscoveryMessage> {
-        self.build_messages().into_iter()
-            .map(|mut m| { m.retain = true; m })
+        self.build_messages()
+            .into_iter()
+            .map(|mut m| {
+                m.retain = true;
+                m
+            })
             .collect()
     }
 
@@ -83,8 +88,16 @@ impl DiscoveryBuilder {
 
         // Temperature sensor
         configs.push(Self::make_sensor(
-            &topics, &self.device_id, &device_info, &origin, &state_topic, &avail_topic,
-            "temperature", "Water Temperature", "temperature", "°F",
+            &topics,
+            &self.device_id,
+            &device_info,
+            &origin,
+            &state_topic,
+            &avail_topic,
+            "temperature",
+            "Water Temperature",
+            "temperature",
+            "°F",
             "{{ value_json.current_temp }}",
         ));
 
@@ -105,22 +118,36 @@ impl DiscoveryBuilder {
                 "command_topic": format!("{}/set_temperature", cmd_topic),
                 "value_template": "{{ value_json.set_temp }}",
                 "availability_topic": avail_topic,
-            }).to_string(),
+            })
+            .to_string(),
             retain: false,
         });
 
         // Heating state binary sensor
         configs.push(Self::make_binary_sensor(
-            &topics, &self.device_id, &device_info, &origin, &state_topic, &avail_topic,
-            "heating", "Heating", "heat",
+            &topics,
+            &self.device_id,
+            &device_info,
+            &origin,
+            &state_topic,
+            &avail_topic,
+            "heating",
+            "Heating",
+            "heat",
             "{{ value_json.is_heating }}",
         ));
 
         // Pump switches
         for i in 1..=6 {
             configs.push(Self::make_switch(
-                &topics, &self.device_id, &device_info, &origin, &state_topic, &avail_topic,
-                &format!("pump{}", i), &format!("Pump {}", i),
+                &topics,
+                &self.device_id,
+                &device_info,
+                &origin,
+                &state_topic,
+                &avail_topic,
+                &format!("pump{}", i),
+                &format!("Pump {}", i),
                 &format!("{{{{ value_json.pump{}_on }}}}", i),
                 &format!("{}/pump{}", cmd_topic, i),
             ));
@@ -128,7 +155,11 @@ impl DiscoveryBuilder {
 
         // Lights
         for i in 1..=2 {
-            let name = if i == 1 { "Spa Light".to_string() } else { format!("Spa Light {}", i) };
+            let name = if i == 1 {
+                "Spa Light".to_string()
+            } else {
+                format!("Spa Light {}", i)
+            };
             configs.push(DiscoveryMessage {
                 topic: topics.discovery_topic("light", &format!("light{}", i)),
                 payload: json!({
@@ -142,7 +173,8 @@ impl DiscoveryBuilder {
                     "payload_on": "true",
                     "payload_off": "false",
                     "availability_topic": avail_topic,
-                }).to_string(),
+                })
+                .to_string(),
                 retain: false,
             });
         }
@@ -160,14 +192,21 @@ impl DiscoveryBuilder {
                 "payload_on": "true",
                 "payload_off": "false",
                 "availability_topic": avail_topic,
-            }).to_string(),
+            })
+            .to_string(),
             retain: false,
         });
 
         // Heat Mode select
         configs.push(Self::make_select(
-            &topics, &self.device_id, &device_info, &origin, &state_topic, &avail_topic,
-            "heat_mode", "Heat Mode",
+            &topics,
+            &self.device_id,
+            &device_info,
+            &origin,
+            &state_topic,
+            &avail_topic,
+            "heat_mode",
+            "Heat Mode",
             json!(["ready", "rest", "ready_in_rest"]),
             "{{ value_json.heating_mode }}",
             &format!("{}/heat_mode", cmd_topic),
@@ -175,16 +214,28 @@ impl DiscoveryBuilder {
 
         // Circulation Pump switch
         configs.push(Self::make_switch(
-            &topics, &self.device_id, &device_info, &origin, &state_topic, &avail_topic,
-            "circ_pump", "Circulation Pump",
+            &topics,
+            &self.device_id,
+            &device_info,
+            &origin,
+            &state_topic,
+            &avail_topic,
+            "circ_pump",
+            "Circulation Pump",
             "{{ value_json.circ_pump }}",
             &format!("{}/circ_pump", cmd_topic),
         ));
 
         // Temperature Range select
         configs.push(Self::make_select(
-            &topics, &self.device_id, &device_info, &origin, &state_topic, &avail_topic,
-            "temp_range", "Temperature Range",
+            &topics,
+            &self.device_id,
+            &device_info,
+            &origin,
+            &state_topic,
+            &avail_topic,
+            "temp_range",
+            "Temperature Range",
             json!(["high", "low"]),
             "{{ value_json.temp_range }}",
             &format!("{}/temp_range", cmd_topic),
@@ -192,16 +243,28 @@ impl DiscoveryBuilder {
 
         // Hold Mode switch
         configs.push(Self::make_switch(
-            &topics, &self.device_id, &device_info, &origin, &state_topic, &avail_topic,
-            "hold_mode", "Hold Mode",
+            &topics,
+            &self.device_id,
+            &device_info,
+            &origin,
+            &state_topic,
+            &avail_topic,
+            "hold_mode",
+            "Hold Mode",
             "{{ value_json.hold_mode }}",
             &format!("{}/hold_mode", cmd_topic),
         ));
 
         // Mister switch
         configs.push(Self::make_switch(
-            &topics, &self.device_id, &device_info, &origin, &state_topic, &avail_topic,
-            "mister", "Mister",
+            &topics,
+            &self.device_id,
+            &device_info,
+            &origin,
+            &state_topic,
+            &avail_topic,
+            "mister",
+            "Mister",
             "{{ value_json.mister }}",
             &format!("{}/mister", cmd_topic),
         ));
@@ -217,7 +280,8 @@ impl DiscoveryBuilder {
                 "state_topic": state_topic,
                 "value_template": "{{ value_json.last_fault }}",
                 "availability_topic": avail_topic,
-            }).to_string(),
+            })
+            .to_string(),
             retain: false,
         });
 
@@ -249,7 +313,8 @@ impl DiscoveryBuilder {
                 "state_topic": state_topic,
                 "value_template": value_template,
                 "availability_topic": avail_topic,
-            }).to_string(),
+            })
+            .to_string(),
             retain: false,
         }
     }
@@ -279,7 +344,8 @@ impl DiscoveryBuilder {
                 "payload_on": "true",
                 "payload_off": "false",
                 "availability_topic": avail_topic,
-            }).to_string(),
+            })
+            .to_string(),
             retain: false,
         }
     }
@@ -309,7 +375,8 @@ impl DiscoveryBuilder {
                 "payload_on": "true",
                 "payload_off": "false",
                 "availability_topic": avail_topic,
-            }).to_string(),
+            })
+            .to_string(),
             retain: false,
         }
     }
@@ -339,7 +406,8 @@ impl DiscoveryBuilder {
                 "value_template": value_template,
                 "options": options,
                 "availability_topic": avail_topic,
-            }).to_string(),
+            })
+            .to_string(),
             retain: false,
         }
     }
@@ -398,7 +466,11 @@ mod tests {
         for (_, json_str) in &configs {
             let v: serde_json::Value = serde_json::from_str(json_str).unwrap();
             let uid = v["unique_id"].as_str().unwrap().to_string();
-            assert!(uid.starts_with("test_spa_001_"), "unique_id {} should start with device_id", uid);
+            assert!(
+                uid.starts_with("test_spa_001_"),
+                "unique_id {} should start with device_id",
+                uid
+            );
             unique_ids.push(uid);
         }
 

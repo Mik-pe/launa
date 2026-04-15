@@ -8,9 +8,9 @@ use launa_protocol::frame::{Frame, FrameEncoder};
 /// Simulated spa state.
 #[derive(Debug, Clone)]
 pub struct SpaState {
-    pub current_temp: u8,      // raw value (Fahrenheit direct, Celsius halved)
+    pub current_temp: u8, // raw value (Fahrenheit direct, Celsius halved)
     pub set_temp: u8,
-    pub heating_mode: u8,      // 0=Ready, 1=Rest, 3=Ready-in-Rest
+    pub heating_mode: u8, // 0=Ready, 1=Rest, 3=Ready-in-Rest
     pub temp_scale_celsius: bool,
     pub is_heating: bool,
     pub temp_range_high: bool,
@@ -30,9 +30,9 @@ pub struct SpaState {
 impl Default for SpaState {
     fn default() -> Self {
         SpaState {
-            current_temp: 100,     // 100°F
-            set_temp: 104,         // 104°F
-            heating_mode: 0,       // Ready
+            current_temp: 100, // 100°F
+            set_temp: 104,     // 104°F
+            heating_mode: 0,   // Ready
             temp_scale_celsius: false,
             is_heating: true,
             temp_range_high: true,
@@ -119,8 +119,7 @@ impl SpaSimulator {
             | ((self.state.pumps[3] & 0x03) << 6);
 
         // Offset 12: pump5 bits 0-1, pump6 bits 2-3
-        payload[12] = (self.state.pumps[4] & 0x03)
-            | ((self.state.pumps[5] & 0x03) << 2);
+        payload[12] = (self.state.pumps[4] & 0x03) | ((self.state.pumps[5] & 0x03) << 2);
 
         // Offset 13: circ pump (bit 1), blower (bits 2-3)
         if self.state.circ_pump {
@@ -408,9 +407,17 @@ impl SpaSimulator {
     pub fn tick(&mut self) {
         // Simulate temperature approaching set point
         if self.state.current_temp < self.state.set_temp && self.state.is_heating {
-            self.state.current_temp = self.state.current_temp.saturating_add(1).min(self.state.set_temp);
+            self.state.current_temp = self
+                .state
+                .current_temp
+                .saturating_add(1)
+                .min(self.state.set_temp);
         } else if self.state.current_temp > self.state.set_temp {
-            self.state.current_temp = self.state.current_temp.saturating_sub(1).max(self.state.set_temp);
+            self.state.current_temp = self
+                .state
+                .current_temp
+                .saturating_sub(1)
+                .max(self.state.set_temp);
         }
 
         // Advance time

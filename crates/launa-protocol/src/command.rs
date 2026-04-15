@@ -1,4 +1,4 @@
-use crate::status::{TemperatureScale, TempRange};
+use crate::status::{TempRange, TemperatureScale};
 
 /// Hard upper limit that can never be exceeded regardless of range (108°F / 42°C).
 pub const ABSOLUTE_MAX_TEMP_F: u8 = 108;
@@ -168,7 +168,11 @@ impl Command {
             Command::ConfigurationRequest => ([0x0A, 0xBF], vec![0x04]),
             Command::ToggleItem(item) => ([0x0A, 0xBF], vec![0x11, item.code(), 0x00]),
             Command::SetTemperature(temp) => ([0x0A, 0xBF], vec![0x20, *temp]),
-            Command::SetTime { hour, minute, is_24h } => {
+            Command::SetTime {
+                hour,
+                minute,
+                is_24h,
+            } => {
                 let h = if *is_24h { hour | 0x80 } else { *hour };
                 ([0x0A, 0xBF], vec![0x21, h, *minute])
             }
@@ -176,14 +180,18 @@ impl Command {
                 let ts = if *celsius { 0x01 } else { 0x00 };
                 ([0x0A, 0xBF], vec![0x27, 0x01, ts])
             }
-            Command::SettingsRequest(SettingsType::Panel) => ([0x0A, 0xBF], vec![0x22, 0x00, 0x00, 0x01]),
+            Command::SettingsRequest(SettingsType::Panel) => {
+                ([0x0A, 0xBF], vec![0x22, 0x00, 0x00, 0x01])
+            }
             Command::SettingsRequest(SettingsType::FilterCycles) | Command::FilterCyclesRequest => {
                 ([0x0A, 0xBF], vec![0x22, 0x01, 0x00, 0x00])
             }
             Command::SettingsRequest(SettingsType::Information) | Command::InformationRequest => {
                 ([0x0A, 0xBF], vec![0x22, 0x02, 0x00, 0x00])
             }
-            Command::SettingsRequest(SettingsType::Preferences) => ([0x0A, 0xBF], vec![0x22, 0x08, 0x00, 0x00]),
+            Command::SettingsRequest(SettingsType::Preferences) => {
+                ([0x0A, 0xBF], vec![0x22, 0x08, 0x00, 0x00])
+            }
             Command::FaultLogRequest { entry } => ([0x0A, 0xBF], vec![0x22, 0x20, *entry, 0x00]),
             Command::NothingToSend { client_id } => ([*client_id, 0xBF], vec![0x07]),
         }
@@ -228,14 +236,24 @@ mod tests {
 
     #[test]
     fn test_set_time_24h() {
-        let (mt, payload) = Command::SetTime { hour: 14, minute: 30, is_24h: true }.encode();
+        let (mt, payload) = Command::SetTime {
+            hour: 14,
+            minute: 30,
+            is_24h: true,
+        }
+        .encode();
         assert_eq!(mt, [0x0A, 0xBF]);
         assert_eq!(payload, vec![0x21, 0x80 | 14, 30]);
     }
 
     #[test]
     fn test_set_time_12h() {
-        let (mt, payload) = Command::SetTime { hour: 9, minute: 5, is_24h: false }.encode();
+        let (mt, payload) = Command::SetTime {
+            hour: 9,
+            minute: 5,
+            is_24h: false,
+        }
+        .encode();
         assert_eq!(mt, [0x0A, 0xBF]);
         assert_eq!(payload, vec![0x21, 9, 5]);
     }

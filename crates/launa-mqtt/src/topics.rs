@@ -1,5 +1,4 @@
 /// MQTT topic builder for Launa spa integration.
-
 extern crate alloc;
 
 use alloc::string::String;
@@ -19,7 +18,9 @@ pub struct TopicBuilder {
 
 impl TopicBuilder {
     pub fn new(device_id: &str) -> Self {
-        TopicBuilder { device_id: device_id.into() }
+        TopicBuilder {
+            device_id: device_id.into(),
+        }
     }
 
     pub fn state_topic(&self) -> String {
@@ -35,7 +36,12 @@ impl TopicBuilder {
     }
 
     pub fn discovery_topic(&self, component: &str, object_id: &str) -> String {
-        alloc::format!("homeassistant/{}/{}/{}/config", component, self.device_id, object_id)
+        alloc::format!(
+            "homeassistant/{}/{}/{}/config",
+            component,
+            self.device_id,
+            object_id
+        )
     }
 
     pub fn ota_topic(&self) -> String {

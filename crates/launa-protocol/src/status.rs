@@ -114,12 +114,12 @@ impl StatusUpdate {
         // Offset 12 (P2): pump5 bits 0-1, pump6 bits 2-3
         let p2 = payload[12];
         let pumps = [
-            decode_pump_state(pp & 0x03),           // pump1
-            decode_pump_state((pp >> 2) & 0x03),    // pump2
-            decode_pump_state((pp >> 4) & 0x03),    // pump3
-            decode_pump_state((pp >> 6) & 0x03),    // pump4
-            decode_pump_state(p2 & 0x03),           // pump5
-            decode_pump_state((p2 >> 2) & 0x03),    // pump6
+            decode_pump_state(pp & 0x03),        // pump1
+            decode_pump_state((pp >> 2) & 0x03), // pump2
+            decode_pump_state((pp >> 4) & 0x03), // pump3
+            decode_pump_state((pp >> 6) & 0x03), // pump4
+            decode_pump_state(p2 & 0x03),        // pump5
+            decode_pump_state((p2 >> 2) & 0x03), // pump6
         ];
 
         // Offset 13 (CB): circ pump, blower
@@ -159,8 +159,8 @@ impl StatusUpdate {
             blower,
             mister,
             lights: [
-                payload[14] & 0x03 != 0,   // light1
-                payload[14] & 0x0C != 0,   // light2
+                payload[14] & 0x03 != 0, // light1
+                payload[14] & 0x0C != 0, // light2
             ],
             is_priming: payload[1] == 0x01,
             is_hold: payload[0] == 0x05,
@@ -190,17 +190,17 @@ mod tests {
     fn test_parse_status_fahrenheit() {
         // Construct a plausible status payload using correct offsets
         let mut payload = [0u8; 24];
-        payload[0] = 0x00;  // spa state: running
-        payload[1] = 0x00;  // init mode: idle
-        payload[2] = 100;   // current temp = 100°F
-        payload[3] = 14;    // hour
-        payload[4] = 30;    // minute
-        payload[5] = 0x00;  // heating mode: Ready
-        payload[9] = 0x02;  // 24h time format
+        payload[0] = 0x00; // spa state: running
+        payload[1] = 0x00; // init mode: idle
+        payload[2] = 100; // current temp = 100°F
+        payload[3] = 14; // hour
+        payload[4] = 30; // minute
+        payload[5] = 0x00; // heating mode: Ready
+        payload[9] = 0x02; // 24h time format
         payload[10] = 0x34; // heating active (bits 4-5=0x30) + temp range high (bit 2)
         payload[11] = 0x01; // pump1=low
         payload[14] = 0x03; // light on
-        payload[20] = 104;  // set temp = 104°F
+        payload[20] = 104; // set temp = 104°F
 
         let status = StatusUpdate::parse(&payload).unwrap();
         assert_eq!(status.current_temp, Some(100.0));
@@ -217,9 +217,9 @@ mod tests {
     #[test]
     fn test_parse_status_celsius_unknown_temp() {
         let mut payload = [0u8; 24];
-        payload[2] = 0xFF;  // unknown temp
-        payload[9] = 0x01;  // celsius (bit 0)
-        payload[20] = 76;   // set temp = 38°C (76/2)
+        payload[2] = 0xFF; // unknown temp
+        payload[9] = 0x01; // celsius (bit 0)
+        payload[20] = 76; // set temp = 38°C (76/2)
 
         let status = StatusUpdate::parse(&payload).unwrap();
         assert_eq!(status.current_temp, None);
@@ -230,11 +230,11 @@ mod tests {
     #[test]
     fn test_parse_status_hold_and_priming() {
         let mut payload = [0u8; 24];
-        payload[0] = 0x05;  // spa state: hold mode
-        payload[1] = 0x01;  // init mode: priming
-        payload[2] = 100;   // temp
-        payload[9] = 0x02;  // 24h time
-        payload[20] = 104;  // set temp
+        payload[0] = 0x05; // spa state: hold mode
+        payload[1] = 0x01; // init mode: priming
+        payload[2] = 100; // temp
+        payload[9] = 0x02; // 24h time
+        payload[20] = 104; // set temp
 
         let status = StatusUpdate::parse(&payload).unwrap();
         assert!(status.is_hold);
@@ -250,7 +250,7 @@ mod tests {
         ] {
             let mut payload = [0u8; 24];
             payload[2] = 100;
-            payload[5] = val;  // heating mode at offset 5
+            payload[5] = val; // heating mode at offset 5
             payload[9] = 0x02;
             payload[20] = 104;
             let status = StatusUpdate::parse(&payload).unwrap();
@@ -263,10 +263,10 @@ mod tests {
         let mut payload = [0u8; 24];
         payload[2] = 100;
         payload[9] = 0x02;
-        payload[11] = 0x09;  // pump1=1(low), pump2=0(off), pump3=2(high) → 0b10_00_01_01 = 0x09
+        payload[11] = 0x09; // pump1=1(low), pump2=0(off), pump3=2(high) → 0b10_00_01_01 = 0x09
         payload[11] = (1 | (0 << 2) | (2 << 4)) as u8; // pump1=low, pump2=off, pump3=high
-        payload[13] = 0x0E;  // circ pump (bit 1) + blower (bits 2-3)
-        payload[15] = 0x01;  // mister on
+        payload[13] = 0x0E; // circ pump (bit 1) + blower (bits 2-3)
+        payload[15] = 0x01; // mister on
         payload[20] = 104;
 
         let status = StatusUpdate::parse(&payload).unwrap();

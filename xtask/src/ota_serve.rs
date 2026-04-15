@@ -35,7 +35,11 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to start HTTP server on {}: {}", addr, e))?;
 
     println!("OTA server running on http://{}/firmware.bin", addr);
-    println!("Serving: {} ({} bytes)", firmware_path.display(), firmware_data.len());
+    println!(
+        "Serving: {} ({} bytes)",
+        firmware_path.display(),
+        firmware_data.len()
+    );
     println!("Press Ctrl+C to stop.");
 
     let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -48,7 +52,8 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     while running.load(std::sync::atomic::Ordering::SeqCst) {
         match server.recv_timeout(timeout) {
             Ok(Some(request)) => {
-                let remote = request.remote_addr()
+                let remote = request
+                    .remote_addr()
                     .map(|a| a.to_string())
                     .unwrap_or_else(|| "unknown".to_string());
                 let path = request.url().to_string();
@@ -58,8 +63,16 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                 let response = tiny_http::Response::new(
                     tiny_http::StatusCode::from(200),
                     vec![
-                        tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/octet-stream"[..]).unwrap(),
-                        tiny_http::Header::from_bytes(&b"Content-Length"[..], format!("{}", len).as_bytes()).unwrap(),
+                        tiny_http::Header::from_bytes(
+                            &b"Content-Type"[..],
+                            &b"application/octet-stream"[..],
+                        )
+                        .unwrap(),
+                        tiny_http::Header::from_bytes(
+                            &b"Content-Length"[..],
+                            format!("{}", len).as_bytes(),
+                        )
+                        .unwrap(),
                     ],
                     std::io::Cursor::new((*data).clone()),
                     Some(len),
@@ -83,4 +96,3 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     println!("OTA server stopped.");
     Ok(())
 }
-

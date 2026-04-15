@@ -19,16 +19,16 @@
 //!   SimBroker (mock MQTT broker for verification)
 //! ```
 
-pub mod spa_sim;
 pub mod controller;
-pub mod sim_transport;
 pub mod sim_broker;
+pub mod sim_transport;
+pub mod spa_sim;
 
-pub use spa_sim::{SpaSim, SpaState};
-pub use controller::{SpaController, ControllerEvent};
-pub use sim_transport::SimTransport;
+pub use controller::{ControllerEvent, SpaController};
 pub use sim_broker::SimBroker;
+pub use sim_transport::SimTransport;
+pub use spa_sim::{SpaSim, SpaState};
 
 // Re-export protocol types commonly used with the sim
-pub use launa_protocol::status::{HeatingMode, TemperatureScale, TempRange, PumpState};
 pub use launa_protocol::command::ToggleItem;
+pub use launa_protocol::status::{HeatingMode, PumpState, TempRange, TemperatureScale};

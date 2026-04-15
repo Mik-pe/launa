@@ -5,10 +5,10 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-pub mod transport;
 #[cfg(feature = "std")]
 pub mod network;
+pub mod transport;
 
-pub use transport::Transport;
 #[cfg(feature = "std")]
 pub use network::Network;
+pub use transport::Transport;

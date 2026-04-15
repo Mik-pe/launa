@@ -1,9 +1,9 @@
 //! HAL integration tests for mock transport and mock network.
 
-use launa_hal::transport::mock::MockTransport;
 use launa_hal::network::mock::MockNetwork;
-use launa_hal::Transport;
+use launa_hal::transport::mock::MockTransport;
 use launa_hal::Network;
+use launa_hal::Transport;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MockTransport tests
@@ -12,8 +12,14 @@ use launa_hal::Network;
 #[test]
 fn test_mock_transport_new_is_empty() {
     let t = MockTransport::new();
-    assert!(!t.has_incoming(), "new transport should have no incoming data");
-    assert!(t.written().is_empty(), "new transport should have no written data");
+    assert!(
+        !t.has_incoming(),
+        "new transport should have no incoming data"
+    );
+    assert!(
+        t.written().is_empty(),
+        "new transport should have no written data"
+    );
 }
 
 #[test]

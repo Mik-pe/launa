@@ -65,10 +65,7 @@ impl FilterCycles {
             enabled: f2_enabled,
         };
 
-        Ok(FilterCycles {
-            filter1,
-            filter2,
-        })
+        Ok(FilterCycles { filter1, filter2 })
     }
 }
 

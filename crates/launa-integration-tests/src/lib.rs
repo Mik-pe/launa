@@ -7,16 +7,18 @@ pub mod spa_simulator;
 #[cfg(test)]
 mod tests {
     use crate::spa_simulator::SpaSimulator;
-    use launa_protocol::frame::{Frame, FrameDecoder, FrameEncoder};
-    use launa_protocol::status::{HeatingMode, TemperatureScale, TempRange, PumpState};
-    use launa_protocol::config::PumpConfig;
-    use launa_protocol::command::{Command, ToggleItem};
-    use launa_protocol::information::{HeaterVoltage, HeaterType};
-    use launa_protocol::fault::FaultCode;
-    use launa_protocol::dispatcher::{IncomingMessage, dispatch_frame};
-    use launa_protocol::registration::{RegistrationStateMachine, RegistrationState, RegistrationAction};
-    use launa_protocol::crc8;
     use launa_ota::OtaUpdate;
+    use launa_protocol::command::{Command, ToggleItem};
+    use launa_protocol::config::PumpConfig;
+    use launa_protocol::crc8;
+    use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
+    use launa_protocol::fault::FaultCode;
+    use launa_protocol::frame::{Frame, FrameDecoder, FrameEncoder};
+    use launa_protocol::information::{HeaterType, HeaterVoltage};
+    use launa_protocol::registration::{
+        RegistrationAction, RegistrationState, RegistrationStateMachine,
+    };
+    use launa_protocol::status::{HeatingMode, PumpState, TempRange, TemperatureScale};
 
     // ========================================================================
     // Test Group A: Protocol Round-Trip
@@ -62,7 +64,9 @@ mod tests {
         assert_eq!(frames.len(), 1);
         let request_frame = &frames[0];
 
-        let response = sim.process_incoming(request_frame).expect("should return config response");
+        let response = sim
+            .process_incoming(request_frame)
+            .expect("should return config response");
         let response_frames = decoder.feed_slice(&response);
         assert_eq!(response_frames.len(), 1);
 
@@ -90,7 +94,9 @@ mod tests {
         let frames = decoder.feed_slice(&encoded);
         let request_frame = &frames[0];
 
-        let response = sim.process_incoming(request_frame).expect("should return info response");
+        let response = sim
+            .process_incoming(request_frame)
+            .expect("should return info response");
         let response_frames = decoder.feed_slice(&response);
         let msg = dispatch_frame(&response_frames[0]);
         match msg {
@@ -115,7 +121,9 @@ mod tests {
         let frames = decoder.feed_slice(&encoded);
         let request_frame = &frames[0];
 
-        let response = sim.process_incoming(request_frame).expect("should return fault response");
+        let response = sim
+            .process_incoming(request_frame)
+            .expect("should return fault response");
         let response_frames = decoder.feed_slice(&response);
         let msg = dispatch_frame(&response_frames[0]);
         match msg {
@@ -138,7 +146,9 @@ mod tests {
         let frames = decoder.feed_slice(&encoded);
         let request_frame = &frames[0];
 
-        let response = sim.process_incoming(request_frame).expect("should return filter response");
+        let response = sim
+            .process_incoming(request_frame)
+            .expect("should return filter response");
         let response_frames = decoder.feed_slice(&response);
         let msg = dispatch_frame(&response_frames[0]);
         match msg {
@@ -246,7 +256,9 @@ mod tests {
         let request_frame = &request_frames[0];
 
         // Simulator processes client request and assigns ID
-        let assignment = sim.process_incoming(request_frame).expect("should assign ID");
+        let assignment = sim
+            .process_incoming(request_frame)
+            .expect("should assign ID");
 
         // Step 3: Simulator sends assignment (FE BF 02 <ID>)
         let assignment_frames = decoder.feed_slice(&assignment);
@@ -310,7 +322,8 @@ mod tests {
             "launa/test_spa/command",
             "launa/test_spa/command/pump1",
             b"true",
-        ).expect("should parse command");
+        )
+        .expect("should parse command");
         assert_eq!(cmd, Command::ToggleItem(ToggleItem::Pump1));
 
         let (mt, payload) = cmd.encode();
@@ -340,7 +353,8 @@ mod tests {
             "launa/test_spa/command",
             "launa/test_spa/command/set_temperature",
             b"102",
-        ).expect("should parse command");
+        )
+        .expect("should parse command");
         assert_eq!(cmd, Command::SetTemperature(102));
 
         let (mt, payload) = cmd.encode();
@@ -439,7 +453,11 @@ mod tests {
         for (_topic, json_str) in &configs {
             let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
             let uid = parsed["unique_id"].as_str().unwrap().to_string();
-            assert!(uid.starts_with("test_spa_001_"), "unique_id '{}' should start with device id", uid);
+            assert!(
+                uid.starts_with("test_spa_001_"),
+                "unique_id '{}' should start with device id",
+                uid
+            );
             assert!(unique_ids.insert(uid), "duplicate unique_id found");
         }
     }
@@ -450,11 +468,21 @@ mod tests {
         let configs = builder.build();
 
         for (topic, json_str) in &configs {
-            assert!(topic.starts_with("homeassistant/"), "topic '{}' should start with homeassistant/", topic);
+            assert!(
+                topic.starts_with("homeassistant/"),
+                "topic '{}' should start with homeassistant/",
+                topic
+            );
 
             let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
-            assert!(parsed["state_topic"].is_string(), "state_topic should be a string");
-            assert!(parsed["availability_topic"].is_string(), "availability_topic should be a string");
+            assert!(
+                parsed["state_topic"].is_string(),
+                "state_topic should be a string"
+            );
+            assert!(
+                parsed["availability_topic"].is_string(),
+                "availability_topic should be a string"
+            );
 
             let state_topic = parsed["state_topic"].as_str().unwrap();
             assert!(state_topic.starts_with("launa/test_spa_001/"));
@@ -508,7 +536,11 @@ mod tests {
 
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
-        assert_eq!(frames.len(), 0, "Corrupted CRC should not yield a valid frame");
+        assert_eq!(
+            frames.len(),
+            0,
+            "Corrupted CRC should not yield a valid frame"
+        );
     }
 
     #[test]
@@ -543,7 +575,10 @@ mod tests {
         };
         let msg = dispatch_frame(&frame);
         match msg {
-            IncomingMessage::Unknown { message_type, payload } => {
+            IncomingMessage::Unknown {
+                message_type,
+                payload,
+            } => {
                 assert_eq!(message_type, [0xAB, 0xCD]);
                 assert_eq!(payload, vec![0x01, 0x02, 0x03]);
             }
@@ -624,7 +659,7 @@ mod tests {
         let mut sim = SpaSimulator::new();
         sim.state.temp_scale_celsius = true;
         sim.state.current_temp = 76; // 76/2 = 38°C
-        sim.state.set_temp = 80;     // 80/2 = 40°C
+        sim.state.set_temp = 80; // 80/2 = 40°C
 
         let encoded = sim.generate_status_frame();
         let mut decoder = FrameDecoder::new();
@@ -826,11 +861,7 @@ mod tests {
     fn test_toggle_all_items() {
         let mut sim = SpaSimulator::new();
 
-        let toggles = [
-            ToggleItem::Pump1,
-            ToggleItem::Pump2,
-            ToggleItem::Pump3,
-        ];
+        let toggles = [ToggleItem::Pump1, ToggleItem::Pump2, ToggleItem::Pump3];
 
         for item in &toggles {
             let (mt, payload) = Command::ToggleItem(*item).encode();
@@ -872,10 +903,8 @@ mod tests {
         assert_eq!(crc8::compute(&[0x00]), 0x0C);
 
         let data: &[u8] = &[
-            0x1D, 0xFF, 0xAF, 0x13, 0x00, 0x00, 0x64, 0x07,
-            0x07, 0x00, 0x00, 0x01, 0x00, 0x00, 0x04, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x64, 0x00, 0x00, 0x00,
+            0x1D, 0xFF, 0xAF, 0x13, 0x00, 0x00, 0x64, 0x07, 0x07, 0x00, 0x00, 0x01, 0x00, 0x00,
+            0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00, 0x00,
         ];
         assert_eq!(crc8::compute(data), 0xC2);
     }
@@ -1006,7 +1035,8 @@ mod tests {
             "launa/spa/command",
             "launa/spa/command/pump1",
             b"true",
-        ).expect("should parse");
+        )
+        .expect("should parse");
 
         // Encode to frame
         let (mt, payload) = cmd.encode();
@@ -1042,7 +1072,8 @@ mod tests {
             "launa/spa/command",
             "launa/spa/command/set_temperature",
             b"100",
-        ).expect("should parse");
+        )
+        .expect("should parse");
         assert_eq!(cmd, Command::SetTemperature(100));
 
         let (mt, payload) = cmd.encode();
@@ -1063,18 +1094,38 @@ mod tests {
         let builder = launa_mqtt::discovery::DiscoveryBuilder::new("test_spa");
         let configs = builder.build();
 
-        assert_eq!(configs.len(), 18, "should produce exactly 18 discovery configs");
+        assert_eq!(
+            configs.len(),
+            18,
+            "should produce exactly 18 discovery configs"
+        );
 
         let mut topics_seen = std::collections::HashSet::new();
 
         for (topic, json_str) in &configs {
             // Topic must follow HA pattern: homeassistant/<component>/<device_id>/<object_id>/config
-            assert!(topic.starts_with("homeassistant/"), "topic should start with homeassistant/: {}", topic);
-            assert!(topic.ends_with("/config"), "topic should end with /config: {}", topic);
-            assert!(topic.contains("/test_spa/"), "topic should contain device_id: {}", topic);
+            assert!(
+                topic.starts_with("homeassistant/"),
+                "topic should start with homeassistant/: {}",
+                topic
+            );
+            assert!(
+                topic.ends_with("/config"),
+                "topic should end with /config: {}",
+                topic
+            );
+            assert!(
+                topic.contains("/test_spa/"),
+                "topic should contain device_id: {}",
+                topic
+            );
 
             // No duplicate topics
-            assert!(topics_seen.insert(topic.clone()), "duplicate topic: {}", topic);
+            assert!(
+                topics_seen.insert(topic.clone()),
+                "duplicate topic: {}",
+                topic
+            );
 
             // Must be valid JSON
             let v: serde_json::Value = serde_json::from_str(json_str)
@@ -1082,17 +1133,36 @@ mod tests {
 
             // Must have required HA fields
             assert!(v.get("name").is_some(), "missing name in {}", topic);
-            assert!(v.get("unique_id").is_some(), "missing unique_id in {}", topic);
-            assert!(v.get("state_topic").is_some(), "missing state_topic in {}", topic);
-            assert!(v.get("availability_topic").is_some(), "missing availability_topic in {}", topic);
+            assert!(
+                v.get("unique_id").is_some(),
+                "missing unique_id in {}",
+                topic
+            );
+            assert!(
+                v.get("state_topic").is_some(),
+                "missing state_topic in {}",
+                topic
+            );
+            assert!(
+                v.get("availability_topic").is_some(),
+                "missing availability_topic in {}",
+                topic
+            );
 
             // unique_id must contain device_id
             let uid = v["unique_id"].as_str().unwrap();
-            assert!(uid.starts_with("test_spa_"), "unique_id should start with device_id: {}", uid);
+            assert!(
+                uid.starts_with("test_spa_"),
+                "unique_id should start with device_id: {}",
+                uid
+            );
 
             // state_topic must be the device state topic
             let st = v["state_topic"].as_str().unwrap();
-            assert_eq!(st, "launa/test_spa/state", "state_topic should match device state topic");
+            assert_eq!(
+                st, "launa/test_spa/state",
+                "state_topic should match device state topic"
+            );
 
             // availability_topic must match
             let at = v["availability_topic"].as_str().unwrap();
@@ -1113,7 +1183,9 @@ mod tests {
     /// RegistrationStateMachine, verifying all state transitions.
     #[test]
     fn test_registration_flow_with_state_machine() {
-        use launa_protocol::registration::{RegistrationStateMachine, RegistrationAction, RegistrationState};
+        use launa_protocol::registration::{
+            RegistrationAction, RegistrationState, RegistrationStateMachine,
+        };
 
         let mut sm = RegistrationStateMachine::new();
         assert!(!sm.is_registered());
@@ -1121,12 +1193,23 @@ mod tests {
 
         // Step 1: Simulate receiving a client ID query from the spa (FE BF 00)
         let action = sm.process([0xFE, 0xBF], &[0x00]);
-        assert_eq!(action, RegistrationAction::SendIdRequest, "should respond to query with ID request");
-        assert!(matches!(sm.state(), RegistrationState::WaitingForAssignment));
+        assert_eq!(
+            action,
+            RegistrationAction::SendIdRequest,
+            "should respond to query with ID request"
+        );
+        assert!(matches!(
+            sm.state(),
+            RegistrationState::WaitingForAssignment
+        ));
 
         // Step 2: Simulate receiving client ID assignment (FE BF 02 <id>)
         let action = sm.process([0xFE, 0xBF], &[0x02, 0x03]);
-        assert_eq!(action, RegistrationAction::SendIdAck { client_id: 0x03 }, "should send ack after assignment");
+        assert_eq!(
+            action,
+            RegistrationAction::SendIdAck { client_id: 0x03 },
+            "should send ack after assignment"
+        );
         assert!(sm.is_registered(), "should be registered after assignment");
 
         // Step 3: Verify we can now encode commands with the assigned client ID

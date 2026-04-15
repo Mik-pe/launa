@@ -33,7 +33,10 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let device_id = device_id_override.unwrap_or(config.device.id.clone());
     let ota_port = config.ota.serve_port;
 
-    println!("OTA flash: device={}, feature={}, ota_port={}", device_id, feature, ota_port);
+    println!(
+        "OTA flash: device={}, feature={}, ota_port={}",
+        device_id, feature, ota_port
+    );
 
     // Step 1: Run cargo test
     println!("\n[1/6] Running cargo test...");
@@ -53,14 +56,20 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let app_dir = project_root().join("app");
 
     let mut build_cmd = Command::new("cargo");
-    build_cmd.arg("espflash").arg("save-image").arg("--chip").arg("esp32");
+    build_cmd
+        .arg("espflash")
+        .arg("save-image")
+        .arg("--chip")
+        .arg("esp32");
     if feature != "default" {
         build_cmd.arg("--features").arg(&feature);
     }
     build_cmd.arg("-o").arg(&bin_path);
     build_cmd.current_dir(&app_dir);
 
-    let build_status = build_cmd.status().context("Failed to run cargo espflash save-image")?;
+    let build_status = build_cmd
+        .status()
+        .context("Failed to run cargo espflash save-image")?;
     if !build_status.success() {
         bail!("Firmware build failed.");
     }
@@ -72,10 +81,13 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut ota_serve_cmd = Command::new(&xtask_bin);
     ota_serve_cmd
         .arg("ota-serve")
-        .arg("--firmware").arg(&bin_path)
-        .arg("--port").arg(ota_port.to_string());
+        .arg("--firmware")
+        .arg(&bin_path)
+        .arg("--port")
+        .arg(ota_port.to_string());
 
-    let mut ota_serve_child = ota_serve_cmd.spawn()
+    let mut ota_serve_child = ota_serve_cmd
+        .spawn()
         .context("Failed to start OTA server")?;
     println!("OTA server started (PID {}).", ota_serve_child.id());
 
@@ -100,7 +112,13 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         "feature": feature,
     });
     let topic = format!("launa/{}/ota", device_id);
-    client.publish(&topic, rumqttc::QoS::AtLeastOnce, false, payload.to_string().as_bytes())
+    client
+        .publish(
+            &topic,
+            rumqttc::QoS::AtLeastOnce,
+            false,
+            payload.to_string().as_bytes(),
+        )
         .context("Failed to publish OTA command")?;
     println!("OTA command published to {}", topic);
 
@@ -138,7 +156,10 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     println!("OTA server stopped.");
 
     if came_online {
-        println!("\nOTA flash successful! Device {} is running new firmware.", device_id);
+        println!(
+            "\nOTA flash successful! Device {} is running new firmware.",
+            device_id
+        );
         Ok(())
     } else {
         bail!("OTA flash timed out. Device did not come back online within 120s.");

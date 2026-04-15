@@ -42,9 +42,7 @@ pub struct OtaConfig {
 
 impl Default for OtaConfig {
     fn default() -> Self {
-        OtaConfig {
-            serve_port: 8080,
-        }
+        OtaConfig { serve_port: 8080 }
     }
 }
 
@@ -79,8 +77,8 @@ pub fn load() -> anyhow::Result<Config> {
     let contents = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
 
-    let config: Config = toml::from_str(&contents)
-        .with_context(|| format!("Failed to parse {}", path.display()))?;
+    let config: Config =
+        toml::from_str(&contents).with_context(|| format!("Failed to parse {}", path.display()))?;
 
     config.validate()?;
     Ok(config)

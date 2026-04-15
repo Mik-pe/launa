@@ -128,13 +128,13 @@ These must be fixed before field deployment. The firmware runs headless at the s
 
 - [ ] **OTA HTTP download over embassy-net TCP** (`app/src/ota.rs`): `perform_ota_update()` is a stub -- it parses the URL but logs "not yet implemented". Implement: (1) create TCP socket, (2) HTTP GET the firmware URL, (3) write chunks to alternate OTA partition via `EspOtaFlash::write()`, (4) finalize and reboot. Without this, remote firmware updates are impossible.
 - [x] **Graceful shutdown before OTA reboot**: On OTA trigger: publish "offline" to availability, send MQTT DISCONNECT, drain UART TX channel, wait 50ms for in-flight bytes, then reboot.
-- [ ] **Fix NVS partition size mismatch**: `partitions.csv` allocates `0x4000` (16 KiB) for NVS, but `config.rs` hardcodes `Nvs::new(0x9000, 0x6000, flash)` (24 KiB). This reads/writes beyond NVS into `phy_init`. Fix one to match the other.
-- [ ] **Add factory app partition to partition table**: The partition table has no factory app at `0x10000`. First flash via `espflash` may fail or write to wrong offset. Standard ESP32 tables have a factory app at `0x10000` with OTA slots after.
+- [x] **Fix NVS partition size mismatch**: Fixed `partitions.csv` NVS size from `0x4000` to `0x6000` (24 KiB) to match `config.rs`. Adjusted `phy_init` offset accordingly.
+- [x] **Add factory app partition to partition table**: Added factory app partition at `0x20000` (1.25 MiB). Three equal app partitions (factory + ota_0 + ota_1) fit within 4MB flash. Updated `launa-esp-ota` constants to match.
 
 ### Discovery / HA Integration
 
 - [ ] **Unify app/ discovery with library -- app has 14 entities, library has 18**: `mqtt_client.rs::publish_discovery()` is missing Pump4-6 and Light2. The command parser already handles these subtopics, so MQTT commands will be accepted but HA won't show the entities. Sync the app's hand-rolled discovery to match `DiscoveryBuilder`'s 18 entities.
-- [ ] **Fix app/ discovery `payload_on`/`payload_off` format**: The hand-rolled `format!()` strings embed raw JSON booleans (`"payload_on":true`). HA MQTT discovery expects **strings** (`"payload_on": "true"`). The `launa-mqtt` library uses string values correctly. Switch the app to `"\"true\""` in the format strings.
+- [x] **Fix app/ discovery `payload_on`/`payload_off` format**: Fixed 7 instances in `mqtt_client.rs` `publish_discovery()` from raw JSON booleans to quoted strings (`"payload_on":"true"`).
 - [x] **Add firmware version to app/ discovery and state JSON**: Added `firmware_version` field to `status_to_json()`. Discovery includes `sw_version` via `env!("CARGO_PKG_VERSION")` in `launa-mqtt` builder.
 
 ### Connectivity / Robustness
@@ -143,7 +143,7 @@ These must be fixed before field deployment. The firmware runs headless at the s
 - [ ] **Registration timeout**: If the spa sends `FE BF 00` but never replies with the ID assignment, the state machine is stuck in `WaitingForAssignment` forever. Add a timeout (e.g., 5 seconds) that resets back to `WaitingForQuery` so it can try again on the next broadcast cycle.
 - [ ] **WiFi reconnect triggers MQTT reconnect**: `connection_task` handles WiFi disconnect/reconnect, but `mqtt_task` only detects MQTT-level connection loss. If WiFi drops and reconnects, the old TCP socket may be in a zombie state. Fix: share a signal between `connection_task` and `mqtt_task` so WiFi reconnect triggers MQTT reconnect proactively.
 - [x] **Stale-status detection and alerting**: Track time since last valid status frame. If >5s, send `ConfigurationRequest` to provoke a response. If >30s, publish "stale" to availability topic so HA shows the device as unavailable. Recovery is automatic when a valid status frame arrives.
-- [ ] **CommandTracker bounded capacity**: `pending: Vec<PendingCommand>` grows without bound. A burst of MQTT commands could exhaust the 32 KiB heap. Cap at e.g., 8 pending commands and reject new ones when full.
+- [x] **CommandTracker bounded capacity**: Added `MAX_PENDING_COMMANDS = 8` cap. `track()` rejects new commands with a warning log when full, preventing heap exhaustion.
 
 ### MQTT-based Alerting
 
@@ -173,7 +173,7 @@ The firmware runs headless -- serial debug is inaccessible in production. All di
 
 - [ ] **Consolidate duplicate simulators**: `launa-integration-tests/src/spa_simulator.rs` (`SpaSimulator`) and `launa-sim/src/spa_sim.rs` (`SpaSim`) do the same thing with different abstractions. The old one uses raw `u8`/`bool` fields and is missing pump4/5/6, light2, and mister toggle handling. Migrate all integration tests in `lib.rs` to use `SpaSim` from `launa-sim`, then remove the duplicate `SpaSimulator`.
 - [ ] **Extend `PumpTimerManager` to cover all 6 pumps**: Currently only pump1/2/3 have timers. The command parser already handles `pump4_timer` through `pump6_timer` subtopics, but `start_pump_timer`/`cancel_pump_timer`/`is_pump_timer_running` silently ignore pump4/5/6. Add timers for all 6 pumps (or make it generic over `ToggleItem`).
-- [ ] **Remove unused `client_id` binding in `encode_command`**: `controller.rs` line 149 does `let _client_id = self.registration.client_id()?;` but never uses it (only `NothingToSend` embeds client_id in the message type). Either remove the binding or add a comment explaining why it's fetched but unused.
+- [x] **Remove unused `client_id` binding in `encode_command`**: Changed to `let _ = self.registration.client_id()?;` with comment explaining it's a registration guard that returns `None` if not registered.
 - [ ] **Gate default temperature parsing behind validation**: `parse_set_temperature()` accepts 0-255 without range checking. The validated variant `parse_set_temperature_validated()` exists but isn't the default path. Consider making the unvalidated path opt-in (behind a feature flag or explicit caller decision) to prevent accidental `SetTemperature(255)` being sent to the spa.
 
 ## P2: Documentation Cleanup

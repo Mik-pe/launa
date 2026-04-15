@@ -4,8 +4,8 @@
 //! to the `SpaController` (acting as our ESP32 firmware). Bytes written by the
 //! spa appear as readable data for the controller, and vice versa.
 
-use std::collections::VecDeque;
 use launa_hal::transport::{Transport, TransportError};
+use std::collections::VecDeque;
 
 /// Virtual RS-485 bus connecting spa simulator to controller.
 ///

@@ -482,7 +482,7 @@ impl MqttClient {
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
             ("binary_sensor".into(), "heating".into(), format!(
-                r#"{{"device":{},"name":"Heating","unique_id":"{}_heating","device_class":"heat","state_topic":"{}","value_template":"{{{{value_json.is_heating}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
+                r#"{{"device":{},"name":"Heating","unique_id":"{}_heating","device_class":"heat","state_topic":"{}","value_template":"{{{{value_json.is_heating}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, avail_topic
             )),
         ];
@@ -493,7 +493,7 @@ impl MqttClient {
             let unique_id = format!("{}_pump{}", device_id, i);
             let value_template = format!("{{{{value_json.pump{}_on}}}}", i);
             let payload = format!(
-                r#"{{"device":{},"name":"{}","unique_id":"{}","state_topic":"{}","command_topic":"{}/pump{}","value_template":"{}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
+                r#"{{"device":{},"name":"{}","unique_id":"{}","state_topic":"{}","command_topic":"{}/pump{}","value_template":"{}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
                 device_info, name, unique_id, state_topic, cmd_topic, i, value_template, avail_topic
             );
             configs.push(("switch".into(), format!("pump{}", i), payload));
@@ -505,7 +505,7 @@ impl MqttClient {
             let unique_id = format!("{}_light{}", device_id, i);
             let value_template = format!("{{{{value_json.light{} }}}}", i);
             let payload = format!(
-                r#"{{"device":{},"name":"{}","unique_id":"{}","state_topic":"{}","command_topic":"{}/light{}","value_template":"{}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
+                r#"{{"device":{},"name":"{}","unique_id":"{}","state_topic":"{}","command_topic":"{}/light{}","value_template":"{}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
                 device_info, name, unique_id, state_topic, cmd_topic, i, value_template, avail_topic
             );
             configs.push(("light".into(), format!("light{}", i), payload));
@@ -513,7 +513,7 @@ impl MqttClient {
 
         configs.extend_from_slice(&[
             ("fan".into(), "blower".into(), format!(
-                r#"{{"device":{},"name":"Blower","unique_id":"{}_blower","state_topic":"{}","command_topic":"{}/blower","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
+                r#"{{"device":{},"name":"Blower","unique_id":"{}_blower","state_topic":"{}","command_topic":"{}/blower","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
             ("select".into(), "heat_mode".into(), format!(
@@ -521,7 +521,7 @@ impl MqttClient {
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
             ("switch".into(), "circ_pump".into(), format!(
-                r#"{{"device":{},"name":"Circulation Pump","unique_id":"{}_circ_pump","state_topic":"{}","value_template":"{{{{value_json.circ_pump}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
+                r#"{{"device":{},"name":"Circulation Pump","unique_id":"{}_circ_pump","state_topic":"{}","value_template":"{{{{value_json.circ_pump}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, avail_topic
             )),
             ("select".into(), "temp_range".into(), format!(
@@ -529,11 +529,11 @@ impl MqttClient {
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
             ("switch".into(), "hold_mode".into(), format!(
-                r#"{{"device":{},"name":"Hold Mode","unique_id":"{}_hold_mode","state_topic":"{}","command_topic":"{}/hold_mode","value_template":"{{{{value_json.hold_mode}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
+                r#"{{"device":{},"name":"Hold Mode","unique_id":"{}_hold_mode","state_topic":"{}","command_topic":"{}/hold_mode","value_template":"{{{{value_json.hold_mode}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
             ("switch".into(), "mister".into(), format!(
-                r#"{{"device":{},"name":"Mister","unique_id":"{}_mister","state_topic":"{}","value_template":"{{{{value_json.mister}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
+                r#"{{"device":{},"name":"Mister","unique_id":"{}_mister","state_topic":"{}","value_template":"{{{{value_json.mister}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, avail_topic
             )),
             ("sensor".into(), "fault".into(), format!(

@@ -1,22 +1,22 @@
 #![cfg_attr(not(test), no_std)]
 
-pub mod crc8;
-pub mod frame;
-pub mod message;
-pub mod status;
 pub mod command;
 pub mod config;
-pub mod registration;
-pub mod information;
+pub mod crc8;
+pub mod dispatcher;
 pub mod fault;
 pub mod filter;
-pub mod dispatcher;
+pub mod frame;
+pub mod information;
+pub mod message;
+pub mod registration;
+pub mod status;
 
+pub use command::Command;
+pub use dispatcher::{dispatch_frame, IncomingMessage};
+pub use fault::{FaultCode, FaultLogEntry};
+pub use filter::FilterCycles;
 pub use frame::{Frame, FrameDecoder, FrameEncoder};
+pub use information::InformationResponse;
 pub use message::MessageType;
 pub use status::StatusUpdate;
-pub use command::Command;
-pub use information::InformationResponse;
-pub use fault::{FaultLogEntry, FaultCode};
-pub use filter::FilterCycles;
-pub use dispatcher::{IncomingMessage, dispatch_frame};

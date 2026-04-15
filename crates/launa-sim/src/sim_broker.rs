@@ -3,8 +3,8 @@
 //! Records published messages and allows tests to verify that the controller
 //! publishes correct state, discovery configs, and availability messages.
 
-use std::collections::HashSet;
 use launa_mqtt::topics::TopicBuilder;
+use std::collections::HashSet;
 
 /// A mock MQTT broker that records all publications for test verification.
 pub struct SimBroker {
@@ -24,7 +24,8 @@ impl SimBroker {
 
     /// Record a publication (simulates `mqtt_client.publish()`).
     pub fn publish(&mut self, topic: &str, payload: &str) {
-        self.published.push((topic.to_string(), payload.to_string()));
+        self.published
+            .push((topic.to_string(), payload.to_string()));
     }
 
     /// Publish a discovery config.
@@ -64,7 +65,8 @@ impl SimBroker {
     /// Find the last state payload published.
     pub fn last_state(&self) -> Option<&str> {
         let state_topic = TopicBuilder::new(&self.device_id).state_topic();
-        self.published.iter()
+        self.published
+            .iter()
             .rev()
             .find(|(t, _)| t == &state_topic)
             .map(|(_, p)| p.as_str())
@@ -72,7 +74,8 @@ impl SimBroker {
 
     /// Find all discovery payloads published.
     pub fn discovery_payloads(&self) -> Vec<&str> {
-        self.published.iter()
+        self.published
+            .iter()
             .filter(|(t, _)| t.starts_with("homeassistant/"))
             .map(|(_, p)| p.as_str())
             .collect()
@@ -97,7 +100,9 @@ impl SimBroker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use launa_protocol::status::{StatusUpdate, HeatingMode, TemperatureScale, TempRange, PumpState, TimeFormat};
+    use launa_protocol::status::{
+        HeatingMode, PumpState, StatusUpdate, TempRange, TemperatureScale, TimeFormat,
+    };
 
     fn sample_status() -> StatusUpdate {
         StatusUpdate {

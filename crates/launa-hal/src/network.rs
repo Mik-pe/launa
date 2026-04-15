@@ -71,7 +71,11 @@ pub mod mock {
     }
 
     impl super::Network for MockNetwork {
-        fn connect_wifi(&mut self, _ssid: &str, _password: &str) -> Result<(), super::NetworkError> {
+        fn connect_wifi(
+            &mut self,
+            _ssid: &str,
+            _password: &str,
+        ) -> Result<(), super::NetworkError> {
             self.connected = true;
             Ok(())
         }
@@ -80,7 +84,11 @@ pub mod mock {
             self.connected
         }
 
-        fn tcp_connect(&mut self, addr: &str, port: u16) -> Result<Box<dyn super::TcpSocket>, super::NetworkError> {
+        fn tcp_connect(
+            &mut self,
+            addr: &str,
+            port: u16,
+        ) -> Result<Box<dyn super::TcpSocket>, super::NetworkError> {
             if !self.connected {
                 return Err(super::NetworkError::ConnectionFailed);
             }

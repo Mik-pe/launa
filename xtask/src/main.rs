@@ -19,10 +19,14 @@ fn usage() {
     eprintln!("  flash [--feature <name>] [--port <COMx>]         Flash firmware via USB");
     eprintln!("  monitor [--port <COMx>] [--duration <secs>]       Read serial output");
     eprintln!("  flash-monitor [--feature <name>] [--port <COMx>]  Flash + monitor");
-    eprintln!("  sniff-decode [--host <host>] [--port <1883>]      Decode sniffer frames from MQTT");
+    eprintln!(
+        "  sniff-decode [--host <host>] [--port <1883>]      Decode sniffer frames from MQTT"
+    );
     eprintln!("  spa-sim [--port <COMx>] [--duration <secs>]       Simulate spa over RS-485");
     eprintln!("  ota-serve --firmware <path> [--port <8080>]       Serve firmware over HTTP");
-    eprintln!("  ota-flash [--feature <name>] [--device-id <id>]   Build and flash remotely over WiFi");
+    eprintln!(
+        "  ota-flash [--feature <name>] [--device-id <id>]   Build and flash remotely over WiFi"
+    );
     eprintln!("  self-test [--port <COMx>]                         Run hardware self-test");
     eprintln!("  config-flash [--port <COMx>]                      Write config to ESP32 NVS");
 }

@@ -26,7 +26,10 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         .open()
         .with_context(|| format!("Failed to open serial port {}", port_name))?;
 
-    println!("Monitoring on {} for {}s... (Ctrl+C to stop)", port_name, duration_secs);
+    println!(
+        "Monitoring on {} for {}s... (Ctrl+C to stop)",
+        port_name, duration_secs
+    );
     let start = Instant::now();
     let deadline = start + Duration::from_secs(duration_secs);
 

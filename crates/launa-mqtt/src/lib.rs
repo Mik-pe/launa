@@ -7,15 +7,20 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
+pub mod command_parser;
 #[cfg(feature = "std")]
 pub mod discovery;
-pub mod topics;
-pub mod command_parser;
 pub mod state;
+pub mod topics;
 
 #[cfg(feature = "std")]
 pub use discovery::{DiscoveryBuilder, DiscoveryMessage};
-pub use topics::{TopicBuilder, LwtConfig, BirthConfig, lwt_config, birth_config, AVAILABILITY_ONLINE, AVAILABILITY_OFFLINE};
+pub use topics::{
+    birth_config, lwt_config, BirthConfig, LwtConfig, TopicBuilder, AVAILABILITY_OFFLINE,
+    AVAILABILITY_ONLINE,
+};
 
-pub use command_parser::{parse_command, parse_command_ok, parse_set_temperature_validated, ParseResult};
+pub use command_parser::{
+    parse_command, parse_command_ok, parse_set_temperature_validated, ParseResult,
+};
 pub use state::status_to_json;

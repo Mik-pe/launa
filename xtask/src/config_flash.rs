@@ -72,6 +72,9 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         let error = &response[idx + "CONFIG_ERROR:".len()..];
         bail!("ESP32 config error: {}", error.trim());
     } else {
-        bail!("No acknowledgment received from ESP32. Response: {}", response.trim());
+        bail!(
+            "No acknowledgment received from ESP32. Response: {}",
+            response.trim()
+        );
     }
 }
