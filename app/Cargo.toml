@@ -27,10 +27,11 @@ opt-level = 3
 esp-hal = { version = "1.0.0", features = ["esp32", "unstable"] }
 esp-rtos = { version = "0.2.0", features = ["esp32", "embassy", "log-04"] }
 esp-radio = { version = "0.17", features = ["esp32", "unstable", "wifi", "smoltcp", "log-04"] }
-esp-alloc = "0.7"
+esp-alloc = "0.9"
 esp-nvs = { version = "0.4", features = ["esp32"] }
-esp-storage = { version = "0.5", features = ["esp32"] }
-esp-backtrace = { version = "0.15", features = ["esp32", "panic-handler", "exception-handler", "print-uart"] }
+esp-storage = { version = "0.8", features = ["esp32"] }
+esp-backtrace = { version = "0.18", features = ["esp32", "panic-handler", "println"] }
+esp-println = { version = "0.16", default-features = false, features = ["esp32", "auto"] }
 
 embassy-executor = "0.9"
 embassy-time = "0.5"

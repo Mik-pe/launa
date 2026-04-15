@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use embassy_time::{Duration, Instant};
 use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::status::{HeatingMode, PumpState, StatusUpdate, TempRange};
-use log::{info, warn, debug};
+use log::{warn, debug};
 
 /// How long to wait for a command to be reflected in status before timing out.
 const COMMAND_ACK_TIMEOUT_SECS: u64 = 5;

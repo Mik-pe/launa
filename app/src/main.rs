@@ -17,7 +17,7 @@ use embassy_executor::Spawner;
 use embassy_sync::channel::Channel;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Duration, Instant, Timer};
-use embedded_io_async::Write as _;
+use embedded_io_async::{Read as _, Write as _};
 use launa_protocol::command::Command;
 use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
 use launa_protocol::frame::{Frame, FrameDecoder, FrameEncoder};
@@ -35,8 +35,20 @@ mod pump_timer;
 mod transport;
 mod wifi;
 
-// Heap allocator: 32 KiB
-esp_alloc::heap_allocator!(size: 32 * 1024);
+use esp_backtrace as _;
+
+// Heap allocator: 32 KiB (initialized in main)
+fn init_heap() {
+    const HEAP_SIZE: usize = 32 * 1024;
+    static mut HEAP: core::mem::MaybeUninit<[u8; HEAP_SIZE]> = core::mem::MaybeUninit::uninit();
+    unsafe {
+        esp_alloc::HEAP.add_region(esp_alloc::HeapRegion::new(
+            HEAP.as_mut_ptr() as *mut u8,
+            HEAP_SIZE,
+            esp_alloc::MemoryCapability::Internal.into(),
+        ));
+    }
+}
 
 // ── Inter-task channels ────────────────────────────────────────────────
 
@@ -206,6 +218,7 @@ async fn send_frame(msg_type: [u8; 2], payload: &[u8]) {
 #[cfg(feature = "sniff")]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
+    init_heap();
     let peripherals = esp_hal::init(esp_hal::Config::default());
 
     let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
@@ -214,7 +227,7 @@ async fn main(spawner: Spawner) {
     info!("Launa ESP32 sniffer mode starting...");
 
     // ── Load config from NVS ────────────────────────────────────────
-    let mut nvs = config::AppConfig::open_nvs();
+    let mut nvs = config::AppConfig::open_nvs(peripherals.FLASH);
     let app_config = config::AppConfig::load(&mut nvs);
     let device_id = app_config.device_id.clone();
     info!("Config loaded: device_id={}", device_id);
@@ -230,16 +243,13 @@ async fn main(spawner: Spawner) {
     let mut transport = transport::Rs485Transport::new(uart, Some(peripherals.GPIO4.into()));
     info!("RS-485 UART initialized");
 
-    // ── Initialize esp-radio ────────────────────────────────────────
+    // ── Initialize esp-radio and connect WiFi ──────────────────────
     let radio_ctrl = esp_radio::init().expect("Failed to init esp-radio");
-
-    // ── Connect WiFi ────────────────────────────────────────────────
-    let rng = esp_hal::rng::Rng::new(peripherals.RNG);
     let wifi_stack = wifi::WifiStack::connect(
         spawner,
         radio_ctrl,
         peripherals.WIFI,
-        rng,
+        esp_hal::rng::Rng::new(),
         &app_config.wifi_ssid,
         &app_config.wifi_password,
     )
@@ -300,6 +310,7 @@ async fn main(spawner: Spawner) {
 #[cfg(feature = "hw-test")]
 #[esp_rtos::main]
 async fn main(_spawner: Spawner) {
+    init_heap();
     let peripherals = esp_hal::init(esp_hal::Config::default());
 
     let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
@@ -321,7 +332,7 @@ async fn main(_spawner: Spawner) {
     info!("TEST_PASS:timer");
 
     // Test 3: Heap
-    let free = esp_alloc::get_free_heap();
+    let free = esp_alloc::HEAP.free();
     if free > 1000 {
         info!("TEST_PASS:heap_free={}", free);
     } else {
@@ -336,6 +347,8 @@ async fn main(_spawner: Spawner) {
 #[cfg(not(any(feature = "sniff", feature = "hw-test")))]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
+    use launa_ota::OtaUpdate;
+    init_heap();
     let peripherals = esp_hal::init(esp_hal::Config::default());
 
     let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
@@ -344,9 +357,11 @@ async fn main(spawner: Spawner) {
     info!("Launa ESP32 firmware starting...");
 
     // ── Load config from NVS ────────────────────────────────────────
-    let mut nvs = config::AppConfig::open_nvs();
+    let mut nvs = config::AppConfig::open_nvs(peripherals.FLASH);
     let app_config = config::AppConfig::load(&mut nvs);
     info!("Config loaded: device_id={}", app_config.device_id);
+    // Recover flash from NVS for OTA use
+    let flash = nvs.into_inner();
 
     // ── Initialize RS-485 UART ──────────────────────────────────────
     let uart_config = esp_hal::uart::Config::default().with_baudrate(115200);
@@ -359,16 +374,13 @@ async fn main(spawner: Spawner) {
     let uart_transport = transport::Rs485Transport::new(uart, Some(peripherals.GPIO4.into()));
     info!("RS-485 UART initialized");
 
-    // ── Initialize esp-radio ────────────────────────────────────────
+    // ── Initialize esp-radio and connect WiFi ──────────────────────
     let radio_ctrl = esp_radio::init().expect("Failed to init esp-radio");
-
-    // ── Connect WiFi ────────────────────────────────────────────────
-    let rng = esp_hal::rng::Rng::new(peripherals.RNG);
     let wifi_stack = wifi::WifiStack::connect(
         spawner,
         radio_ctrl,
         peripherals.WIFI,
-        rng,
+        esp_hal::rng::Rng::new(),
         &app_config.wifi_ssid,
         &app_config.wifi_password,
     )
@@ -388,7 +400,7 @@ async fn main(spawner: Spawner) {
     let _ = mqtt.subscribe_commands().await;
 
     // Mark firmware as valid (boot successful: WiFi + MQTT connected).
-    let mut ota = ota::create_ota();
+    let mut ota = ota::create_ota(flash);
     if let Err(e) = ota.mark_valid() {
         warn!("Failed to mark firmware valid: {:?}", e);
     } else {
@@ -519,7 +531,7 @@ async fn handle_frame(
     last_status: &mut Option<launa_protocol::status::StatusUpdate>,
     last_fault: &mut Option<alloc::string::String>,
     client_id: &mut Option<u8>,
-    cmd_rx: &embassy_sync::channel::Receiver<CriticalSectionRawMutex, Command, 4>,
+    cmd_rx: &embassy_sync::channel::Receiver<'_, CriticalSectionRawMutex, Command, 4>,
     last_status_time: &mut Instant,
     last_probe_time: &mut Instant,
     was_stale: &mut bool,
@@ -597,7 +609,7 @@ async fn handle_frame(
                 if let Some(ref pre_status) = last_status {
                     cmd_tracker.track(cmd.clone(), pre_status);
                 }
-            } else if let Some(cid) = client_id {
+            } else if let Some(cid) = *client_id {
                 // No command queued, send NothingToSend to keep the bus alive
                 let (msg_type, payload) = Command::NothingToSend { client_id: cid }.encode();
                 send_frame(msg_type, &payload).await;
@@ -619,7 +631,7 @@ async fn handle_frame(
             info!("Information response received");
         }
         IncomingMessage::FaultLogResponse(fault_log) => {
-            last_fault = Some(alloc::format!(
+            *last_fault = Some(alloc::format!(
                 "{:?} ({}d ago, {}:{:02}, set={})",
                 fault_log.message_code, fault_log.days_ago, fault_log.hour, fault_log.minute, fault_log.set_temperature
             ));

@@ -4,6 +4,7 @@ extern crate alloc;
 
 use alloc::format;
 use alloc::string::String;
+use alloc::vec::Vec;
 use launa_protocol::status::{HeatingMode, PumpState, StatusUpdate, TempRange, TemperatureScale};
 
 /// Serialize a `StatusUpdate` into a JSON string suitable for publishing

@@ -93,7 +93,7 @@ The hand-rolled MQTT client in `app/src/mqtt_client.rs` had multiple protocol bu
 
 ## P0: Build Blocking
 
-- [ ] **Make `cargo +esp check` work for `app/`**: Running `cargo +esp check` (or `cargo check --target xtensa-esp32-none-elf`) from `app/` should compile-check the ESP32 firmware without a full build. This requires: (1) the `xtensa-esp32-none-elf` toolchain installed via `rustup`, (2) correct `[target.xtensa-esp32-none-elf]` runner/linker config in `app/.cargo/config.toml` or `.cargo/config.toml`, (3) all `app/` dependencies resolving for the target. Currently the app may not `cargo check` cleanly due to API mismatches or missing target setup. Fix whatever is needed so `cd app && cargo +esp check` exits 0.
+- [x] **Make `cargo +esp check` work for `app/`**: Bumped esp-storage to 0.8, esp-alloc to 0.9, esp-backtrace to 0.18, esp-println to 0.16. Fixed all API drift: FlashStorage::new() takes FLASH peripheral, heap init via manual function, embassy-net Stack promoted to &'static via mk_static!, TcpSocket buffers use mk_static!, esp-radio wifi::new() takes &Controller + WIFI + Config, ClientConfig uses with_ssid/with_password builders, UART read is synchronous (not async), Write::write returns Result<usize>, missing Vec import in state.rs, lifetime annotations on Receiver references. NVS flash recovered via into_inner() for OTA use. Added into_flash() to EspOtaFlash.
 
 - [x] **Add `src/lib.rs` stub to `launa-esp-ota`**: Resolved — `crates/launa-esp-ota/src/lib.rs` now contains the full OTA implementation (17KB, 11 tests passing). All 301 workspace tests pass.
 

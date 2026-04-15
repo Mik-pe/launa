@@ -34,7 +34,7 @@ impl HeapMonitor {
         }
         self.last_check = Instant::now();
 
-        let free = esp_alloc::get_free_heap();
+        let free = esp_alloc::HEAP.free();
         info!("Heap free: {} bytes", free);
 
         if free < HEAP_CRIT_THRESHOLD {

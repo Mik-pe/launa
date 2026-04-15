@@ -87,12 +87,11 @@ impl AppConfig {
         info!("Config saved to NVS");
     }
 
-    /// Open the NVS partition. The default NVS partition on ESP32 starts at
-    /// the offset defined in the partition table and is typically 24KB (0x6000).
-    pub fn open_nvs() -> esp_nvs::Nvs<esp_storage::FlashStorage<'static>> {
-        let flash = esp_storage::FlashStorage::new();
-        // Default NVS partition: offset 0x9000, size 0x6000 (24KB)
-        // These must match the partition table in app/partitions.csv
+    /// Open the NVS partition using the given flash peripheral.
+    /// The default NVS partition on ESP32 starts at offset 0x9000, size 0x6000 (24 KiB).
+    /// These must match the partition table in app/partitions.csv.
+    pub fn open_nvs(flash: esp_hal::peripherals::FLASH<'static>) -> esp_nvs::Nvs<esp_storage::FlashStorage<'static>> {
+        let flash = esp_storage::FlashStorage::new(flash);
         esp_nvs::Nvs::new(0x9000, 0x6000, flash).unwrap_or_else(|e| {
             warn!("Failed to open NVS partition: {:?}, using defaults", e);
             panic!("NVS init failed")

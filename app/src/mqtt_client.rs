@@ -9,6 +9,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::format;
+use alloc::string::ToString;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{IpAddress, IpEndpoint, Ipv4Address, Stack};
 use embassy_time::{Duration, Instant, Timer};
@@ -21,6 +22,15 @@ use launa_protocol::status::{TemperatureScale, TempRange, StatusUpdate};
 use log::{info, warn, debug, error};
 
 use crate::config::AppConfig;
+
+macro_rules! mk_static {
+    ($t:ty,$val:expr) => {{
+        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
+        #[deny(unused_attributes)]
+        let x = STATIC_CELL.uninit().write(($val));
+        x
+    }};
+}
 
 // ── MQTT action type (command vs timer) ────────────────────────────────
 
@@ -62,8 +72,8 @@ impl Read for TcpTransport {
 }
 
 impl Write for TcpTransport {
-    async fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
-        self.socket.write_all(buf).await.map_err(|_| TransportError)
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        self.socket.write(buf).await.map_err(|_| TransportError)
     }
 }
 
@@ -74,7 +84,7 @@ const DEFAULT_KEEP_ALIVE_SECS: u16 = 30;
 pub struct MqttClient {
     transport: TcpTransport,
     stack: &'static Stack<'static>,
-    device_id: String,
+    pub device_id: String,
     keep_alive: u16,
     config_host: String,
     config_port: u16,
@@ -134,14 +144,14 @@ impl MqttClient {
         stack: &'static Stack<'static>,
         config: &AppConfig,
     ) -> Result<Self, MqttError> {
-        let mut rx_buf = [0u8; 1024];
-        let mut tx_buf = [0u8; 1024];
-        let mut socket = TcpSocket::new(stack, &mut rx_buf, &mut tx_buf);
+        let rx_buf = mk_static!([u8; 1024], [0u8; 1024]);
+        let tx_buf = mk_static!([u8; 1024], [0u8; 1024]);
+        let mut socket = TcpSocket::new(*stack, rx_buf, tx_buf);
         socket.set_timeout(Some(Duration::from_secs(10)));
 
         let addr = parse_ip(&config.mqtt_host).unwrap_or([192, 168, 1, 100]);
         let endpoint = IpEndpoint {
-            addr: IpAddress::Ipv4(Ipv4Address::from_bytes(&addr)),
+            addr: IpAddress::Ipv4(Ipv4Address::from_octets(addr)),
             port: config.mqtt_port,
         };
 
@@ -169,8 +179,10 @@ impl MqttClient {
         let client_id = format!("launa_{}", config.device_id);
         let topics = TopicBuilder::new(&config.device_id);
         let avail_topic = topics.availability_topic();
-        let username = if client.config_user.is_empty() { None } else { Some(client.config_user.as_str()) };
-        let password = if client.config_password.is_empty() { None } else { Some(client.config_password.as_str()) };
+        let config_user = client.config_user.clone();
+        let config_password = client.config_password.clone();
+        let username = if config_user.is_empty() { None } else { Some(config_user.as_str()) };
+        let password = if config_password.is_empty() { None } else { Some(config_password.as_str()) };
 
         client.send_connect(&client_id, &avail_topic, username, password).await?;
 
@@ -205,14 +217,14 @@ impl MqttClient {
     pub async fn reconnect(&mut self) -> Result<(), MqttError> {
         info!("MQTT reconnecting to {}:{}...", self.config_host, self.config_port);
 
-        let mut rx_buf = [0u8; 1024];
-        let mut tx_buf = [0u8; 1024];
-        let mut socket = TcpSocket::new(self.stack, &mut rx_buf, &mut tx_buf);
+        let rx_buf = mk_static!([u8; 1024], [0u8; 1024]);
+        let tx_buf = mk_static!([u8; 1024], [0u8; 1024]);
+        let mut socket = TcpSocket::new(*self.stack, rx_buf, tx_buf);
         socket.set_timeout(Some(Duration::from_secs(10)));
 
         let addr = parse_ip(&self.config_host).unwrap_or([192, 168, 1, 100]);
         let endpoint = IpEndpoint {
-            addr: IpAddress::Ipv4(Ipv4Address::from_bytes(&addr)),
+            addr: IpAddress::Ipv4(Ipv4Address::from_octets(addr)),
             port: self.config_port,
         };
 
@@ -229,8 +241,10 @@ impl MqttClient {
         let client_id = format!("launa_{}", self.device_id);
         let topics = TopicBuilder::new(&self.device_id);
         let avail_topic = topics.availability_topic();
-        let username = if self.config_user.is_empty() { None } else { Some(self.config_user.as_str()) };
-        let password = if self.config_password.is_empty() { None } else { Some(self.config_password.as_str()) };
+        let config_user = self.config_user.clone();
+        let config_password = self.config_password.clone();
+        let username = if config_user.is_empty() { None } else { Some(config_user.as_str()) };
+        let password = if config_password.is_empty() { None } else { Some(config_password.as_str()) };
 
         self.send_connect(&client_id, &avail_topic, username, password).await?;
 
@@ -443,7 +457,7 @@ impl MqttClient {
     pub async fn publish_state(&mut self, status: &StatusUpdate, last_fault: Option<&str>) -> Result<(), MqttError> {
         let topics = TopicBuilder::new(&self.device_id);
         let state_topic = topics.state_topic();
-        let json = status_to_json(status, last_fault);
+        let json = status_to_json(status, last_fault, None);
         self.publish(&state_topic, json.as_bytes(), 1, false).await
     }
 
@@ -461,8 +475,8 @@ impl MqttClient {
     }
 
     pub async fn publish_discovery(&mut self) -> Result<(), MqttError> {
-        let topics = TopicBuilder::new(&self.device_id);
-        let device_id = &self.device_id;
+        let device_id = self.device_id.clone();
+        let topics = TopicBuilder::new(&device_id);
         let state_topic = topics.state_topic();
         let avail_topic = topics.availability_topic();
         let cmd_topic = topics.command_topic();
@@ -544,7 +558,7 @@ impl MqttClient {
 
         for (component, object_id, payload) in &configs {
             let topic = format!("homeassistant/{}/{}/{}/config", component, device_id, object_id);
-            if let Err(e) = self.publish(topic, payload.as_bytes(), 1, true).await {
+            if let Err(e) = self.publish(&topic, payload.as_bytes(), 1, true).await {
                 warn!("Failed to publish discovery for {}: {:?}", object_id, e);
             }
         }

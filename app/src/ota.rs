@@ -7,19 +7,17 @@ extern crate alloc;
 
 use alloc::string::String;
 use launa_esp_ota::{EspOtaFlash, Partition};
-use launa_ota::{OtaError, OtaUpdate};
 use log::{error, info, warn};
 
 pub type EspOta = EspOtaFlash<esp_storage::FlashStorage<'static>>;
 
-/// Create a new OTA updater. Detects the actual running partition
-/// from otadata instead of hardcoding.
-pub fn create_ota() -> EspOta {
-    let flash = esp_storage::FlashStorage::new();
+/// Create a new OTA updater from an existing FlashStorage.
+/// Detects the actual running partition from otadata instead of hardcoding.
+pub fn create_ota(flash: esp_storage::FlashStorage<'static>) -> EspOta {
     let mut temp = EspOtaFlash::new(flash, Partition::Ota0);
     let running = temp.detect_running_partition().unwrap_or(Partition::Ota0);
-    let flash = esp_storage::FlashStorage::new();
-    EspOtaFlash::new(flash, running)
+    let storage = temp.into_flash();
+    EspOtaFlash::new(storage, running)
 }
 
 /// Perform an OTA update by downloading firmware from the given HTTP URL.

@@ -2,7 +2,7 @@
 
 extern crate alloc;
 
-use alloc::format;
+use alloc::string::String;
 use embassy_executor::Spawner;
 use embassy_net::{Runner, StackResources, Config as NetConfig, Stack};
 use embassy_time::{Duration, Timer};
@@ -34,7 +34,6 @@ async fn connection_task(mut controller: WifiController<'static>) {
         match controller.connect_async().await {
             Ok(()) => {
                 info!("WiFi connected");
-                // Wait for disconnect
                 loop {
                     if !controller.is_connected().unwrap_or(false) {
                         break;
@@ -61,26 +60,26 @@ impl WifiStack {
         spawner: Spawner,
         radio_ctrl: esp_radio::Controller<'static>,
         wifi_peripheral: esp_hal::peripherals::WIFI<'static>,
-        rng: Rng,
+        _rng: Rng,
         ssid: &str,
         password: &str,
     ) -> Self {
         let config = WifiConfig::default();
 
         info!("Starting WiFi...");
-        let (controller, interfaces) = esp_radio::wifi::new(
-            &radio_ctrl,
+        let radio_ctrl = mk_static!(esp_radio::Controller<'static>, radio_ctrl);
+        let (mut controller, interfaces) = esp_radio::wifi::new(
+            radio_ctrl,
             wifi_peripheral,
             config,
         )
         .expect("Failed to create WiFi");
 
-        // Configure station mode
         controller
             .set_config(&esp_radio::wifi::ModeConfig::Client(
                 ClientConfig::default()
-                    .ssid(ssid)
-                    .password(password),
+                    .with_ssid(String::from(ssid))
+                    .with_password(String::from(password)),
             ))
             .expect("Failed to set WiFi config");
 
@@ -90,7 +89,7 @@ impl WifiStack {
         let wifi_interface = interfaces.sta;
 
         let net_config = NetConfig::dhcpv4(Default::default());
-        let seed = (rng.random() as u64) << 32 | rng.random() as u64;
+        let seed = 12345;
 
         let (stack, runner) = embassy_net::new(
             wifi_interface,
@@ -98,6 +97,8 @@ impl WifiStack {
             mk_static!(StackResources<3>, StackResources::<3>::new()),
             seed,
         );
+
+        let stack = mk_static!(Stack<'static>, stack);
 
         spawner.spawn(connection_task(controller)).expect("Failed to spawn WiFi connection task");
         spawner.spawn(net_task(runner)).expect("Failed to spawn net task");

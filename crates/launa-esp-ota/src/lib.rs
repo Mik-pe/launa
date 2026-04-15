@@ -127,6 +127,11 @@ where
         self.running
     }
 
+    /// Consume self and return the flash storage backend.
+    pub fn into_flash(self) -> S {
+        self.flash
+    }
+
     /// Erase sectors in the target partition from `start` to `end` (byte offsets
     /// relative to partition start).
     fn erase_range(&mut self, start: u32, end: u32) -> Result<(), OtaError> {
