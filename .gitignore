@@ -8,4 +8,5 @@ Cargo.lock
 *.swo
 *~
 launa.toml
+launa.key
 *.toml.bak

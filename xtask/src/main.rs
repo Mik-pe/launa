@@ -5,6 +5,7 @@ mod flash_monitor;
 mod monitor;
 mod ota_flash;
 mod ota_serve;
+mod provision;
 mod self_test;
 mod sniff_decode;
 mod spa_sim;
@@ -29,6 +30,9 @@ fn usage() {
     );
     eprintln!("  self-test [--port <COMx>]                         Run hardware self-test");
     eprintln!("  config-flash [--port <COMx>]                      Write config to ESP32 NVS");
+    eprintln!(
+        "  provision [--port <COMx>] [--no-confirm]          Burn AES key to ESP32 eFuse BLOCK3"
+    );
 }
 
 fn main() -> anyhow::Result<()> {
@@ -53,6 +57,7 @@ fn main() -> anyhow::Result<()> {
         "ota-flash" | "ota_flash" => ota_flash::run(sub_args),
         "self-test" | "self_test" => self_test::run(sub_args),
         "config-flash" | "config_flash" => config_flash::run(sub_args),
+        "provision" => provision::run(sub_args),
         other => {
             usage();
             bail!("Unknown command: {}", other);
