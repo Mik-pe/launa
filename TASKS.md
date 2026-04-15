@@ -405,6 +405,161 @@ PC (Python script simulating spa)
 
 - [ ] **Field test at spa (full stack)**: With protocol validated from sniffing and bench-tested, take ESP32 + RS-485 module to the spa. This time the firmware runs the full stack: registration, status parsing, MQTT publishing, and accepting commands from Home Assistant. Verify temperature readings, pump control, and all entities work correctly.
 
+## P1: Extract App Logic for Desktop Testing (`SpaApp`)
+
+### Current State: What Works
+
+The simulation correctly tests protocol-layer correctness:
+- Byte-accurate RS-485 frame encode/decode with CRC8 and HDLC byte stuffing
+- Full registration handshake (multi-step query/request/assignment/ack)
+- Status frame parsing and command encoding round-trips
+- Temperature physics (heating/cooling approach to set point)
+- 60-second continuous status streaming
+- Multi-frame streaming and noise injection
+- Pump timer expiry at virtual tick level
+- MQTT JSON serialization with HA discovery validation
+
+### Critical Gaps: What Cannot Be Tested Today
+
+#### 1. CommandTracker (ACK/retry/drop) — Completely Untested
+
+`app/src/command_tracker.rs` tracks sent commands, waits for them in subsequent status updates, retries up to 2x, then drops. Uses `embassy_time::Instant` directly — cannot be instantiated outside ESP32. The simulator's `SpaController` has no command verification at all.
+
+Missing: command confirmed on status change, retry when spa ignores toggle, drop after 3 failures, rapid commands bounded to 8 pending, temperature validation with scale/range.
+
+#### 2. Pump/Hold Timers Use `embassy_time::Instant` — Untestable
+
+`app/src/pump_timer.rs` uses `embassy_time::Instant`/`Duration`. The simulator has its own separate `PumpTimer` using tick counts — two completely different implementations. `HoldModeTimer` (auto-clear hold after 60min) has zero test coverage.
+
+#### 3. Stale Detection / Availability Transitions — Untested
+
+Real firmware: 5s no status → config probe, 30s no status → `stale` availability + alert. Not testable because no concept of "time passing without data" in simulation. `VirtualClock` exists but isn't wired into any timeout/interval logic.
+
+#### 4. MQTT Reconnection and Resilience — Untestable
+
+Hand-rolled MQTT v5 client (`app/src/mqtt_client.rs`): reconnect with backoff, re-publish discovery/availability, SUBACK validation, keepalive PINGREQ, graceful disconnect before OTA, WiFi reconnect signal, alert throttling — all zero test coverage.
+
+#### 5. OTA Pipeline — Mock-Level Only
+
+`MockOta` stores bytes in a Vec. Doesn't test HTTP download over TCP, partition swapping, boot validation, or graceful shutdown sequence (publish offline → DISCONNECT → drain UART → reboot).
+
+#### 6. No Error Injection in SpaSim
+
+SpaSim is a perfect actor — never drops commands, never sends corrupt frames, never goes silent, never changes state spontaneously (e.g. filter cycle starting a pump).
+
+#### 7. No Asynchrony / Timing Simulation
+
+Real firmware is async with concurrent tasks (UART, MQTT, main loop). Simulator is purely synchronous. Can't test: commands arriving mid-registration, MQTT reconnect mid-command, race conditions, buffer overflow scenarios.
+
+### Architecture Problems
+
+**Three separate time systems, not unified:** `VirtualClock` (launa-sim, manually advanced), `embassy_time::Instant` (CommandTracker/PumpTimer/HoldModeTimer/MQTT keepalive/stale detection), tick counter in `SpaController` (counts status updates). `VirtualClock` is never used by anything that matters.
+
+**SpaController vs real main loop divergence:** `SpaController` in launa-sim is a simplified rewrite — has its own PumpTimer, FrameDecoder, registration — but no CommandTracker, HoldModeTimer, stale detection, config probe, command queuing on Ready, diagnostics, heap monitoring, alert generation, or OTA handling. The code being tested is not the code that runs on the ESP32.
+
+**SimBroker is a recorder, not a broker:** Just appends `(topic, payload)` tuples. No QoS simulation, ordering, subscription matching, connection loss, or availability state tracking.
+
+### Confidence Level
+
+**Protocol correctness: ~70% of bug surface, well tested.** Frame encode/decode, CRC, escaping, message dispatch, status parsing, command encoding — all byte-accurate round-trips.
+
+**Operational resilience: ~30% of bug surface, but the most subtle/dangerous bugs.** Command retries, stale detection, safety timeouts, MQTT reconnection — untestable until time is abstracted and logic is extracted.
+
+### Goal
+
+Extract a single `SpaApp` struct (in a workspace crate or `launa-sim`) that owns all stateful logic and exposes a pure synchronous API. The ESP32 `main.rs` becomes thin IO wiring. Integration tests exercise the exact same logic the ESP32 runs.
+
+### Architecture
+
+```rust
+// SpaApp owns all logic — registration, command tracking, pump timers,
+// hold timers, stale detection, diagnostics, fault handling
+impl SpaApp {
+    fn process_frame(&mut self, frame: &Frame, now: Timestamp) -> Vec<AppAction>;
+    fn on_mqtt_command(&mut self, cmd: Command, now: Timestamp) -> Vec<AppAction>;
+    fn tick(&mut self, now: Timestamp) -> Vec<AppAction>; // periodic: stale, diagnostics, timer expiry
+}
+
+enum AppAction {
+    SendFrame(Vec<u8>),                    // write to UART
+    PublishState(StatusUpdate),            // publish to MQTT
+    PublishAvailability { status: AvailStatus },  // online/offline/stale
+    PublishDiscovery,
+    PublishDiagnostics { ... },
+    PublishAlert { level, message },
+    RequestOta { url },
+}
+```
+
+ESP32 `main.rs` becomes:
+```rust
+loop {
+    let frame = frame_rx.receive().await;
+    let actions = app.process_frame(&frame, clock.now_ms());
+    for action in actions {
+        match action { /* IO wiring only */ }
+    }
+}
+```
+
+One implementation of the logic, tested through the same interface whether it's running on ESP32 or in a desktop test. ESP32 code becomes purely IO wiring — read bytes, feed to app, execute actions.
+
+### Tasks
+
+#### Phase 1: Time Abstraction
+
+#### Phase 1: Time Abstraction
+
+- [x] **Extend `Clock` trait in `launa-hal` with `Timestamp` newtype**: Added `Timestamp(u64)` newtype with `from_millis()`, `from_secs()`, `elapsed_since()`, `saturating_add()`. `Clock` trait now has `fn now(&self) -> Timestamp` plus existing `now_ms()`. `VirtualClock` and `EmbassyClock` updated.
+- [x] **Make `CommandTracker` generic over time source**: Replaced `embassy_time::Instant::now()` with `Timestamp` values. `CommandTracker` in `launa-core` stores `sent_at: Timestamp` and compares via `now.elapsed_since(sent_at)`.
+- [x] **Make `PumpTimer` and `HoldModeTimer` generic over time source**: Same pattern. Both use `Timestamp` instead of `embassy_time::Instant`. Live in `launa-core`.
+- [x] **Move `CommandTracker` from `app/src/` to a workspace crate**: Moved to `launa-core` crate (`crates/launa-core/`). No_std, no embassy dependency.
+- [x] **Move `PumpTimer` and `HoldModeTimer` from `app/src/` to a workspace crate**: Same. Both in `launa-core`.
+
+#### Phase 2: Extract `SpaApp`
+
+- [x] **Create `SpaApp` struct**: Created in `launa-core` crate. Owns `RegistrationStateMachine`, `CommandTracker`, `PumpTimerManager`, `HoldModeTimer`, `HeapMonitor`, last status, last fault, client ID, stale detection state, diagnostics counters, command queue. No async, no IO. Uses `&dyn Clock` for time.
+- [x] **Implement `SpaApp::process_frame()`**: Extracted from `app/src/main.rs` `handle_frame()`. Takes `&Frame`, returns `Vec<AppAction>`. Covers: registration, status dispatch, command tracking, pump timer tick, hold timer tick, stale reset, fault log capture, Ready command dequeue.
+- [x] **Implement `SpaApp::on_mqtt_command()`**: Takes `Command`, returns `Vec<AppAction>`. Queues command for next Ready window.
+- [x] **Implement `SpaApp::tick()`**: Returns `Vec<AppAction>`. Covers: stale timeout (5s probe, 30s stale), diagnostics (60s interval), registration timeout (5s).
+- [x] **Define `AppAction` enum**: `SendFrame`, `PublishState`, `PublishAvailability`, `PublishStaleAvailability`, `PublishDiscovery`, `PublishDiagnostics`, `PublishAlert`, `RequestOta`.
+
+#### Phase 3: Wire ESP32 to `SpaApp`
+
+- [x] **Refactor `app/src/main.rs` to use `SpaApp`**: Replaced `handle_frame()` and 13 scattered state variables with single `SpaApp` instance. Main loop: receive frame → `app.process_frame()` → `execute_actions()`. MQTT commands → `app.on_mqtt_command()`. Periodic → `app.tick()` + `app.check_heap()`.
+- [x] **Create `EmbassyClock` adapter**: Already existed in `app/src/clock.rs`. Updated to implement new `Clock` trait with `fn now() -> Timestamp`.
+- [x] **Remove redundant state from main.rs**: All moved into `SpaApp`. Main loop holds only `SpaApp`, channels, `EmbassyClock`, and OTA state.
+- [x] **Remove `app/src/command_tracker.rs`, `app/src/pump_timer.rs`, `app/src/heap_monitor.rs`**: Deleted. Logic lives in `launa-core`.
+
+#### Phase 4: Desktop Integration Tests via `SpaApp`
+
+- [ ] **Replace `SpaController` with `SpaApp` in integration tests**: The current `launa-sim/src/controller.rs` `SpaController` is a simplified parallel implementation. Replace it with the real `SpaApp`. Tests now exercise the exact same code path as the ESP32.
+- [ ] **Test: command ACK and confirmation**: Send toggle → verify `AppAction::SendFrame` → spa applies toggle → next status → verify no retry.
+- [ ] **Test: command retry on spa ignore**: Send toggle → spa does NOT apply → advance time past 5s → verify retry `AppAction::SendFrame` → still ignored → advance again → verify second retry → still ignored → verify command dropped.
+- [ ] **Test: stale detection flow**: Normal operation → stop sending spa ticks → advance time 5s → verify `AppAction::SendFrame` (config probe) → advance to 30s → verify `AppAction::PublishAvailability { stale }` + `AppAction::PublishAlert` → resume ticks → verify `AppAction::PublishAvailability { online }` recovery.
+- [ ] **Test: hold mode safety timeout**: Enter hold mode → advance 60 minutes via VirtualClock → verify `AppAction::SendFrame` (hold toggle to clear).
+- [ ] **Test: pump timer expiry**: Start pump timer → advance virtual time → verify auto-off toggle sent at exact duration.
+- [ ] **Test: diagnostics periodic publish**: Run 60+ ticks → verify `AppAction::PublishDiagnostics` fires every 60 ticks with correct counter values.
+- [ ] **Test: registration timeout**: Start registration → no spa response → advance 5s → verify `AppAction::PublishAlert` (registration_timeout) and state reset.
+- [ ] **Test: bus reset re-registration**: Fully registered and running → spa sends `NewClientQuery` → verify `SpaApp` resets registration and re-registers.
+- [ ] **Test: temperature validation rejection**: Call `on_mqtt_command(SetTemperature(106))` with high range → verify command rejected (no `AppAction::SendFrame`).
+- [ ] **Test: concurrent operations**: Toggle pump + set temp + change heating mode → verify all tracked, all confirmed when status reflects changes.
+- [ ] **Test: fault log captured in state**: Request fault log → parse response → verify next `AppAction::PublishState` includes fault string.
+- [ ] **Test: Ready-window command queuing**: Queue 3 commands → verify only one sent per Ready → verify NothingToSend when queue empty.
+
+#### Phase 5: Error Injection in SpaSim
+
+- [ ] **Add configurable command success rate to SpaSim**: `set_command_success_rate(0.8)` — spa silently ignores a fraction of toggle/set commands. Tests verify retry behavior.
+- [ ] **Add bus silence simulation**: `simulate_bus_silence(duration_ticks)` — spa stops sending status frames. Tests verify stale detection and recovery.
+- [ ] **Add spontaneous state changes**: `simulate_filter_cycle_start()` — pump turns on by itself (simulates real spa filter cycles). Tests verify command tracker handles unexpected state changes gracefully.
+- [ ] **Add corrupt frame injection**: `inject_corrupt_frame()` — sends a frame with bad CRC or wrong length. Tests verify FrameDecoder error counting and that processing continues.
+- [ ] **Add duplicate frame injection**: Send the same status frame twice. Tests verify command tracker doesn't double-confirm or get confused.
+
+#### Phase 6: Long-Running Simulation
+
+- [ ] **24-hour simulation smoke test**: Run SpaApp + SpaSim for 86,400 simulated seconds. Verify: no memory leaks (SpaApp state stays bounded), temperature reaches set point and stays stable, pump timers fire correctly, clock rolls over midnight, diagnostics published every 60s, alerts throttled correctly.
+- [ ] **Stress test: rapid commands**: Send 100 commands in quick succession, verify all queued, sent on Ready windows, tracked, confirmed or dropped appropriately. No panics, no unbounded growth.
+
 ## Done
 
 - [x] Project structure and workspace setup

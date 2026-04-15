@@ -4,7 +4,7 @@
 //! `embassy_time::Instant::now()`. Use this in the ESP32 firmware; use
 //! `VirtualClock` in simulation and tests.
 
-use launa_hal::Clock;
+use launa_hal::{Clock, Timestamp};
 
 /// Real-time clock using `embassy_time::Instant::now()`.
 ///
@@ -26,7 +26,7 @@ impl Default for EmbassyClock {
 }
 
 impl Clock for EmbassyClock {
-    fn now_ms(&self) -> u64 {
-        embassy_time::Instant::now().as_millis()
+    fn now(&self) -> Timestamp {
+        Timestamp(embassy_time::Instant::now().as_millis())
     }
 }

@@ -1,8 +1,7 @@
 //! Launa Spa Simulation Framework.
 //!
 //! Provides a complete desktop-testable simulation of a Balboa BP6013G1 spa
-//! controller communication over RS-485, with an extracted `SpaController`
-//! that can be tested end-to-end without any ESP32 hardware.
+//! controller communication over RS-485.
 //!
 //! # Architecture
 //!
@@ -13,11 +12,14 @@
 //!   SimTransport (virtual RS-485 wire)
 //!       │ reads → controller, writes → spa
 //!       ▼
-//!   SpaController (protocol logic, extracted from ESP32 main loop)
+//!   SpaController (simplified protocol logic for sim tests)
 //!       │ emits ControllerEvents
 //!       ▼
 //!   SimBroker (mock MQTT broker for verification)
 //! ```
+//!
+//! The real firmware logic lives in the `launa-core` crate (`SpaApp`).
+//! The `SpaController` here is a simplified version used by sim integration tests.
 
 pub mod clock;
 pub mod controller;

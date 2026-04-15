@@ -1,0 +1,12 @@
+[package]
+name = "launa-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+launa-protocol = { path = "../launa-protocol" }
+launa-hal = { path = "../launa-hal", default-features = false }
+log.workspace = true
+
+[dev-dependencies]
+launa-sim = { path = "../launa-sim" }

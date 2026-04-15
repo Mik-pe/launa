@@ -20,23 +20,19 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
 use embedded_io_async::{Read as _, Write as _};
+use launa_core::{AppAction, SpaApp};
 use launa_protocol::command::Command;
-use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
-use launa_protocol::frame::{Frame, FrameDecoder, FrameEncoder};
-use launa_protocol::registration::{RegistrationAction, RegistrationStateMachine};
+use launa_protocol::frame::{Frame, FrameDecoder};
 use launa_protocol::status::StatusUpdate;
 use launa_mqtt::topics::TopicBuilder;
 use log::{debug, error, info, warn};
 
 mod clock;
-mod command_tracker;
 mod config;
-mod heap_monitor;
 mod macros;
 mod mqtt_client;
 mod net_util;
 mod ota;
-mod pump_timer;
 mod transport;
 mod wifi;
 
@@ -46,9 +42,6 @@ use esp_backtrace as _;
 
 static MQTT_RECONNECT_COUNT: AtomicU32 = AtomicU32::new(0);
 static WIFI_DISCONNECT_COUNT: AtomicU32 = AtomicU32::new(0);
-static COMMAND_RETRY_COUNT: AtomicU32 = AtomicU32::new(0);
-static COMMAND_DROP_COUNT: AtomicU32 = AtomicU32::new(0);
-static FRAMES_RECEIVED: AtomicU32 = AtomicU32::new(0);
 
 /// Boot timestamp in seconds (lower 32 bits of millis/1000), set once in main().
 /// Used for uptime calculation. AtomicU32 is used because AtomicU64 is not
@@ -341,21 +334,20 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-async fn send_frame(msg_type: [u8; 2], payload: &[u8]) {
-    let encoded = FrameEncoder::encode(msg_type, payload);
-    UART_TX_CHANNEL.send(encoded).await;
-}
+
 
 /// Build a diagnostics JSON payload with all counters and publish via the
-/// diagnostics channel. Called every 60 seconds from the main loop.
-fn publish_diagnostics(device_id: &str) {
-    let uptime_secs = uptime_secs();
-
+/// diagnostics channel. Uses SpaApp's internal counters for frames/retries/drops
+/// and the static counters for MQTT/WiFi reconnects.
+fn publish_diagnostics(
+    device_id: &str,
+    uptime_secs: u64,
+    frames_received: u32,
+    command_retries: u32,
+    command_drops: u32,
+) {
     let mqtt_reconnects = MQTT_RECONNECT_COUNT.load(Ordering::Relaxed);
     let wifi_disconnects = WIFI_DISCONNECT_COUNT.load(Ordering::Relaxed);
-    let command_retries = COMMAND_RETRY_COUNT.load(Ordering::Relaxed);
-    let command_drops = COMMAND_DROP_COUNT.load(Ordering::Relaxed);
-    let frames_received = FRAMES_RECEIVED.load(Ordering::Relaxed);
     let heap_free = esp_alloc::HEAP.free();
 
     let json = alloc::format!(
@@ -392,6 +384,47 @@ fn send_alert(level: &str, message: &str) {
     // (alerts are best-effort and should not block the main loop).
     let payload = Vec::from(json.as_bytes());
     let _ = ALERT_CHANNEL.try_send(payload);
+}
+
+/// Execute a batch of `AppAction` side effects from `SpaApp`.
+///
+/// Maps each action to the corresponding IO operation (UART send, MQTT publish, etc.).
+async fn execute_actions(actions: &[AppAction], device_id: &str) {
+    for action in actions {
+        match action {
+            AppAction::SendFrame(bytes) => {
+                UART_TX_CHANNEL.send(bytes.clone()).await;
+            }
+            AppAction::PublishState {
+                status,
+                fault,
+                recovering_from_stale,
+            } => {
+                let _ = STATE_CHANNEL.try_send((status.clone(), fault.clone(), *recovering_from_stale));
+            }
+            AppAction::PublishStaleAvailability => {
+                // Stale availability is handled by the MQTT task when it sees
+                // a STATE_CHANNEL message with is_stale=true.
+            }
+            AppAction::PublishAlert { level, message } => {
+                send_alert(level, message);
+            }
+            AppAction::PublishDiagnostics {
+                uptime_secs,
+                frames_received,
+                command_retries,
+                command_drops,
+            } => {
+                publish_diagnostics(device_id, *uptime_secs, *frames_received, *command_retries, *command_drops);
+            }
+            AppAction::RequestOta { url } => {
+                let _ = OTA_CHANNEL.try_send(url.clone());
+            }
+            AppAction::PublishAvailability { .. } | AppAction::PublishDiscovery => {
+                // These are handled by the MQTT task on initial connect, not emitted by SpaApp.
+            }
+        }
+    }
 }
 
 // ── Sniffer mode (passive RS-485 monitoring) ──────────────────────────
@@ -722,73 +755,35 @@ async fn main(spawner: Spawner) {
     let pump_timer_rx = PUMP_TIMER_CHANNEL.receiver();
     let ota_rx = OTA_CHANNEL.receiver();
 
-    let mut registration = RegistrationStateMachine::new();
-    let mut pump_timers = pump_timer::PumpTimerManager::new();
-    let mut hold_timer = pump_timer::HoldModeTimer::new();
-    let mut cmd_tracker = command_tracker::CommandTracker::new();
-    let mut heap_monitor = heap_monitor::HeapMonitor::new();
-    let mut last_status: Option<launa_protocol::status::StatusUpdate> = None;
-    let mut last_fault: Option<alloc::string::String> = None;
-    let mut client_id: Option<u8> = None;
-    let mut last_status_time: Instant = Instant::now();
-    let mut last_probe_time: Instant = Instant::now();
-    let mut last_diag_time: Instant = Instant::now();
-    let mut was_stale: bool = false;
-    let mut registration_started_at: Option<Instant> = None;
+    let clock = clock::EmbassyClock::new();
+    let mut app = SpaApp::new(&app_config.device_id, &clock);
     let device_id_str: &str = &app_config.device_id;
 
     loop {
         // Wait for a frame from the UART task
         let frame = frame_rx.receive().await;
-        handle_frame(
-            &frame,
-            &mut registration,
-            &mut pump_timers,
-            &mut hold_timer,
-            &mut cmd_tracker,
-            &mut last_status,
-            &mut last_fault,
-            &mut client_id,
-            &cmd_rx,
-            &mut last_status_time,
-            &mut last_probe_time,
-            &mut was_stale,
-            &mut registration_started_at,
-        ).await;
+        let actions = app.process_frame(&frame);
+        execute_actions(&actions, device_id_str).await;
 
         // Drain all available frames
         while let Ok(frame) = frame_rx.try_receive() {
-            handle_frame(
-                &frame,
-                &mut registration,
-                &mut pump_timers,
-                &mut hold_timer,
-                &mut cmd_tracker,
-                &mut last_status,
-                &mut last_fault,
-                &mut client_id,
-                &cmd_rx,
-                &mut last_status_time,
-                &mut last_probe_time,
-                &mut was_stale,
-                &mut registration_started_at,
-            ).await;
+            let actions = app.process_frame(&frame);
+            execute_actions(&actions, device_id_str).await;
         }
 
-        // ── Registration timeout ────────────────────────────────────
-        if !registration.is_registered() {
-            if let Some(started) = registration_started_at {
-                if started.elapsed() >= Duration::from_secs(5) {
-                    warn!("Registration timeout (5s), resetting to try again");
-                    send_alert("warn", "registration_timeout");
-                    registration.reset();
-                    registration_started_at = None;
-                }
-            }
-        } else {
-            // Clear if registered through a path other than SendIdAck
-            registration_started_at = None;
+        // Drain MQTT commands into SpaApp's command queue
+        while let Ok(cmd) = cmd_rx.try_receive() {
+            let actions = app.on_mqtt_command(cmd);
+            execute_actions(&actions, device_id_str).await;
         }
+
+        // Periodic tick: stale detection, registration timeout, diagnostics
+        let tick_actions = app.tick();
+        execute_actions(&tick_actions, device_id_str).await;
+
+        // Heap check (uses actual ESP32 free heap)
+        let heap_actions = app.check_heap(esp_alloc::HEAP.free());
+        execute_actions(&heap_actions, device_id_str).await;
 
         // ── OTA update handling ─────────────────────────────────────
         if let Ok(firmware_url) = ota_rx.try_receive() {
@@ -805,178 +800,9 @@ async fn main(spawner: Spawner) {
 
         // Drain pump timer commands
         while let Ok((pump_index, minutes)) = pump_timer_rx.try_receive() {
-            if let Some(cmd) = pump_timers.start_timer(pump_index, minutes) {
-                let (msg_type, payload) = cmd.encode();
-                send_frame(msg_type, &payload).await;
-                info!("Started pump {} timer for {} min", pump_index, minutes);
-            }
-        }
-
-        // ── Stale detection ─────────────────────────────────────────
-        let elapsed = last_status_time.elapsed();
-
-        // If no status for 5s, send configuration request to provoke response
-        if elapsed >= Duration::from_secs(5) && last_probe_time.elapsed() >= Duration::from_secs(5) {
-            warn!("No status update for 5s, sending configuration request");
-            send_frame([0x0A, 0xBF], &[0x04]).await;
-            last_probe_time = Instant::now(); // Avoid spamming probes
-        }
-
-        // If no status for 30s, mark as stale and notify MQTT
-        if elapsed >= Duration::from_secs(30) {
-            if !was_stale {
-                warn!("No status update for 30s, publishing stale availability");
-                was_stale = true;
-                send_alert("warn", "spa_communication_lost");
-                // Only publish stale if we have a known status (never received = just booting)
-                if let Some(ref stale_status) = last_status {
-                    let _ = STATE_CHANNEL.try_send((stale_status.clone(), last_fault.clone(), true));
-                }
-            }
-        }
-
-        // Check heap usage (logs warning if low)
-        if heap_monitor.tick() {
-            warn!("Heap critically low — consider reducing allocations");
-            send_alert("error", "heap_critically_low");
-        }
-
-        // ── Periodic diagnostics publishing (every 60s) ─────────────
-        if last_diag_time.elapsed() >= Duration::from_secs(60) {
-            last_diag_time = Instant::now();
-            publish_diagnostics(device_id_str);
-        }
-    }
-}
-
-async fn handle_frame(
-    frame: &Frame,
-    registration: &mut RegistrationStateMachine,
-    pump_timers: &mut pump_timer::PumpTimerManager,
-    hold_timer: &mut pump_timer::HoldModeTimer,
-    cmd_tracker: &mut command_tracker::CommandTracker,
-    last_status: &mut Option<launa_protocol::status::StatusUpdate>,
-    last_fault: &mut Option<alloc::string::String>,
-    client_id: &mut Option<u8>,
-    cmd_rx: &embassy_sync::channel::Receiver<'_, CriticalSectionRawMutex, Command, 4>,
-    last_status_time: &mut Instant,
-    last_probe_time: &mut Instant,
-    was_stale: &mut bool,
-    registration_started_at: &mut Option<Instant>,
-) {
-    // ── Registration ────────────────────────────────────────────────
-    if !registration.is_registered() {
-        let action = registration.process(frame.message_type, &frame.payload);
-        match action {
-            RegistrationAction::SendIdRequest => {
-                send_frame([0xFE, 0xBF], &[0x01, 0x02, 0xF1, 0x73]).await;
-                debug!("Sent registration ID request");
-                *registration_started_at = Some(Instant::now());
-            }
-            RegistrationAction::SendIdAck { client_id: id } => {
-                send_frame([id, 0xBF], &[0x03]).await;
-                *client_id = Some(id);
-                info!("Registered with client ID: {}", id);
-                *registration_started_at = None;
-            }
-            RegistrationAction::None => {}
-        }
-        return;
-    }
-
-    // ── Dispatch incoming message ───────────────────────────────────
-    let message = dispatch_frame(frame);
-
-    match message {
-        IncomingMessage::StatusUpdate(status) => {
-            debug!(
-                "Status: temp={:?} set={:.0} heating={}",
-                status.current_temp, status.set_temp, status.is_heating
-            );
-
-            // Count received frames (each StatusUpdate = one frame processed)
-            FRAMES_RECEIVED.fetch_add(1, Ordering::Relaxed);
-
-            // Verify pending commands against new status
-            let result = cmd_tracker.verify(&status);
-            COMMAND_RETRY_COUNT.fetch_add(result.retries.len() as u32, Ordering::Relaxed);
-            COMMAND_DROP_COUNT.fetch_add(result.dropped, Ordering::Relaxed);
-            for cmd in result.retries {
-                let (msg_type, payload) = cmd.encode();
-                send_frame(msg_type, &payload).await;
-            }
-
-            let expired = pump_timers.tick_all(&status.pumps);
-            for cmd in expired {
-                let (msg_type, payload) = cmd.encode();
-                send_frame(msg_type, &payload).await;
-            }
-
-            // Hold mode safety timeout
-            if let Some(cmd) = hold_timer.tick(status.is_hold) {
-                let (msg_type, payload) = cmd.encode();
-                send_frame(msg_type, &payload).await;
-            }
-
-            *last_status = Some(status.clone());
-            *last_status_time = Instant::now();
-            *last_probe_time = Instant::now(); // Reset probe timer on valid status
-
-            // If we were stale, publish recovery availability
-            let recovering = *was_stale;
-            if recovering {
-                *was_stale = false;
-            }
-
-            STATE_CHANNEL.send((status, last_fault.clone(), recovering)).await;
-        }
-        IncomingMessage::Ready => {
-            debug!("Spa ready -- sending queued command or NothingToSend");
-
-            // Try to dequeue a command from MQTT
-            if let Ok(cmd) = cmd_rx.try_receive() {
-                let (msg_type, payload) = cmd.encode();
-                send_frame(msg_type, &payload).await;
-                debug!("Sent command on Ready: {:?}", cmd);
-                if let Some(ref pre_status) = last_status {
-                    cmd_tracker.track(cmd.clone(), pre_status);
-                }
-            } else if let Some(cid) = *client_id {
-                // No command queued, send NothingToSend to keep the bus alive
-                let (msg_type, payload) = Command::NothingToSend { client_id: cid }.encode();
-                send_frame(msg_type, &payload).await;
-            }
-        }
-        IncomingMessage::NewClientQuery => {
-            info!("Bus reset detected (NewClientQuery), re-registering");
-            registration.reset();
-            *client_id = None;
-        }
-        IncomingMessage::ClientIdAssignment { id } => {
-            info!("Client ID assigned: {}", id);
-            *client_id = Some(id);
-        }
-        IncomingMessage::ConfigurationResponse(_) => {
-            info!("Spa configuration received");
-        }
-        IncomingMessage::InformationResponse(_) => {
-            info!("Information response received");
-        }
-        IncomingMessage::FaultLogResponse(fault_log) => {
-            *last_fault = Some(alloc::format!(
-                "{:?} ({}d ago, {}:{:02}, set={})",
-                fault_log.message_code, fault_log.days_ago, fault_log.hour, fault_log.minute, fault_log.set_temperature
-            ));
-            info!("Fault log response received");
-        }
-        IncomingMessage::FilterCyclesResponse(_) => {
-            info!("Filter cycles response received");
-        }
-        IncomingMessage::ControlConfiguration(_) => {
-            info!("Control configuration received");
-        }
-        IncomingMessage::Unknown { message_type, .. } => {
-            debug!("Unknown message: {:02X?}", message_type);
+            let actions = app.start_pump_timer(pump_index, minutes);
+            execute_actions(&actions, device_id_str).await;
+            info!("Started pump {} timer for {} min", pump_index, minutes);
         }
     }
 }

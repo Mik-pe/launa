@@ -6,6 +6,7 @@ members = [
     "crates/launa-mqtt",
     "crates/launa-ota",
     "crates/launa-esp-ota",
+    "crates/launa-core",
     "crates/launa-sim",
     "crates/launa-integration-tests",
     "xtask",

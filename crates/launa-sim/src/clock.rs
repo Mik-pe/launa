@@ -4,7 +4,7 @@
 //! tick counter. Call [`VirtualClock::advance_ms`] to move time forward
 //! deterministically.
 
-use launa_hal::Clock;
+use launa_hal::{Clock, Timestamp};
 
 /// A manually-advanceable clock for simulation and testing.
 ///
@@ -56,15 +56,15 @@ impl Default for VirtualClock {
 }
 
 impl Clock for VirtualClock {
-    fn now_ms(&self) -> u64 {
-        self.now.get()
+    fn now(&self) -> Timestamp {
+        Timestamp(self.now.get())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use launa_hal::Clock;
+    use launa_hal::{Clock, Timestamp};
 
     #[test]
     fn test_virtual_clock_starts_at_zero() {
@@ -140,5 +140,23 @@ mod tests {
         }
         let clock = VirtualClock::new();
         assert_eq!(use_clock(&clock), 0);
+    }
+
+    #[test]
+    fn test_virtual_clock_now_returns_timestamp() {
+        let clock = VirtualClock::new();
+        assert_eq!(clock.now(), Timestamp::ZERO);
+
+        clock.advance_ms(5000);
+        assert_eq!(clock.now(), Timestamp::from_millis(5000));
+    }
+
+    #[test]
+    fn test_virtual_clock_elapsed_since() {
+        let clock = VirtualClock::new();
+        let start = clock.now();
+
+        clock.advance_ms(3000);
+        assert_eq!(clock.elapsed_since(start), 3000);
     }
 }

@@ -10,7 +10,7 @@ pub mod clock;
 pub mod network;
 pub mod transport;
 
-pub use clock::Clock;
+pub use clock::{Clock, Timestamp};
 #[cfg(feature = "std")]
 pub use network::Network;
 pub use transport::Transport;

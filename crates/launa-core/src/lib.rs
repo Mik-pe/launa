@@ -1,0 +1,1220 @@
+//! Extracted application logic for the Launa spa controller.
+//!
+//! `SpaApp` owns all stateful firmware logic — registration, command tracking,
+//! pump timers, hold timers, stale detection, diagnostics, fault handling.
+//! It exposes a pure synchronous API that returns `Vec<AppAction>` side effects.
+//!
+//! The ESP32 `main.rs` becomes thin IO wiring: receive frame → `app.process_frame()`
+//! → execute actions. Tests exercise the exact same logic.
+//!
+//! # Example (desktop test)
+//!
+//! ```
+//! use launa_core::{SpaApp, AppAction};
+//! use launa_sim::VirtualClock;
+//! use launa_hal::Clock;
+//!
+//! let clock = Box::leak(Box::new(VirtualClock::new()));
+//! let mut app = SpaApp::new("test_spa", clock);
+//!
+//! // Process a tick, get actions back
+//! let actions = app.tick();
+//! for action in actions {
+//!     // handle or assert on action
+//! }
+//! ```
+
+#![no_std]
+
+extern crate alloc;
+
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use launa_hal::{Clock, Timestamp};
+use launa_protocol::command::{Command, ToggleItem};
+use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
+use launa_protocol::frame::{Frame, FrameEncoder};
+use launa_protocol::registration::{RegistrationAction, RegistrationStateMachine};
+use launa_protocol::status::{HeatingMode, PumpState, StatusUpdate, TempRange};
+
+// ── Time constants ─────────────────────────────────────────────────────
+
+const COMMAND_ACK_TIMEOUT_MS: u64 = 5_000;
+const MAX_COMMAND_RETRIES: u8 = 2;
+const MAX_PENDING_COMMANDS: usize = 8;
+
+const DEFAULT_PUMP_DURATION_MS: u64 = 20 * 60 * 1000;
+const DEFAULT_HOLD_MODE_TIMEOUT_MS: u64 = 60 * 60 * 1000;
+
+const STALE_PROBE_INTERVAL_MS: u64 = 5_000;
+const STALE_THRESHOLD_MS: u64 = 30_000;
+const REGISTRATION_TIMEOUT_MS: u64 = 5_000;
+const DIAGNOSTICS_INTERVAL_MS: u64 = 60_000;
+const HEAP_CHECK_INTERVAL_MS: u64 = 60_000;
+const HEAP_WARN_THRESHOLD: usize = 4096;
+const HEAP_CRIT_THRESHOLD: usize = 1024;
+
+// ── AppAction ──────────────────────────────────────────────────────────
+
+/// Side effects the app logic can request.
+///
+/// The caller (ESP32 main loop or test harness) is responsible for executing these.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AppAction {
+    /// Write encoded frame bytes to UART.
+    SendFrame(Vec<u8>),
+
+    /// Publish status state to MQTT.
+    PublishState {
+        status: StatusUpdate,
+        fault: Option<String>,
+        recovering_from_stale: bool,
+    },
+
+    /// Publish availability status to MQTT.
+    PublishAvailability { online: bool },
+
+    /// Publish stale availability to MQTT.
+    PublishStaleAvailability,
+
+    /// Publish all HA discovery configs.
+    PublishDiscovery,
+
+    /// Publish diagnostics JSON.
+    PublishDiagnostics {
+        uptime_secs: u64,
+        frames_received: u32,
+        command_retries: u32,
+        command_drops: u32,
+    },
+
+    /// Publish an alert.
+    PublishAlert { level: String, message: String },
+
+    /// Request OTA firmware update.
+    RequestOta { url: String },
+}
+
+// ── CommandTracker (clock-based) ───────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExpectedChange {
+    PumpOn { item: ToggleItem },
+    PumpOff { item: ToggleItem },
+    TemperatureSet { temp: u8 },
+    LightToggled { item: ToggleItem, pre_state: bool },
+    HoldModeToggled { pre_state: bool },
+    HeatingModeToggled { pre_mode: HeatingMode },
+    TempRangeToggled { pre_range: TempRange },
+}
+
+impl ExpectedChange {
+    fn from_command(cmd: &Command, pre_status: &StatusUpdate) -> Option<Self> {
+        match cmd {
+            Command::ToggleItem(item) => {
+                if let Some(idx) = item.pump_index() {
+                    let is_on = matches!(pre_status.pumps[idx], PumpState::Low | PumpState::High);
+                    Some(if is_on {
+                        ExpectedChange::PumpOff { item: *item }
+                    } else {
+                        ExpectedChange::PumpOn { item: *item }
+                    })
+                } else if let Some(idx) = item.light_index() {
+                    Some(ExpectedChange::LightToggled {
+                        item: *item,
+                        pre_state: pre_status.lights[idx],
+                    })
+                } else {
+                    match item {
+                        ToggleItem::Blower => Some(if pre_status.blower {
+                            ExpectedChange::PumpOff { item: *item }
+                        } else {
+                            ExpectedChange::PumpOn { item: *item }
+                        }),
+                        ToggleItem::HoldMode => Some(ExpectedChange::HoldModeToggled {
+                            pre_state: pre_status.is_hold,
+                        }),
+                        ToggleItem::HeatingMode => Some(ExpectedChange::HeatingModeToggled {
+                            pre_mode: pre_status.heating_mode,
+                        }),
+                        ToggleItem::TemperatureRange => Some(ExpectedChange::TempRangeToggled {
+                            pre_range: pre_status.temp_range,
+                        }),
+                        _ => None,
+                    }
+                }
+            }
+            Command::SetTemperature(temp) => Some(ExpectedChange::TemperatureSet { temp: *temp }),
+            _ => None,
+        }
+    }
+}
+
+struct PendingCommand {
+    command: Command,
+    expected: ExpectedChange,
+    sent_at: Timestamp,
+    retries: u8,
+}
+
+/// Tracks pending commands and verifies them against status updates.
+pub struct CommandTracker {
+    pending: Vec<PendingCommand>,
+    dropped_count: u32,
+    retry_count: u32,
+}
+
+/// Result of verifying pending commands against a status update.
+pub struct VerifyResult {
+    /// Commands that timed out and should be retried.
+    pub retries: Vec<Command>,
+    /// Number of commands that exceeded max retries and were dropped.
+    pub dropped: u32,
+}
+
+impl CommandTracker {
+    pub fn new() -> Self {
+        CommandTracker {
+            pending: Vec::new(),
+            dropped_count: 0,
+            retry_count: 0,
+        }
+    }
+
+    pub fn track(&mut self, command: Command, pre_status: &StatusUpdate, now: Timestamp) {
+        if self.pending.len() >= MAX_PENDING_COMMANDS {
+            return;
+        }
+        if let Some(expected) = ExpectedChange::from_command(&command, pre_status) {
+            self.pending.push(PendingCommand {
+                command,
+                expected,
+                sent_at: now,
+                retries: 0,
+            });
+        }
+    }
+
+    pub fn verify(&mut self, status: &StatusUpdate, now: Timestamp) -> VerifyResult {
+        let mut confirmed = Vec::new();
+        let mut to_retry = Vec::new();
+        let mut dropped_this_call: u32 = 0;
+
+        for i in (0..self.pending.len()).rev() {
+            let pending = &self.pending[i];
+            let elapsed = now.elapsed_since(pending.sent_at);
+
+            if Self::is_confirmed(&pending.expected, status) {
+                confirmed.push(i);
+            } else if elapsed >= COMMAND_ACK_TIMEOUT_MS {
+                if pending.retries < MAX_COMMAND_RETRIES {
+                    to_retry.push(i);
+                } else {
+                    confirmed.push(i);
+                    dropped_this_call += 1;
+                }
+            }
+        }
+
+        let mut retries = Vec::new();
+        for &i in &to_retry {
+            let pending = &mut self.pending[i];
+            pending.retries += 1;
+            pending.sent_at = now;
+            retries.push(pending.command.clone());
+        }
+
+        self.retry_count += retries.len() as u32;
+
+        let mut to_remove = confirmed;
+        to_remove.sort();
+        for &i in to_remove.iter().rev() {
+            self.pending.remove(i);
+        }
+
+        self.dropped_count += dropped_this_call;
+
+        VerifyResult {
+            retries,
+            dropped: dropped_this_call,
+        }
+    }
+
+    fn is_confirmed(expected: &ExpectedChange, status: &StatusUpdate) -> bool {
+        match expected {
+            ExpectedChange::PumpOn { item } => {
+                if let Some(idx) = item.pump_index() {
+                    matches!(status.pumps[idx], PumpState::Low | PumpState::High)
+                } else {
+                    match item {
+                        ToggleItem::Blower => status.blower,
+                        _ => false,
+                    }
+                }
+            }
+            ExpectedChange::PumpOff { item } => {
+                if let Some(idx) = item.pump_index() {
+                    status.pumps[idx] == PumpState::Off
+                } else {
+                    match item {
+                        ToggleItem::Blower => !status.blower,
+                        _ => false,
+                    }
+                }
+            }
+            ExpectedChange::TemperatureSet { temp } => (status.set_temp as u8) == *temp,
+            ExpectedChange::LightToggled { item, pre_state } => {
+                if let Some(idx) = item.light_index() {
+                    status.lights[idx] != *pre_state
+                } else {
+                    status.lights[0] != *pre_state
+                }
+            }
+            ExpectedChange::HoldModeToggled { pre_state } => status.is_hold != *pre_state,
+            ExpectedChange::HeatingModeToggled { pre_mode } => status.heating_mode != *pre_mode,
+            ExpectedChange::TempRangeToggled { pre_range } => status.temp_range != *pre_range,
+        }
+    }
+
+    pub fn pending_count(&self) -> usize {
+        self.pending.len()
+    }
+
+    pub fn total_dropped(&self) -> u32 {
+        self.dropped_count
+    }
+
+    pub fn total_retries(&self) -> u32 {
+        self.retry_count
+    }
+}
+
+// ── PumpTimer (clock-based) ────────────────────────────────────────────
+
+pub struct PumpTimer {
+    pump: ToggleItem,
+    started_at: Option<Timestamp>,
+    duration_ms: u64,
+}
+
+impl PumpTimer {
+    pub fn new(pump: ToggleItem) -> Self {
+        PumpTimer {
+            pump,
+            started_at: None,
+            duration_ms: DEFAULT_PUMP_DURATION_MS,
+        }
+    }
+
+    pub fn start(&mut self, now: Timestamp) -> Command {
+        self.started_at = Some(now);
+        Command::ToggleItem(self.pump)
+    }
+
+    pub fn start_with_minutes(&mut self, minutes: u32, now: Timestamp) -> Command {
+        self.duration_ms = minutes as u64 * 60 * 1000;
+        self.start(now)
+    }
+
+    pub fn cancel(&mut self) {
+        self.started_at = None;
+    }
+
+    pub fn tick(&mut self, now: Timestamp, current_state: PumpState) -> Option<Command> {
+        if let Some(started_at) = self.started_at {
+            let is_on = matches!(current_state, PumpState::Low | PumpState::High);
+            if !is_on {
+                self.started_at = None;
+                return None;
+            }
+            if now.elapsed_since(started_at) >= self.duration_ms {
+                self.started_at = None;
+                return Some(Command::ToggleItem(self.pump));
+            }
+        }
+        None
+    }
+
+    pub fn remaining_ms(&self, now: Timestamp) -> u64 {
+        if let Some(started_at) = self.started_at {
+            self.duration_ms
+                .saturating_sub(now.elapsed_since(started_at))
+        } else {
+            0
+        }
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.started_at.is_some()
+    }
+}
+
+pub struct PumpTimerManager {
+    timers: [PumpTimer; 6],
+}
+
+impl PumpTimerManager {
+    pub fn new() -> Self {
+        PumpTimerManager {
+            timers: [
+                PumpTimer::new(ToggleItem::Pump1),
+                PumpTimer::new(ToggleItem::Pump2),
+                PumpTimer::new(ToggleItem::Pump3),
+                PumpTimer::new(ToggleItem::Pump4),
+                PumpTimer::new(ToggleItem::Pump5),
+                PumpTimer::new(ToggleItem::Pump6),
+            ],
+        }
+    }
+
+    pub fn tick_all(&mut self, now: Timestamp, pumps: &[PumpState; 6]) -> Vec<Command> {
+        let mut cmds = Vec::new();
+        for (i, timer) in self.timers.iter_mut().enumerate() {
+            if let Some(c) = timer.tick(now, pumps[i]) {
+                cmds.push(c);
+            }
+        }
+        cmds
+    }
+
+    pub fn start_timer(&mut self, pump_index: u8, minutes: u32, now: Timestamp) -> Option<Command> {
+        let i = (pump_index as usize).checked_sub(1)?;
+        if i >= self.timers.len() {
+            return None;
+        }
+        Some(self.timers[i].start_with_minutes(minutes, now))
+    }
+}
+
+// ── HoldModeTimer (clock-based) ────────────────────────────────────────
+
+pub struct HoldModeTimer {
+    entered_at: Option<Timestamp>,
+    timeout_ms: u64,
+}
+
+impl HoldModeTimer {
+    pub fn new() -> Self {
+        HoldModeTimer {
+            entered_at: None,
+            timeout_ms: DEFAULT_HOLD_MODE_TIMEOUT_MS,
+        }
+    }
+
+    pub fn with_timeout_ms(timeout_ms: u64) -> Self {
+        HoldModeTimer {
+            entered_at: None,
+            timeout_ms,
+        }
+    }
+
+    pub fn tick(&mut self, now: Timestamp, is_hold: bool) -> Option<Command> {
+        if is_hold {
+            if self.entered_at.is_none() {
+                self.entered_at = Some(now);
+            } else if now.elapsed_since(self.entered_at.unwrap()) >= self.timeout_ms {
+                self.entered_at = None;
+                return Some(Command::ToggleItem(ToggleItem::HoldMode));
+            }
+        } else {
+            self.entered_at = None;
+        }
+        None
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.entered_at.is_some()
+    }
+
+    pub fn remaining_ms(&self, now: Timestamp) -> u64 {
+        if let Some(entered_at) = self.entered_at {
+            self.timeout_ms
+                .saturating_sub(now.elapsed_since(entered_at))
+        } else {
+            0
+        }
+    }
+}
+
+// ── HeapMonitor (abstracted) ───────────────────────────────────────────
+
+/// Heap monitoring state. The caller provides the free heap value.
+pub struct HeapMonitor {
+    last_check: Option<Timestamp>,
+}
+
+impl HeapMonitor {
+    pub fn new() -> Self {
+        HeapMonitor { last_check: None }
+    }
+
+    /// Check heap usage. Returns `Some(critical)` when a check fires:
+    /// - `Some(true)` = critically low (< 1 KiB)
+    /// - `Some(false)` = warning (< 4 KiB but >= 1 KiB)
+    /// - `None` = not time to check yet, or heap is fine
+    pub fn tick(&mut self, now: Timestamp, free_heap: usize) -> Option<bool> {
+        let should_check = self.last_check.map_or(true, |last| {
+            now.elapsed_since(last) >= HEAP_CHECK_INTERVAL_MS
+        });
+        if !should_check {
+            return None;
+        }
+        self.last_check = Some(now);
+
+        if free_heap < HEAP_CRIT_THRESHOLD {
+            Some(true)
+        } else if free_heap < HEAP_WARN_THRESHOLD {
+            Some(false)
+        } else {
+            None
+        }
+    }
+}
+
+// ── SpaApp ─────────────────────────────────────────────────────────────
+
+/// The core application logic, extracted from the ESP32 main loop.
+///
+/// Owns all stateful logic with zero hardware dependencies. Feed it frames,
+/// commands, and periodic ticks — it returns `Vec<AppAction>` side effects
+/// for the caller to execute.
+pub struct SpaApp<'a> {
+    device_id: String,
+    clock: &'a dyn Clock,
+
+    // Registration
+    registration: RegistrationStateMachine,
+    registration_started_at: Option<Timestamp>,
+
+    // Command tracking
+    cmd_tracker: CommandTracker,
+    /// Queue of commands waiting for the next Ready window.
+    command_queue: Vec<Command>,
+
+    // Timers
+    pump_timers: PumpTimerManager,
+    hold_timer: HoldModeTimer,
+    heap_monitor: HeapMonitor,
+
+    // State tracking
+    last_status: Option<StatusUpdate>,
+    last_fault: Option<String>,
+    client_id: Option<u8>,
+    last_status_time: Option<Timestamp>,
+    last_probe_time: Option<Timestamp>,
+    last_diag_time: Option<Timestamp>,
+    was_stale: bool,
+
+    // Counters
+    frames_received: u32,
+    boot_time: Timestamp,
+}
+
+impl<'a> SpaApp<'a> {
+    pub fn new(device_id: &str, clock: &'a dyn Clock) -> Self {
+        let now = clock.now();
+        SpaApp {
+            device_id: String::from(device_id),
+            clock,
+            registration: RegistrationStateMachine::new(),
+            registration_started_at: None,
+            cmd_tracker: CommandTracker::new(),
+            command_queue: Vec::new(),
+            pump_timers: PumpTimerManager::new(),
+            hold_timer: HoldModeTimer::new(),
+            heap_monitor: HeapMonitor::new(),
+            last_status: None,
+            last_fault: None,
+            client_id: None,
+            last_status_time: None,
+            last_probe_time: None,
+            last_diag_time: None,
+            was_stale: false,
+            frames_received: 0,
+            boot_time: now,
+        }
+    }
+
+    /// Whether the controller has completed registration.
+    pub fn is_registered(&self) -> bool {
+        self.registration.is_registered()
+    }
+
+    /// The assigned client ID, if registered.
+    pub fn client_id(&self) -> Option<u8> {
+        self.client_id
+    }
+
+    /// The last received status, if any.
+    pub fn last_status(&self) -> Option<&StatusUpdate> {
+        self.last_status.as_ref()
+    }
+
+    /// The last fault string, if any.
+    pub fn last_fault(&self) -> Option<&str> {
+        self.last_fault.as_deref()
+    }
+
+    /// Number of commands in the queue waiting for Ready windows.
+    pub fn queued_command_count(&self) -> usize {
+        self.command_queue.len()
+    }
+
+    /// Total dropped commands.
+    pub fn total_dropped(&self) -> u32 {
+        self.cmd_tracker.total_dropped()
+    }
+
+    /// Total command retries.
+    pub fn total_retries(&self) -> u32 {
+        self.cmd_tracker.total_retries()
+    }
+
+    /// Total frames received.
+    pub fn frames_received(&self) -> u32 {
+        self.frames_received
+    }
+
+    /// Whether the spa is currently detected as stale (no status for 30s).
+    pub fn is_stale(&self) -> bool {
+        self.was_stale
+    }
+
+    /// Force registration (for tests).
+    pub fn force_registered(&mut self, client_id: u8) {
+        self.registration.process([0xFE, 0xBF], &[0x00]);
+        self.registration.process([0xFE, 0xBF], &[0x02, client_id]);
+        self.client_id = Some(client_id);
+    }
+
+    /// Start a pump timer. Returns actions including the toggle-on command.
+    pub fn start_pump_timer(&mut self, pump_index: u8, minutes: u32) -> Vec<AppAction> {
+        let now = self.clock.now();
+        let mut actions = Vec::new();
+        if let Some(cmd) = self.pump_timers.start_timer(pump_index, minutes, now) {
+            let encoded = encode_command(&cmd);
+            actions.push(AppAction::SendFrame(encoded));
+        }
+        actions
+    }
+
+    // ── Main processing methods ─────────────────────────────────────
+
+    /// Process an incoming frame from the spa.
+    pub fn process_frame(&mut self, frame: &Frame) -> Vec<AppAction> {
+        let now = self.clock.now();
+        let mut actions = Vec::new();
+
+        // Handle registration
+        if !self.registration.is_registered() {
+            let action = self
+                .registration
+                .process(frame.message_type, &frame.payload);
+            match action {
+                RegistrationAction::SendIdRequest => {
+                    let encoded = FrameEncoder::encode([0xFE, 0xBF], &[0x01, 0x02, 0xF1, 0x73]);
+                    actions.push(AppAction::SendFrame(encoded));
+                    self.registration_started_at = Some(now);
+                }
+                RegistrationAction::SendIdAck { client_id: id } => {
+                    let encoded = FrameEncoder::encode([id, 0xBF], &[0x03]);
+                    actions.push(AppAction::SendFrame(encoded));
+                    self.client_id = Some(id);
+                    self.registration_started_at = None;
+                }
+                RegistrationAction::None => {}
+            }
+            return actions;
+        }
+
+        // Dispatch incoming message
+        let message = dispatch_frame(frame);
+
+        match message {
+            IncomingMessage::StatusUpdate(status) => {
+                self.frames_received += 1;
+
+                // Verify pending commands
+                let result = self.cmd_tracker.verify(&status, now);
+                for cmd in result.retries {
+                    let encoded = encode_command(&cmd);
+                    actions.push(AppAction::SendFrame(encoded));
+                }
+
+                // Tick pump timers
+                let expired = self.pump_timers.tick_all(now, &status.pumps);
+                for cmd in expired {
+                    let encoded = encode_command(&cmd);
+                    actions.push(AppAction::SendFrame(encoded));
+                }
+
+                // Hold mode safety timeout
+                if let Some(cmd) = self.hold_timer.tick(now, status.is_hold) {
+                    let encoded = encode_command(&cmd);
+                    actions.push(AppAction::SendFrame(encoded));
+                }
+
+                self.last_status = Some(status.clone());
+                self.last_status_time = Some(now);
+                self.last_probe_time = Some(now);
+
+                let recovering = self.was_stale;
+                if recovering {
+                    self.was_stale = false;
+                }
+
+                actions.push(AppAction::PublishState {
+                    status,
+                    fault: self.last_fault.clone(),
+                    recovering_from_stale: recovering,
+                });
+            }
+            IncomingMessage::Ready => {
+                // Dequeue one command or send NothingToSend
+                if let Some(cmd) = self.command_queue.pop() {
+                    let encoded = encode_command(&cmd);
+                    actions.push(AppAction::SendFrame(encoded));
+                    if let Some(ref pre_status) = self.last_status {
+                        self.cmd_tracker.track(cmd, pre_status, now);
+                    }
+                } else if let Some(cid) = self.client_id {
+                    let cmd = Command::NothingToSend { client_id: cid };
+                    let encoded = encode_command(&cmd);
+                    actions.push(AppAction::SendFrame(encoded));
+                }
+            }
+            IncomingMessage::NewClientQuery => {
+                self.registration.reset();
+                self.client_id = None;
+            }
+            IncomingMessage::ClientIdAssignment { id } => {
+                self.client_id = Some(id);
+            }
+            IncomingMessage::FaultLogResponse(fault_log) => {
+                self.last_fault = Some(format!(
+                    "{:?} ({}d ago, {}:{:02}, set={})",
+                    fault_log.message_code,
+                    fault_log.days_ago,
+                    fault_log.hour,
+                    fault_log.minute,
+                    fault_log.set_temperature
+                ));
+            }
+            IncomingMessage::ConfigurationResponse(_)
+            | IncomingMessage::InformationResponse(_)
+            | IncomingMessage::FilterCyclesResponse(_)
+            | IncomingMessage::ControlConfiguration(_) => {}
+            IncomingMessage::Unknown { .. } => {}
+        }
+
+        actions
+    }
+
+    /// Handle an incoming MQTT command.
+    pub fn on_mqtt_command(&mut self, cmd: Command) -> Vec<AppAction> {
+        // Queue command for next Ready window
+        self.command_queue.push(cmd);
+        Vec::new()
+    }
+
+    /// Periodic tick for time-based checks: stale detection, diagnostics,
+    /// registration timeout, heap monitoring.
+    ///
+    /// Call this regularly (e.g., every main loop iteration or every 100ms).
+    pub fn tick(&mut self) -> Vec<AppAction> {
+        let now = self.clock.now();
+        let mut actions = Vec::new();
+
+        // Registration timeout
+        if !self.registration.is_registered() {
+            if let Some(started) = self.registration_started_at {
+                if now.elapsed_since(started) >= REGISTRATION_TIMEOUT_MS {
+                    actions.push(AppAction::PublishAlert {
+                        level: String::from("warn"),
+                        message: String::from("registration_timeout"),
+                    });
+                    self.registration.reset();
+                    self.registration_started_at = None;
+                }
+            }
+        } else {
+            self.registration_started_at = None;
+        }
+
+        // Stale detection
+        if let Some(last) = self.last_status_time {
+            let elapsed = now.elapsed_since(last);
+
+            // Probe at 5s intervals
+            let should_probe = self
+                .last_probe_time
+                .map_or(true, |lp| now.elapsed_since(lp) >= STALE_PROBE_INTERVAL_MS);
+
+            if elapsed >= STALE_PROBE_INTERVAL_MS && should_probe {
+                let encoded = FrameEncoder::encode([0x0A, 0xBF], &[0x04]);
+                actions.push(AppAction::SendFrame(encoded));
+                self.last_probe_time = Some(now);
+            }
+
+            // Stale at 30s
+            if elapsed >= STALE_THRESHOLD_MS && !self.was_stale {
+                self.was_stale = true;
+                actions.push(AppAction::PublishAlert {
+                    level: String::from("warn"),
+                    message: String::from("spa_communication_lost"),
+                });
+                // Publish stale state if we have a known status
+                if let Some(ref stale_status) = self.last_status {
+                    actions.push(AppAction::PublishState {
+                        status: stale_status.clone(),
+                        fault: self.last_fault.clone(),
+                        recovering_from_stale: false,
+                    });
+                    actions.push(AppAction::PublishStaleAvailability);
+                }
+            }
+        }
+
+        // Diagnostics publishing (every 60s)
+        let should_diag = self
+            .last_diag_time
+            .map_or(true, |ld| now.elapsed_since(ld) >= DIAGNOSTICS_INTERVAL_MS);
+        if should_diag {
+            self.last_diag_time = Some(now);
+            let uptime_ms = now.elapsed_since(self.boot_time);
+            actions.push(AppAction::PublishDiagnostics {
+                uptime_secs: uptime_ms / 1000,
+                frames_received: self.frames_received,
+                command_retries: self.cmd_tracker.total_retries(),
+                command_drops: self.cmd_tracker.total_dropped(),
+            });
+        }
+
+        actions
+    }
+
+    /// Check heap status. The caller provides the current free heap value.
+    /// Returns actions for alerts if heap is low.
+    pub fn check_heap(&mut self, free_heap: usize) -> Vec<AppAction> {
+        let now = self.clock.now();
+        let mut actions = Vec::new();
+        match self.heap_monitor.tick(now, free_heap) {
+            Some(true) => {
+                actions.push(AppAction::PublishAlert {
+                    level: String::from("error"),
+                    message: String::from("heap_critically_low"),
+                });
+            }
+            Some(false) => {
+                // Warning only, no alert action needed
+            }
+            None => {}
+        }
+        actions
+    }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────
+
+fn encode_command(cmd: &Command) -> Vec<u8> {
+    let (msg_type, payload) = cmd.encode();
+    FrameEncoder::encode(msg_type, &payload)
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::boxed::Box;
+    use alloc::vec;
+    use launa_protocol::frame::Frame;
+    use launa_sim::VirtualClock;
+
+    fn make_app_with_clock() -> (&'static VirtualClock, SpaApp<'static>) {
+        let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
+        let app = SpaApp::new("test_spa", clock);
+        (clock, app)
+    }
+
+    fn status_frame() -> Frame {
+        let mut payload = vec![0u8; 24];
+        payload[2] = 100; // current temp
+        payload[20] = 104; // set temp
+        Frame {
+            message_type: [0xFF, 0xAF],
+            payload,
+        }
+    }
+
+    fn ready_frame() -> Frame {
+        Frame {
+            message_type: [0x10, 0xBF],
+            payload: vec![0x06],
+        }
+    }
+
+    fn new_client_query_frame() -> Frame {
+        Frame {
+            message_type: [0xFE, 0xBF],
+            payload: vec![0x00],
+        }
+    }
+
+    fn client_id_assignment_frame(id: u8) -> Frame {
+        Frame {
+            message_type: [0xFE, 0xBF],
+            payload: vec![0x02, id],
+        }
+    }
+
+    #[test]
+    fn test_spa_app_new() {
+        let (_clock, app) = make_app_with_clock();
+        assert!(!app.is_registered());
+        assert!(app.last_status().is_none());
+        assert!(app.client_id().is_none());
+        assert_eq!(app.frames_received(), 0);
+    }
+
+    #[test]
+    fn test_registration_flow() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+
+        // Send NewClientQuery → should request ID
+        let actions = app.process_frame(&new_client_query_frame());
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            AppAction::SendFrame(_bytes) => {
+                // Frame is HDLC-encoded, just check it's a non-empty frame
+            }
+            _ => panic!("Expected SendFrame"),
+        }
+        assert!(!app.is_registered());
+
+        // Send ClientIdAssignment
+        let actions = app.process_frame(&client_id_assignment_frame(0x05));
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            AppAction::SendFrame(_bytes) => {
+                // ACK frame
+            }
+            _ => panic!("Expected SendFrame"),
+        }
+        assert!(app.is_registered());
+        assert_eq!(app.client_id(), Some(0x05));
+    }
+
+    #[test]
+    fn test_status_update() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        let actions = app.process_frame(&status_frame());
+        assert_eq!(app.frames_received(), 1);
+
+        // Should have a PublishState action
+        let has_state = actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishState { .. }));
+        assert!(has_state);
+    }
+
+    #[test]
+    fn test_command_queued_and_sent_on_ready() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // First, get a status so the tracker has a pre_status
+        app.process_frame(&status_frame());
+
+        // Queue a command
+        let cmd_actions = app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        assert!(cmd_actions.is_empty()); // Command is queued, not sent immediately
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Ready arrives → command is dequeued and sent
+        let actions = app.process_frame(&ready_frame());
+        let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(has_send);
+        assert_eq!(app.queued_command_count(), 0);
+    }
+
+    #[test]
+    fn test_nothing_to_send_on_ready() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        let actions = app.process_frame(&ready_frame());
+        // Should send NothingToSend
+        let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(has_send);
+    }
+
+    #[test]
+    fn test_stale_detection() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get a status
+        app.process_frame(&status_frame());
+
+        // Advance past stale threshold
+        clock.advance_ms(31_000);
+
+        let actions = app.tick();
+
+        // Should have stale alert and stale availability
+        let has_alert = actions.iter().any(|a| {
+            matches!(a, AppAction::PublishAlert { message, .. } if message == "spa_communication_lost")
+        });
+        assert!(has_alert);
+        assert!(app.is_stale());
+    }
+
+    #[test]
+    fn test_stale_recovery() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get a status
+        app.process_frame(&status_frame());
+
+        // Go stale
+        clock.advance_ms(31_000);
+        app.tick();
+        assert!(app.is_stale());
+
+        // Receive a new status → should recover
+        let actions = app.process_frame(&status_frame());
+        assert!(!app.is_stale());
+
+        let recovering = actions.iter().any(|a| {
+            matches!(
+                a,
+                AppAction::PublishState {
+                    recovering_from_stale: true,
+                    ..
+                }
+            )
+        });
+        assert!(recovering);
+    }
+
+    #[test]
+    fn test_registration_timeout() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+
+        // Start registration
+        app.process_frame(&new_client_query_frame());
+
+        // Advance past timeout
+        clock.advance_ms(6_000);
+
+        let actions = app.tick();
+        let has_alert = actions.iter().any(|a| {
+            matches!(a, AppAction::PublishAlert { message, .. } if message == "registration_timeout")
+        });
+        assert!(has_alert);
+        assert!(!app.is_registered());
+    }
+
+    #[test]
+    fn test_diagnostics_periodic() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+
+        // Advance past diagnostics interval
+        clock.advance_ms(61_000);
+
+        let actions = app.tick();
+        let has_diag = actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishDiagnostics { .. }));
+        assert!(has_diag);
+    }
+
+    #[test]
+    fn test_hold_mode_timer() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get a status without hold mode
+        app.process_frame(&status_frame());
+
+        // Create a status with hold mode (payload[0] == 0x05 means is_hold)
+        let mut hold_frame = status_frame();
+        hold_frame.payload[0] = 0x05;
+        app.process_frame(&hold_frame);
+
+        // Advance past hold timeout (60 min)
+        clock.advance_ms(61 * 60 * 1000);
+
+        // Send another status with hold still active
+        let actions = app.process_frame(&hold_frame);
+        // The hold timer should have fired a toggle command
+        assert!(actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))));
+    }
+
+    #[test]
+    fn test_pump_timer_expiry() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Start pump 1 timer for 1 minute
+        let actions = app.start_pump_timer(1, 1);
+        assert!(actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))));
+
+        // Get a status with pump running
+        let mut status = status_frame();
+        status.payload[11] = 0x01; // Pump 1 = Low
+        app.process_frame(&status);
+
+        // Advance past timer
+        clock.advance_ms(61_000);
+
+        // Next status should trigger auto-off
+        let actions = app.process_frame(&status);
+        assert!(actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))));
+    }
+
+    #[test]
+    fn test_command_tracker_confirm() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get initial status
+        app.process_frame(&status_frame());
+
+        // Queue and send toggle on Ready
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        app.process_frame(&ready_frame());
+
+        assert_eq!(app.queued_command_count(), 0);
+
+        // Status comes back with pump on → command confirmed
+        let mut new_status = status_frame();
+        new_status.payload[11] = 0x01; // Pump 1 = Low
+        let _actions = app.process_frame(&new_status);
+
+        // No retry actions
+        assert_eq!(app.total_retries(), 0);
+        assert_eq!(app.total_dropped(), 0);
+    }
+
+    #[test]
+    fn test_command_tracker_timeout_retry() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get initial status (pump off)
+        app.process_frame(&status_frame());
+
+        // Queue and send toggle on Ready
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        app.process_frame(&ready_frame());
+
+        // Advance past timeout (5s) but don't change status
+        clock.advance_ms(6_000);
+
+        // Same status arrives → pump still off → timeout triggers retry
+        let _actions = app.process_frame(&status_frame());
+        assert!(app.total_retries() > 0);
+    }
+
+    #[test]
+    fn test_bus_reset_reregistration() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Bus reset — resets registration state, no frames sent
+        let actions = app.process_frame(&new_client_query_frame());
+        assert!(!app.is_registered());
+        assert_eq!(app.client_id(), None);
+        // When already registered, the frame goes through dispatch, which
+        // resets registration. No SendFrame is produced at this point.
+        // The next NewClientQuery from the spa will trigger re-registration.
+        assert!(actions.is_empty());
+
+        // Next NewClientQuery starts re-registration
+        let actions = app.process_frame(&new_client_query_frame());
+        let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(has_send);
+    }
+
+    #[test]
+    fn test_fault_log_captured() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get a status first
+        app.process_frame(&status_frame());
+
+        // Simulate fault log response
+        let fault_frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: vec![
+                0x28, 0x03, 0x01, 0x1B, 0x02, 0x0E, 0x1E, 0x04, 0x68, 0x68, 0x66,
+            ],
+        };
+        app.process_frame(&fault_frame);
+        assert!(app.last_fault().is_some());
+    }
+
+    #[test]
+    fn test_heap_critical_alert() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+
+        // Advance past check interval
+        clock.advance_ms(61_000);
+
+        let actions = app.check_heap(500); // Very low
+        let has_alert = actions.iter().any(|a| {
+            matches!(a, AppAction::PublishAlert { message, .. } if message == "heap_critically_low")
+        });
+        assert!(has_alert);
+    }
+
+    #[test]
+    fn test_ready_window_queues_multiple() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get initial status
+        app.process_frame(&status_frame());
+
+        // Queue 3 commands
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump2));
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump3));
+        assert_eq!(app.queued_command_count(), 3);
+
+        // First Ready → send pump1
+        app.process_frame(&ready_frame());
+        assert_eq!(app.queued_command_count(), 2);
+
+        // Second Ready → send pump2
+        app.process_frame(&ready_frame());
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Third Ready → send pump3
+        app.process_frame(&ready_frame());
+        assert_eq!(app.queued_command_count(), 0);
+    }
+}
