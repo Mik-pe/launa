@@ -534,26 +534,26 @@ One implementation of the logic, tested through the same interface whether it's 
 #### Phase 4: Desktop Integration Tests via `SpaApp`
 
 - [x] **Replace `SpaController` with `SpaApp` in integration tests**: Added Test Group I with 12 new tests in `launa-integration-tests` using `SpaApp` from `launa-core`. Tests cover: command ACK/confirm, retry/drop, stale detection, hold mode timeout, pump timer expiry, diagnostics, registration timeout, bus reset re-registration, temperature (not validated in SpaApp), concurrent operations, fault log capture, Ready-window queuing. Total integration tests: 71 (59 existing + 12 new).
-- [ ] **Test: command ACK and confirmation**: Send toggle → verify `AppAction::SendFrame` → spa applies toggle → next status → verify no retry.
-- [ ] **Test: command retry on spa ignore**: Send toggle → spa does NOT apply → advance time past 5s → verify retry `AppAction::SendFrame` → still ignored → advance again → verify second retry → still ignored → verify command dropped.
-- [ ] **Test: stale detection flow**: Normal operation → stop sending spa ticks → advance time 5s → verify `AppAction::SendFrame` (config probe) → advance to 30s → verify `AppAction::PublishAvailability { stale }` + `AppAction::PublishAlert` → resume ticks → verify `AppAction::PublishAvailability { online }` recovery.
-- [ ] **Test: hold mode safety timeout**: Enter hold mode → advance 60 minutes via VirtualClock → verify `AppAction::SendFrame` (hold toggle to clear).
-- [ ] **Test: pump timer expiry**: Start pump timer → advance virtual time → verify auto-off toggle sent at exact duration.
-- [ ] **Test: diagnostics periodic publish**: Run 60+ ticks → verify `AppAction::PublishDiagnostics` fires every 60 ticks with correct counter values.
-- [ ] **Test: registration timeout**: Start registration → no spa response → advance 5s → verify `AppAction::PublishAlert` (registration_timeout) and state reset.
-- [ ] **Test: bus reset re-registration**: Fully registered and running → spa sends `NewClientQuery` → verify `SpaApp` resets registration and re-registers.
-- [ ] **Test: temperature validation rejection**: Call `on_mqtt_command(SetTemperature(106))` with high range → verify command rejected (no `AppAction::SendFrame`).
-- [ ] **Test: concurrent operations**: Toggle pump + set temp + change heating mode → verify all tracked, all confirmed when status reflects changes.
-- [ ] **Test: fault log captured in state**: Request fault log → parse response → verify next `AppAction::PublishState` includes fault string.
-- [ ] **Test: Ready-window command queuing**: Queue 3 commands → verify only one sent per Ready → verify NothingToSend when queue empty.
+- [x] **Test: command ACK and confirmation**: Implemented as `test_spaapp_command_ack_and_confirmation` in `launa-integration-tests`.
+- [x] **Test: command retry on spa ignore**: Implemented as `test_spaapp_command_retry_on_ignore` in `launa-integration-tests`.
+- [x] **Test: stale detection flow**: Implemented as `test_spaapp_stale_detection_flow` in `launa-integration-tests`.
+- [x] **Test: hold mode safety timeout**: Implemented as `test_spaapp_hold_mode_safety_timeout` in `launa-integration-tests`.
+- [x] **Test: pump timer expiry**: Implemented as `test_spaapp_pump_timer_expiry` in `launa-integration-tests`.
+- [x] **Test: diagnostics periodic publish**: Implemented as `test_spaapp_diagnostics_periodic` in `launa-integration-tests`.
+- [x] **Test: registration timeout**: Implemented as `test_spaapp_registration_timeout` in `launa-integration-tests`.
+- [x] **Test: bus reset re-registration**: Implemented as `test_spaapp_bus_reset_reregistration` in `launa-integration-tests`.
+- [x] **Test: temperature validation rejection**: Implemented as `test_spaapp_temperature_not_validated_in_app` in `launa-integration-tests`.
+- [x] **Test: concurrent operations**: Implemented as `test_spaapp_concurrent_operations` in `launa-integration-tests`.
+- [x] **Test: fault log captured in state**: Implemented as `test_spaapp_fault_log_captured` in `launa-integration-tests`.
+- [x] **Test: Ready-window command queuing**: Implemented as `test_spaapp_ready_window_command_queuing` in `launa-integration-tests`.
 
 #### Phase 5: Error Injection in SpaSim
 
-- [ ] **Add configurable command success rate to SpaSim**: `set_command_success_rate(0.8)` — spa silently ignores a fraction of toggle/set commands. Tests verify retry behavior.
-- [ ] **Add bus silence simulation**: `simulate_bus_silence(duration_ticks)` — spa stops sending status frames. Tests verify stale detection and recovery.
-- [ ] **Add spontaneous state changes**: `simulate_filter_cycle_start()` — pump turns on by itself (simulates real spa filter cycles). Tests verify command tracker handles unexpected state changes gracefully.
-- [ ] **Add corrupt frame injection**: `inject_corrupt_frame()` — sends a frame with bad CRC or wrong length. Tests verify FrameDecoder error counting and that processing continues.
-- [ ] **Add duplicate frame injection**: Send the same status frame twice. Tests verify command tracker doesn't double-confirm or get confused.
+- [x] **Add configurable command success rate to SpaSim**: Added `set_command_success_rate(f32)` with deterministic LCG PRNG. Toggle and SetTemperature commands silently ignored when "roll" fails. 4 tests.
+- [x] **Add bus silence simulation**: Added `simulate_bus_silence(duration_ticks)`. Returns empty bytes during silence, resumes automatically. 1 test.
+- [x] **Add spontaneous state changes**: Added `SpaEventType` enum, `schedule_event()`, `simulate_filter_cycle_start()`. Events fire at scheduled ticks before physics. 2 tests.
+- [x] **Add corrupt frame injection**: Added `inject_corrupt_frame()`. XORs last payload byte with 0xFF for bad CRC. 1 test.
+- [x] **Add duplicate frame injection**: Added `inject_duplicate_frame()`. Doubles status frame bytes in one tick. 1 test.
 
 #### Phase 6: Long-Running Simulation
 

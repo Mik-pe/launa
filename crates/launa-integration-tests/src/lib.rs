@@ -24,7 +24,7 @@ mod tests {
 
     #[test]
     fn test_status_frame_round_trip() {
-        let sim = SpaSim::new();
+        let mut sim = SpaSim::new();
         let encoded = sim.generate_status_frame();
 
         let mut decoder = FrameDecoder::new();
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_status_to_mqtt_json() {
-        let sim = SpaSim::new();
+        let mut sim = SpaSim::new();
         let encoded = sim.generate_status_frame();
 
         let mut decoder = FrameDecoder::new();
@@ -728,7 +728,7 @@ mod tests {
 
     #[test]
     fn test_feed_bytes_one_at_a_time() {
-        let sim = SpaSim::new();
+        let mut sim = SpaSim::new();
         let encoded = sim.generate_status_frame();
 
         let mut decoder = FrameDecoder::new();
@@ -768,7 +768,7 @@ mod tests {
 
     #[test]
     fn test_frames_with_noise_bytes_between() {
-        let sim = SpaSim::new();
+        let mut sim = SpaSim::new();
 
         let status = sim.generate_status_frame();
         let config = sim.generate_config_response();

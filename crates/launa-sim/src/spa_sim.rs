@@ -90,6 +90,20 @@ impl SpaState {
     }
 }
 
+/// Type of spontaneous event that can be scheduled on the spa simulator.
+#[derive(Debug, Clone)]
+pub enum SpaEventType {
+    /// Start a filter cycle, turning the specified pump on (to Low).
+    FilterCycleStart { pump_index: usize },
+}
+
+/// A scheduled spontaneous event that fires at a specific tick.
+#[derive(Debug, Clone)]
+pub struct SpaEvent {
+    pub tick: u64,
+    pub event_type: SpaEventType,
+}
+
 /// Simulated Balboa BP6013G1 spa mainboard.
 ///
 /// Connects to a `SimTransport` and simulates the real spa's behavior:
@@ -97,12 +111,29 @@ impl SpaState {
 /// - Sends registration queries until a client registers
 /// - Sends `Ready` messages after each status update
 /// - Processes incoming command frames and updates internal state
+///
+/// ## Error Injection
+///
+/// The simulator supports several error injection features for testing:
+/// - **Command success rate**: Drop commands probabilistically
+/// - **Bus silence**: Suppress all output for a number of ticks
+/// - **Spontaneous events**: Schedule state changes at specific ticks
+/// - **Corrupt frames**: Inject frames with bad CRC
+/// - **Duplicate frames**: Send the same status frame twice in one tick
 pub struct SpaSim {
     pub state: SpaState,
     pub client_id: Option<u8>,
     next_client_id: u8,
     tick_count: u64,
     registered: bool,
+
+    // Error injection fields
+    command_success_rate: f32,
+    command_counter: u64,
+    bus_silence_remaining: u64,
+    pending_events: Vec<SpaEvent>,
+    inject_corrupt_next: bool,
+    duplicate_next: bool,
 }
 
 impl SpaSim {
@@ -113,7 +144,75 @@ impl SpaSim {
             next_client_id: 0x02,
             tick_count: 0,
             registered: false,
+
+            command_success_rate: 1.0,
+            command_counter: 0,
+            bus_silence_remaining: 0,
+            pending_events: Vec::new(),
+            inject_corrupt_next: false,
+            duplicate_next: false,
         }
+    }
+
+    /// Set the probability that commands are accepted (0.0 = never, 1.0 = always).
+    ///
+    /// Uses a deterministic PRNG seeded by a per-command counter for reproducibility.
+    pub fn set_command_success_rate(&mut self, rate: f32) {
+        self.command_success_rate = rate.clamp(0.0, 1.0);
+    }
+
+    /// Simulate bus silence: suppress all output for `duration_ticks` ticks.
+    pub fn simulate_bus_silence(&mut self, duration_ticks: u64) {
+        self.bus_silence_remaining = duration_ticks;
+    }
+
+    /// Schedule a spontaneous event to fire at the given tick.
+    pub fn schedule_event(&mut self, at_tick: u64, event: SpaEventType) {
+        self.pending_events.push(SpaEvent {
+            tick: at_tick,
+            event_type: event,
+        });
+    }
+
+    /// Convenience method: schedule a filter cycle start at the given tick.
+    pub fn simulate_filter_cycle_start(&mut self, pump_index: usize, at_tick: u64) {
+        self.schedule_event(at_tick, SpaEventType::FilterCycleStart { pump_index });
+    }
+
+    /// Inject a corrupt frame on the next `generate_status_frame()` call.
+    ///
+    /// The payload's last byte is XOR'd with 0xFF, producing a bad CRC.
+    pub fn inject_corrupt_frame(&mut self) {
+        self.inject_corrupt_next = true;
+    }
+
+    /// Inject a duplicate status frame on the next `tick()` call.
+    ///
+    /// The status frame bytes will be emitted twice in a single tick.
+    pub fn inject_duplicate_frame(&mut self) {
+        self.duplicate_next = true;
+    }
+
+    /// Deterministic pseudo-random check for command acceptance.
+    ///
+    /// Returns `true` if the command should be accepted based on the success rate.
+    fn should_accept_command(&mut self) -> bool {
+        let rate = self.command_success_rate;
+        if rate >= 1.0 {
+            return true;
+        }
+        if rate <= 0.0 {
+            return false;
+        }
+        // Simple LCG-based deterministic "random"
+        let rand_val = (self
+            .command_counter
+            .wrapping_mul(1103515245)
+            .wrapping_add(12345)
+            >> 16) as u8;
+        self.command_counter += 1;
+        let threshold = (rate * 256.0) as u8;
+        rand_val < threshold
     }
 
     /// Advance simulated time by 1 second.
@@ -122,8 +221,20 @@ impl SpaSim {
     /// - If not registered: a registration query (`FE BF 00`)
     /// - Always: a status update frame (`FF AF 13` with 24-byte payload)
     /// - Always: a `Ready` frame (`10 BF 06`) indicating the bus is free
+    ///
+    /// Error injection features may modify this output:
+    /// - Bus silence suppresses all output
+    /// - Spontaneous events are applied before frame generation
+    /// - Duplicate frame injection doubles the status frame
     pub fn tick(&mut self) -> Vec<u8> {
         self.tick_count += 1;
+
+        // Bus silence: suppress all output
+        if self.bus_silence_remaining > 0 {
+            self.bus_silence_remaining -= 1;
+            return Vec::new();
+        }
+
         let mut output = Vec::new();
 
         // Send registration query if no client is registered
@@ -131,16 +242,47 @@ impl SpaSim {
             output.extend_from_slice(&self.generate_registration_query());
         }
 
+        // Process scheduled spontaneous events
+        self.process_pending_events();
+
         // Update physical simulation
         self.simulate_physics();
 
         // Send status update
-        output.extend_from_slice(&self.generate_status_frame());
+        let status_bytes = self.generate_status_frame();
+
+        // Duplicate frame injection: send status frame twice
+        if self.duplicate_next {
+            self.duplicate_next = false;
+            output.extend_from_slice(&status_bytes);
+            output.extend_from_slice(&status_bytes);
+        } else {
+            output.extend_from_slice(&status_bytes);
+        }
 
         // Send ready indicator (bus is free for commands)
         output.extend_from_slice(&self.generate_ready_frame());
 
         output
+    }
+
+    /// Process any scheduled spontaneous events whose tick has arrived.
+    fn process_pending_events(&mut self) {
+        let mut i = 0;
+        while i < self.pending_events.len() {
+            if self.pending_events[i].tick <= self.tick_count {
+                let event = self.pending_events.remove(i);
+                match event.event_type {
+                    SpaEventType::FilterCycleStart { pump_index } => {
+                        if pump_index < 6 && self.state.pumps[pump_index] == PumpState::Off {
+                            self.state.pumps[pump_index] = PumpState::Low;
+                        }
+                    }
+                }
+            } else {
+                i += 1;
+            }
+        }
     }
 
     /// Process all bytes the controller has written to the transport.
@@ -173,15 +315,19 @@ impl SpaSim {
                     0x04 => Some(self.generate_config_response()),
                     0x11 => {
                         if frame.payload.len() >= 2 {
-                            self.handle_toggle_by_code(frame.payload[1]);
+                            if self.should_accept_command() {
+                                self.handle_toggle_by_code(frame.payload[1]);
+                            }
                         }
                         None
                     }
                     0x20 => {
                         if frame.payload.len() >= 2 {
-                            let raw_temp = frame.payload[1];
-                            self.state.set_temp =
-                                SpaState::decode_temp(raw_temp, self.state.temp_scale);
+                            if self.should_accept_command() {
+                                let raw_temp = frame.payload[1];
+                                self.state.set_temp =
+                                    SpaState::decode_temp(raw_temp, self.state.temp_scale);
+                            }
                         }
                         None
                     }
@@ -247,7 +393,8 @@ impl SpaSim {
     /// Generate a complete framed status update.
     ///
     /// This is the boundary where Rust types → raw wire bytes.
-    pub fn generate_status_frame(&self) -> Vec<u8> {
+    /// If corrupt frame injection is enabled, the last payload byte is flipped.
+    pub fn generate_status_frame(&mut self) -> Vec<u8> {
         let mut payload = [0u8; 24];
 
         // Offset 0: Spa State (0x00=Running, 0x05=Hold)
@@ -317,7 +464,18 @@ impl SpaSim {
         // Offset 20: Set Temperature
         payload[20] = SpaState::encode_temp(self.state.set_temp, self.state.temp_scale);
 
-        FrameEncoder::encode([0xFF, 0xAF], &payload)
+        let mut frame = FrameEncoder::encode([0xFF, 0xAF], &payload);
+
+        // Corrupt frame injection: flip last byte of the encoded frame
+        if self.inject_corrupt_next {
+            self.inject_corrupt_next = false;
+            if !frame.is_empty() {
+                let last = frame.len() - 1;
+                frame[last] ^= 0xFF;
+            }
+        }
+
+        frame
     }
 
     /// Generate a `Ready` frame (`10 BF 06`).
@@ -595,5 +753,165 @@ mod tests {
         sim.process_incoming_bytes(&encoded);
 
         assert_eq!(sim.state.set_temp, 40.0);
+    }
+
+    // -- Error injection tests --
+
+    #[test]
+    fn test_command_success_rate_ignores_toggle() {
+        let mut sim = SpaSim::new();
+        sim.set_command_success_rate(0.0); // Never accept commands
+
+        let (mt, payload) = launa_protocol::command::Command::ToggleItem(
+            launa_protocol::command::ToggleItem::Pump1,
+        )
+        .encode();
+        let encoded = FrameEncoder::encode(mt, &payload);
+        sim.process_incoming_bytes(&encoded);
+
+        // Pump should still be Off (command was ignored)
+        assert_eq!(sim.state.pumps[0], PumpState::Off);
+    }
+
+    #[test]
+    fn test_command_success_rate_accepts_toggle() {
+        let mut sim = SpaSim::new();
+        sim.set_command_success_rate(1.0); // Always accept commands
+
+        let (mt, payload) = launa_protocol::command::Command::ToggleItem(
+            launa_protocol::command::ToggleItem::Pump1,
+        )
+        .encode();
+        let encoded = FrameEncoder::encode(mt, &payload);
+        sim.process_incoming_bytes(&encoded);
+
+        // Pump should be Low (command was accepted)
+        assert_eq!(sim.state.pumps[0], PumpState::Low);
+    }
+
+    #[test]
+    fn test_command_success_rate_ignores_set_temp() {
+        let mut sim = SpaSim::new();
+        sim.state.temp_scale = TemperatureScale::Fahrenheit;
+        sim.set_command_success_rate(0.0); // Never accept commands
+
+        let (mt, payload) = launa_protocol::command::Command::SetTemperature(90).encode();
+        let encoded = FrameEncoder::encode(mt, &payload);
+        sim.process_incoming_bytes(&encoded);
+
+        // Set temp should remain at default (104.0)
+        assert_eq!(sim.state.set_temp, 104.0);
+    }
+
+    #[test]
+    fn test_command_success_rate_accepts_set_temp() {
+        let mut sim = SpaSim::new();
+        sim.state.temp_scale = TemperatureScale::Fahrenheit;
+        sim.set_command_success_rate(1.0); // Always accept commands
+
+        let (mt, payload) = launa_protocol::command::Command::SetTemperature(100).encode();
+        let encoded = FrameEncoder::encode(mt, &payload);
+        sim.process_incoming_bytes(&encoded);
+
+        assert_eq!(sim.state.set_temp, 100.0);
+    }
+
+    #[test]
+    fn test_bus_silence_produces_no_output() {
+        let mut sim = SpaSim::new();
+        sim.simulate_bus_silence(3);
+
+        let bytes1 = sim.tick();
+        assert!(bytes1.is_empty(), "silenced tick should produce no bytes");
+
+        let bytes2 = sim.tick();
+        assert!(bytes2.is_empty());
+
+        let bytes3 = sim.tick();
+        assert!(bytes3.is_empty());
+
+        // Silence over, normal output resumes
+        let bytes4 = sim.tick();
+        assert!(!bytes4.is_empty(), "should resume after silence");
+    }
+
+    #[test]
+    fn test_spontaneous_filter_cycle_start() {
+        let mut sim = SpaSim::new();
+        assert_eq!(sim.state.pumps[0], PumpState::Off);
+
+        // Schedule pump1 to turn on at tick 5
+        sim.simulate_filter_cycle_start(0, 5);
+
+        // Ticks 1-4: pump still off
+        for _ in 0..4 {
+            sim.tick();
+        }
+        // After tick 4, tick_count is 4
+        let _ = sim.tick(); // tick 5: tick_count becomes 5, events at tick<=5 fire
+
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::Low,
+            "pump should start from scheduled event"
+        );
+    }
+
+    #[test]
+    fn test_spontaneous_event_does_not_double_toggle() {
+        let mut sim = SpaSim::new();
+        // If pump is already on, filter cycle start should not change it
+        sim.state.pumps[1] = PumpState::High;
+        sim.simulate_filter_cycle_start(1, 1);
+
+        sim.tick();
+        // Should still be High, not cycled
+        assert_eq!(sim.state.pumps[1], PumpState::High);
+    }
+
+    #[test]
+    fn test_corrupt_frame_injection() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        // Get a normal frame for comparison
+        let normal = sim.generate_status_frame();
+
+        // Inject corruption
+        sim.inject_corrupt_frame();
+        let corrupt = sim.generate_status_frame();
+
+        // Frames should differ
+        assert_ne!(normal, corrupt, "corrupt frame should differ from normal");
+
+        // Corrupt frame should still be parseable as bytes (just has bad CRC)
+        assert!(!corrupt.is_empty());
+    }
+
+    #[test]
+    fn test_duplicate_frame_injection() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        // Normal tick produces N bytes
+        let normal_bytes = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let normal_frames = decoder.feed_slice(&normal_bytes);
+
+        // Reset sim for comparison
+        let mut sim2 = SpaSim::new();
+        sim2.registered = true;
+        sim2.inject_duplicate_frame();
+        let dup_bytes = sim2.tick();
+
+        // Duplicate tick should have more bytes (extra status frame)
+        assert!(dup_bytes.len() > normal_bytes.len());
+
+        let mut decoder2 = FrameDecoder::new();
+        let dup_frames = decoder2.feed_slice(&dup_bytes);
+        assert!(
+            dup_frames.len() > normal_frames.len(),
+            "should have extra frames from duplication"
+        );
     }
 }
