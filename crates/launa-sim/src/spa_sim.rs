@@ -120,6 +120,12 @@ pub struct SpaEvent {
 /// - **Spontaneous events**: Schedule state changes at specific ticks
 /// - **Corrupt frames**: Inject frames with bad CRC
 /// - **Duplicate frames**: Send the same status frame twice in one tick
+///
+/// ## Simulation Realism
+///
+/// - **Frame jitter**: Add 0..N random padding bytes before status frames
+/// - **Command latency**: Defer state changes by N ticks
+/// - **Ready interval**: Send Ready frames at randomized intervals
 pub struct SpaSim {
     pub state: SpaState,
     pub client_id: Option<u8>,
@@ -134,6 +140,21 @@ pub struct SpaSim {
     pending_events: Vec<SpaEvent>,
     inject_corrupt_next: bool,
     duplicate_next: bool,
+
+    // Simulation realism fields
+    /// Maximum random padding bytes before status frame (0 = no jitter).
+    frame_jitter_ticks: u64,
+    /// Number of ticks to defer command state changes (0 = immediate).
+    command_latency_ticks: u64,
+    /// Pending commands waiting for their latency to expire.
+    /// Each entry is (remaining_ticks, Box<dyn FnOnce(&mut SpaState)>).
+    pending_commands: Vec<(u64, Box<dyn FnOnce(&mut SpaState)>)>,
+    /// Min/max ticks between Ready frames. Default (1,1) = every tick.
+    ready_interval_range: (u64, u64),
+    /// Ticks remaining until the next Ready frame should be sent.
+    ready_countdown: u64,
+    /// PRNG state for ready interval randomization.
+    ready_rng_state: u64,
 }
 
 impl SpaSim {
@@ -151,6 +172,13 @@ impl SpaSim {
             pending_events: Vec::new(),
             inject_corrupt_next: false,
             duplicate_next: false,
+
+            frame_jitter_ticks: 0,
+            command_latency_ticks: 0,
+            pending_commands: Vec::new(),
+            ready_interval_range: (1, 1),
+            ready_countdown: 1,
+            ready_rng_state: 0,
         }
     }
 
@@ -193,6 +221,32 @@ impl SpaSim {
         self.duplicate_next = true;
     }
 
+    /// Set the maximum number of random padding bytes to add before the status frame.
+    ///
+    /// With `frame_jitter_ticks > 0`, each `tick()` adds 0..N random padding bytes
+    /// before the status frame, simulating bus noise. Uses the existing LCG PRNG.
+    /// Default: 0 (no jitter, identical to original behavior).
+    pub fn set_frame_jitter_ticks(&mut self, ticks: u64) {
+        self.frame_jitter_ticks = ticks;
+    }
+
+    /// Set the number of ticks to defer command state changes.
+    ///
+    /// With `command_latency_ticks > 0`, incoming commands are buffered and their
+    /// state changes are applied N `tick()` calls later via `pending_commands`.
+    /// Default: 0 (immediate, identical to original behavior).
+    pub fn set_command_latency_ticks(&mut self, ticks: u64) {
+        self.command_latency_ticks = ticks;
+    }
+
+    /// Set the interval range (min, max) for Ready frame transmission.
+    ///
+    /// With range (1, 1) (default), a Ready frame is sent every tick (original behavior).
+    /// With range (2, 5), Ready frames are sent at randomized intervals between 2-5 ticks.
+    pub fn set_ready_interval_range(&mut self, min: u64, max: u64) {
+        self.ready_interval_range = (min.max(1), max.max(min));
+    }
+
     /// Deterministic pseudo-random check for command acceptance.
     ///
     /// Returns `true` if the command should be accepted based on the success rate.
@@ -215,6 +269,48 @@ impl SpaSim {
         rand_val < threshold
     }
 
+    /// Generate a deterministic pseudo-random u64 using the ready RNG state.
+    fn next_ready_rand(&mut self) -> u64 {
+        self.ready_rng_state = self
+            .ready_rng_state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.ready_rng_state
+    }
+
+    /// Generate a random padding length in 0..max using the LCG PRNG.
+    fn jitter_padding_len(&mut self) -> usize {
+        if self.frame_jitter_ticks == 0 {
+            return 0;
+        }
+        let rand_val = self.next_ready_rand();
+        (rand_val % self.frame_jitter_ticks) as usize
+    }
+
+    /// Compute the next ready countdown value from the interval range.
+    fn next_ready_interval(&mut self) -> u64 {
+        let (min, max) = self.ready_interval_range;
+        if min == max {
+            return min;
+        }
+        let rand_val = self.next_ready_rand();
+        min + (rand_val % (max - min + 1))
+    }
+
+    /// Process pending deferred commands, decrementing timers and applying expired ones.
+    fn process_pending_commands(&mut self) {
+        let mut i = 0;
+        while i < self.pending_commands.len() {
+            self.pending_commands[i].0 -= 1;
+            if self.pending_commands[i].0 == 0 {
+                let (_, apply_fn) = self.pending_commands.remove(i);
+                apply_fn(&mut self.state);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
     /// Advance simulated time by 1 second.
     ///
     /// Returns the raw bytes the spa would transmit this second:
@@ -228,6 +324,9 @@ impl SpaSim {
     /// - Duplicate frame injection doubles the status frame
     pub fn tick(&mut self) -> Vec<u8> {
         self.tick_count += 1;
+
+        // Process deferred commands (decrement timers, apply expired)
+        self.process_pending_commands();
 
         // Bus silence: suppress all output
         if self.bus_silence_remaining > 0 {
@@ -248,6 +347,12 @@ impl SpaSim {
         // Update physical simulation
         self.simulate_physics();
 
+        // Frame jitter: add random padding bytes before status frame
+        let padding_len = self.jitter_padding_len();
+        for _ in 0..padding_len {
+            output.push(0x00);
+        }
+
         // Send status update
         let status_bytes = self.generate_status_frame();
 
@@ -260,8 +365,14 @@ impl SpaSim {
             output.extend_from_slice(&status_bytes);
         }
 
-        // Send ready indicator (bus is free for commands)
-        output.extend_from_slice(&self.generate_ready_frame());
+        // Send ready indicator at randomized intervals
+        if self.ready_countdown > 0 {
+            self.ready_countdown -= 1;
+        }
+        if self.ready_countdown == 0 {
+            output.extend_from_slice(&self.generate_ready_frame());
+            self.ready_countdown = self.next_ready_interval();
+        }
 
         output
     }
@@ -316,7 +427,18 @@ impl SpaSim {
                     0x11 => {
                         if frame.payload.len() >= 2 {
                             if self.should_accept_command() {
-                                self.handle_toggle_by_code(frame.payload[1]);
+                                let item_code = frame.payload[1];
+                                if self.command_latency_ticks == 0 {
+                                    self.handle_toggle_by_code(item_code);
+                                } else {
+                                    let latency = self.command_latency_ticks;
+                                    self.pending_commands.push((
+                                        latency,
+                                        Box::new(move |state: &mut SpaState| {
+                                            apply_toggle_by_code(state, item_code);
+                                        }),
+                                    ));
+                                }
                             }
                         }
                         None
@@ -325,8 +447,18 @@ impl SpaSim {
                         if frame.payload.len() >= 2 {
                             if self.should_accept_command() {
                                 let raw_temp = frame.payload[1];
-                                self.state.set_temp =
-                                    SpaState::decode_temp(raw_temp, self.state.temp_scale);
+                                let scale = self.state.temp_scale;
+                                if self.command_latency_ticks == 0 {
+                                    self.state.set_temp = SpaState::decode_temp(raw_temp, scale);
+                                } else {
+                                    let latency = self.command_latency_ticks;
+                                    self.pending_commands.push((
+                                        latency,
+                                        Box::new(move |state: &mut SpaState| {
+                                            state.set_temp = SpaState::decode_temp(raw_temp, scale);
+                                        }),
+                                    ));
+                                }
                             }
                         }
                         None
@@ -555,26 +687,33 @@ impl SpaSim {
     ///
     /// This is the boundary where raw bytes → Rust type mutations.
     fn handle_toggle_by_code(&mut self, item_code: u8) {
-        match item_code {
-            0x04..=0x09 => {
-                let idx = (item_code - 0x04) as usize;
-                if idx < 6 {
-                    self.state.pumps[idx] = cycle_pump(self.state.pumps[idx]);
-                }
-            }
-            0x0C => self.state.blower = !self.state.blower,
-            0x11 => self.state.lights[0] = !self.state.lights[0],
-            0x12 => self.state.lights[1] = !self.state.lights[1],
-            0x3C => self.state.hold = !self.state.hold,
-            0x51 => self.state.heating_mode = cycle_heating_mode(self.state.heating_mode),
-            0x50 => self.state.temp_range = flip_temp_range(self.state.temp_range),
-            _ => {}
-        }
+        apply_toggle_by_code(&mut self.state, item_code);
     }
 
     /// How many ticks have elapsed.
     pub fn tick_count(&self) -> u64 {
         self.tick_count
+    }
+}
+
+/// Apply a toggle command by raw protocol item code to the given state.
+///
+/// This is the boundary where raw bytes → Rust type mutations.
+fn apply_toggle_by_code(state: &mut SpaState, item_code: u8) {
+    match item_code {
+        0x04..=0x09 => {
+            let idx = (item_code - 0x04) as usize;
+            if idx < 6 {
+                state.pumps[idx] = cycle_pump(state.pumps[idx]);
+            }
+        }
+        0x0C => state.blower = !state.blower,
+        0x11 => state.lights[0] = !state.lights[0],
+        0x12 => state.lights[1] = !state.lights[1],
+        0x3C => state.hold = !state.hold,
+        0x51 => state.heating_mode = cycle_heating_mode(state.heating_mode),
+        0x50 => state.temp_range = flip_temp_range(state.temp_range),
+        _ => {}
     }
 }
 
@@ -912,6 +1051,301 @@ mod tests {
         assert!(
             dup_frames.len() > normal_frames.len(),
             "should have extra frames from duplication"
+        );
+    }
+
+    // -- Simulation realism tests (frame jitter, command latency, ready interval) --
+
+    #[test]
+    fn test_frame_jitter_default_unchanged() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        // With default frame_jitter_ticks=0, both ticks produce the same structure
+        // (status frame + ready frame). Physics causes minor byte differences (clock),
+        // so we verify structural equivalence: same number of decoded frames with same types.
+        let bytes1 = sim.tick();
+        let bytes2 = sim.tick();
+
+        let mut decoder1 = FrameDecoder::new();
+        let frames1 = decoder1.feed_slice(&bytes1);
+
+        let mut decoder2 = FrameDecoder::new();
+        let frames2 = decoder2.feed_slice(&bytes2);
+
+        // Same frame count and types
+        assert_eq!(frames1.len(), 2, "tick 1: status + ready");
+        assert_eq!(frames2.len(), 2, "tick 2: status + ready");
+        assert_eq!(frames1[0].message_type, [0xFF, 0xAF]); // status
+        assert_eq!(frames1[1].message_type, [0x10, 0xBF]); // ready
+        assert_eq!(frames2[0].message_type, [0xFF, 0xAF]); // status
+        assert_eq!(frames2[1].message_type, [0x10, 0xBF]); // ready
+
+        // Output lengths should be identical (no jitter padding)
+        assert_eq!(
+            bytes1.len(),
+            bytes2.len(),
+            "output lengths should match with default jitter=0"
+        );
+    }
+
+    #[test]
+    fn test_frame_jitter_variable_padding() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.set_frame_jitter_ticks(10);
+
+        // Collect output from 50 ticks, verify at least 3 distinct lengths
+        let mut lengths = std::collections::BTreeSet::new();
+        let mut all_decoded_ok = true;
+
+        for _ in 0..50 {
+            let bytes = sim.tick();
+            lengths.insert(bytes.len());
+
+            // Verify FrameDecoder can still decode all valid frames
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            // Should have at least the status frame (ready may be separate)
+            if frames.is_empty() || frames[0].message_type != [0xFF, 0xAF] {
+                all_decoded_ok = false;
+            }
+        }
+
+        assert!(
+            lengths.len() >= 3,
+            "expected at least 3 distinct output lengths with jitter=10, got {}",
+            lengths.len()
+        );
+        assert!(all_decoded_ok, "all frames should decode correctly");
+    }
+
+    #[test]
+    fn test_command_latency_default_immediate() {
+        let mut sim = SpaSim::new();
+        // Default command_latency_ticks=0: commands applied immediately
+
+        let (mt, payload) = launa_protocol::command::Command::ToggleItem(
+            launa_protocol::command::ToggleItem::Pump1,
+        )
+        .encode();
+        let encoded = FrameEncoder::encode(mt, &payload);
+
+        sim.process_incoming_bytes(&encoded);
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::Low,
+            "default latency=0 should apply toggle immediately"
+        );
+    }
+
+    #[test]
+    fn test_command_latency_deferred() {
+        let mut sim = SpaSim::new();
+        sim.set_command_latency_ticks(3);
+
+        let (mt, payload) = launa_protocol::command::Command::ToggleItem(
+            launa_protocol::command::ToggleItem::Pump1,
+        )
+        .encode();
+        let encoded = FrameEncoder::encode(mt, &payload);
+
+        // Send command
+        sim.process_incoming_bytes(&encoded);
+
+        // State should NOT change immediately
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::Off,
+            "state should not change immediately with latency=3"
+        );
+
+        // Tick 1: still not applied
+        sim.tick();
+        assert_eq!(sim.state.pumps[0], PumpState::Off, "tick 1: still pending");
+
+        // Tick 2: still not applied
+        sim.tick();
+        assert_eq!(sim.state.pumps[0], PumpState::Off, "tick 2: still pending");
+
+        // Tick 3: should be applied now
+        sim.tick();
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::Low,
+            "tick 3: deferred command should be applied"
+        );
+    }
+
+    #[test]
+    fn test_command_latency_multiple_commands_order() {
+        let mut sim = SpaSim::new();
+        sim.set_command_latency_ticks(2);
+
+        // Send two toggle commands for different pumps
+        let (mt, payload) = launa_protocol::command::Command::ToggleItem(
+            launa_protocol::command::ToggleItem::Pump1,
+        )
+        .encode();
+        let encoded1 = FrameEncoder::encode(mt, &payload);
+
+        let (mt, payload) = launa_protocol::command::Command::ToggleItem(
+            launa_protocol::command::ToggleItem::Pump2,
+        )
+        .encode();
+        let encoded2 = FrameEncoder::encode(mt, &payload);
+
+        sim.process_incoming_bytes(&encoded1);
+        sim.process_incoming_bytes(&encoded2);
+
+        // Neither applied yet
+        assert_eq!(sim.state.pumps[0], PumpState::Off);
+        assert_eq!(sim.state.pumps[1], PumpState::Off);
+
+        // Tick 1: pending
+        sim.tick();
+        assert_eq!(sim.state.pumps[0], PumpState::Off);
+        assert_eq!(sim.state.pumps[1], PumpState::Off);
+
+        // Tick 2: both should be applied
+        sim.tick();
+        assert_eq!(sim.state.pumps[0], PumpState::Low, "pump1 toggle applied");
+        assert_eq!(sim.state.pumps[1], PumpState::Low, "pump2 toggle applied");
+    }
+
+    #[test]
+    fn test_ready_interval_default_every_tick() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        // Default ready_interval_range=(1,1): Ready frame every tick
+
+        let mut ready_count = 0;
+        for _ in 0..10 {
+            let bytes = sim.tick();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            for f in &frames {
+                if f.message_type == [0x10, 0xBF] {
+                    ready_count += 1;
+                }
+            }
+        }
+
+        assert_eq!(
+            ready_count, 10,
+            "default (1,1) should produce Ready every tick"
+        );
+    }
+
+    #[test]
+    fn test_ready_interval_randomized() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.set_ready_interval_range(2, 5);
+
+        let mut ready_count = 0;
+        for _ in 0..100 {
+            let bytes = sim.tick();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            for f in &frames {
+                if f.message_type == [0x10, 0xBF] {
+                    ready_count += 1;
+                }
+            }
+        }
+
+        // With interval range (2,5), expect ~20-60 Ready frames in 100 ticks
+        // (min 100/5=20, max 100/2=50, but allow some margin)
+        assert!(
+            ready_count >= 15 && ready_count <= 55,
+            "expected 15-55 Ready frames with range (2,5), got {}",
+            ready_count
+        );
+    }
+
+    #[test]
+    fn test_jitter_and_latency_together() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.set_frame_jitter_ticks(5);
+        sim.set_command_latency_ticks(2);
+
+        let (mt, payload) = launa_protocol::command::Command::ToggleItem(
+            launa_protocol::command::ToggleItem::Pump1,
+        )
+        .encode();
+        let encoded = FrameEncoder::encode(mt, &payload);
+        sim.process_incoming_bytes(&encoded);
+
+        // Jitter should work (variable output), latency should defer command
+        let mut distinct_lengths = std::collections::BTreeSet::new();
+        for _ in 0..20 {
+            let bytes = sim.tick();
+            distinct_lengths.insert(bytes.len());
+        }
+
+        assert!(
+            distinct_lengths.len() >= 2,
+            "jitter should produce at least 2 distinct lengths, got {}",
+            distinct_lengths.len()
+        );
+
+        // Command should be applied after 2 ticks
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::Low,
+            "deferred command applied after latency ticks"
+        );
+    }
+
+    #[test]
+    fn test_all_three_features_together() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.set_frame_jitter_ticks(3);
+        sim.set_command_latency_ticks(1);
+        sim.set_ready_interval_range(1, 3);
+
+        let (mt, payload) = launa_protocol::command::Command::ToggleItem(
+            launa_protocol::command::ToggleItem::Pump1,
+        )
+        .encode();
+        let encoded = FrameEncoder::encode(mt, &payload);
+        sim.process_incoming_bytes(&encoded);
+
+        // Tick through several cycles
+        let mut status_count = 0;
+        let mut ready_count = 0;
+        for _ in 0..20 {
+            let bytes = sim.tick();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            for f in &frames {
+                if f.message_type == [0xFF, 0xAF] {
+                    status_count += 1;
+                }
+                if f.message_type == [0x10, 0xBF] {
+                    ready_count += 1;
+                }
+            }
+        }
+
+        // Status should appear every tick
+        assert_eq!(status_count, 20, "status every tick");
+
+        // Ready should appear at interval (1,3), so fewer than 20
+        assert!(
+            ready_count >= 7 && ready_count <= 20,
+            "ready at randomized interval, got {}",
+            ready_count
+        );
+
+        // Command should be applied
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::Low,
+            "deferred command applied"
         );
     }
 }
