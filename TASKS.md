@@ -120,6 +120,32 @@ The hand-rolled MQTT client in `app/src/mqtt_client.rs` had multiple protocol bu
 
 - [x] **Wire pump timers to MQTT commands**: Added `pump1_timer`, `pump2_timer`, `pump3_timer` subtopics to `command_parser.rs` allowlist. Added `ParseResult::TimerPump` variant. `mqtt_client.rs` maps it to `MqttAction::StartPumpTimer`. Main loop receives timer commands via `PUMP_TIMER_CHANNEL` and calls `PumpTimerManager::start_timer()`.
 
+## Code Review: Issues Found (2026-04-15)
+
+### Critical
+
+- [ ] **OTA: unbounded `header_buf` can OOM the 32 KiB heap** (`app/src/ota.rs`): `header_buf: Vec` grows without limit until `\r\n\r\n` is found. A malicious/buggy HTTP server that never sends the header terminator will exhaust the heap and panic. Add a size cap (e.g., 4 KiB — headers should never be that large).
+- [ ] **OTA: no HTTP status code validation** (`app/src/ota.rs`): The code skips headers but never checks the HTTP response status line. A 404, 500, or redirect response body would be flashed as "firmware," potentially bricking the device. Must verify `HTTP/1.1 200` before proceeding.
+- [ ] **OTA: `begin()` erases entire partition before download completes** (`app/src/ota.rs`): `ota.begin()` wipes the full 1.25 MiB target partition before any firmware bytes are downloaded. If the TCP connection drops mid-download, the device has a wiped partition. Consider erasing sectors incrementally as data arrives, or at minimum validate the HTTP response before erasing.
+- [ ] **OTA: `rollback_and_reboot()` does not actually reboot** (`launa-esp-ota`): The method name says "and reboot" but it only writes otadata. Callers in `ota.rs` error paths invoke it then `return Err(())`, so execution falls through to the caller without resetting. In `main.rs` the fallback `software_reset()` exists but only at the outermost level. Error paths inside `perform_ota_update` that call `rollback_and_reboot()` followed by `return Err(())` leave the device running with a partially-rolled-back state.
+
+### Moderate
+
+- [ ] **MQTT WiFi-reconnect loop has no backoff or attempt cap** (`app/src/main.rs`): The `WIFI_RECONNECT_SIGNAL`-triggered reconnect loop retries every 5s forever with no max attempt limit or exponential backoff. The MQTT-loss path has alerting after 3 attempts, but this WiFi path does not.
+- [ ] **Alert spam during persistent MQTT failures** (`app/src/main.rs`): After `reconnect_attempts > 3`, every subsequent 5s retry publishes an alert JSON. During an extended outage, this wastes heap on repeated JSON formatting and floods the alert channel. Should throttle (e.g., alert at most once per minute).
+- [ ] **OTA: IP-only resolution, no DNS** (`app/src/ota.rs`): `parse_ip()` only handles dotted-quad IPv4. If the OTA URL contains a hostname, OTA fails silently. This limits OTA to LAN IP addresses only. At minimum, document this limitation; ideally add a simple DNS lookup via embassy-net.
+- [ ] **MQTT `reconnect()` leaks old socket's static buffers** (`app/src/mqtt_client.rs`): Each `reconnect()` call creates new `mk_static!` TCP buffers. The old socket's buffers become leaked static memory that can never be reclaimed on a 32 KiB heap. After multiple reconnects, this could exhaust memory.
+- [ ] **`DIAGNOSTICS_START` is `unsafe static mut` accessed from multiple tasks** (`app/src/main.rs`): Accessed via `unsafe` blocks in `send_alert()` and `publish_diagnostics()`. While only written once during init, this is technically UB under Rust's aliasing rules. Should use a `OnceCell<Instant>` or `AtomicU64`.
+- [ ] **MQTT SUBACK read discards result** (`app/src/mqtt_client.rs`): `let _ = self.transport.read(&mut buf).await;` in `subscribe()` doesn't validate the SUBACK packet or check the return code. A failed subscription goes undetected silently.
+
+### Minor
+
+- [ ] **Duplicate `mk_static!` macro in 3 files** (`app/src/ota.rs`, `app/src/mqtt_client.rs`, `app/src/wifi.rs`): The `mk_static!` macro is copy-pasted into three separate files. Should be a shared module to prevent divergence.
+- [ ] **Duplicate `parse_ip()` function in 2 files** (`app/src/ota.rs`, `app/src/mqtt_client.rs`): Identical `parse_ip()` logic copy-pasted. Should be a shared utility.
+- [ ] **`ota_rx` receiver recreated inside main loop every iteration** (`app/src/main.rs`): `let ota_rx = OTA_CHANNEL.receiver();` is inside the loop. Other receivers (`frame_rx`, `cmd_rx`) are created before the loop for consistency.
+- [ ] **`parse_ip` accepts malformed input** (`app/src/ota.rs`, `app/src/mqtt_client.rs`): `filter_map(|p| p.parse::<u8>().ok())` silently drops invalid octets, so `"1.2.3.4.5"` matches `[1,2,3,4]` and `"999.1.1.1"` matches `[1,1,1]`. Should validate exactly 4 dot-separated octets in range 0-255.
+- [ ] **Registration timeout `registration_started_at` leak** (`app/src/main.rs`): If `registration_started_at` is set but `is_registered()` becomes true between checks, the `Some` value persists indefinitely. Harmless in practice since `SendIdAck` clears it, but inconsistent.
+
 ## P0: Production Blockers
 
 These must be fixed before field deployment. The firmware runs headless at the spa with no serial debug access -- all observability must be via MQTT.
