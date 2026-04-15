@@ -1,0 +1,28 @@
+{
+  "featureId": "sim-partial-frame-injection",
+  "reviewedAt": "2026-04-15T23:44:00.000Z",
+  "commitId": "0eaf16e",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean implementation of partial frame injection for SpaSim. Two new fields (partial_frame_split, partial_frame_remainder), inject_partial_frame_at() method, and tick() logic to split status frame across two ticks. Three well-structured tests covering midpoint split with FrameDecoder reassembly, split-at-zero edge case, and one-shot reset. All 394 workspace tests pass, TDD was followed (tests written first, verified to fail, then implementation). Code follows existing patterns and conventions.",
+    "issues": [
+      {
+        "file": "crates/launa-sim/src/spa_sim.rs",
+        "line": 397,
+        "severity": "non_blocking",
+        "description": "Minor inconsistency: in the split_point == 0 branch, the ready_countdown is not decremented and no Ready frame is emitted on tick1. This means ready_countdown tracking is skipped for that tick. With default ready_interval_range (1,1) this has no observable effect because the remainder tick always emits Ready. With non-default ranges, the countdown state is preserved from before the injection, which is acceptable for a one-shot feature but differs from the split_point >= len() path which does handle ready_countdown."
+      },
+      {
+        "file": "crates/launa-sim/src/spa_sim.rs",
+        "line": 397,
+        "severity": "non_blocking",
+        "description": "The split_at_zero test name (test_partial_frame_split_at_zero) and its comment say 'the full status frame is the remainder', but actually the implementation emits the full status frame on tick1 (not tick2) and the remainder (empty) on tick2 with Ready. The behavior is correct per the feature description ('split at 0 = full frame first tick'), but the test comment is slightly misleading."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "Solid implementation of partial frame injection. The inject_partial_frame_at(split_point) method correctly splits status frames across two ticks, with proper one-shot semantics. Three tests cover the specified scenarios: midpoint split (with FrameDecoder reassembly verification), split-at-zero edge case, and one-shot reset. Worker followed TDD (tests written and verified to fail first), no regressions (394 tests pass), code formatted. Two minor non-blocking issues: (1) the split_point==0 branch skips ready_countdown handling unlike other branches, and (2) the test comment for split_at_zero is slightly misleading about which tick emits what. Neither affects correctness for the documented use cases."
+}

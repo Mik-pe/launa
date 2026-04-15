@@ -1,0 +1,39 @@
+{
+  "featureId": "sim-broker-upgrade",
+  "reviewedAt": "2026-04-15T23:44:00.000Z",
+  "commitId": "76d5e90",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The SimBroker has been upgraded from a simple Vec recorder to a functional mock MQTT broker with 6 new features (QoS 1 tracking, subscription matching, loss rate, disconnect/reconnect, dropped count), all off by default. Implementation is clean, well-documented with module-level doc comments, and includes 10 new tests covering all features plus edge cases and interactions. The TDD process was followed correctly (RED→GREEN visible in transcript). All 63 launa-sim tests pass, and full workspace passes (371 tests).",
+    "issues": [
+      {
+        "file": "crates/launa-sim/src/sim_broker.rs",
+        "line": 89,
+        "severity": "non_blocking",
+        "description": "Packet ID wrapping: when next_packet_id reaches u16::MAX (65535), subsequent calls reuse IDs starting from 1. If old entries with matching IDs are still unacked in the HashMap, they'll be silently overwritten. This is acceptable for a test mock but could cause confusing test failures if a test publishes >65535 QoS 1 messages without acking. No action needed — just worth noting as a known limitation."
+      },
+      {
+        "file": "crates/launa-sim/src/sim_broker.rs",
+        "line": 83,
+        "severity": "non_blocking",
+        "description": "publish_qos1 returns 0 to indicate a dropped publish (due to disconnect/loss). In real MQTT, packet ID 0 is invalid, so this is a reasonable sentinel. However, the API has no documentation or method to distinguish 'dropped due to disconnect' from 'dropped due to loss rate'. The test test_simbroker_disconnect_drops_qos1 only checks disconnect. If a test needed to distinguish these cases, it couldn't. Acceptable for current requirements."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "architecture.md states 'All workspace crates are `#![no_std]` with `extern crate alloc`' but launa-sim has never been no_std — it uses `std` features from launa-hal and launa-mqtt, and sim_broker.rs imports `std::collections::{HashMap, HashSet}`. This invariant description is inaccurate for launa-sim. The mission AGENTS.md also states 'All workspace crates must remain `#![no_std]`' but launa-sim is a desktop-only simulation crate.",
+      "evidence": "architecture.md 'Invariants' section, launa-sim/Cargo.toml has `launa-hal = { path = \"../launa-hal\", features = [\"std\"] }`, sim_broker.rs line 20 uses `std::collections`"
+    },
+    {
+      "area": "knowledge",
+      "observation": "architecture.md should be updated to document SimBroker's new capabilities (QoS 1, subscription matching, loss rate, disconnect/reconnect) so future workers know the mock broker can simulate these scenarios.",
+      "evidence": "architecture.md currently says 'launa-sim — Spa simulator (SpaSim/SpaState), SimBroker (mock MQTT), SimTransport (virtual RS-485), SpaController, VirtualClock' with no mention of SimBroker's mock broker features"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The SimBroker upgrade is well-implemented, follows TDD correctly, covers all 6 required features with 10 tests (exceeds the 5+ requirement), maintains full backward compatibility (all features off by default), and passes all 371 workspace tests with no regressions. Two minor non-blocking observations about packet ID wrapping edge case and architecture.md inaccuracy about no_std. Worker followed the rust-worker skill procedure faithfully."
+}

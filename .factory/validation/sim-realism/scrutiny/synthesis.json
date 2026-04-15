@@ -1,0 +1,32 @@
+{
+  "milestone": "sim-realism",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": { "passed": true, "command": "cargo test --workspace", "exitCode": 0 },
+    "typecheck": { "passed": true, "command": "cargo check --workspace", "exitCode": 0 },
+    "lint": { "passed": true, "command": "cargo fmt --check", "exitCode": 0 }
+  },
+  "reviewsSummary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Updated architecture.md: corrected no_std invariant (launa-sim is std), documented SimBroker's functional mock capabilities (QoS 1, subscription matching, loss rate, disconnect/reconnect), and SpaSim realism features (frame jitter, command latency, ready interval variation, partial frame injection)",
+      "sourceFeature": "sim-jitter-and-latency, sim-broker-upgrade"
+    }
+  ],
+  "suggestedGuidanceUpdates": [],
+  "rejectedObservations": [
+    {
+      "observation": "architecture.md should be updated to document SimBroker's new capabilities",
+      "reason": "already-applied — directly updated architecture.md with SimBroker features"
+    }
+  ],
+  "previousRound": null
+}

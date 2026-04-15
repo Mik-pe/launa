@@ -1,0 +1,52 @@
+{
+  "featureId": "sim-jitter-and-latency",
+  "reviewedAt": "2026-04-15T21:45:00.000Z",
+  "commitId": "fef3943",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Well-implemented feature adding three simulation realism controls (frame jitter, command latency, ready interval) to SpaSim. The implementation follows a clean design: new struct fields with sensible defaults, setter methods, and integration into tick()/process_frame(). The refactoring of handle_toggle_by_code into a standalone apply_toggle_by_code function enables deferred closures. All 9 tests cover default behavior, each feature individually, and feature interactions. 63 launa-sim tests pass with no regressions.",
+    "issues": [
+      {
+        "file": "crates/launa-sim/src/spa_sim.rs",
+        "line": 328,
+        "severity": "non_blocking",
+        "description": "process_pending_commands() holds &mut self while iterating pending_commands, then calls apply_fn(&mut self.state). This works because state is a separate field, but it's a subtle borrow-checker dependency: the closures can only access &mut SpaState, not other SpaSim fields. If a future deferred command needs to modify other SpaSim fields (e.g., registered, client_id), this pattern would need rework. Not a current issue."
+      },
+      {
+        "file": "crates/launa-sim/src/spa_sim.rs",
+        "line": 278,
+        "severity": "non_blocking",
+        "description": "ready_rng_state starts at 0 and uses a PCG-style LCG (Knuth LCG constants). For ready_interval_range, this is fine since the values are bounded and tested. However, the PRNG is separate from the command_success_rate PRNG (which uses command_counter with different LCG constants). Having two independent PRNGs means jitter and ready interval randomization are coupled — the sequence of jitter padding lengths affects the ready interval sequence, since both call next_ready_rand(). This is acceptable for simulation but worth noting."
+      },
+      {
+        "file": "crates/launa-sim/src/spa_sim.rs",
+        "line": 286,
+        "severity": "non_blocking",
+        "description": "jitter_padding_len() with frame_jitter_ticks=N generates rand_val % N, which gives a range of 0..N (i.e., N can be 0 padding bytes). The feature description says 'adds 0..N random padding bytes before status frame' — this matches the spec exactly, but note that 0 bytes is a valid output, meaning some ticks will have no jitter padding even with jitter enabled. This is correct behavior for simulating realistic bus conditions."
+      },
+      {
+        "file": "crates/launa-sim/src/spa_sim.rs",
+        "line": 271,
+        "severity": "non_blocking",
+        "description": "set_ready_interval_range clamps min to max(1, min), so a minimum of 0 is silently converted to 1. This prevents the countdown from never reaching 0, which is a sensible guard. The max is clamped to max(min, max), ensuring max >= min. Good defensive coding."
+      },
+      {
+        "file": "crates/launa-sim/src/spa_sim.rs",
+        "line": 1091,
+        "severity": "non_blocking",
+        "description": "test_ready_interval_randomized uses a generous range (15-55 in 100 ticks) to account for PRNG variance. The theoretical range for interval (2,5) in 100 ticks is exactly 20-50, so the test has 5 ticks of margin on each side. This is reasonable for a deterministic PRNG but could be flaky if the PRNG seed changes. The test passed on verification, so this is acceptable."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The architecture.md in .factory/library/ states 'All workspace crates are #![no_std] with extern crate alloc', but launa-sim does NOT use #![no_std] — it's a standard Rust crate that can use std::collections and other std types. The worker's transcript shows they initially tried alloc::collections::BTreeSet in tests and had to fix it to std::collections::BTreeSet. The library doc should be updated to note that launa-sim is an exception (it's a desktop-only simulation crate).",
+      "evidence": "architecture.md line: 'All workspace crates are #![no_std] with extern crate alloc'. launa-sim/src/lib.rs has no #![no_std] attribute. Worker transcript shows error with alloc::collections and fix to std::collections."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The implementation cleanly adds three simulation realism features (frame jitter, command latency, ready interval) to SpaSim. All features default to preserving current behavior. The design is well-structured: new fields, setter methods, PRNG helpers, and a refactored standalone toggle function for use in deferred closures. 9 tests cover defaults, each feature individually, and interactions — exceeding the minimum of 6. All 63 launa-sim tests pass. Minor non-blocking observations about PRNG coupling between jitter/ready interval, and the architecture.md inaccuracy about all crates being no_std."
+}
