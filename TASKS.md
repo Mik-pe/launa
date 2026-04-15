@@ -133,8 +133,8 @@ The hand-rolled MQTT client in `app/src/mqtt_client.rs` had multiple protocol bu
 
 - [x] **MQTT WiFi-reconnect loop has no backoff or attempt cap** (`app/src/main.rs`): Added exponential backoff (5s → 10s → 20s → 40s → 60s cap), max 10 attempts logged as critical, alert after 3 failures throttled to once per 60s.
 - [x] **Alert spam during persistent MQTT failures** (`app/src/main.rs`): Added 60-second throttle on alert publishing in both WiFi-reconnect and MQTT-loss reconnect loops. Only one alert per 60s window.
-- [ ] **OTA: IP-only resolution, no DNS** (`app/src/ota.rs`): `parse_ip()` only handles dotted-quad IPv4. If the OTA URL contains a hostname, OTA fails silently. This limits OTA to LAN IP addresses only. At minimum, document this limitation; ideally add a simple DNS lookup via embassy-net.
-- [ ] **MQTT `reconnect()` leaks old socket's static buffers** (`app/src/mqtt_client.rs`): Each `reconnect()` call creates new `mk_static!` TCP buffers. The old socket's buffers become leaked static memory that can never be reclaimed on a 32 KiB heap. After multiple reconnects, this could exhaust memory.
+- [x] **OTA: IP-only resolution, no DNS** (`app/src/ota.rs`): Documented limitation. Module doc comment explains IP-only restriction. Error message now explicitly states hostnames are unsupported and suggests using an IP address. DNS lookup deferred (embassy-net DNS not available on this stack).
+- [x] **MQTT `reconnect()` leaks old socket's static buffers** (`app/src/mqtt_client.rs`): Fixed — TCP socket buffers (`rx_buf`/`tx_buf`) allocated once in `connect()` and stored as struct fields. `reconnect()` drops old transport via `Option::take()`, then reborrows the stored buffers for a new `TcpSocket`. No more per-reconnect memory leak.
 - [x] **`DIAGNOSTICS_START` is `unsafe static mut` accessed from multiple tasks** (`app/src/main.rs`): Replaced `static mut DIAGNOSTICS_START: Option<Instant>` with `static DIAGNOSTICS_START_SECS: AtomicU32` and safe `uptime_secs()` helper. Removed all unsafe accesses for diagnostics.
 - [x] **MQTT SUBACK read discards result** (`app/src/mqtt_client.rs`): `subscribe()` now validates SUBACK: checks packet type 0x90, verifies packet ID match, parses MQTT v5 property length, and rejects return code 0x80 (subscription failure).
 
@@ -144,7 +144,26 @@ The hand-rolled MQTT client in `app/src/mqtt_client.rs` had multiple protocol bu
 - [x] **Duplicate `parse_ip()` function in 2 files** (`app/src/ota.rs`, `app/src/mqtt_client.rs`): Moved to `app/src/net_util.rs`. Both files now use `net_util::parse_ip`.
 - [x] **`ota_rx` receiver recreated inside main loop every iteration** (`app/src/main.rs`): Moved to before the loop alongside `frame_rx` and `cmd_rx`.
 - [x] **`parse_ip` accepts malformed input** (`app/src/ota.rs`, `app/src/mqtt_client.rs`): Fixed — now validates exactly 4 dot-separated octets via `split('.')` count check instead of `filter_map`. `"1.2.3.4.5"` and `"999.1.1.1"` are correctly rejected.
-- [ ] **Registration timeout `registration_started_at` leak** (`app/src/main.rs`): If `registration_started_at` is set but `is_registered()` becomes true between checks, the `Some` value persists indefinitely. Harmless in practice since `SendIdAck` clears it, but inconsistent.
+- [x] **Registration timeout `registration_started_at` leak** (`app/src/main.rs`): Fixed — added `else` branch to clear `registration_started_at = None` when `is_registered()` is true in the main loop.
+
+## Code Review: xtask (2026-04-15)
+
+All 10 xtask subcommands compile clean. Config validation, arg parsing, and error handling are solid. Below are issues found.
+
+### Moderate
+
+- [ ] **`ota-flash` uses `config.mqtt.host` as the OTA server bind address** (`xtask/src/ota_flash.rs:99`): The firmware URL is `http://{mqtt.host}:{ota_port}/firmware.bin`. The OTA HTTP server binds `0.0.0.0:{ota_port}`, but the URL tells the ESP32 to connect to the MQTT broker IP. This only works if the OTA server and MQTT broker are on the same machine. If the broker is on a different host, the ESP32 will try to download firmware from the broker IP where no HTTP server is running. Fix: add an `[ota] host = "192.168.1.X"` field to `launa.toml`, defaulting to `mqtt.host` for backward compat.
+- [ ] **`ota-flash` does not pass `--partition-table` to `espflash save-image`** (`xtask/src/ota_flash.rs`): The `cargo espflash save-image` command does not include `--partition-table ../partitions.csv`. Without this, `espflash` uses the default ESP32 partition table (no OTA slots). The resulting `.bin` may not have the correct partition layout for OTA. The `flash` command has the same issue. Both need `--partition-table` to produce a valid dual-OTA image.
+- [ ] **`ota-flash` sends `"feature"` field in OTA payload** (`xtask/src/ota_flash.rs:107-110`): The MQTT payload includes `{"url": "...", "feature": "sniff"}`, but the ESP32 `parse_ota_url()` only extracts the `"url"` key. The extra field is harmless (ignored), but it's dead data that could confuse debugging. Remove the `"feature"` field from the payload.
+
+### Minor
+
+- [ ] **`flash.rs` hardcodes `--chip esp32` without `--partition-table`** (`xtask/src/flash.rs`): First USB flash must use the custom partition table. Without `--partition-table partitions.csv`, the default ESP32 partition table is flashed, which has no `otadata`/`ota_0`/`ota_1` partitions. OTA will not work until the correct table is flashed. Add `--partition-table ../partitions.csv` to the `espflash flash` command.
+- [ ] **`self_test.rs` hardcodes `--chip esp32` without `--partition-table`** (`xtask/src/self_test.rs`): Same issue as `flash.rs`.
+- [ ] **`monitor` defaults to `COM3` instead of reading from config** (`xtask/src/monitor.rs:6`): Hardcoded `let mut port_name = "COM3".to_string()`. All other commands (`self-test`, `config-flash`) fall back to `launa.toml`'s `device.serial_port`. Monitor should do the same for consistency.
+- [ ] **`ota-flash` waits for `launa/{device_id}/status` topic that doesn't exist** (`xtask/src/ota_flash.rs:119`): Subscribes to `launa/{device_id}/status` to detect the device coming back online, but the firmware publishes to `launa/{device_id}/state` (set via `TopicBuilder::state_topic()`). Should subscribe to `launa/{device_id}/state` or `launa/{device_id}/availability` instead.
+- [ ] **`config_flash.rs` sends config as text lines over serial, but ESP32 has no text config parser** (`xtask/src/config_flash.rs`): Sends `CONFIG_START`, `wifi.ssid=...`, etc. over serial at 115200 baud, expecting a `CONFIG_OK` response. But `app/` reads config from NVS via `esp_nvs`, not from serial text input. There's no serial config parser in the firmware. This command will hang waiting for `CONFIG_OK` that never comes. Either implement a serial config receiver in the firmware (e.g., in `hw-test` feature mode), or change `config-flash` to use `espflash` NVS write APIs directly.
+- [ ] **`sniff_decode.rs` has off-by-one in `hex_to_bytes`** (`xtask/src/sniff_decode.rs`): The `step_by(2)` loop with `i.saturating_add(2).min(hex.len())` can produce single-char slices when the input has odd length. The `filter_map` handles the parse failure, silently dropping the trailing nibble. This is unlikely to cause real issues (sniff payloads should be even-length hex), but worth noting.
 
 ## P0: Production Blockers
 

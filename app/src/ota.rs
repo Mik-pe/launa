@@ -5,6 +5,12 @@
 //!
 //! OTA HTTP download is performed over embassy-net TCP. The firmware is downloaded
 //! in chunks, skipping HTTP headers, and written directly to the target OTA partition.
+//!
+//! # Limitation: IP-only resolution (no DNS)
+//!
+//! The OTA URL must contain a dotted-quad IPv4 address (e.g. `http://192.168.1.100:8080/firmware.bin`).
+//! Hostnames are **not** resolved — there is no DNS lookup. If a hostname is provided,
+//! OTA will fail with a clear error message. This restricts OTA to LAN IP addresses only.
 
 extern crate alloc;
 
@@ -62,11 +68,16 @@ pub async fn perform_ota_update(
     let mut socket = TcpSocket::new(*stack, rx_buf, tx_buf);
     socket.set_timeout(Some(Duration::from_secs(30)));
 
-    // Resolve host IP
+    // Resolve host IP (no DNS — only dotted-quad IPv4 is supported)
     let addr = match net_util::parse_ip(&host) {
         Some(a) => a,
         None => {
-            error!("OTA: cannot resolve host IP: {}", host);
+            error!(
+                "OTA: hostname '{}' is not a valid IPv4 address. \
+                 Only dotted-quad IPs are supported (no DNS). \
+                 Use an IP address like http://192.168.1.100:8080/firmware.bin",
+                host
+            );
             return Err(());
         }
     };

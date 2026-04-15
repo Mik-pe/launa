@@ -75,8 +75,12 @@ impl Write for TcpTransport {
 const DEFAULT_KEEP_ALIVE_SECS: u16 = 30;
 
 pub struct MqttClient {
-    transport: TcpTransport,
+    transport: Option<TcpTransport>,
     stack: &'static Stack<'static>,
+    /// TCP socket buffers allocated once and reused across reconnects.
+    /// Without this, each reconnect leaks 2 KiB of static memory (32 KiB heap).
+    socket_rx_buf: &'static mut [u8; 1024],
+    socket_tx_buf: &'static mut [u8; 1024],
     pub device_id: String,
     keep_alive: u16,
     config_host: String,
@@ -137,9 +141,17 @@ impl MqttClient {
         stack: &'static Stack<'static>,
         config: &AppConfig,
     ) -> Result<Self, MqttError> {
-        let rx_buf = mk_static!([u8; 1024], [0u8; 1024]);
-        let tx_buf = mk_static!([u8; 1024], [0u8; 1024]);
-        let mut socket = TcpSocket::new(*stack, rx_buf, tx_buf);
+        // Allocate socket buffers once — reused across reconnects to avoid
+        // leaking static memory on the 32 KiB heap.
+        let socket_rx_buf = mk_static!([u8; 1024], [0u8; 1024]);
+        let socket_tx_buf = mk_static!([u8; 1024], [0u8; 1024]);
+
+        // SAFETY: This is the first and only borrow of these buffers at this
+        // point. The TcpSocket borrows them, and when it's dropped in
+        // reconnect(), we'll reborrow from the stored fields.
+        let rx: &'static mut [u8] = unsafe { &mut *(socket_rx_buf as *mut [u8; 1024] as *mut [u8]) };
+        let tx: &'static mut [u8] = unsafe { &mut *(socket_tx_buf as *mut [u8; 1024] as *mut [u8]) };
+        let mut socket = TcpSocket::new(*stack, rx, tx);
         socket.set_timeout(Some(Duration::from_secs(10)));
 
         let addr = net_util::parse_ip(&config.mqtt_host).unwrap_or([192, 168, 1, 100]);
@@ -156,8 +168,10 @@ impl MqttClient {
         let transport = TcpTransport::new(socket);
 
         let mut client = MqttClient {
-            transport,
+            transport: Some(transport),
             stack,
+            socket_rx_buf,
+            socket_tx_buf,
             device_id: config.device_id.clone(),
             keep_alive: DEFAULT_KEEP_ALIVE_SECS,
             config_host: config.mqtt_host.clone(),
@@ -193,7 +207,8 @@ impl MqttClient {
     }
 
     async fn send_bytes(&mut self, data: &[u8]) -> Result<(), MqttError> {
-        self.transport.write_all(data).await.map_err(|_| MqttError::PublishFailed)?;
+        let transport = self.transport.as_mut().ok_or(MqttError::PublishFailed)?;
+        transport.write_all(data).await.map_err(|_| MqttError::PublishFailed)?;
         self.last_outgoing = Instant::now();
         Ok(())
     }
@@ -210,9 +225,19 @@ impl MqttClient {
     pub async fn reconnect(&mut self) -> Result<(), MqttError> {
         info!("MQTT reconnecting to {}:{}...", self.config_host, self.config_port);
 
-        let rx_buf = mk_static!([u8; 1024], [0u8; 1024]);
-        let tx_buf = mk_static!([u8; 1024], [0u8; 1024]);
-        let mut socket = TcpSocket::new(*self.stack, rx_buf, tx_buf);
+        // Drop old transport first — this drops the old TcpSocket and releases
+        // its borrow on the shared socket buffers.
+        self.transport.take();
+
+        // SAFETY: The old TcpSocket was dropped above. We are the only task
+        // accessing these buffers. Reborrow them for the new socket.
+        let rx: &'static mut [u8] = unsafe {
+            &mut *(self.socket_rx_buf as *mut [u8; 1024] as *mut [u8])
+        };
+        let tx: &'static mut [u8] = unsafe {
+            &mut *(self.socket_tx_buf as *mut [u8; 1024] as *mut [u8])
+        };
+        let mut socket = TcpSocket::new(*self.stack, rx, tx);
         socket.set_timeout(Some(Duration::from_secs(10)));
 
         let addr = net_util::parse_ip(&self.config_host).unwrap_or([192, 168, 1, 100]);
@@ -226,7 +251,7 @@ impl MqttClient {
             MqttError::ConnectionFailed
         })?;
 
-        self.transport = TcpTransport::new(socket);
+        self.transport = Some(TcpTransport::new(socket));
         self.rx_buffer.clear();
         self.next_packet_id = 1;
         self.last_outgoing = Instant::now();
@@ -289,7 +314,8 @@ impl MqttClient {
         self.send_bytes(&packet).await.map_err(|_| MqttError::ConnectionFailed)?;
 
         let mut buf = [0u8; 64];
-        let n = self.transport.read(&mut buf).await.map_err(|_| MqttError::ConnectionFailed)?;
+        let transport = self.transport.as_mut().ok_or(MqttError::ConnectionFailed)?;
+        let n = transport.read(&mut buf).await.map_err(|_| MqttError::ConnectionFailed)?;
         if n < 4 || buf[0] != 0x20 {
             error!("MQTT CONNACK unexpected: {:?}", &buf[..n]);
             return Err(MqttError::ConnectionFailed);
@@ -346,7 +372,8 @@ impl MqttClient {
         self.send_bytes(&packet).await.map_err(|_| MqttError::SubscribeFailed)?;
 
         let mut buf = [0u8; 64];
-        let n = match self.transport.read(&mut buf).await {
+        let transport = self.transport.as_mut().ok_or(MqttError::SubscribeFailed)?;
+        let n = match transport.read(&mut buf).await {
             Ok(n) => n,
             Err(_) => {
                 warn!("MQTT SUBACK read failed");
@@ -416,7 +443,11 @@ impl MqttClient {
             }
 
             let mut buf = [0u8; 512];
-            let n = match self.transport.read(&mut buf).await {
+            let transport = match self.transport.as_mut() {
+                Some(t) => t,
+                None => return None,
+            };
+            let n = match transport.read(&mut buf).await {
                 Ok(0) => {
                     Timer::after(Duration::from_millis(10)).await;
                     continue;

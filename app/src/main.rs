@@ -670,6 +670,9 @@ async fn main(spawner: Spawner) {
                     registration_started_at = None;
                 }
             }
+        } else {
+            // Clear if registered through a path other than SendIdAck
+            registration_started_at = None;
         }
 
         // ── OTA update handling ─────────────────────────────────────
