@@ -4,7 +4,7 @@
 
 #[cfg(test)]
 mod tests {
-    use launa_ota::OtaUpdate;
+    use launa_ota::{OtaError, OtaUpdate};
     use launa_protocol::command::{Command, ToggleItem};
     use launa_protocol::config::PumpConfig;
     use launa_protocol::crc8;
@@ -432,7 +432,7 @@ mod tests {
         let builder = launa_mqtt::discovery::DiscoveryBuilder::new("test_spa_001");
         let configs = builder.build();
 
-        assert_eq!(configs.len(), 18);
+        assert_eq!(configs.len(), 20);
 
         for (topic, json_str) in &configs {
             let _: serde_json::Value = serde_json::from_str(json_str)
@@ -1096,8 +1096,8 @@ mod tests {
 
         assert_eq!(
             configs.len(),
-            18,
-            "should produce exactly 18 discovery configs"
+            20,
+            "should produce exactly 20 discovery configs"
         );
 
         let mut topics_seen = std::collections::HashSet::new();
@@ -1157,12 +1157,24 @@ mod tests {
                 uid
             );
 
-            // state_topic must be the device state topic
+            // state_topic must be the device state topic (or a dedicated topic for diagnostics/alert)
             let st = v["state_topic"].as_str().unwrap();
-            assert_eq!(
-                st, "launa/test_spa/state",
-                "state_topic should match device state topic"
-            );
+            let uid = v["unique_id"].as_str().unwrap();
+            let is_dedicated_topic = uid.ends_with("_diagnostics") || uid.ends_with("_alert");
+            if !is_dedicated_topic {
+                assert_eq!(
+                    st, "launa/test_spa/state",
+                    "state_topic should match device state topic for {}",
+                    uid
+                );
+            } else {
+                // Dedicated topics should still be under the device namespace
+                assert!(
+                    st.starts_with("launa/test_spa/"),
+                    "dedicated state_topic should be under device namespace: {}",
+                    st
+                );
+            }
 
             // availability_topic must match
             let at = v["availability_topic"].as_str().unwrap();
@@ -1216,5 +1228,209 @@ mod tests {
         let cmd = Command::NothingToSend { client_id: 0x03 };
         let (mt, _) = cmd.encode();
         assert_eq!(mt, [0x03, 0xBF]);
+    }
+
+    // ========================================================================
+    // Test Group H: OTA Integration Tests
+    // ========================================================================
+    //
+    // Integration-level OTA tests that exercise the full OTA flow end-to-end
+    // on desktop, simulating HTTP firmware download from memory and writing
+    // through the OtaUpdate trait via MockOta.
+
+    /// Simulates an HTTP firmware download server that serves firmware data
+    /// in configurable chunk sizes, mimicking how the real OTA downloads
+    /// firmware over a TCP socket.
+    struct SimHttpServer {
+        firmware: Vec<u8>,
+        chunk_size: usize,
+    }
+
+    impl SimHttpServer {
+        fn new(firmware: Vec<u8>, chunk_size: usize) -> Self {
+            SimHttpServer {
+                firmware,
+                chunk_size,
+            }
+        }
+
+        /// Simulate downloading all firmware chunks from the server.
+        /// Returns each chunk as if read from a TCP socket.
+        fn download_chunks(&self) -> Vec<Vec<u8>> {
+            let mut chunks = Vec::new();
+            let mut offset = 0;
+            while offset < self.firmware.len() {
+                let end = (offset + self.chunk_size).min(self.firmware.len());
+                chunks.push(self.firmware[offset..end].to_vec());
+                offset = end;
+            }
+            chunks
+        }
+    }
+
+    /// Simulate an OTA download-and-write pipeline: download chunks from
+    /// a simulated HTTP server and write each chunk through the OtaUpdate trait.
+    fn simulate_ota_download(
+        ota: &mut dyn OtaUpdate,
+        server: &SimHttpServer,
+    ) -> Result<(), OtaError> {
+        ota.begin()?;
+        for chunk in server.download_chunks() {
+            ota.write(&chunk)?;
+        }
+        ota.finalize()
+    }
+
+    #[test]
+    fn test_ota_basic_flow() {
+        let mut ota = launa_ota::mock::MockOta::new();
+
+        // Simulate a 4 KiB firmware image served in 1 KiB chunks
+        let firmware: Vec<u8> = (0..4096).map(|i| (i % 256) as u8).collect();
+        let server = SimHttpServer::new(firmware.clone(), 1024);
+
+        // Full OTA pipeline: download → write → finalize → mark valid
+        simulate_ota_download(&mut ota, &server).unwrap();
+        ota.mark_valid().unwrap();
+
+        // Verify the OTA state
+        assert!(ota.finalized, "OTA should be finalized");
+        assert!(ota.valid, "OTA should be marked valid");
+        assert_eq!(ota.firmware_data.len(), 4096);
+        assert_eq!(ota.firmware_data, firmware, "firmware data should match");
+    }
+
+    #[test]
+    fn test_ota_rollback() {
+        let mut ota = launa_ota::mock::MockOta::new();
+
+        let firmware: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let server = SimHttpServer::new(firmware.clone(), 256);
+
+        // Simulate OTA update completing but firmware failing to boot
+        simulate_ota_download(&mut ota, &server).unwrap();
+        assert!(ota.finalized);
+        assert!(!ota.valid, "should NOT be valid before mark_valid");
+
+        // Firmware crashes before mark_valid — trigger rollback
+        ota.rollback_and_reboot().unwrap();
+        assert!(ota.rolled_back, "should have rolled back");
+        assert!(
+            !ota.valid,
+            "firmware should still be invalid after rollback"
+        );
+    }
+
+    #[test]
+    fn test_ota_write_failure() {
+        /// A MockOta variant that fails after N bytes written, simulating
+        /// a flash write error mid-transfer.
+        struct FailingOta {
+            inner: launa_ota::mock::MockOta,
+            max_bytes: usize,
+            failed: bool,
+        }
+
+        impl FailingOta {
+            fn new(max_bytes: usize) -> Self {
+                FailingOta {
+                    inner: launa_ota::mock::MockOta::new(),
+                    max_bytes,
+                    failed: false,
+                }
+            }
+        }
+
+        impl OtaUpdate for FailingOta {
+            fn begin(&mut self) -> Result<(), OtaError> {
+                self.inner.begin()
+            }
+            fn write(&mut self, chunk: &[u8]) -> Result<(), OtaError> {
+                if self.failed || self.inner.firmware_data.len() + chunk.len() > self.max_bytes {
+                    self.failed = true;
+                    return Err(OtaError::WriteFailed);
+                }
+                self.inner.write(chunk)
+            }
+            fn finalize(&mut self) -> Result<(), OtaError> {
+                self.inner.finalize()
+            }
+            fn mark_valid(&mut self) -> Result<(), OtaError> {
+                self.inner.mark_valid()
+            }
+            fn rollback_and_reboot(&mut self) -> Result<(), OtaError> {
+                self.inner.rollback_and_reboot()
+            }
+        }
+
+        let mut ota = FailingOta::new(512);
+
+        // 1 KiB firmware but only 512 bytes allowed — should fail
+        let firmware: Vec<u8> = (0..1024).map(|i| (i % 256) as u8).collect();
+        let server = SimHttpServer::new(firmware, 256);
+
+        // Attempt OTA — should fail during write
+        let result = simulate_ota_download(&mut ota, &server);
+        assert!(result.is_err(), "OTA should fail when write fails");
+        assert!(ota.failed, "should have recorded the failure");
+        assert!(
+            !ota.inner.finalized,
+            "should not be finalized after failure"
+        );
+    }
+
+    #[test]
+    fn test_ota_chunked_writes() {
+        let mut ota = launa_ota::mock::MockOta::new();
+
+        // 8 KiB firmware with various chunk sizes to simulate realistic HTTP
+        let firmware: Vec<u8> = (0..8192).map(|i| ((i * 7 + 13) % 256) as u8).collect();
+
+        // Use multiple chunk sizes to simulate realistic network behavior
+        let chunk_sizes = [512, 1024, 1460, 256, 4096];
+
+        ota.begin().unwrap();
+        let mut offset = 0;
+        for (round, &chunk_size) in chunk_sizes.iter().cycle().enumerate() {
+            if offset >= firmware.len() {
+                break;
+            }
+            let end = (offset + chunk_size).min(firmware.len());
+            let chunk = &firmware[offset..end];
+            ota.write(chunk).unwrap();
+            offset = end;
+
+            // Sanity: shouldn't take more than 100 rounds for 8 KiB
+            assert!(round < 100, "too many rounds, likely infinite loop");
+        }
+        ota.finalize().unwrap();
+        ota.mark_valid().unwrap();
+
+        // Verify assembled firmware is exactly what we wrote
+        assert_eq!(ota.firmware_data.len(), 8192);
+        assert_eq!(ota.firmware_data, firmware);
+    }
+
+    #[test]
+    fn test_ota_empty_firmware() {
+        let mut ota = launa_ota::mock::MockOta::new();
+
+        // Edge case: zero-length firmware
+        let firmware: Vec<u8> = Vec::new();
+        let server = SimHttpServer::new(firmware.clone(), 1024);
+
+        ota.begin().unwrap();
+        // No chunks to write — download_chunks returns empty vec
+        let chunks = server.download_chunks();
+        assert!(chunks.is_empty(), "empty firmware should yield no chunks");
+        for chunk in &chunks {
+            ota.write(chunk).unwrap();
+        }
+        ota.finalize().unwrap();
+        ota.mark_valid().unwrap();
+
+        assert!(ota.finalized);
+        assert!(ota.valid);
+        assert!(ota.firmware_data.is_empty());
     }
 }

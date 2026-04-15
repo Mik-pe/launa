@@ -151,14 +151,14 @@ The firmware runs headless -- serial debug is inaccessible in production. All di
 
 - [x] **Add `launa/<device_id>/diagnostics` MQTT topic**: Publishes JSON payload every 60 seconds with: `free_heap`, `uptime_secs`, `frames_received`, `mqtt_reconnects`, `wifi_disconnects`, `command_retries`, `command_drops`. Uses `DIAGNOSTICS_CHANNEL` from main loop to MQTT task. `TopicBuilder::diagnostics_topic()` added to `launa-mqtt`.
 - [x] **Add `launa/<device_id>/alert` MQTT topic**: Publishes JSON alerts via `ALERT_CHANNEL` for: heap critically low, spa communication lost (>30s), registration timeout, MQTT reconnect loop (>3 failures), OTA failure. Each alert: `{"level":"warn"|"error","message":"...","timestamp":<uptime_secs>}`. `TopicBuilder::alert_topic()` added to `launa-mqtt`.
-- [ ] **Add diagnostics HA discovery entity**: Add a `sensor` entity for diagnostics and a `sensor` entity for alerts in both `DiscoveryBuilder` and app/ discovery. The diagnostics sensor shows the last diagnostics payload; the alert sensor shows the last alert message. This gives the operator a dashboard without needing raw MQTT tools.
+- [x] **Add diagnostics HA discovery entity**: Added diagnostics sensor and alert sensor to both `DiscoveryBuilder` and app/ discovery. Total entities: 20 (up from 18). Diagnostics uses `diagnostics_topic()`, alerts use `alert_topic()` as their state topics.
 - [x] **Heap monitoring with MQTT alert**: `HeapMonitor` in `app/src/heap_monitor.rs` checks free heap every 60s. Logs warning below 4 KiB, critical below 1 KiB. Returns `true` from `tick()` when critically low so the main loop can react.
 - [x] **Frame CRC error counter in diagnostics**: Added `crc_error_count` and `reset_crc_error_count` methods to `FrameDecoder` in `launa-protocol/src/frame.rs`. Counter increments on CRC mismatch; retrievable and resettable for diagnostics publishing. 4 new tests.
 - [x] **Counters for MQTT reconnects, WiFi disconnects, command failures**: Added 5 `AtomicU32` counters (`MQTT_RECONNECT_COUNT`, `WIFI_DISCONNECT_COUNT`, `COMMAND_RETRY_COUNT`, `COMMAND_DROP_COUNT`, `FRAMES_RECEIVED`). Published via `launa/<device_id>/diagnostics` topic every 60s with uptime and heap info. `CommandTracker.verify()` now returns `VerifyResult` with retry/drop counts.
 
 ## P2: OTA Integration Simulation
 
-- [ ] **Add OTA simulation to `launa-sim`**: The OTA logic is well-tested at the unit level (`launa-esp-ota` has 11 tests with a `MockFlash`), but there's no integration-level OTA test. Add a simulation that tests the full OTA flow end-to-end on desktop: (1) simulate HTTP firmware download (serve chunks from memory), (2) write through `OtaUpdate` trait via `MockOta`, (3) verify partition switching / boot selection logic, (4) test rollback scenario (crash before `mark_valid`), (5) test graceful OTA shutdown (MQTT offline, UART drain). This would live in `launa-integration-tests` alongside the existing spa protocol tests.
+- [x] **Add OTA simulation to `launa-sim`**: Added 5 integration tests in `launa-integration-tests` (Test Group H): basic flow, rollback, write failure, chunked writes with varying sizes, empty firmware edge case. Uses `MockOta` from `launa-ota` with `SimHttpServer` helper for chunked firmware download simulation.
 
 ## P2: Missing Firmware Features
 

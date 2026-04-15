@@ -285,6 +285,36 @@ impl DiscoveryBuilder {
             retain: false,
         });
 
+        // Diagnostics sensor
+        configs.push(DiscoveryMessage {
+            topic: topics.discovery_topic("sensor", "diagnostics"),
+            payload: json!({
+                "device": device_info,
+                "origin": origin,
+                "name": "Diagnostics",
+                "unique_id": format!("{}_diagnostics", self.device_id),
+                "state_topic": topics.diagnostics_topic(),
+                "availability_topic": avail_topic,
+            })
+            .to_string(),
+            retain: false,
+        });
+
+        // Alert sensor
+        configs.push(DiscoveryMessage {
+            topic: topics.discovery_topic("sensor", "alert"),
+            payload: json!({
+                "device": device_info,
+                "origin": origin,
+                "name": "Alert",
+                "unique_id": format!("{}_alert", self.device_id),
+                "state_topic": topics.alert_topic(),
+                "availability_topic": avail_topic,
+            })
+            .to_string(),
+            retain: false,
+        });
+
         configs
     }
 
@@ -422,7 +452,7 @@ mod tests {
         let builder = DiscoveryBuilder::new("test_spa_001");
         let configs = builder.build();
 
-        assert_eq!(configs.len(), 18);
+        assert_eq!(configs.len(), 20);
 
         for (topic, json_str) in &configs {
             let _: serde_json::Value = serde_json::from_str(json_str)
@@ -435,7 +465,7 @@ mod tests {
         let builder = DiscoveryBuilder::new("test_spa_001");
         let messages = builder.build_with_retain();
 
-        assert_eq!(messages.len(), 18);
+        assert_eq!(messages.len(), 20);
         for msg in &messages {
             assert!(msg.retain, "discovery messages should have retain=true");
             let _: serde_json::Value = serde_json::from_str(&msg.payload)

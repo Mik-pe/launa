@@ -572,6 +572,14 @@ impl MqttClient {
                 r#"{{"device":{},"name":"Last Fault","unique_id":"{}_fault","state_topic":"{}","value_template":"{{{{value_json.last_fault}}}}","availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, avail_topic
             )),
+            ("sensor".into(), "diagnostics".into(), format!(
+                r#"{{"device":{},"name":"Diagnostics","unique_id":"{}_diagnostics","state_topic":"{}","availability_topic":"{}"}}"#,
+                device_info, device_id, topics.diagnostics_topic(), avail_topic
+            )),
+            ("sensor".into(), "alert".into(), format!(
+                r#"{{"device":{},"name":"Alert","unique_id":"{}_alert","state_topic":"{}","availability_topic":"{}"}}"#,
+                device_info, device_id, topics.alert_topic(), avail_topic
+            )),
         ]);
 
         for (component, object_id, payload) in &configs {
