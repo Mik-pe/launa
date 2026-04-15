@@ -265,12 +265,18 @@ fn print_entry(entry: &SniffEntry) {
 }
 
 fn hex_to_bytes(hex: &str) -> Vec<u8> {
-    let hex = hex.trim_start_matches("0x").trim_start_matches("0X");
+    let hex = hex.trim().trim_start_matches("0x").trim_start_matches("0X");
+    let hex = if hex.len() % 2 != 0 {
+        // Odd-length: prepend '0' so "1A3B5" becomes "01A3B5"
+        let mut padded = String::with_capacity(hex.len() + 1);
+        padded.push('0');
+        padded.push_str(hex);
+        padded
+    } else {
+        hex.to_string()
+    };
     (0..hex.len())
         .step_by(2)
-        .filter_map(|i| {
-            let byte_str = &hex[i..i.saturating_add(2).min(hex.len())];
-            u8::from_str_radix(byte_str, 16).ok()
-        })
+        .filter_map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
         .collect()
 }

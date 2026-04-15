@@ -3,14 +3,14 @@ use std::io::Read;
 use std::time::{Duration, Instant};
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
-    let mut port_name = "COM3".to_string();
+    let mut port_name = None;
     let mut duration_secs = 10u64;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--port" => {
                 i += 1;
-                port_name = args[i].clone();
+                port_name = Some(args[i].clone());
             }
             "--duration" => {
                 i += 1;
@@ -20,6 +20,11 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         }
         i += 1;
     }
+
+    let config = crate::config::load().ok();
+    let port_name = port_name
+        .or_else(|| config.map(|c| c.device.serial_port.clone()))
+        .unwrap_or_else(|| "COM3".to_string());
 
     let port = serialport::new(&port_name, 115200)
         .timeout(Duration::from_millis(100))

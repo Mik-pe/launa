@@ -31,6 +31,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let app_dir = project_root().join("app");
     let mut cmd = Command::new("cargo");
     cmd.arg("espflash").arg("flash").arg("--chip").arg("esp32");
+    cmd.arg("--partition-table").arg("partitions.csv");
 
     if let Some(ref f) = feature {
         cmd.arg("--features").arg(f);

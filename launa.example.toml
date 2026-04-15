@@ -22,3 +22,4 @@ serial_port = "COM3"           # required for USB flash commands
 
 [ota]
 serve_port = 8080              # optional, default 8080 — port for local OTA HTTP server
+host = ""                      # optional, default empty (uses mqtt.host) — OTA server address if different from MQTT broker

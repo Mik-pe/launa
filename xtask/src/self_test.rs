@@ -39,6 +39,8 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             "flash",
             "--chip",
             "esp32",
+            "--partition-table",
+            "partitions.csv",
             "--features",
             "hw-test",
             "-p",

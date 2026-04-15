@@ -60,7 +60,9 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         .arg("espflash")
         .arg("save-image")
         .arg("--chip")
-        .arg("esp32");
+        .arg("esp32")
+        .arg("--partition-table")
+        .arg("partitions.csv");
     if feature != "default" {
         build_cmd.arg("--features").arg(&feature);
     }
@@ -96,7 +98,12 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     // Step 4: Publish OTA command via MQTT
     println!("\n[4/6] Publishing OTA command via MQTT...");
-    let firmware_url = format!("http://{}:{}/firmware.bin", config.mqtt.host, ota_port);
+    let ota_host = if config.ota.host.is_empty() {
+        &config.mqtt.host
+    } else {
+        &config.ota.host
+    };
+    let firmware_url = format!("http://{}:{}/firmware.bin", ota_host, ota_port);
 
     let mut mqttoptions = rumqttc::MqttOptions::new(
         format!("xtask-ota-flash-{}", device_id),
@@ -109,7 +116,6 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     let payload = serde_json::json!({
         "url": firmware_url,
-        "feature": feature,
     });
     let topic = format!("launa/{}/ota", device_id);
     client
@@ -124,7 +130,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     // Step 5: Wait for device to come back online
     println!("\n[5/6] Waiting for device to come back online (timeout 120s)...");
-    let status_topic = format!("launa/{}/status", device_id);
+    let status_topic = format!("launa/{}/state", device_id);
     client.subscribe(&status_topic, rumqttc::QoS::AtLeastOnce)?;
 
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
@@ -136,7 +142,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         }
         match notification {
             Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
-                if publish.topic.contains(&device_id) && publish.topic.contains("status") {
+                if publish.topic.contains(&device_id) && publish.topic.contains("state") {
                     came_online = true;
                     println!("Device {} is back online!", device_id);
                     break;
