@@ -51,21 +51,55 @@ impl Write for Rs485Transport {
         // Assert DE pin for transmit
         if let Some(ref mut de) = self.de_pin {
             de.set_high();
-            // Let RS-485 transceiver switch direction
             Timer::after(Duration::from_micros(50)).await;
         }
 
-        let result = self.uart.write(buf).map_err(|_| TransportError);
+        let n = self.uart.write(buf).map_err(|e| {
+            log::warn!("UART write error: {:?}", e);
+            TransportError
+        })?;
 
-        // Flush TX to ensure all bytes are on the wire
+        // Flush TX FIFO + shift register to ensure all bytes are on the wire
+        // before releasing DE pin. esp-hal flush() blocks until TX is complete.
         let _ = self.uart.flush();
 
-        // Release DE pin
         if let Some(ref mut de) = self.de_pin {
             de.set_low();
         }
 
-        trace!("UART wrote {} bytes", buf.len());
-        result
+        trace!("UART wrote {} bytes", n);
+        Ok(n)
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        self.uart.flush().map_err(|_| TransportError)
+    }
+
+    // Override default write_all to keep DE pin asserted for the entire
+    // operation, avoiding glitches on the RS-485 bus from per-chunk toggle.
+    async fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+        if let Some(ref mut de) = self.de_pin {
+            de.set_high();
+            Timer::after(Duration::from_micros(50)).await;
+        }
+
+        let mut written = 0;
+        while written < buf.len() {
+            let n = self.uart.write(&buf[written..]).map_err(|e| {
+                log::warn!("UART write error at offset {}: {:?}", written, e);
+                TransportError
+            })?;
+            written += n;
+        }
+
+        // Flush TX FIFO + shift register before releasing DE
+        let _ = self.uart.flush();
+
+        if let Some(ref mut de) = self.de_pin {
+            de.set_low();
+        }
+
+        trace!("UART wrote all {} bytes", buf.len());
+        Ok(())
     }
 }

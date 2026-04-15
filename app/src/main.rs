@@ -42,7 +42,7 @@ esp_alloc::heap_allocator!(size: 32 * 1024);
 static FRAME_CHANNEL: Channel<CriticalSectionRawMutex, Frame, 4> = Channel::new();
 static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
 static UART_TX_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
-static STATE_CHANNEL: Channel<CriticalSectionRawMutex, StatusUpdate, 2> = Channel::new();
+static STATE_CHANNEL: Channel<CriticalSectionRawMutex, (StatusUpdate, Option<alloc::string::String>), 2> = Channel::new();
 static PUMP_TIMER_CHANNEL: Channel<CriticalSectionRawMutex, (u8, u32), 4> = Channel::new();
 
 // ── Combined UART task (reads frames + writes outgoing bytes) ──────────
@@ -92,13 +92,15 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
     let state_rx = STATE_CHANNEL.receiver();
     let topics = TopicBuilder::new(&mqtt.device_id);
     let cmd_base = topics.command_topic();
+    let mut last_scale_range: Option<(launa_protocol::status::TemperatureScale, launa_protocol::status::TempRange)> = None;
 
     info!("MQTT task started");
 
     loop {
         // Check for state updates to publish (non-blocking)
-        if let Ok(status) = state_rx.try_receive() {
-            if let Err(e) = mqtt.publish_state(&status).await {
+        if let Ok((status, fault)) = state_rx.try_receive() {
+            last_scale_range = Some((status.temperature_scale, status.temp_range));
+            if let Err(e) = mqtt.publish_state(&status, fault.as_deref()).await {
                 warn!("MQTT state publish failed: {:?}", e);
             }
             continue;
@@ -132,7 +134,11 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 }
 
                 // Handle commands and pump timers
-                if let Some(action) = mqtt_client::parse_command(&cmd_base, &topic, &payload) {
+                let (scale, range) = match last_scale_range {
+                    Some((s, r)) => (Some(s), Some(r)),
+                    None => (None, None),
+                };
+                if let Some(action) = mqtt_client::parse_command(&cmd_base, &topic, &payload, scale, range) {
                     match action {
                         mqtt_client::MqttAction::Command(cmd) => {
                             info!("MQTT command: {:?}", cmd);
@@ -257,6 +263,7 @@ async fn main(spawner: Spawner) {
     let mut hold_timer = pump_timer::HoldModeTimer::new();
     let mut cmd_tracker = command_tracker::CommandTracker::new();
     let mut last_status: Option<launa_protocol::status::StatusUpdate> = None;
+    let mut last_fault: Option<alloc::string::String> = None;
     let mut client_id: Option<u8> = None;
 
     loop {
@@ -269,6 +276,7 @@ async fn main(spawner: Spawner) {
             &mut hold_timer,
             &mut cmd_tracker,
             &mut last_status,
+            &mut last_fault,
             &mut client_id,
             &cmd_rx,
         ).await;
@@ -282,6 +290,7 @@ async fn main(spawner: Spawner) {
                 &mut hold_timer,
                 &mut cmd_tracker,
                 &mut last_status,
+                &mut last_fault,
                 &mut client_id,
                 &cmd_rx,
             ).await;
@@ -305,6 +314,7 @@ async fn handle_frame(
     hold_timer: &mut pump_timer::HoldModeTimer,
     cmd_tracker: &mut command_tracker::CommandTracker,
     last_status: &mut Option<launa_protocol::status::StatusUpdate>,
+    last_fault: &mut Option<alloc::string::String>,
     client_id: &mut Option<u8>,
     cmd_rx: &embassy_sync::channel::Receiver<CriticalSectionRawMutex, Command, 4>,
 ) {
@@ -357,7 +367,7 @@ async fn handle_frame(
 
             *last_status = Some(status.clone());
 
-            STATE_CHANNEL.send(status).await;
+            STATE_CHANNEL.send((status, last_fault.clone())).await;
         }
         IncomingMessage::Ready => {
             debug!("Spa ready -- sending queued command or NothingToSend");
@@ -389,7 +399,11 @@ async fn handle_frame(
         IncomingMessage::InformationResponse(_) => {
             info!("Information response received");
         }
-        IncomingMessage::FaultLogResponse(_) => {
+        IncomingMessage::FaultLogResponse(fault_log) => {
+            last_fault = Some(alloc::format!(
+                "{:?} ({}d ago, {}:{:02}, set={})",
+                fault_log.message_code, fault_log.days_ago, fault_log.hour, fault_log.minute, fault_log.set_temperature
+            ));
             info!("Fault log response received");
         }
         IncomingMessage::FilterCyclesResponse(_) => {

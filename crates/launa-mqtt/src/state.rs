@@ -13,7 +13,7 @@ use launa_protocol::status::{StatusUpdate, HeatingMode, TemperatureScale, TempRa
 /// the discovery configuration so that HA can extract each value.
 ///
 /// This implementation builds JSON manually (no serde) so it works in no_std.
-pub fn status_to_json(status: &StatusUpdate) -> String {
+pub fn status_to_json(status: &StatusUpdate, last_fault: Option<&str>) -> String {
     let current_temp = match status.current_temp {
         Some(t) => format!("{}", t),
         None => String::from("null"),
@@ -41,7 +41,7 @@ pub fn status_to_json(status: &StatusUpdate) -> String {
     };
 
     format!(
-        "{{\"current_temp\":{},\"set_temp\":{},\"is_heating\":{},\"pump1_on\":{},\"pump2_on\":{},\"pump3_on\":{},\"light1\":{},\"blower\":{},\"circ_pump\":{},\"mister\":{},\"hold_mode\":{},\"heating_mode\":\"{}\",\"temp_range\":\"{}\",\"temp_scale\":\"{}\",\"hour\":{},\"minute\":{},\"last_fault\":null}}",
+        "{{\"current_temp\":{},\"set_temp\":{},\"is_heating\":{},\"pump1_on\":{},\"pump2_on\":{},\"pump3_on\":{},\"light1\":{},\"blower\":{},\"circ_pump\":{},\"mister\":{},\"hold_mode\":{},\"heating_mode\":\"{}\",\"temp_range\":\"{}\",\"temp_scale\":\"{}\",\"hour\":{},\"minute\":{},\"last_fault\":{}}}",
         current_temp,
         status.set_temp,
         is_heating,
@@ -57,7 +57,11 @@ pub fn status_to_json(status: &StatusUpdate) -> String {
         temp_range,
         temp_scale,
         status.hour,
-        status.minute
+        status.minute,
+        match last_fault {
+            Some(f) => alloc::format!("\"{}\"", f.replace('"', "\\\"")),
+            None => alloc::string::String::from("null"),
+        }
     )
 }
 
@@ -96,7 +100,7 @@ mod tests {
     #[test]
     fn test_status_to_json_all_fields() {
         let status = sample_status();
-        let json_str = status_to_json(&status);
+        let json_str = status_to_json(&status, None);
 
         // Verify it is valid JSON by parsing it back
         let parsed: serde_json::Value =
@@ -126,7 +130,7 @@ mod tests {
     fn test_status_to_json_null_temp() {
         let mut status = sample_status();
         status.current_temp = None;
-        let json_str = status_to_json(&status);
+        let json_str = status_to_json(&status, None);
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert!(parsed["current_temp"].is_null());
     }
@@ -140,7 +144,7 @@ mod tests {
         ] {
             let mut status = sample_status();
             status.heating_mode = mode;
-            let json_str = status_to_json(&status);
+            let json_str = status_to_json(&status, None);
             let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
             assert_eq!(parsed["heating_mode"], expected);
         }
@@ -152,7 +156,7 @@ mod tests {
         status.pump1 = PumpState::High;
         status.pump2 = PumpState::Low;
         status.pump3 = PumpState::Off;
-        let json_str = status_to_json(&status);
+        let json_str = status_to_json(&status, None);
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["pump1_on"], true);
         assert_eq!(parsed["pump2_on"], true);
@@ -164,7 +168,7 @@ mod tests {
         let mut status = sample_status();
         status.temperature_scale = TemperatureScale::Celsius;
         status.temp_range = TempRange::Low;
-        let json_str = status_to_json(&status);
+        let json_str = status_to_json(&status, None);
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["temp_scale"], "celsius");
         assert_eq!(parsed["temp_range"], "low");
@@ -174,8 +178,16 @@ mod tests {
     fn test_status_to_json_is_heating_false() {
         let mut status = sample_status();
         status.is_heating = false;
-        let json_str = status_to_json(&status);
+        let json_str = status_to_json(&status, None);
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["is_heating"], false);
+    }
+
+    #[test]
+    fn test_status_to_json_with_fault() {
+        let status = sample_status();
+        let json_str = status_to_json(&status, Some("HeaterDry: code 27"));
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["last_fault"], "HeaterDry: code 27");
     }
 }

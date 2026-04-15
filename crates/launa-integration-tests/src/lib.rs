@@ -288,7 +288,7 @@ mod tests {
 
         match msg {
             IncomingMessage::StatusUpdate(status) => {
-                let json_str = launa_mqtt::state::status_to_json(&status);
+                let json_str = launa_mqtt::state::status_to_json(&status, None);
                 let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
                 assert_eq!(parsed["current_temp"], 100.0);
@@ -974,7 +974,7 @@ mod tests {
         let msg = dispatch_frame(&frames[0]);
         match msg {
             IncomingMessage::StatusUpdate(status) => {
-                let json_str = launa_mqtt::state::status_to_json(&status);
+                let json_str = launa_mqtt::state::status_to_json(&status, None);
                 let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
                 // Verify JSON fields match simulator state
@@ -1025,7 +1025,7 @@ mod tests {
         let status_frames = decoder.feed_slice(&status_bytes);
         let msg = dispatch_frame(&status_frames[0]);
         if let IncomingMessage::StatusUpdate(s) = msg {
-            let json_str = launa_mqtt::state::status_to_json(&s);
+            let json_str = launa_mqtt::state::status_to_json(&s, None);
             let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
             assert_eq!(parsed["pump1_on"], true);
         } else {

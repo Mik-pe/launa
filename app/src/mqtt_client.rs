@@ -16,8 +16,8 @@ use embedded_io_async::{self, Read, Write, ErrorType};
 use launa_mqtt::topics::TopicBuilder;
 use launa_mqtt::command_parser::{self, ParseResult};
 use launa_mqtt::state::status_to_json;
-use launa_protocol::command::Command;
-use launa_protocol::status::StatusUpdate;
+use launa_protocol::command::{Command, validate_set_temperature};
+use launa_protocol::status::{TemperatureScale, TempRange, StatusUpdate};
 use log::{info, warn, debug, error};
 
 use crate::config::AppConfig;
@@ -94,8 +94,21 @@ pub enum MqttError {
 }
 
 /// Parse incoming MQTT command using launa-mqtt's command parser.
-pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8]) -> Option<MqttAction> {
+pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8], scale: Option<TemperatureScale>, range: Option<TempRange>) -> Option<MqttAction> {
     match command_parser::parse_command(command_topic_base, topic, payload) {
+        ParseResult::Valid(Command::SetTemperature(temp)) => {
+            if let (Some(s), Some(r)) = (scale, range) {
+                match validate_set_temperature(temp, s, r) {
+                    Ok(_) => Some(MqttAction::Command(Command::SetTemperature(temp))),
+                    Err(e) => {
+                        warn!("MQTT temperature {} rejected for {:?}/{:?}: {:?}", temp, s, r, e);
+                        None
+                    }
+                }
+            } else {
+                Some(MqttAction::Command(Command::SetTemperature(temp)))
+            }
+        }
         ParseResult::Valid(cmd) => Some(MqttAction::Command(cmd)),
         ParseResult::TimerPump { minutes, pump_index } => {
             info!("MQTT pump timer: pump {} for {} min", pump_index, minutes);
@@ -427,10 +440,10 @@ impl MqttClient {
         }
     }
 
-    pub async fn publish_state(&mut self, status: &StatusUpdate) -> Result<(), MqttError> {
+    pub async fn publish_state(&mut self, status: &StatusUpdate, last_fault: Option<&str>) -> Result<(), MqttError> {
         let topics = TopicBuilder::new(&self.device_id);
         let state_topic = topics.state_topic();
-        let json = status_to_json(status);
+        let json = status_to_json(status, last_fault);
         self.publish(&state_topic, json.as_bytes(), 1, false).await
     }
 
@@ -491,8 +504,8 @@ impl MqttClient {
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
             ("switch", "circ_pump", format!(
-                r#"{{"device":{},"name":"Circulation Pump","unique_id":"{}_circ_pump","state_topic":"{}","command_topic":"{}/circ_pump","value_template":"{{{{value_json.circ_pump}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
-                device_info, device_id, state_topic, cmd_topic, avail_topic
+                r#"{{"device":{},"name":"Circulation Pump","unique_id":"{}_circ_pump","state_topic":"{}","value_template":"{{{{value_json.circ_pump}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
+                device_info, device_id, state_topic, avail_topic
             )),
             ("select", "temp_range", format!(
                 r#"{{"device":{},"name":"Temperature Range","unique_id":"{}_temp_range","state_topic":"{}","command_topic":"{}/temp_range","value_template":"{{{{value_json.temp_range}}}}","options":["high","low"],"availability_topic":"{}"}}"#,
@@ -503,8 +516,8 @@ impl MqttClient {
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
             ("switch", "mister", format!(
-                r#"{{"device":{},"name":"Mister","unique_id":"{}_mister","state_topic":"{}","command_topic":"{}/mister","value_template":"{{{{value_json.mister}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
-                device_info, device_id, state_topic, cmd_topic, avail_topic
+                r#"{{"device":{},"name":"Mister","unique_id":"{}_mister","state_topic":"{}","value_template":"{{{{value_json.mister}}}}","payload_on":true,"payload_off":false,"availability_topic":"{}"}}"#,
+                device_info, device_id, state_topic, avail_topic
             )),
             ("sensor", "fault", format!(
                 r#"{{"device":{},"name":"Last Fault","unique_id":"{}_fault","state_topic":"{}","value_template":"{{{{value_json.last_fault}}}}","availability_topic":"{}"}}"#,
@@ -552,8 +565,18 @@ impl MqttClient {
 
     pub fn parse_ota_url(payload: &[u8]) -> Option<String> {
         let s = core::str::from_utf8(payload).ok()?;
-        if let Some(start) = s.find(r#""url""#) {
-            let after_key = &s[start + 5..];
+        let mut search_from = 0;
+        while let Some(pos) = s[search_from..].find("\"url\"") {
+            let abs_pos = search_from + pos;
+            // Reject matches inside longer keys like "callback_url" or "image_url"
+            if abs_pos > 0 {
+                let ch_before = s.as_bytes()[abs_pos - 1];
+                if ch_before == b'_' || ch_before.is_ascii_alphanumeric() {
+                    search_from = abs_pos + 5;
+                    continue;
+                }
+            }
+            let after_key = &s[abs_pos + 5..];
             let after_key = after_key.trim_start();
             let after_key = after_key.strip_prefix(':')?;
             let after_key = after_key.trim_start();
@@ -561,6 +584,7 @@ impl MqttClient {
             if let Some(end) = after_key.find('"') {
                 return Some(String::from(&after_key[..end]));
             }
+            return None;
         }
         None
     }

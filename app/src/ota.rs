@@ -12,11 +12,14 @@ use log::{error, info, warn};
 
 pub type EspOta = EspOtaFlash<esp_storage::FlashStorage<'static>>;
 
-/// Create a new OTA updater. Defaults to running from ota_0.
-/// TODO: detect actual running partition from otadata at boot.
+/// Create a new OTA updater. Detects the actual running partition
+/// from otadata instead of hardcoding.
 pub fn create_ota() -> EspOta {
     let flash = esp_storage::FlashStorage::new();
-    EspOtaFlash::new(flash, Partition::Ota0)
+    let mut temp = EspOtaFlash::new(flash, Partition::Ota0);
+    let running = temp.detect_running_partition().unwrap_or(Partition::Ota0);
+    let flash = esp_storage::FlashStorage::new();
+    EspOtaFlash::new(flash, running)
 }
 
 /// Perform an OTA update by downloading firmware from the given HTTP URL.
