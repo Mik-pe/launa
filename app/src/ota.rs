@@ -1,59 +1,26 @@
 //! OTA firmware update support.
 //!
-//! TODO: Replace with `launa-esp-ota` crate (custom ESP32 OTA using esp-storage directly).
-//! The previous `esp-hal-ota` dependency is broken with nightly Rust >=1.90 (concat_idents removed).
-//! The new crate will implement partition management, flash writes, and boot marker directly
-//! using esp-storage, without the broken third-party dependency.
+//! Uses `launa-esp-ota` crate for real OTA operations backed by `esp-storage::FlashStorage`.
+//! The `EspOtaFlash` struct implements the `OtaUpdate` trait from `launa-ota`.
 
 extern crate alloc;
 
 use alloc::string::String;
-use alloc::format;
+use launa_esp_ota::{EspOtaFlash, Partition};
 use launa_ota::{OtaError, OtaUpdate};
-use log::{info, warn, error};
+use log::{error, info, warn};
 
-pub struct EspOta;
+pub type EspOta = EspOtaFlash<esp_storage::FlashStorage<'static>>;
 
-impl EspOta {
-    pub fn new() -> Self {
-        EspOta
-    }
-
-    /// Mark the current firmware as valid. Call this after successful boot
-    /// (WiFi + MQTT connected). Prevents auto-rollback.
-    pub fn mark_valid(&mut self) -> Result<(), OtaError> {
-        info!("OTA: marking firmware valid (stub)");
-        // TODO: Implement with launa-esp-ota
-        Ok(())
-    }
-}
-
-impl OtaUpdate for EspOta {
-    fn begin(&mut self) -> Result<(), OtaError> {
-        warn!("OTA: begin stub -- not yet implemented");
-        Err(OtaError::BeginFailed)
-    }
-
-    fn write(&mut self, _chunk: &[u8]) -> Result<(), OtaError> {
-        Err(OtaError::WriteFailed)
-    }
-
-    fn finalize(&mut self) -> Result<(), OtaError> {
-        Err(OtaError::FinalizeFailed)
-    }
-
-    fn mark_valid(&mut self) -> Result<(), OtaError> {
-        self.mark_valid()
-    }
-
-    fn rollback_and_reboot(&mut self) -> Result<(), OtaError> {
-        warn!("OTA: rollback and reboot requested (stub)");
-        Err(OtaError::FlashError)
-    }
+/// Create a new OTA updater. Defaults to running from ota_0.
+/// TODO: detect actual running partition from otadata at boot.
+pub fn create_ota() -> EspOta {
+    let flash = esp_storage::FlashStorage::new();
+    EspOtaFlash::new(flash, Partition::Ota0)
 }
 
 /// Perform an OTA update by downloading firmware from the given HTTP URL.
-/// Currently stubbed -- will be implemented with launa-esp-ota + embassy-net HTTP.
+/// Currently stubbed -- will be implemented with embassy-net HTTP.
 pub async fn perform_ota_update(firmware_url: &str) {
     info!("OTA update requested from: {} (not yet implemented)", firmware_url);
 

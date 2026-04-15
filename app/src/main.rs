@@ -209,7 +209,7 @@ async fn main(spawner: Spawner) {
 
     // Mark firmware as valid (boot successful: WiFi + MQTT connected).
     // If we crash before reaching this point, bootloader auto-rolls back.
-    let mut ota = ota::EspOta::new();
+    let mut ota = ota::create_ota();
     if let Err(e) = ota.mark_valid() {
         warn!("Failed to mark firmware valid: {:?}", e);
     } else {

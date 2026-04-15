@@ -1,0 +1,9 @@
+[package]
+name = "launa-esp-ota"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+embedded-storage = "0.3"
+launa-ota = { path = "../launa-ota", default-features = false }
+log.workspace = true

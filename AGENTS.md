@@ -31,8 +31,11 @@ launa/
 │   │       └── filter.rs       # Filter cycles response parser (0A BF 23)
 │   ├── launa-hal/              # Hardware abstraction traits + mocks
 │   ├── launa-mqtt/             # MQTT client with HA auto-discovery
-│   ├── launa-ota/              # OTA firmware update support
+│   ├── launa-ota/              # OTA firmware update trait + mock
+│   ├── launa-esp-ota/          # ESP32 OTA using embedded-storage (replaces esp-hal-ota)
+│   ├── launa-sim/              # Spa simulator for integration testing
 │   └── launa-integration-tests/ # Integration tests with SpaSimulator
+├── xtask/                      # Cargo xtask tooling (desktop-only workspace crate)
 ├── app/                        # ESP32 firmware binary (excluded from workspace)
 │   ├── Cargo.toml              # Uses esp-hal + embassy (no_std, xtensa-esp32-none-elf)
 │   └── src/                    # ESP32 main, UART, WiFi, MQTT glue
@@ -47,11 +50,46 @@ launa/
 - `cargo check` — Verify workspace compiles
 - `cd app && cargo espflash flash --chip esp32 --monitor` — Flash to ESP32 (needs espflash + xtensa toolchain)
 
+### Project Commands (`cargo xtask`)
+
+All xtask commands require a `launa.toml` config file at the project root (gitignored). Create it from `launa.example.toml`:
+
+```toml
+[wifi]
+ssid = "MyWiFi"
+password = "MyPassword"
+
+[mqtt]
+host = "192.168.1.100"
+port = 1883
+user = ""
+password = ""
+
+[device]
+id = "launa_spa"
+serial_port = "COM3"
+
+[ota]
+serve_port = 8080
+```
+
+| Command | Description |
+|---|---|
+| `cargo xtask flash [--feature <name>] [--port <COMx>]` | Flash firmware to ESP32 via USB |
+| `cargo xtask monitor [--port <COMx>] [--duration <secs>]` | Read serial output from ESP32 |
+| `cargo xtask flash-monitor [--feature <name>] [--port <COMx>]` | Flash + monitor in one command |
+| `cargo xtask sniff-decode [--host <host>] [--port <1883>]` | Decode sniffer frames from MQTT in real-time |
+| `cargo xtask spa-sim [--port <COMx>] [--duration <secs>]` | Simulate spa over RS-485 via USB adapter |
+| `cargo xtask ota-serve --firmware <path> [--port <8080>]` | Serve firmware .bin over HTTP for OTA |
+| `cargo xtask ota-flash [--feature <name>] [--device-id <id>]` | Build + serve + trigger OTA remotely |
+| `cargo xtask self-test [--port <COMx>]` | Run hardware self-test on ESP32 |
+| `cargo xtask config-flash [--port <COMx>]` | Write WiFi/MQTT config to ESP32 NVS |
+
 ## Architecture Notes
 
-- **Workspace crates** (`launa-protocol`, `launa-hal`, `launa-mqtt`, `launa-ota`, `launa-integration-tests`) are all pure Rust, desktop-testable, and `no_std` compatible
+- **Workspace crates** (`launa-protocol`, `launa-hal`, `launa-mqtt`, `launa-ota`, `launa-esp-ota`, `launa-sim`, `launa-integration-tests`) are all pure Rust, desktop-testable, and `no_std` compatible
 - The **`app/`** crate is ESP32-only using `esp-hal` + `embassy` (no_std, pure Rust), excluded from the Cargo workspace
-- **ESP32 stack**: `esp-hal` 1.0 (UART, GPIO), `esp-radio` (WiFi), `embassy-net` (TCP/IP), `rust-mqtt` (MQTTv5), `esp-hal-ota` (OTA), `esp-nvs` (config storage), `embassy` (async executor)
+- **ESP32 stack**: `esp-hal` 1.0 (UART, GPIO), `esp-radio` (WiFi), `embassy-net` (TCP/IP), `rust-mqtt` (MQTTv5), `launa-esp-ota` (OTA via esp-storage), `esp-nvs` (config storage), `embassy` (async executor)
 - All protocol logic lives in `launa-protocol`; hardware abstractions are in `launa-hal`
 - Tests use **SpaSimulator** (a mock BP6013G1 mainboard) for integration testing
 - Home Assistant integration uses MQTT auto-discovery to create 8 entities (sensor, number, select, switch, light, fan, binary_sensor)
@@ -99,14 +137,14 @@ Key workspace dependencies (see `Cargo.toml` for versions):
 
 Key `app/` dependencies:
 - `esp-hal` 1.0+ — Hardware abstraction (UART, GPIO, SPI, I2C)
-- `esp-hal-embassy` — Embassy executor support for esp-hal
+- `esp-rtos` — Scheduler for esp-radio + embassy bridge
 - `esp-radio` — WiFi driver (unstable feature)
 - `embassy-net` — Async TCP/IP stack (smoltcp)
 - `embassy-executor`, `embassy-time` — Async runtime
 - `rust-mqtt` — MQTT v5 client (no_std)
-- `esp-hal-ota` — OTA partition management with rollback
+- `launa-esp-ota` — OTA partition management with rollback (custom, uses esp-storage)
 - `esp-nvs` — Non-volatile storage (ESP-IDF compatible format)
-- `esp-mbedtls` — TLS for MQTT (if needed)
+- `esp-storage` — Raw flash access via embedded-storage traits
 
 ## Current State
 
@@ -130,5 +168,5 @@ Key `app/` dependencies:
 ### In Progress / Next (see TASKS.md)
 - **ESP32 firmware rewrite**: Migrating `app/` from esp-idf-svc to esp-hal + embassy (pure Rust, no_std)
 - **Protocol**: Validate parser against real spa hardware via sniffer
-- **MQTT**: Birth/last-will messages, retain flags
-- **OTA**: Real implementation with esp-hal-ota
+- **OTA**: HTTP download over embassy-net TCP still pending
+- **Hardware testing**: Sniffer firmware, bench testing with RS-485 adapter

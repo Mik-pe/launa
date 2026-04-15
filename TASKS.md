@@ -69,6 +69,54 @@ The app code was written against older esp-radio/esp-nvs/embassy-net/embassy-syn
 - [x] **Resolve `embassy-sync` version split**: Unified to `0.7` in `app/Cargo.toml`.
 - [x] **Add `esp-backtrace` + panic handler**: Added `esp-backtrace = "0.15"` with `esp32`, `panic-handler`, `exception-handler`, `print-uart` features.
 
+## P0: MQTT Protocol Correctness (Firmware Will Fail Without These)
+
+The hand-rolled MQTT client in `app/src/mqtt_client.rs` has multiple protocol bugs that will cause failures in practice. The `rust-mqtt` dependency is declared in `Cargo.toml` but never used -- all MQTT is hand-rolled packet construction.
+
+- [ ] **Fix MQTT QoS 1: send PUBACK for incoming PUBLISH packets**: `recv()` handles PINGREQ (type 12) but never sends PUBACK (type 0x40) for QoS 1 PUBLISH packets received from the broker. Without PUBACK, the broker redelivers messages forever. The `recv()` match on packet type 3 needs a PUBACK response when QoS > 0.
+- [ ] **Fix MQTT QoS 1: wait for PUBACK on outgoing PUBLISH**: `publish()` sends QoS 1 packets with a packet identifier but never waits for PUBACK from the broker. The packet identifier is also never sent in the payload (the code adds 2 to `remaining` for the ID but never actually writes the ID bytes). Fix: either implement proper QoS 1 handshake or downgrade all publishes to QoS 0.
+- [ ] **Fix MQTT packet identifier generation**: SUBSCRIBE hardcodes packet ID to `1`, and PUBLISH never writes one. Need a monotonically increasing `u16` counter for all packets requiring an identifier.
+- [ ] **Add MQTT keepalive PINGREQ**: CONNECT declares 30-second keepalive but no code sends PINGREQ when idle. After 45 seconds of silence, the broker disconnects. Need a timer in the MQTT task that sends `[0xC0, 0x00]` (PINGREQ) if no traffic within keepalive/2.
+- [ ] **Add MQTT username/password to CONNECT packet**: `AppConfig` stores `mqtt_user`/`mqtt_password` in NVS but `send_connect()` never includes them. MQTT v5 CONNECT requires: set username flag (bit 7) and password flag (bit 6) in connect flags, then append username and password as length-prefixed strings in the payload after the will payload. Without this, brokers requiring auth will reject the connection.
+- [ ] **Add MQTT reconnect logic**: When `recv()` returns `None` (TCP drop), the MQTT task logs and sleeps 5 seconds, then loops back to `recv()` on the dead transport forever. Need: (1) close old socket, (2) create new TCP socket, (3) reconnect TCP, (4) send CONNECT, (5) re-subscribe to command/OTA/HA-status topics, (6) re-publish availability + discovery. The `MqttClient` needs to own a `&'static Stack` so it can create new sockets.
+- [ ] **Wire WiFi reconnect to MQTT reconnect**: `connection_task` in `wifi.rs` handles WiFi reconnect internally, but nothing notifies the MQTT task that the underlying network changed. After WiFi reconnect, the old TCP socket is stale. Options: (a) have MQTT task detect dead socket and reconnect, (b) use a channel to signal network change, (c) have the MQTT task own the WiFi connection cycle.
+- [ ] **Add MQTT incoming packet reassembly**: `recv()` reads a single `read()` into a 512-byte buffer and assumes it contains exactly one complete MQTT packet. TCP can fragment or coalesce. A split PUBLISH will be silently dropped; coalesced packets lose trailing data. Need: (1) buffer partial reads, (2) decode remaining length to know full packet size, (3) loop until full packet received, (4) handle multiple packets per read.
+- [ ] **Remove unused `rust-mqtt` dependency or use it**: `rust-mqtt 0.5` is in `Cargo.toml` but no code imports it. It wastes flash space. Either: (a) remove it and keep hand-rolled (fixing all the bugs above), or (b) switch to using `rust-mqtt` properly (it handles keepalive, PUBACK, reconnect internally). Recommendation: fix the hand-rolled client since `rust-mqtt` API may not match our no_std needs, but remove the unused dep until then.
+
+## P0: RS-485 Bus Protocol (Will Cause Collisions With Real Hardware)
+
+- [ ] **Honor Ready window for command pacing**: The Balboa protocol requires clients to only send commands after receiving a `Ready` message (`10 BF 06`, type `IncomingMessage::Ready`). Currently the main loop sends commands from `COMMAND_CHANNEL` immediately regardless of bus state. With real hardware this will cause bus collisions. Fix: queue commands, only flush the queue when a `Ready` frame is received. The `NothingToSend` command (`<ID> BF 07`) should be sent when the queue is empty and a Ready arrives, to keep the bus alive.
+- [ ] **Add UART framing error handling**: `transport.rs` ignores UART framing errors, parity errors, and buffer overflows. A noise spike on RS-485 could corrupt internal state silently. `esp_hal::uart::Uart` exposes error info -- need to handle `Err(embassy_io_error)` variants properly (reset decoder state on framing error, log CRC failures, etc.).
+
+## P0: Build Blocking
+
+- [ ] **Add `src/lib.rs` stub to `launa-esp-ota`**: The crate has no source files, which prevents `cargo test` from running for the entire workspace. Another agent is working on this crate -- until it's ready, add a minimal `src/lib.rs` with `#![no_std]` so the workspace compiles.
+
+## P1: MQTT / HA Discovery Correctness
+
+- [ ] **Unify discovery generation between `launa-mqtt` and `app/`**: `launa-mqtt/src/discovery.rs` has a proper `DiscoveryBuilder` using serde with `origin` field, correct field names, and proper JSON. `app/src/mqtt_client.rs` has a completely separate `publish_discovery()` with hand-rolled JSON format strings that omit `origin`, use different field ordering, and will drift. Fix: refactor `app/` to use the `launa-mqtt` discovery builder's `build_with_retain()` output, generating the JSON strings once and publishing them. The `DiscoveryBuilder` already works in no_std.
+- [ ] **Fix light discovery value_template type mismatch**: Discovery config uses `"value_template": "{{ value_json.light1 }}"` with `payload_on: "true"` / `payload_off: "false"` (strings). But `status_to_json()` outputs real JSON booleans (`true`/`false`), not strings (`"true"`/`"false"`). HA's Jinja2 template renders a JSON bool as the string `"True"` or `"False"` (Python-style), which won't match `payload_on: "true"`. Fix: either change `value_template` to compare against `"True"`/`"False"`, or change `status_to_json()` to output string values for light/blower/etc, or use `payload_on: true` (YAML bool, not string). This affects all switch/fan/light entities.
+
+## P1: Command Tracker Fixes
+
+- [ ] **Fix CommandTracker instant-confirm for toggle commands**: `HoldModeToggled`, `HeatingModeToggled`, and `TempRangeToggled` all return `true` from `is_confirmed()` immediately, making retries impossible for these commands. Fix: track the pre-command state and verify the new state differs (e.g., `hold_mode` changed from true to false).
+- [ ] **Fix CommandTracker for Light1 toggle verification**: Light1 uses `ExpectedChange::HoldModeToggled` as a catch-all, which is semantically wrong. Light1 toggle should verify `light1` state changed in the next status update.
+
+## P1: Pump Timer Integration
+
+- [ ] **Wire pump timers to MQTT commands**: `PumpTimerManager` exists but is never activated from MQTT. No MQTT subtopic triggers timed pump mode. Need: (1) add `pump1_timer`, `pump2_timer`, `pump3_timer` subtopics that accept a duration in minutes, (2) start the corresponding `PumpTimer` when a timed command arrives, (3) publish remaining time in state JSON.
+
+## P2: Missing Firmware Features
+
+- [ ] **Add sniffer firmware feature** (`#[cfg(feature = "sniff")]` in `app/src/main.rs`): Phase 3 of TASKS.md describes this but no code exists. Need: add `[features]` section to `app/Cargo.toml` with `sniff = []`, then gate the sniffer-only main loop behind it (no registration, no commands, just passive frame publishing to MQTT).
+- [ ] **Add hw-test feature** (`#[cfg(feature = "hw-test")]` in `app/src/main.rs`): `cargo xtask self-test` references this feature but it doesn't exist in `app/Cargo.toml`. Need: add `hw-test = []` feature, implement a test mode that exercises UART loopback, WiFi connect, NVS read/write, and prints `TEST_PASS`/`TEST_FAIL` to serial.
+- [ ] **Add `ToggleItem` variants for Light2, Pump4-6**: Real BP6013G1 configurations can have up to 6 pumps and 2 lights. `ToggleItem` only covers Pump1-3 and Light1. Protocol codes: Pump4=0x07, Pump5=0x08, Pump6=0x09, Light2=0x12 (from community docs). Add to enum, `code()`, command parser allowlist, discovery builder, and state JSON.
+- [ ] **Add periodic status request / stale detection**: The firmware is purely reactive -- if the spa stops broadcasting (fault, power cycle), HA goes stale with no indication. Fix: track time since last status update, if >5 seconds send a `ConfigurationRequest` to provoke a response, if >30 seconds publish "stale" availability.
+- [ ] **Add heap monitoring**: 32KB heap with no usage tracking. Add periodic `esp_alloc::get_free_heap()` logging and an OOM hook. If heap drops below 4KB, log a warning; if below 1KB, publish an alert to MQTT.
+- [ ] **Add graceful shutdown before OTA reboot**: When OTA triggers, there's no MQTT disconnect, UART flush, or cleanup. The spa could be mid-command. Fix: (1) publish "offline" to availability, (2) send MQTT DISCONNECT packet, (3) flush UART TX, (4) then reboot.
+- [ ] **Add firmware version to state JSON and discovery**: The `launa-mqtt` `DiscoveryBuilder` includes `sw_version` via `env!("CARGO_PKG_VERSION")`, but the `app/` hand-rolled discovery omits it. Add version to both discovery and state JSON so HA can display it and OTA can check for downgrade.
+- [ ] **Add TLS support for MQTT (optional)**: Architecture doc lists `esp-mbedtls` as available. For local-network deployments this is low priority, but the dependency map should be updated if it's not planned (remove `esp-mbedtls` row or mark as future).
+
 ## ESP32 Firmware (`app/`) -- In Progress
 
 Built on esp-hal + embassy (pure Rust, no_std). Workspace tests pass.
@@ -79,7 +127,7 @@ Built on esp-hal + embassy (pure Rust, no_std). Workspace tests pass.
 ### OTA tasks (apply to new esp-hal stack):
 
 - [x] **OTA partition table for `app/`**: Created `app/partitions.csv` with dual OTA slots (ota_0 at 0x20000/1.75MB, ota_1 at 0x1E0000/1.75MB, otadata at 0x10000). Required for OTA. First flash via USB must use `--partition-table partitions.csv`.
-- [ ] **`launa-esp-ota` crate**: Custom ESP32 OTA implementation replacing `esp-hal-ota` (broken with nightly >=1.90 due to removed `concat_idents` feature). Use `esp-storage` directly for flash writes. Implement: partition table parsing (read `partitions.csv` offsets), MMU address mapping for ESP32, flash erase/write to inactive partition, boot partition swap via otadata, `mark_app_valid()` for rollback prevention. ~200-300 lines. Add as `crates/launa-esp-ota/` with `OtaUpdate` trait impl from `launa-ota`.
+- [x] **`launa-esp-ota` crate**: Custom ESP32 OTA implementation replacing `esp-hal-ota` (broken with nightly >=1.90 due to removed `concat_idents` feature). Uses `esp-storage` directly for flash writes via `embedded-storage` NorFlash traits. Implements: partition table constants matching `partitions.csv`, otadata sequence number management for boot partition selection, CRC-32/MPEG-2 for otadata entries, sector erase + word-aligned write, `mark_valid()` for rollback prevention, `rollback_and_reboot()`. Generic over `NorFlash + ReadNorFlash` for testability. 11 desktop tests covering full OTA cycle, rollback, overflow protection, boundary cases. Added as `crates/launa-esp-ota/` with `OtaUpdate` trait impl from `launa-ota`. `app/src/ota.rs` now uses `EspOtaFlash<esp_storage::FlashStorage>` instead of stubs.
 - [ ] **OTA real implementation**: Use `launa-esp-ota` with `esp_storage::FlashStorage`. HTTP download via embassy-net, write chunks to alternate partition, verify CRC, reboot. OTA module has URL parsing and partition write skeleton; HTTP download over embassy-net TCP still pending.
 - [x] **OTA HTTP server on dev PC** (`cargo xtask ota-serve`): Already implemented in xtask. Serves firmware .bin files over HTTP for ESP32 to download.
 - [x] **OTA trigger via MQTT**: MQTT subscribes to `launa/<device_id>/ota` topic. Accepts JSON with firmware URL (`{"url":"http://..."}`). Simple JSON parser extracts URL. OTA update initiated from MQTT task. Auto-rollback if new firmware is broken.
@@ -144,7 +192,7 @@ But all logic lives in workspace crates that are fully desktop-testable via mock
   serve_port = 8080
   ```
 - [x] **`cargo xtask config-flash`**: Reads `launa.toml` and writes WiFi/MQTT/device config to ESP32 NVS via serial. Only needed on first setup or when changing credentials. After this, the ESP32 has its config stored in NVS and doesn't need `launa.toml` to boot.
-- [ ] **Document xtask commands in AGENTS.md**: Add a "Project Commands" section listing all `cargo xtask` subcommands with examples. Document the `launa.toml` config format and that it must be created from `launa.example.toml`.
+- [x] **Document xtask commands in AGENTS.md**: Added "Project Commands (`cargo xtask`)" section with table of all 9 subcommands and `launa.toml` config format example. Updated repo structure, workspace crate list, ESP32 stack, and app dependencies to reflect current state.
 
 ### Phase 2: Desktop End-to-End Test (No HW Needed)
 
@@ -231,7 +279,7 @@ PC (Python script simulating spa)
 - [x] **Status parser byte offsets corrected** (`crates/launa-protocol/src/status.rs`): Fixed all byte offsets to match real Balboa BP6013G1 hardware (verified against NorthernMan54/esp32_balboa_spa). Hold=offset 0, Priming=offset 1, Heating Mode=offset 5, flags=offset 9/10, pumps=offset 11, circ/blower=offset 13, lights=offset 14, mister=offset 15.
 - [x] **HDLC byte stuffing** (`crates/launa-protocol/src/frame.rs`): Added escape handling for `0x7E` and `0x7D` bytes in frame encoder/decoder to prevent CRC/data bytes from being interpreted as frame markers.
 - [x] **Spa simulator offsets corrected** (`crates/launa-sim/src/spa_sim.rs`, `crates/launa-integration-tests/src/spa_simulator.rs`): Updated `generate_status_frame()` to use correct real-hardware byte offsets.
-- [x] **All 278 tests passing** (18 HAL + 54 integration + 30 sim + 44 MQTT + 67 protocol + 27 fuzz + 17 property + 21 sim-unit)
+- [x] **All 289 tests passing** (18 HAL + 54 integration + 30 sim + 44 MQTT + 67 protocol + 27 fuzz + 17 property + 21 sim-unit + 11 esp-ota)
 - [x] **Temperature safety clamping** (`crates/launa-protocol/src/command.rs`): Added `validate_set_temperature()` with Balboa-safe ranges and hard upper limit (108°F / 42°C). 13 new tests.
 - [x] **Command allowlist + ParseResult** (`crates/launa-mqtt/src/command_parser.rs`): `parse_command()` now returns `ParseResult` with `Valid`, `TemperatureOutOfRange`, `UnknownSubtopic`, `InvalidPayload` variants. `parse_command_ok()` for backward compat. 10 new tests.
 - [x] **Discovery retain support** (`crates/launa-mqtt/src/discovery.rs`): Added `DiscoveryMessage` struct and `build_with_retain()`. 4 new tests (retain, topics, unique_ids, command_topics).
