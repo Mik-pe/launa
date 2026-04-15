@@ -1,0 +1,129 @@
+{
+  "groupId": "ota-tests",
+  "testedAt": "2026-04-16T00:17:00Z",
+  "isolation": {
+    "tool": "cargo test",
+    "workingDirectory": "C:\\dev\\launa",
+    "package": "launa-integration-tests"
+  },
+  "toolsUsed": ["cargo test"],
+  "assertions": [
+    {
+      "id": "VAL-TEST-001",
+      "title": "OTA graceful shutdown — happy path",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Run cargo test -p launa-integration-tests -- test_ota_graceful_shutdown_happy_path",
+          "expected": "Test passes with exit code 0",
+          "observed": "Test passed: 1 passed; 0 failed; 0 ignored; 85 filtered out; finished in 0.00s (exit code 0)"
+        }
+      ],
+      "evidence": {
+        "command": "cargo test -p launa-integration-tests -- test_ota_graceful_shutdown_happy_path",
+        "exitCode": 0,
+        "output": "running 1 test\ntest tests::test_ota_graceful_shutdown_happy_path ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-TEST-002",
+      "title": "OTA graceful shutdown — failed write triggers rollback",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Run cargo test -p launa-integration-tests -- test_ota_failed_write_triggers_rollback",
+          "expected": "Test passes with exit code 0",
+          "observed": "Test passed: 1 passed; 0 failed; 0 ignored; 85 filtered out; finished in 0.00s (exit code 0)"
+        }
+      ],
+      "evidence": {
+        "command": "cargo test -p launa-integration-tests -- test_ota_failed_write_triggers_rollback",
+        "exitCode": 0,
+        "output": "running 1 test\ntest tests::test_ota_failed_write_triggers_rollback ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-TEST-003",
+      "title": "OTA firmware size validation",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Run cargo test -p launa-integration-tests -- test_ota_firmware_size_exceeded",
+          "expected": "Test passes with exit code 0",
+          "observed": "Test passed: 1 passed; 0 failed; 0 ignored; 85 filtered out; finished in 0.00s (exit code 0)"
+        }
+      ],
+      "evidence": {
+        "command": "cargo test -p launa-integration-tests -- test_ota_firmware_size_exceeded",
+        "exitCode": 0,
+        "output": "running 1 test\ntest tests::test_ota_firmware_size_exceeded ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-TEST-004",
+      "title": "OTA concurrent-operation safety — begin while in progress",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Run cargo test -p launa-integration-tests -- test_ota_begin_while_in_progress",
+          "expected": "Test passes with exit code 0",
+          "observed": "Test passed: 1 passed; 0 failed; 0 ignored; 85 filtered out; finished in 0.00s (exit code 0)"
+        }
+      ],
+      "evidence": {
+        "command": "cargo test -p launa-integration-tests -- test_ota_begin_while_in_progress",
+        "exitCode": 0,
+        "output": "running 1 test\ntest tests::test_ota_begin_while_in_progress ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-TEST-005",
+      "title": "OTA concurrent-operation safety — write before begin",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Run cargo test -p launa-integration-tests -- test_ota_write_before_begin",
+          "expected": "Test passes with exit code 0",
+          "observed": "Test passed: 1 passed; 0 failed; 0 ignored; 85 filtered out; finished in 0.00s (exit code 0)"
+        }
+      ],
+      "evidence": {
+        "command": "cargo test -p launa-integration-tests -- test_ota_write_before_begin",
+        "exitCode": 0,
+        "output": "running 1 test\ntest tests::test_ota_write_before_begin ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-TEST-006",
+      "title": "OTA concurrent-operation safety — finalize with zero bytes",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Run cargo test -p launa-integration-tests -- test_ota_finalize_zero_bytes",
+          "expected": "Test passes with exit code 0",
+          "observed": "Test passed: 1 passed; 0 failed; 0 ignored; 85 filtered out; finished in 0.00s (exit code 0)"
+        }
+      ],
+      "evidence": {
+        "command": "cargo test -p launa-integration-tests -- test_ota_finalize_zero_bytes",
+        "exitCode": 0,
+        "output": "running 1 test\ntest tests::test_ota_finalize_zero_bytes ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 6 assertions: all 6 passed. No frictions or blockers encountered."
+}

@@ -1,0 +1,113 @@
+{
+  "groupId": "frame-queue-tests",
+  "testedAt": "2026-04-16T00:20:00Z",
+  "isolation": {
+    "workingDirectory": "C:\\dev\\launa",
+    "tool": "cargo test",
+    "noServicesRequired": true
+  },
+  "toolsUsed": ["cargo test"],
+  "assertions": [
+    {
+      "id": "VAL-TEST-007",
+      "title": "FrameDecoder stress — many 0x7E bus idle",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-integration-tests -- test_frame_decoder_bus_idle_0x7e", "expected": "Test passes (exit code 0)", "observed": "Test passed: 'test tests::test_frame_decoder_bus_idle_0x7e ... ok', exit code 0" }
+      ],
+      "evidence": {
+        "consoleOutput": "running 1 test\ntest tests::test_frame_decoder_bus_idle_0x7e ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s",
+        "exitCode": 0,
+        "logFile": "integration-tests/user-testing/evidence/frame-queue-tests/test-output.txt"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-TEST-008",
+      "title": "FrameDecoder stress — split at every boundary",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-integration-tests -- test_frame_decoder_split_every_boundary", "expected": "Test passes (exit code 0)", "observed": "Test passed: 'test tests::test_frame_decoder_split_every_boundary ... ok', exit code 0" }
+      ],
+      "evidence": {
+        "consoleOutput": "running 1 test\ntest tests::test_frame_decoder_split_every_boundary ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s",
+        "exitCode": 0,
+        "logFile": "integration-tests/user-testing/evidence/frame-queue-tests/test-output.txt"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-TEST-009",
+      "title": "FrameDecoder stress — corrupted interleaved with valid",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-integration-tests -- test_frame_decoder_corrupt_then_valid", "expected": "Test passes (exit code 0)", "observed": "Test passed: 'test tests::test_frame_decoder_corrupt_then_valid ... ok', exit code 0" }
+      ],
+      "evidence": {
+        "consoleOutput": "running 1 test\ntest tests::test_frame_decoder_corrupt_then_valid ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s",
+        "exitCode": 0,
+        "logFile": "integration-tests/user-testing/evidence/frame-queue-tests/test-output.txt"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-TEST-010",
+      "title": "FrameDecoder stress — all-escape payload",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-integration-tests -- test_frame_decoder_all_escape_payload", "expected": "Test passes (exit code 0)", "observed": "Test passed: 'test tests::test_frame_decoder_all_escape_payload ... ok', exit code 0" }
+      ],
+      "evidence": {
+        "consoleOutput": "running 1 test\ntest tests::test_frame_decoder_all_escape_payload ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s",
+        "exitCode": 0,
+        "logFile": "integration-tests/user-testing/evidence/frame-queue-tests/test-output.txt"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-TEST-011",
+      "title": "Registration race condition",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-integration-tests -- test_registration_race_condition", "expected": "Test passes (exit code 0)", "observed": "Test passed: 'test tests::test_registration_race_condition ... ok', exit code 0" }
+      ],
+      "evidence": {
+        "consoleOutput": "running 1 test\ntest tests::test_registration_race_condition ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s",
+        "exitCode": 0,
+        "logFile": "integration-tests/user-testing/evidence/frame-queue-tests/test-output.txt"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-TEST-012",
+      "title": "Multi-command FIFO queue drain",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-integration-tests -- test_multi_command_fifo_drain", "expected": "Test passes (exit code 0)", "observed": "Test passed: 'test tests::test_multi_command_fifo_drain ... ok', exit code 0" }
+      ],
+      "evidence": {
+        "consoleOutput": "running 1 test\ntest tests::test_multi_command_fifo_drain ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s",
+        "exitCode": 0,
+        "logFile": "integration-tests/user-testing/evidence/frame-queue-tests/test-output.txt"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-TEST-013",
+      "title": "Bounded command queue cap",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-integration-tests -- test_bounded_command_queue_cap", "expected": "Test passes (exit code 0)", "observed": "Test passed: 'test tests::test_bounded_command_queue_cap ... ok', exit code 0" }
+      ],
+      "evidence": {
+        "consoleOutput": "running 1 test\ntest tests::test_bounded_command_queue_cap ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s",
+        "exitCode": 0,
+        "logFile": "integration-tests/user-testing/evidence/frame-queue-tests/test-output.txt"
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 7 assertions: all 7 passed. All FrameDecoder stress tests (bus idle, split boundaries, corruption, escaping) and command queue tests (registration race, FIFO drain, bounded cap) pass successfully."
+}

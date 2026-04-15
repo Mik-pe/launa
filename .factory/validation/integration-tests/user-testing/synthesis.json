@@ -1,0 +1,31 @@
+{
+  "milestone": "integration-tests",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 14,
+    "passed": 14,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-TEST-001",
+    "VAL-TEST-002",
+    "VAL-TEST-003",
+    "VAL-TEST-004",
+    "VAL-TEST-005",
+    "VAL-TEST-006",
+    "VAL-TEST-007",
+    "VAL-TEST-008",
+    "VAL-TEST-009",
+    "VAL-TEST-010",
+    "VAL-TEST-011",
+    "VAL-TEST-012",
+    "VAL-TEST-013",
+    "VAL-CROSS-001"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null
+}

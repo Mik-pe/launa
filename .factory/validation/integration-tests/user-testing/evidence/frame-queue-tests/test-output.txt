@@ -1,0 +1,55 @@
+VAL-TEST-007: test_frame_decoder_bus_idle_0x7e
+Command: cargo test -p launa-integration-tests -- test_frame_decoder_bus_idle_0x7e
+Exit code: 0
+Output:
+  running 1 test
+  test tests::test_frame_decoder_bus_idle_0x7e ... ok
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s
+
+VAL-TEST-008: test_frame_decoder_split_every_boundary
+Command: cargo test -p launa-integration-tests -- test_frame_decoder_split_every_boundary
+Exit code: 0
+Output:
+  running 1 test
+  test tests::test_frame_decoder_split_every_boundary ... ok
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s
+
+VAL-TEST-009: test_frame_decoder_corrupt_then_valid
+Command: cargo test -p launa-integration-tests -- test_frame_decoder_corrupt_then_valid
+Exit code: 0
+Output:
+  running 1 test
+  test tests::test_frame_decoder_corrupt_then_valid ... ok
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s
+
+VAL-TEST-010: test_frame_decoder_all_escape_payload
+Command: cargo test -p launa-integration-tests -- test_frame_decoder_all_escape_payload
+Exit code: 0
+Output:
+  running 1 test
+  test tests::test_frame_decoder_all_escape_payload ... ok
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s
+
+VAL-TEST-011: test_registration_race_condition
+Command: cargo test -p launa-integration-tests -- test_registration_race_condition
+Exit code: 0
+Output:
+  running 1 test
+  test tests::test_registration_race_condition ... ok
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s
+
+VAL-TEST-012: test_multi_command_fifo_drain
+Command: cargo test -p launa-integration-tests -- test_multi_command_fifo_drain
+Exit code: 0
+Output:
+  running 1 test
+  test tests::test_multi_command_fifo_drain ... ok
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s
+
+VAL-TEST-013: test_bounded_command_queue_cap
+Command: cargo test -p launa-integration-tests -- test_bounded_command_queue_cap
+Exit code: 0
+Output:
+  running 1 test
+  test tests::test_bounded_command_queue_cap ... ok
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 85 filtered out; finished in 0.00s
