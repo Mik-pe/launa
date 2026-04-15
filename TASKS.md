@@ -160,7 +160,7 @@ Full logical review of all 12 source files in `app/src/`. Issues ordered by seve
 
 - [x] **Unsafe aliasing of `mk_static!` socket buffers in `MqttClient`** (`app/src/mqtt_client.rs`): Replaced raw pointer casts with `UnsafeCell<[u8; 1024]>` wrappers. Struct fields changed from `&'static mut [u8; 1024]` to `&'static UnsafeCell<[u8; 1024]>`. Both `connect()` and `reconnect()` use `UnsafeCell::get()` instead of raw pointer aliasing.
 - [x] **OTA TCP socket buffer leak on failure** (`app/src/ota.rs`): Introduced `OtaBuffers` struct that holds the 4 KiB rx + 1 KiB tx TCP socket buffers as struct fields, allocated once at startup. `perform_ota_update` reuses the buffers across calls, preventing 5 KiB leak per failed OTA.
-- [ ] **Partition table has only 8 KiB margin** (`app/partitions.csv`): `ota_1` ends at 0x3E0000 in 4 MiB flash (0x400000). Any future partition addition will overflow. Tight but currently correct.
+- [x] **Partition table margin verified** (`app/partitions.csv`): Recalculated: `ota_1` ends at `0x3E0000` in 4 MiB flash (`0x400000`), giving **128 KiB margin** (not 8 KiB as previously stated). Three 1.25 MiB partitions (factory + ota_0 + ota_1) fit comfortably. No change needed.
 
 ### High
 
@@ -265,7 +265,7 @@ These must be resolved before `cargo xtask ota-flash` can work end-to-end on a r
 
 ### App Build Verification
 
-- [ ] **Verify `app/` compiles for `xtensa-esp32-none-elf`**: The app has never been cross-compiled on this machine. Need to install the Xtensa toolchain (`rustup target add xtensa-esp32-none-elf` via esp-rs/rust-build) and run `cd app && cargo +esp build` successfully. This is the real "does it link" gate.
+- [x] **Verify `app/` compiles for `xtensa-esp32-none-elf`**: `cargo +esp check` succeeds with only warnings (dead_code, static_mut_refs). The `esp` toolchain is installed and the app compiles cleanly for the Xtensa ESP32 target.
 - [x] **Ensure `app/.cargo/config.toml` has target triple**: Already present — `[build] target = "xtensa-esp32-none-elf"` with `build-std = ["core", "alloc"]`. Verified.
 - [ ] **Install `cargo-espflash` and USB drivers**: Phase 0 prerequisite. Install CP210x or CH340 VCP driver for the ESP-WROOM-32 dev board. Run `cargo install cargo-espflash --locked`. Verify with `cargo espflash board-info --chip esp32`.
 
@@ -362,11 +362,13 @@ cargo xtask config-flash             # 3. Writes config to NVS (passwords encryp
 cargo xtask flash                    # 4. Flashes firmware
 ```
 
-- [ ] **Add `app/src/crypto.rs` — AES-128-CTR encryption using ESP32 hardware AES** (~80 lines): Use `esp_hal::aes::Aes` with `cipher_modes::Ctr` to encrypt/decrypt password strings. Key read from eFuse BLOCK3 (128 bits, burned by `provision`). Nonce is random per-value (12 bytes), prepended to ciphertext. Encrypted values stored as hex string prefixed with `"enc:"` in NVS. `maybe_decrypt()` helper passes through unencrypted values for migration from unencrypted NVS.
-- [ ] **Modify `app/src/config.rs` to encrypt/decrypt sensitive fields** (~20 lines): `load()` decrypts `wifi_password` and `mqtt_password` after NVS read. `save()` encrypts before NVS write. Other fields (ssid, host, port, device_id) remain plaintext (not sensitive). NVS values with no `"enc:"` prefix treated as plaintext (backward compatible with existing devices).
-- [ ] **Modify `app/src/main.rs` to pass AES peripheral to config** (~5 lines): Take `peripherals.AES` (currently unused), create `Aes::new(peripherals.AES)`, read key from eFuse BLOCK3 via `esp_hal::efuse::Efuse::read_field_le`, pass to config load/save.
-- [x] **Add `cargo xtask provision` command** (`xtask/src/provision.rs`): Generates random 16-byte AES key, saves to `launa.key` (gitignored), burns to eFuse BLOCK3 via `espefuse.py`. Uses `std::process::Command` to call `espefuse.py`/`espefuse` on PATH. Requires `pip install esptool` or ESP-IDF. `--port` overrides `launa.toml` serial port. Refuses to overwrite existing key (use `--no-confirm`). Cleans up key file on burn failure.
+- [x] **Add `app/src/crypto.rs` — AES-128-CTR encryption using ESP32 hardware AES** (~80 lines): Use `esp_hal::aes::Aes` with `cipher_modes::Ctr` to encrypt/decrypt password strings. Key read from eFuse BLOCK3 (128 bits, burned by `provision`). Nonce is random per-value (12 bytes), prepended to ciphertext. Encrypted values stored as hex string prefixed with `"enc:"` in NVS. `maybe_decrypt()` helper passes through unencrypted values for migration from unencrypted NVS.
+- [x] **Modify `app/src/config.rs` to decrypt sensitive fields on load** (~10 lines): `load()` decrypts `wifi_password` and `mqtt_password` after NVS read using `crypto::maybe_decrypt()`. `save()` encrypts via `crypto::encrypt()`. Other fields (ssid, host, port, device_id) remain plaintext. NVS values with no `"enc:"` prefix treated as plaintext (backward compatible).
+- [x] **Modify `app/src/main.rs` to pass AES peripheral and RNG to config** (~5 lines): Both `main()` and the `hw-test` serial config handler create `Aes::new(peripherals.AES)` and `Rng::new()`, pass to `AppConfig::load()` and `AppConfig::save()`.
+- [x] **Add `cargo xtask provision` command** (`xtask/src/provision.rs`): Generates random 16-byte AES key, burns to eFuse BLOCK3 via temp file (deleted after burn), stores key in OS keychain via `keyring` crate. Falls back to printing key if keychain unavailable. Uses `espefuse.py`/`espefuse` on PATH. `--port` overrides `launa.toml` serial port. `--no-confirm` kept for backward compat.
 - [x] **Update `launa.example.toml` with provisioning note**: Added comment noting `cargo xtask provision` one-time setup step.
+- [x] **Eliminate `launa.key` from host -- move encryption to ESP32** (`xtask/src/provision.rs`): `provision` generates a random 16-byte key, burns it to eFuse BLOCK3 via a temp file (deleted immediately), and stores the key hex in the OS keychain (via `keyring` crate) for future `config-flash` use. If keychain is unavailable, prints key for manual backup. The ESP32 firmware encrypts passwords using the eFuse key before writing to NVS, and decrypts on read.
+- [x] **Modify firmware serial config handler to encrypt sensitive fields before NVS write** (`app/src/config.rs`): The `hw-test` serial config handler creates `Aes`/`Rng` peripherals and calls `AppConfig::save()` which encrypts `wifi.password` and `mqtt.password` via `crypto::encrypt()` before NVS write. Other fields remain plaintext.
 
 ### Phase 2: Desktop End-to-End Test (No HW Needed)
 
@@ -641,3 +643,52 @@ One implementation of the logic, tested through the same interface whether it's 
 - [x] **Graceful OTA shutdown**: Publishes offline, sends MQTT DISCONNECT, drains UART, waits 50ms before reboot.
 - [x] **`sniff_topic()` in `launa-mqtt`**: `TopicBuilder::sniff_topic()` returns `launa/<device_id>/sniff`.
 - [x] **`publish_availability_stale()` and `disconnect()` in MQTT client**: Availability can report "stale" state; `disconnect()` sends MQTT DISCONNECT packet.
+
+## P2: Improve Simulation Realism for Shipping Confidence
+
+Code review of `launa-ota` and the broader simulation/test infrastructure identified gaps between desktop tests and real ESP32 behavior. These tasks make sims and mocks behave more like production, so passing tests actually means the firmware will work in the field.
+
+### launa-ota: Realistic MockOTA
+
+- [ ] **Add configurable failure injection to `MockOta`** (`crates/launa-ota/src/lib.rs`): Add `fail_on_begin: bool`, `fail_on_write_after: Option<usize>` (fail after N bytes written), `fail_on_finalize: bool` fields. Default all off. When enabled, corresponding methods return `Err(OtaError::*)`. Lets integration tests exercise error paths in the OTA pipeline (begin failure mid-erase, write failure mid-download, finalize failure after full write).
+- [ ] **Add `OtaError` context fields** (`crates/launa-ota/src/lib.rs`): Replace bare `OtaError::WriteFailed` with `OtaError::WriteFailed { byte_offset: usize }`, `OtaError::FlashError { address: u32 }`, etc. Implement `#[derive(thiserror::Error)]` with `#[error(...)]` annotations (dependency already in Cargo.toml but unused). Makes OTA failures debuggable from logs instead of guessing which write failed.
+- [ ] **Gate `extern crate alloc` behind mock feature** (`crates/launa-ota/src/lib.rs`): Move `extern crate alloc` and the `use alloc::vec::Vec` inside `#[cfg(any(test, feature = "mock"))]` block. The trait itself needs no allocation; only the mock uses `Vec`. Keeps the trait surface truly zero-allocation.
+
+### SpaSim: Protocol Realism
+
+- [ ] **Add configurable inter-frame jitter to SpaSim** (`crates/launa-sim/src/spa_sim.rs`): Real RS-485 frames arrive with ~1-5ms jitter. Add `frame_jitter_ticks: u64` field (default 0). When set, `tick()` adds 0..jitter_ticks delay bytes (random padding) before the status frame. Tests can enable this to verify FrameDecoder handles variable-length byte streams, not just perfectly framed data.
+- [ ] **Add command latency simulation to SpaSim** (`crates/launa-sim/src/spa_sim.rs`): Real spa doesn't process commands instantly. Add `command_latency_ticks: u64` field (default 0). When set, `process_incoming()` defers state changes by buffering commands and applying them N ticks later. Tests verify CommandTracker handles the delay before confirmation arrives.
+- [ ] **Add Ready frame interval variation** (`crates/launa-sim/src/spa_sim.rs`): Real Balboa controllers send Ready frames at slightly irregular intervals. Add `ready_interval_range: (u64, u64)` field (default `(1, 1)` = every tick). `tick()` sends Ready only within the range. Tests verify command queuing works when Ready doesn't arrive perfectly every tick.
+- [ ] **Add partial frame injection** (`crates/launa-sim/src/spa_sim.rs`): Add `inject_partial_frame_at(split_point: usize)` that emits only the first N bytes of a status frame in one tick, remainder in next. Tests verify FrameDecoder's streaming reassembly handles split reads correctly (critical for real UART where reads can return partial data).
+
+### SimBroker: MQTT Realism
+
+- [ ] **Upgrade `SimBroker` from recorder to functional mock broker** (`crates/launa-sim/src/sim_broker.rs`): Add QoS simulation (track packet IDs, expect PUBACK for QoS 1), subscription matching (only deliver to subscribed topics), in-order delivery guarantee, and configurable message loss rate. Current broker is just `Vec::push` with no protocol validation. Real MQTT broker behavior is essential for testing the hand-rolled MQTT v5 client's reconnect, resubscribe, and QoS handling.
+- [ ] **Add connection loss simulation to SimBroker** (`crates/launa-sim/src/sim_broker.rs`): Add `simulate_disconnect()` that marks the broker as disconnected, causing subsequent `publish()` calls to be silently dropped (mimicking TCP socket closure). Add `simulate_reconnect()` to restore. Tests verify the caller detects lost messages and recovers. Critical for testing MQTT reconnect + re-publish + re-subscribe logic that currently has zero test coverage.
+
+### OTA Integration Tests: End-to-End Simulation
+
+- [ ] **Add OTA graceful shutdown sequence test** (`crates/launa-integration-tests/src/lib.rs`): Test that the full OTA flow calls operations in the correct order: begin -> write(N) -> finalize -> mark_valid. Verify that a failed write mid-stream triggers rollback_and_reboot, not mark_valid. Current tests only test happy path and explicit rollback; no test verifies the error-path sequence.
+- [ ] **Add OTA firmware size validation test** (`crates/launa-integration-tests/src/lib.rs`): Test that `MockOta` (and eventually the real `EspOtaFlash`) rejects firmware larger than the OTA partition. Add `MAX_FIRMWARE_SIZE` constant to `MockOta` and return `OtaError::InvalidFirmware` when exceeded. Real ESP32 has fixed-size partitions; writing past the boundary corrupts the next partition.
+- [ ] **Add OTA concurrent-operation safety test** (`crates/launa-integration-tests/src/lib.rs`): Verify that calling `begin()` while already in progress, or `write()` before `begin()`, or `finalize()` with zero bytes written, returns appropriate errors. Real firmware guards against these but no test verifies it.
+
+### Integration Tests: Error Path Coverage
+
+- [ ] **Add FrameDecoder stress test with realistic byte streams** (`crates/launa-integration-tests/src/lib.rs`): Feed FrameDecoder with: (1) many 0x7E bytes in a row (bus idle), (2) frames split at every possible byte boundary, (3) corrupted frames interleaved with valid ones, (4) frames with all 0x7D escape bytes in payload. Verifies the decoder never panics, never loses sync, and recovers from corruption to find the next valid frame.
+- [ ] **Add registration race condition test** (`crates/launa-integration-tests/src/lib.rs`): Test that commands arriving during registration (before client ID assigned) are correctly queued and sent after registration completes. Currently untested — real firmware receives MQTT commands at any time.
+- [ ] **Add multi-command queue drain test** (`crates/launa-integration-tests/src/lib.rs`): Queue 5+ commands, verify they drain one-per-Ready-window in FIFO order. Verify that NothingToSend is sent when queue empties. Test the bounded capacity cap (MAX_PENDING_COMMANDS=8) by queuing 9 commands and verifying the 9th is rejected.
+
+## Code Review: launa-protocol Crate (2026-04-15)
+
+Full review of `crates/launa-protocol/`. 11 source files, 115 tests (71 unit + 27 fuzz + 17 property), all passing. Well-structured, clean `no_std`, thorough testing including property-based and fuzz. Issues below are actionable improvements only.
+
+### Moderate
+
+- [ ] **Remove or repurpose `message.rs`** (`crates/launa-protocol/src/message.rs`): `MessageType` enum is exported from `lib.rs` but largely redundant with `IncomingMessage` in `dispatcher.rs`. `from_bytes()` returns `Unknown` for `0x0A 0xBF` and `0xFE 0xBF` (the most common types) since those need payload context, making it useless as a frame-level discriminator. Either: (a) remove `MessageType` and its re-export from `lib.rs`, or (b) integrate it into the dispatcher as a first-pass filter. Check downstream crates for usage first.
+- [ ] **Add `log::warn!` on parse failures in `dispatcher.rs`** (`crates/launa-protocol/src/dispatcher.rs`): Failed parses silently fall through to `IncomingMessage::Unknown`. Adding `log::warn!` on each `Err(_)` arm would surface protocol mismatches on real hardware without changing behavior. ~10 lines, one `log::warn!` per parse error path. No new dependency (`log` already in Cargo.toml).
+- [ ] **Add buffer size limit to `FrameDecoder`** (`crates/launa-protocol/src/frame.rs`): Streaming decoder has no bound on `buffer: Vec<u8>`. A noisy RS-485 line with repeated data between markers grows memory unboundedly on a 32 KiB heap. Add `max_buffer_size: usize` field (default 512 bytes, configurable via `with_max_buffer(size)` builder). When exceeded, reset buffer + state and increment `crc_error_count`. Prevents OOM on embedded.
+
+### Low / Code Quality
+
+- [ ] **Fix dead code in `status.rs` test** (`crates/launa-protocol/src/status.rs`): `test_parse_status_pumps_and_circ_blower` writes `payload[11] = 0x09` then immediately overwrites it with `payload[11] = (1 | (0 << 2) | (2 << 4))`. The first line is dead code. Remove the first assignment.
+- [ ] **Verify `config.rs` pump5 bit decode matches hardware** (`crates/launa-protocol/src/config.rs`): `pump_configs[5]` decodes `(payload[6] >> 6) & 0x03` but skips bits 2-5 of byte 6. In `status.rs`, pump5 uses `payload[12] bits 0-1` and pump6 uses `bits 2-3`. The config response may use a different layout, but worth cross-referencing against real hardware captures during Phase 3 sniffing to confirm bits 2-5 are truly unused.

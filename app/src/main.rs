@@ -56,6 +56,7 @@ use log::{debug, error, info, warn};
 
 mod clock;
 mod config;
+mod crypto;
 mod macros;
 mod mqtt_client;
 mod net_util;
@@ -475,7 +476,9 @@ async fn main(spawner: Spawner) {
 
     // ── Load config from NVS ────────────────────────────────────────
     let mut nvs = config::AppConfig::open_nvs(peripherals.FLASH);
-    let app_config = config::AppConfig::load(&mut nvs);
+    let mut aes = esp_hal::aes::Aes::new(peripherals.AES);
+    let mut rng = esp_hal::rng::Rng::new();
+    let app_config = config::AppConfig::load(&mut nvs, &mut aes, &mut rng);
     let device_id = app_config.device_id.clone();
     info!("Config loaded: device_id={}", device_id);
 
@@ -697,7 +700,9 @@ async fn main(_spawner: Spawner) {
 
     // Write to NVS
     let mut nvs = config::AppConfig::open_nvs(peripherals.FLASH);
-    app_config.save(&mut nvs);
+    let mut aes = esp_hal::aes::Aes::new(peripherals.AES);
+    let mut rng = esp_hal::rng::Rng::new();
+    app_config.save(&mut nvs, &mut aes, &mut rng);
 
     let _ = uart.write(b"CONFIG_OK\n");
     let _ = uart.flush();
@@ -723,7 +728,9 @@ async fn main(spawner: Spawner) {
 
     // ── Load config from NVS ────────────────────────────────────────
     let mut nvs = config::AppConfig::open_nvs(peripherals.FLASH);
-    let app_config = config::AppConfig::load(&mut nvs);
+    let mut aes = esp_hal::aes::Aes::new(peripherals.AES);
+    let mut rng = esp_hal::rng::Rng::new();
+    let app_config = config::AppConfig::load(&mut nvs, &mut aes, &mut rng);
     info!("Config loaded: device_id={}", app_config.device_id);
     // Recover flash from NVS for OTA use
     let flash = nvs.into_inner();

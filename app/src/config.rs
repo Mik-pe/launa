@@ -3,7 +3,11 @@
 extern crate alloc;
 
 use alloc::string::String;
+use esp_hal::aes::Aes;
+use esp_hal::rng::Rng;
 use log::{info, warn};
+
+use crate::crypto;
 
 const NAMESPACE: &str = "launa";
 
@@ -41,12 +45,17 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    pub fn load(nvs: &mut esp_nvs::Nvs<esp_storage::FlashStorage<'static>>) -> Self {
+    pub fn load(
+        nvs: &mut esp_nvs::Nvs<esp_storage::FlashStorage<'static>>,
+        aes: &mut Aes<'_>,
+        rng: &mut Rng,
+    ) -> Self {
         let ns = esp_nvs::Key::from_str(NAMESPACE);
 
         let wifi_ssid = nvs_get_str(nvs, &ns, KEY_WIFI_SSID)
             .unwrap_or_else(|| String::from("YOUR_WIFI_SSID"));
         let wifi_password = nvs_get_str(nvs, &ns, KEY_WIFI_PASS)
+            .map(|v| crypto::maybe_decrypt(&v, aes, rng))
             .unwrap_or_else(|| String::from("YOUR_WIFI_PASSWORD"));
         let mqtt_host = nvs_get_str(nvs, &ns, KEY_MQTT_HOST)
             .unwrap_or_else(|| String::from("192.168.1.100"));
@@ -55,6 +64,7 @@ impl AppConfig {
         let mqtt_user = nvs_get_str(nvs, &ns, KEY_MQTT_USER)
             .unwrap_or_else(|| String::new());
         let mqtt_password = nvs_get_str(nvs, &ns, KEY_MQTT_PASS)
+            .map(|v| crypto::maybe_decrypt(&v, aes, rng))
             .unwrap_or_else(|| String::new());
         let device_id = nvs_get_str(nvs, &ns, KEY_DEVICE_ID)
             .unwrap_or_else(|| String::from("launa_spa"));
@@ -75,14 +85,19 @@ impl AppConfig {
         }
     }
 
-    pub fn save(&self, nvs: &mut esp_nvs::Nvs<esp_storage::FlashStorage<'static>>) {
+    pub fn save(
+        &self,
+        nvs: &mut esp_nvs::Nvs<esp_storage::FlashStorage<'static>>,
+        aes: &mut Aes<'_>,
+        rng: &mut Rng,
+    ) {
         let ns = esp_nvs::Key::from_str(NAMESPACE);
         nvs_set(nvs, &ns, KEY_WIFI_SSID, self.wifi_ssid.as_str());
-        nvs_set(nvs, &ns, KEY_WIFI_PASS, self.wifi_password.as_str());
+        nvs_set(nvs, &ns, KEY_WIFI_PASS, crypto::encrypt(&self.wifi_password, aes, rng).as_str());
         nvs_set(nvs, &ns, KEY_MQTT_HOST, self.mqtt_host.as_str());
         nvs_set(nvs, &ns, KEY_MQTT_PORT, self.mqtt_port);
         nvs_set(nvs, &ns, KEY_MQTT_USER, self.mqtt_user.as_str());
-        nvs_set(nvs, &ns, KEY_MQTT_PASS, self.mqtt_password.as_str());
+        nvs_set(nvs, &ns, KEY_MQTT_PASS, crypto::encrypt(&self.mqtt_password, aes, rng).as_str());
         nvs_set(nvs, &ns, KEY_DEVICE_ID, self.device_id.as_str());
         info!("Config saved to NVS");
     }

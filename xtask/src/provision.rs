@@ -1,19 +1,12 @@
 use anyhow::{bail, Context};
+use rand::Rng;
 use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
-
-fn project_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf()
-}
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     // Parse arguments
     let mut port_name = None;
-    let mut skip_confirm = false;
+    let mut _skip_confirm = false; // kept for backward compat
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -25,7 +18,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                 port_name = Some(args[i].clone());
             }
             "--no-confirm" => {
-                skip_confirm = true;
+                _skip_confirm = true;
             }
             other => bail!("Unknown argument: {}", other),
         }
@@ -38,31 +31,30 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         .or_else(|| config.as_ref().map(|c| c.device.serial_port.clone()))
         .context("No serial port specified. Use --port or set device.serial_port in launa.toml")?;
 
-    let key_path = project_root().join("launa.key");
-
-    // Warn if launa.key already exists
-    if key_path.exists() {
-        if !skip_confirm {
-            bail!(
-                "Key file already exists: {}\nRefusing to overwrite. Delete it first or use --no-confirm to overwrite.",
-                key_path.display()
-            );
-        }
-        eprintln!(
-            "Warning: Overwriting existing key file: {}",
-            key_path.display()
-        );
-    }
+    // Determine keychain username from config device ID
+    let keychain_user = config
+        .as_ref()
+        .map(|c| c.device.id.as_str())
+        .filter(|id| !id.is_empty())
+        .unwrap_or("default");
 
     // Generate a random 16-byte AES key
-    let key: [u8; 16] = rand::random();
+    let key: [u8; 16] = rand::thread_rng().gen();
 
-    // Save key to launa.key (binary)
+    // Write key to a temporary file (cleaned up after espefuse completes)
+    let temp_dir = std::env::temp_dir();
+    let random_suffix: String = rand::thread_rng()
+        .sample_iter(&rand::distributions::Alphanumeric)
+        .take(12)
+        .map(char::from)
+        .collect();
+    let key_path = temp_dir.join(format!("launa-key-{}.tmp", random_suffix));
+
     fs::write(&key_path, &key)
-        .with_context(|| format!("Failed to write key to {}", key_path.display()))?;
+        .with_context(|| format!("Failed to write key to temp file {}", key_path.display()))?;
 
     println!(
-        "Generated 16-byte AES key and saved to {}",
+        "Generated 16-byte AES key in temp file: {}",
         key_path.display()
     );
 
@@ -76,7 +68,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     // Burn the key to eFuse BLOCK3
     println!("Burning key to eFuse BLOCK3 on port {}...", port_name);
 
-    let status = Command::new(&espefuse)
+    let burn_result = Command::new(&espefuse)
         .args(&[
             "--port",
             &port_name,
@@ -86,13 +78,19 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             "--no-confirm",
         ])
         .status()
-        .with_context(|| format!("Failed to run {}", espefuse))?;
+        .with_context(|| format!("Failed to run {}", espefuse));
 
+    // Always clean up the temp file
+    if let Err(e) = fs::remove_file(&key_path) {
+        eprintln!("Warning: could not remove temp key file: {}", e);
+    } else {
+        println!("Temp key file cleaned up.");
+    }
+
+    let status = burn_result?;
     if !status.success() {
-        // Clean up the key file since burning failed
-        let _ = fs::remove_file(&key_path);
         bail!(
-            "espefuse burn-block-data failed. The key file has been removed.\n\
+            "espefuse burn-block-data failed.\n\
              Check the error above and try again."
         );
     }
@@ -104,10 +102,36 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         "  Key preview (first 4 bytes): {:02x}{:02x}{:02x}{:02x}",
         key[0], key[1], key[2], key[3]
     );
-    println!("  Key file: {}", key_path.display());
-    println!();
-    println!("IMPORTANT: Back up launa.key securely. It cannot be recovered from eFuse.");
 
+    // Store the key in the OS keychain
+    let key_hex: String = key.iter().map(|b| format!("{:02x}", b)).collect();
+    match store_key_in_keychain(keychain_user, &key_hex) {
+        Ok(()) => {
+            println!(
+                "  Key stored in OS keychain (service: \"launa\", user: \"{}\").",
+                keychain_user
+            );
+        }
+        Err(e) => {
+            eprintln!();
+            eprintln!("⚠ Could not store key in OS keychain: {}", e);
+            eprintln!("  Save this key securely — it cannot be recovered from eFuse:");
+            eprintln!("  {}", key_hex);
+        }
+    }
+
+    println!();
+
+    Ok(())
+}
+
+/// Try to store the key in the OS keychain using the `keyring` crate.
+fn store_key_in_keychain(user: &str, key_hex: &str) -> anyhow::Result<()> {
+    let entry = keyring::Entry::new("launa", user)
+        .map_err(|e| anyhow::anyhow!("Failed to create keyring entry: {}", e))?;
+    entry
+        .set_password(key_hex)
+        .map_err(|e| anyhow::anyhow!("Failed to set keyring password: {}", e))?;
     Ok(())
 }
 
