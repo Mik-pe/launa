@@ -651,8 +651,8 @@ Code review of `launa-ota` and the broader simulation/test infrastructure identi
 ### launa-ota: Realistic MockOTA
 
 - [ ] **Add configurable failure injection to `MockOta`** (`crates/launa-ota/src/lib.rs`): Add `fail_on_begin: bool`, `fail_on_write_after: Option<usize>` (fail after N bytes written), `fail_on_finalize: bool` fields. Default all off. When enabled, corresponding methods return `Err(OtaError::*)`. Lets integration tests exercise error paths in the OTA pipeline (begin failure mid-erase, write failure mid-download, finalize failure after full write).
-- [ ] **Add `OtaError` context fields** (`crates/launa-ota/src/lib.rs`): Replace bare `OtaError::WriteFailed` with `OtaError::WriteFailed { byte_offset: usize }`, `OtaError::FlashError { address: u32 }`, etc. Implement `#[derive(thiserror::Error)]` with `#[error(...)]` annotations (dependency already in Cargo.toml but unused). Makes OTA failures debuggable from logs instead of guessing which write failed.
-- [ ] **Gate `extern crate alloc` behind mock feature** (`crates/launa-ota/src/lib.rs`): Move `extern crate alloc` and the `use alloc::vec::Vec` inside `#[cfg(any(test, feature = "mock"))]` block. The trait itself needs no allocation; only the mock uses `Vec`. Keeps the trait surface truly zero-allocation.
+- [x] **Add `OtaError` context fields** (`crates/launa-ota/src/lib.rs`): Replace bare `OtaError::WriteFailed` with `OtaError::WriteFailed { byte_offset: usize }`, `OtaError::FlashError { address: u32 }`, etc. Implement `#[derive(thiserror::Error)]` with `#[error(...)]` annotations (dependency already in Cargo.toml but unused). Makes OTA failures debuggable from logs instead of guessing which write failed.
+- [x] **Gate `extern crate alloc` behind mock feature** (`crates/launa-ota/src/lib.rs`): Move `extern crate alloc` and the `use alloc::vec::Vec` inside `#[cfg(any(test, feature = "mock"))]` block. The trait itself needs no allocation; only the mock uses `Vec`. Keeps the trait surface truly zero-allocation.
 
 ### SpaSim: Protocol Realism
 

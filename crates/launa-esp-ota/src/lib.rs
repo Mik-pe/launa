@@ -142,9 +142,10 @@ where
         while offset < aligned_end {
             let abs_offset = base + offset;
             debug!("Erasing sector at 0x{:08X}", abs_offset);
+            let addr = abs_offset;
             self.flash
                 .erase(abs_offset, abs_offset + SECTOR_SIZE)
-                .map_err(|_| OtaError::FlashError)?;
+                .map_err(|_| OtaError::FlashError { address: addr })?;
             offset += SECTOR_SIZE;
         }
         Ok(())
@@ -157,7 +158,9 @@ where
         if data.len() % WORD_SIZE as usize == 0 {
             self.flash
                 .write(abs_offset, data)
-                .map_err(|_| OtaError::WriteFailed)?;
+                .map_err(|_| OtaError::FlashError {
+                    address: abs_offset,
+                })?;
         } else {
             let pad_len =
                 (WORD_SIZE as usize - (data.len() % WORD_SIZE as usize)) % WORD_SIZE as usize;
@@ -165,7 +168,9 @@ where
             padded[..data.len()].copy_from_slice(data);
             self.flash
                 .write(abs_offset, &padded)
-                .map_err(|_| OtaError::WriteFailed)?;
+                .map_err(|_| OtaError::FlashError {
+                    address: abs_offset,
+                })?;
         }
         Ok(())
     }
@@ -174,8 +179,11 @@ where
     /// Returns (seq_0, seq_1) where each is 0 if the slot is empty/erased.
     fn read_otadata_sequences(&mut self) -> Result<(u32, u32), OtaError> {
         let mut buf = [0u8; OTA_ENTRY_SIZE * 2];
-        ReadNorFlash::read(&mut self.flash, OTADATA_OFFSET, &mut buf)
-            .map_err(|_| OtaError::FlashError)?;
+        ReadNorFlash::read(&mut self.flash, OTADATA_OFFSET, &mut buf).map_err(|_| {
+            OtaError::FlashError {
+                address: OTADATA_OFFSET,
+            }
+        })?;
 
         let raw_0 = u32_from_be(&buf[OTA_SEQ_OFFSET..OTA_SEQ_OFFSET + OTA_SEQ_SIZE]);
         let raw_1 = u32_from_be(
@@ -229,11 +237,15 @@ where
 
         self.flash
             .erase(slot_offset, slot_offset + SECTOR_SIZE)
-            .map_err(|_| OtaError::FlashError)?;
+            .map_err(|_| OtaError::FlashError {
+                address: slot_offset,
+            })?;
 
         self.flash
             .write(slot_offset, &entry)
-            .map_err(|_| OtaError::FlashError)?;
+            .map_err(|_| OtaError::FlashError {
+                address: slot_offset,
+            })?;
 
         Ok(())
     }
@@ -277,7 +289,7 @@ where
 
     fn write(&mut self, chunk: &[u8]) -> Result<(), OtaError> {
         if !self.in_progress {
-            return Err(OtaError::WriteFailed);
+            return Err(OtaError::WriteFailed { byte_offset: 0 });
         }
 
         if self.write_offset + chunk.len() as u32 > self.target.size() {
@@ -287,7 +299,9 @@ where
                 chunk.len(),
                 self.target.size()
             );
-            return Err(OtaError::WriteFailed);
+            return Err(OtaError::WriteFailed {
+                byte_offset: self.bytes_written as usize,
+            });
         }
 
         self.aligned_write(self.write_offset, chunk)?;

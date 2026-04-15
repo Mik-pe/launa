@@ -1348,7 +1348,9 @@ mod tests {
             fn write(&mut self, chunk: &[u8]) -> Result<(), OtaError> {
                 if self.failed || self.inner.firmware_data.len() + chunk.len() > self.max_bytes {
                     self.failed = true;
-                    return Err(OtaError::WriteFailed);
+                    return Err(OtaError::WriteFailed {
+                        byte_offset: self.inner.firmware_data.len(),
+                    });
                 }
                 self.inner.write(chunk)
             }
