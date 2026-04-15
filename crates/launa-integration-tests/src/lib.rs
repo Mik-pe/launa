@@ -404,9 +404,13 @@ mod tests {
     fn test_ota_begin_clears_previous_data() {
         let mut ota = launa_ota::mock::MockOta::new();
 
+        // First OTA session: begin -> write -> finalize
+        ota.begin().unwrap();
         ota.write(&[0x01, 0x02, 0x03]).unwrap();
         assert_eq!(ota.firmware_data.len(), 3);
+        ota.finalize().unwrap();
 
+        // New session: begin() clears previous data
         ota.begin().unwrap();
         assert!(ota.firmware_data.is_empty());
     }
@@ -1417,7 +1421,7 @@ mod tests {
     fn test_ota_empty_firmware() {
         let mut ota = launa_ota::mock::MockOta::new();
 
-        // Edge case: zero-length firmware
+        // Edge case: zero-length firmware — finalize should reject
         let firmware: Vec<u8> = Vec::new();
         let server = SimHttpServer::new(firmware.clone(), 1024);
 
@@ -1428,12 +1432,12 @@ mod tests {
         for chunk in &chunks {
             ota.write(chunk).unwrap();
         }
-        ota.finalize().unwrap();
-        ota.mark_valid().unwrap();
-
-        assert!(ota.finalized);
-        assert!(ota.valid);
-        assert!(ota.firmware_data.is_empty());
+        // Finalize with zero bytes should fail
+        assert!(ota.finalize().is_err());
+        assert!(!ota.finalized);
+        // Rollback the failed session
+        ota.rollback_and_reboot().unwrap();
+        assert!(ota.rolled_back);
     }
 
     // ========================================================================
