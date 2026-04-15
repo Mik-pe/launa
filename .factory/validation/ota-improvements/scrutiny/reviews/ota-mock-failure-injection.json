@@ -1,0 +1,56 @@
+{
+  "featureId": "ota-mock-failure-injection",
+  "reviewedAt": "2026-04-15T21:30:00Z",
+  "commitId": "b2e6330",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Solid, well-tested implementation of failure injection for MockOta. All three failure injection fields (fail_on_begin, fail_on_write_after, fail_on_finalize) work correctly with proper defaults. The in_progress guard and MAX_FIRMWARE_SIZE constant are properly implemented. 11 new tests cover all specified failure modes, guard conditions, and edge cases. Two integration tests were properly updated to match the new session contract. One minor observation about ambiguous error source in begin() when both in_progress and fail_on_begin are true.",
+    "issues": [
+      {
+        "file": "crates/launa-ota/src/lib.rs",
+        "line": 253,
+        "severity": "non_blocking",
+        "description": "When `fail_on_begin = true` and `in_progress = true`, both conditions return `OtaError::BeginFailed`, making it ambiguous which condition caused the failure. The `in_progress` check runs first, so a caller cannot distinguish 'session already active' from 'injected failure'. This is a minor concern since the mock is for testing, but callers that want to assert a specific failure reason cannot differentiate. Consider using a distinct error variant (e.g., OtaError::AlreadyInProgress) for the in_progress guard in a future iteration."
+      },
+      {
+        "file": "crates/launa-ota/src/lib.rs",
+        "line": 253,
+        "severity": "non_blocking",
+        "description": "When `fail_on_begin = true`, the `begin()` method returns Err(BeginFailed) without setting `in_progress = true`. This means the mock remains usable (a subsequent `begin()` with `fail_on_begin = false` would succeed). This is actually correct and desirable behavior — failed begin should not lock the mock — but it's worth noting there's no explicit test verifying that a failed begin (due to fail_on_begin) leaves in_progress=false and allows retry. The existing test_mock_ota_fail_on_begin creates a fresh MockOta for the fail case, so it doesn't verify retry-ability after an injected failure."
+      },
+      {
+        "file": "crates/launa-ota/src/lib.rs",
+        "line": 270,
+        "severity": "non_blocking",
+        "description": "The `write()` method checks `firmware_data.len() + chunk.len() > MAX_FIRMWARE_SIZE` using strict greater-than. This means writing exactly MAX_FIRMWARE_SIZE bytes is allowed (correct), and writing MAX_FIRMWARE_SIZE + 1 bytes in a single chunk is rejected (correct). However, the size check is done on each individual chunk via addition, which could theoretically overflow if chunk.len() is near usize::MAX. In practice this is impossible since chunks come from real firmware data in memory, so this is not a real concern."
+      },
+      {
+        "file": "crates/launa-ota/src/lib.rs",
+        "line": 284,
+        "severity": "non_blocking",
+        "description": "The `finalize()` method sets `in_progress = false` only on success (after setting finalized=true). When finalize fails (due to empty data or fail_on_finalize), in_progress remains true, which means the caller must use rollback_and_reboot() to reset the state. This is reasonable behavior for a mock simulating real hardware where a failed finalize would require recovery, but there's no test verifying that finalize failure preserves in_progress=true and that rollback clears it. The test_mock_ota_fail_on_finalize only checks !ota.finalized."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The feature description says 'Add MAX_FIRMWARE_SIZE constant (set to partition size ~1.75MB)'. The value chosen is 1_835_008 bytes (0x1C0000), which is exactly 1.75 MiB. The constant is placed between the tests module and the mock module, outside any cfg gate. This means MAX_FIRMWARE_SIZE is always available even when the mock feature is disabled, which is appropriate since real OTA code (launa-esp-ota) would need this constant too. The placement seems intentional but isn't documented in AGENTS.md or architecture.md.",
+      "evidence": "crates/launa-ota/src/lib.rs:215 — `pub const MAX_FIRMWARE_SIZE: usize = 1_835_008;` placed outside #[cfg(any(test, feature = \"mock\"))]"
+    },
+    {
+      "area": "knowledge",
+      "observation": "The in_progress guard introduces a state machine for MockOta: (not_started → in_progress → finalized/rolled_back). The state transitions are: begin() sets in_progress=true, successful finalize() sets in_progress=false, rollback_and_reboot() sets in_progress=false. Failed operations leave state unchanged. This OTA session contract is now relied upon by integration tests but isn't documented in architecture.md or the crate-level docs. Future workers modifying MockOta need to understand this state machine.",
+      "evidence": "crates/launa-ota/src/lib.rs:251-308 — MockOta impl with in_progress field and state transitions across begin/write/finalize/rollback_and_reboot"
+    },
+    {
+      "area": "skills",
+      "observation": "The rust-worker skill's example handoff mentions tests like 'test_ota_firmware_size_exceeded' and 'test_ota_concurrent_safety' which don't exactly match the actual test names implemented ('test_mock_ota_firmware_size_exceeded', split into 'test_mock_ota_begin_while_in_progress' + 'test_mock_ota_write_before_begin'). The skill example is meant to be illustrative rather than prescriptive, and the worker correctly followed the feature description rather than the example. No skill update needed.",
+      "evidence": "Worker followed feature description faithfully. Skill example handoff is clearly marked as an example. Worker's skillFeedback.followedProcedure = true."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The implementation correctly adds failure injection (fail_on_begin, fail_on_write_after, fail_on_finalize) to MockOta with proper defaults (all off), an in_progress guard preventing invalid state transitions, and MAX_FIRMWARE_SIZE constant. 11 new tests thoroughly cover all failure modes, guard conditions, and backward compatibility. Two integration tests were properly updated for the new session contract. All 14 OTA tests pass and all 371 workspace tests pass. The code follows project conventions (no_std, thiserror, TDD). Minor observations: begin() returns same error for both in_progress guard and injected failure (non-blocking), and there are no explicit tests for retry-after-failed-begin or in_progress state after failed finalize (non-blocking). These don't affect correctness for the intended testing use case."
+}
