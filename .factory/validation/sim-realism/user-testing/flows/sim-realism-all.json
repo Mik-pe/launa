@@ -1,0 +1,199 @@
+{
+  "groupId": "sim-realism-all",
+  "testedAt": "2026-04-15T23:50:00Z",
+  "isolation": {
+    "type": "cargo test",
+    "crate": "launa-sim",
+    "noServices": true,
+    "noUI": true,
+    "idempotent": true
+  },
+  "toolsUsed": ["cargo test"],
+  "assertions": [
+    {
+      "id": "VAL-SIM-001",
+      "title": "SpaSim jitter default backward compatible",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-sim test_frame_jitter_default_unchanged", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testName": "spa_sim::tests::test_frame_jitter_default_unchanged",
+        "testResult": "ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-SIM-002",
+      "title": "SpaSim jitter adds variable padding",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-sim test_frame_jitter_variable_padding", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testName": "spa_sim::tests::test_frame_jitter_variable_padding",
+        "testResult": "ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-SIM-003",
+      "title": "SpaSim command latency default immediate",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-sim test_command_latency_default_immediate", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testName": "spa_sim::tests::test_command_latency_default_immediate",
+        "testResult": "ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-SIM-004",
+      "title": "SpaSim command latency deferred",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-sim test_command_latency_deferred", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testName": "spa_sim::tests::test_command_latency_deferred",
+        "testResult": "ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-SIM-005",
+      "title": "SpaSim Ready interval default every tick",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-sim test_ready_interval_default_every_tick", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testName": "spa_sim::tests::test_ready_interval_default_every_tick",
+        "testResult": "ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-SIM-006",
+      "title": "SpaSim Ready interval randomized",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-sim test_ready_interval_randomized", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testName": "spa_sim::tests::test_ready_interval_randomized",
+        "testResult": "ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-SIM-007",
+      "title": "SpaSim partial frame injection split",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-sim test_partial_frame_split_reassembly", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testName": "spa_sim::tests::test_partial_frame_split_reassembly",
+        "testResult": "ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-SIM-008",
+      "title": "SpaSim partial frame injection one-shot",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-sim test_partial_frame_oneshot_reset", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testName": "spa_sim::tests::test_partial_frame_oneshot_reset",
+        "testResult": "ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-SIM-009",
+      "title": "SimBroker QoS PUBACK tracking",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-sim test_simbroker_qos1_puback", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testName": "sim_broker::tests::test_simbroker_qos1_puback",
+        "testResult": "ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-SIM-010",
+      "title": "SimBroker subscription matching",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-sim test_simbroker_subscription_filtering", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testName": "sim_broker::tests::test_simbroker_subscription_filtering",
+        "testResult": "ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-SIM-011",
+      "title": "SimBroker message loss rate",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-sim test_simbroker_loss_rate", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testName": "sim_broker::tests::test_simbroker_loss_rate",
+        "testResult": "ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-SIM-012",
+      "title": "SimBroker disconnect drops publishes",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-sim test_simbroker_disconnect_drops", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testName": "sim_broker::tests::test_simbroker_disconnect_drops",
+        "testResult": "ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-SIM-013",
+      "title": "SimBroker reconnect restores",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-sim test_simbroker_reconnect_restores", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testName": "sim_broker::tests::test_simbroker_reconnect_restores",
+        "testResult": "ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 13 assertions: all 13 passed. All evidence tests exist in launa-sim and pass. Full suite: 63 unit tests + 1 doc-test passed, 0 failed."
+}

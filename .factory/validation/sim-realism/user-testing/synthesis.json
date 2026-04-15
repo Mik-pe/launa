@@ -1,0 +1,30 @@
+{
+  "milestone": "sim-realism",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 13,
+    "passed": 13,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-SIM-001",
+    "VAL-SIM-002",
+    "VAL-SIM-003",
+    "VAL-SIM-004",
+    "VAL-SIM-005",
+    "VAL-SIM-006",
+    "VAL-SIM-007",
+    "VAL-SIM-008",
+    "VAL-SIM-009",
+    "VAL-SIM-010",
+    "VAL-SIM-011",
+    "VAL-SIM-012",
+    "VAL-SIM-013"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null
+}
