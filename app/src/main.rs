@@ -88,7 +88,7 @@ pub static WIFI_RECONNECT_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::
 /// Channel for sending alert payloads from the main loop to the MQTT task.
 static ALERT_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
 
-// ── Combined UART task (reads frames + writes outgoing bytes) ──────────
+// ── Combined UART task (reads frames first, then writes outgoing bytes) ──────────
 
 #[embassy_executor::task]
 async fn uart_task(mut transport: transport::Rs485Transport) {
@@ -100,14 +100,7 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
     info!("UART task started");
 
     loop {
-        // Check for outgoing data first (prioritize writes)
-        if let Ok(data) = uart_rx.try_receive() {
-            if let Err(e) = transport.write_all(&data).await {
-                error!("UART write error: {:?}", e);
-            }
-        }
-
-        // Read from UART
+        // Read from UART first (prioritize reads to avoid starving frame processing)
         match transport.read(&mut buf).await {
             Ok(n) if n > 0 => {
                 for &byte in &buf[..n] {
@@ -122,6 +115,13 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
             Err(e) => {
                 error!("UART read error: {:?}", e);
                 Timer::after(Duration::from_millis(10)).await;
+            }
+        }
+
+        // Check for outgoing data after reads
+        if let Ok(data) = uart_rx.try_receive() {
+            if let Err(e) = transport.write_all(&data).await {
+                error!("UART write error: {:?}", e);
             }
         }
     }

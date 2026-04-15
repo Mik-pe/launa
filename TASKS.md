@@ -166,7 +166,7 @@ Full logical review of all 12 source files in `app/src/`. Issues ordered by seve
 
 - [x] **WiFi reconnect signal fires on initial connect** (`app/src/wifi.rs:56-58`): Fixed — added `first_connect` flag; `WIFI_RECONNECT_SIGNAL` only signals on reconnections, not the initial connect.
 - [x] **MQTT loss reconnect uses fixed 5s backoff, no exponential backoff** (`app/src/main.rs`): Added exponential backoff (5s→10s→20s→40s→60s cap) matching the WiFi-reconnect strategy, with alert after 3 failures throttled to 60s and max 10 attempts log message.
-- [ ] **`send_connect` reads CONNACK in a single TCP read** (`app/src/mqtt_client.rs:288-291`): Only one `transport.read()` call is issued for CONNACK. If the TCP stack hasn't received the full packet yet, partial data causes a false connection failure. Same issue in `subscribe()` for SUBACK. Should loop until enough bytes are received.
+- [x] **`send_connect` reads CONNACK in a single TCP read** (`app/src/mqtt_client.rs:288-291`): Added `read_exact()` helper that loops until enough bytes are accumulated, with a 5-second deadline. Both `send_connect()` (CONNACK, min 4 bytes) and `subscribe()` (SUBACK, min 5 bytes) now use it.
 
 ### Moderate
 
@@ -180,8 +180,8 @@ Full logical review of all 12 source files in `app/src/`. Issues ordered by seve
 ### Low / Code Quality
 
 - [x] **`clock.rs` module is dead code** (`app/src/clock.rs`): Verified — `EmbassyClock` IS used in `main.rs` for `SpaApp` construction. Not dead code. No change needed.
-- [ ] **`HeapMonitor` check interval is 60s** (`app/src/heap_monitor.rs:17`): With a 32 KiB heap and multiple concurrent allocators, 60 seconds between checks is long. A burst of allocations could exhaust the heap between checks. Consider reducing to 15-30s.
-- [ ] **`uart_task` write-priority could starve reads** (`app/src/main.rs:106-111`): Outgoing UART data is checked before reading. A constant stream of writes could delay incoming frame processing. Unlikely in practice but worth noting.
+- [x] **`HeapMonitor` check interval is 60s** (`app/src/heap_monitor.rs:17`): Reduced from 60s to 30s (`HEAP_CHECK_INTERVAL_MS` in `launa-core`) to catch heap exhaustion faster on the 32 KiB heap.
+- [x] **`uart_task` write-priority could starve reads** (`app/src/main.rs:106-111`): Swapped order — UART reads are processed first, then outgoing writes. Prevents incoming frame processing from being delayed by a constant stream of writes.
 
 ## P0: Production Blockers
 

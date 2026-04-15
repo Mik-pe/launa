@@ -211,6 +211,34 @@ impl MqttClient {
         Ok(())
     }
 
+    /// Read from the transport until at least `min_bytes` bytes are in `buf[..pos]`,
+    /// or until a 5-second timeout expires between individual read attempts.
+    /// Returns the total number of bytes read into the buffer.
+    async fn read_exact(&mut self, buf: &mut [u8], min_bytes: usize) -> Result<usize, MqttError> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut pos = 0;
+        while pos < min_bytes {
+            if Instant::now() >= deadline {
+                warn!("MQTT read_exact timed out: got {} bytes, need {}", pos, min_bytes);
+                return Err(MqttError::ReadFailed);
+            }
+            let transport = self.transport.as_mut().ok_or(MqttError::ReadFailed)?;
+            match transport.read(&mut buf[pos..]).await {
+                Ok(0) => {
+                    // Zero-byte read: remote closed or no data; yield and retry
+                    Timer::after(Duration::from_millis(10)).await;
+                }
+                Ok(n) => {
+                    pos += n;
+                }
+                Err(_) => {
+                    return Err(MqttError::ReadFailed);
+                }
+            }
+        }
+        Ok(pos)
+    }
+
     pub async fn maybe_ping(&mut self) -> Result<(), MqttError> {
         let half_keepalive = Duration::from_secs(self.keep_alive as u64 / 2);
         if self.last_outgoing.elapsed() >= half_keepalive {
@@ -312,8 +340,7 @@ impl MqttClient {
         self.send_bytes(&packet).await.map_err(|_| MqttError::ConnectionFailed)?;
 
         let mut buf = [0u8; 64];
-        let transport = self.transport.as_mut().ok_or(MqttError::ConnectionFailed)?;
-        let n = transport.read(&mut buf).await.map_err(|_| MqttError::ConnectionFailed)?;
+        let n = self.read_exact(&mut buf, 4).await.map_err(|_| MqttError::ConnectionFailed)?;
         if n < 4 || buf[0] != 0x20 {
             error!("MQTT CONNACK unexpected: {:?}", &buf[..n]);
             return Err(MqttError::ConnectionFailed);
@@ -370,8 +397,7 @@ impl MqttClient {
         self.send_bytes(&packet).await.map_err(|_| MqttError::SubscribeFailed)?;
 
         let mut buf = [0u8; 64];
-        let transport = self.transport.as_mut().ok_or(MqttError::SubscribeFailed)?;
-        let n = match transport.read(&mut buf).await {
+        let n = match self.read_exact(&mut buf, 5).await {
             Ok(n) => n,
             Err(_) => {
                 warn!("MQTT SUBACK read failed");
