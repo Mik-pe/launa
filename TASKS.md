@@ -663,8 +663,8 @@ Code review of `launa-ota` and the broader simulation/test infrastructure identi
 
 ### SimBroker: MQTT Realism
 
-- [ ] **Upgrade `SimBroker` from recorder to functional mock broker** (`crates/launa-sim/src/sim_broker.rs`): Add QoS simulation (track packet IDs, expect PUBACK for QoS 1), subscription matching (only deliver to subscribed topics), in-order delivery guarantee, and configurable message loss rate. Current broker is just `Vec::push` with no protocol validation. Real MQTT broker behavior is essential for testing the hand-rolled MQTT v5 client's reconnect, resubscribe, and QoS handling.
-- [ ] **Add connection loss simulation to SimBroker** (`crates/launa-sim/src/sim_broker.rs`): Add `simulate_disconnect()` that marks the broker as disconnected, causing subsequent `publish()` calls to be silently dropped (mimicking TCP socket closure). Add `simulate_reconnect()` to restore. Tests verify the caller detects lost messages and recovers. Critical for testing MQTT reconnect + re-publish + re-subscribe logic that currently has zero test coverage.
+- [x] **Upgrade `SimBroker` from recorder to functional mock broker** (`crates/launa-sim/src/sim_broker.rs`): Add QoS simulation (track packet IDs, expect PUBACK for QoS 1), subscription matching (only deliver to subscribed topics), in-order delivery guarantee, and configurable message loss rate. Current broker is just `Vec::push` with no protocol validation. Real MQTT broker behavior is essential for testing the hand-rolled MQTT v5 client's reconnect, resubscribe, and QoS handling.
+- [x] **Add connection loss simulation to SimBroker** (`crates/launa-sim/src/sim_broker.rs`): Add `simulate_disconnect()` that marks the broker as disconnected, causing subsequent `publish()` calls to be silently dropped (mimicking TCP socket closure). Add `simulate_reconnect()` to restore. Tests verify the caller detects lost messages and recovers. Critical for testing MQTT reconnect + re-publish + re-subscribe logic that currently has zero test coverage.
 
 ### OTA Integration Tests: End-to-End Simulation
 
