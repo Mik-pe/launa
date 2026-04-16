@@ -760,55 +760,7 @@ impl MqttClient {
     }
 
     pub fn parse_ota_url(payload: &[u8]) -> Option<String> {
-        let s = core::str::from_utf8(payload).ok()?;
-        let mut search_from = 0;
-        while let Some(pos) = s[search_from..].find("\"url\"") {
-            let abs_pos = search_from + pos;
-            // Reject matches inside longer keys like "callback_url" or "image_url"
-            if abs_pos > 0 {
-                let ch_before = s.as_bytes()[abs_pos - 1];
-                if ch_before == b'_' || ch_before.is_ascii_alphanumeric() {
-                    search_from = abs_pos + 5;
-                    continue;
-                }
-            }
-            let after_key = &s[abs_pos + 5..];
-            let after_key = after_key.trim_start();
-            let after_key = after_key.strip_prefix(':')?;
-            let after_key = after_key.trim_start();
-            let after_key = after_key.strip_prefix('"')?;
-            if let Some(end) = after_key.find('"') {
-                let url = &after_key[..end];
-                // Validate URL scheme — only http:// is allowed for OTA.
-                // Reject file://, ftp://, https://, data:, etc.
-                if let Some(scheme_end) = url.find("://") {
-                    let scheme = &url[..scheme_end];
-                    if scheme != "http" {
-                        warn!(
-                            "OTA URL rejected: unsupported scheme '{}' (only http:// allowed)",
-                            scheme
-                        );
-                        return None;
-                    }
-                } else if url.find(':').map_or(false, |i| i < 8) {
-                    // Matches patterns like "data:..." without "://"
-                    let scheme_end = url.find(':').unwrap();
-                    let scheme = &url[..scheme_end];
-                    warn!(
-                        "OTA URL rejected: unsupported scheme '{}' (only http:// allowed)",
-                        scheme
-                    );
-                    return None;
-                } else {
-                    // No scheme at all — reject
-                    warn!("OTA URL rejected: no scheme (only http:// allowed)");
-                    return None;
-                }
-                return Some(String::from(url));
-            }
-            return None;
-        }
-        None
+        launa_mqtt::parse_ota_url(payload)
     }
 }
 

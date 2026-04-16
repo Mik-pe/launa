@@ -9,6 +9,7 @@ extern crate alloc;
 
 pub mod command_parser;
 pub mod discovery;
+pub mod ota_url;
 pub mod packet;
 pub mod state;
 pub mod topics;
@@ -22,4 +23,5 @@ pub use topics::{
 pub use command_parser::{
     parse_command, parse_command_ok, parse_set_temperature_validated, ParseResult,
 };
+pub use ota_url::parse_ota_url;
 pub use state::status_to_json;
