@@ -548,7 +548,10 @@ async fn execute_actions(actions: &[AppAction], device_id: &str) {
                 publish_diagnostics(device_id, *uptime_secs, *frames_received, *command_retries, *command_drops);
             }
             AppAction::RequestOta { url } => {
-                let _ = OTA_CHANNEL.try_send(url.clone());
+                if let Err(_) = OTA_CHANNEL.try_send(url.clone()) {
+                    warn!("OTA channel full, dropping URL: {:?}", url);
+                    send_alert("error", "ota_channel_full");
+                }
             }
             AppAction::PublishAvailability { .. } | AppAction::PublishDiscovery => {
                 // These are handled by the MQTT task on initial connect, not emitted by SpaApp.
