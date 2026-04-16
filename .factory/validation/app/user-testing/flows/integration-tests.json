@@ -1,0 +1,48 @@
+{
+  "groupId": "integration-tests",
+  "milestone": "app",
+  "results": [
+    {
+      "id": "VAL-APP-026",
+      "status": "pass",
+      "evidence": "Integration tests in Test Group I (line 1843+) and Test Group L (line 2741+) create SpaApp, call process_frame(), tick(), on_mqtt_command(), and assert on AppAction. 102 tests in launa-integration-tests, all pass.",
+      "tool": "rg + cargo test -p launa-integration-tests"
+    },
+    {
+      "id": "VAL-APP-027",
+      "status": "pass",
+      "evidence": "make_spaapp() helper creates leaked VirtualClock. Tests use clock.advance_ms() throughout (e.g., advance_ms(6_000), advance_ms(5_000), advance_ms(61_000)).",
+      "tool": "rg VirtualClock + advance_ms"
+    },
+    {
+      "id": "VAL-APP-028",
+      "status": "pass",
+      "evidence": "test_spaapp_registration_e2e() at line 2837 performs full registration: SpaSim sends query → SpaApp sends ID request → SpaSim assigns ID → SpaApp acks. Verifies is_registered() and client_id() match.",
+      "tool": "rg test_spaapp_registration_e2e"
+    },
+    {
+      "id": "VAL-APP-029",
+      "status": "pass",
+      "evidence": "test_spaapp_ota_full_download_cycle() at line 2927 performs begin() → write chunks → finalize() → mark_valid() with data integrity checks. Also test_spaapp_ota_variable_chunk_sizes() verifies different chunk sizes.",
+      "tool": "rg test_spaapp_ota_full_download_cycle"
+    },
+    {
+      "id": "VAL-APP-030",
+      "status": "pass",
+      "evidence": "test_spaapp_stale_detection_lifecycle() at line 3011 covers Phase 1 (normal), Phase 2 (6s probe), Phase 2b (10s probe), Phase 2c (16s probe), Phase 3 (30s stale alert), Phase 4 (recovery).",
+      "tool": "rg test_spaapp_stale_detection_lifecycle"
+    },
+    {
+      "id": "VAL-APP-031",
+      "status": "pass",
+      "evidence": "Three OTA rollback tests: test_spaapp_ota_rollback_on_write_failure (line 3167), test_spaapp_ota_rollback_on_finalize_failure (line 3212), test_spaapp_ota_rollback_on_begin_failure (line 3244). All verify mark_valid never called and rollback performed.",
+      "tool": "rg test_spaapp_ota_rollback"
+    },
+    {
+      "id": "VAL-APP-032",
+      "status": "pass",
+      "evidence": "test_spaapp_command_retry_and_drop_lifecycle() at line 3268 verifies total_retries() increments on each 5s timeout and command is dropped after MAX_COMMAND_RETRIES.",
+      "tool": "rg test_spaapp_command_retry_and_drop_lifecycle"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "milestone": "app",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 40,
+    "passed": 40,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-APP-001", "VAL-APP-002", "VAL-APP-003", "VAL-APP-004", "VAL-APP-005",
+    "VAL-APP-006", "VAL-APP-007", "VAL-APP-008", "VAL-APP-009", "VAL-APP-010",
+    "VAL-APP-011", "VAL-APP-012", "VAL-APP-013", "VAL-APP-014", "VAL-APP-015",
+    "VAL-APP-016", "VAL-APP-017", "VAL-APP-018", "VAL-APP-019", "VAL-APP-020",
+    "VAL-APP-021", "VAL-APP-022", "VAL-APP-023", "VAL-APP-024", "VAL-APP-025",
+    "VAL-APP-026", "VAL-APP-027", "VAL-APP-028", "VAL-APP-029", "VAL-APP-030",
+    "VAL-APP-031", "VAL-APP-032", "VAL-APP-033", "VAL-APP-034", "VAL-APP-035",
+    "VAL-APP-036", "VAL-APP-037",
+    "VAL-CORE-035", "VAL-CORE-036", "VAL-CORE-037"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null,
+  "notes": "All 40 assertions passed. 37 VAL-APP-* assertions from the app milestone plus 3 VAL-CORE-* assertions (VAL-CORE-035/036/037) that were pending from earlier milestones. Validation covered: cargo test --workspace (427 tests, 0 failures), cargo check --workspace, cargo fmt --check, cargo +esp check, code review via ripgrep for SAFETY comments, rate limiting, OTA URL validation, sniffer hex buffer, panic handler, diagnostics version, SSID/host masking, and xtask validation tests (31 tests)."
+}

@@ -1,0 +1,138 @@
+{
+  "groupId": "code-review-app",
+  "milestone": "app",
+  "testedAt": "2026-04-16T00:00:00Z",
+  "isolation": {
+    "type": "read-only-code-review",
+    "workingDirectory": "C:\\dev\\launa",
+    "sharedStateMutations": "none"
+  },
+  "toolsUsed": ["ripgrep", "file-reading"],
+  "assertions": [
+    {
+      "id": "VAL-APP-001",
+      "title": "SAFETY comments present on UnsafeCell allocations",
+      "status": "pass",
+      "steps": [
+        { "action": "rg 'SAFETY:' app/src/mqtt_client.rs", "expected": "SAFETY comments adjacent to each unsafe block dereferencing UnsafeCell", "observed": "Two SAFETY comments found at lines 201 and 317, each preceding an unsafe block that dereferences UnsafeCell socket buffers via .get() + &mut *" },
+        { "action": "Verify all unsafe blocks in mqtt_client.rs relate to UnsafeCell", "expected": "Every unsafe block has a SAFETY comment", "observed": "Two unsafe blocks (lines 208, 322) both have preceding SAFETY comments explaining the single-task ownership invariant and TcpSocket lifecycle" }
+      ],
+      "evidence": "Line 201: 'SAFETY: This is the first and only borrow of these newly-allocated buffers...' before line 208 unsafe block. Line 317: 'SAFETY: The old TcpSocket was dropped above via self.transport.take()...' before line 322 unsafe block. Both explain the single-task mqtt_task ownership invariant.",
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-002",
+      "title": "No raw pointer casts on socket buffers",
+      "status": "pass",
+      "steps": [
+        { "action": "rg 'as \\*mut|as \\*const' app/src/mqtt_client.rs", "expected": "No matches for raw pointer casts on socket buffer fields", "observed": "No matches found. Socket buffer reborrow uses UnsafeCell::get() + &mut * pattern exclusively (lines 208, 322)" }
+      ],
+      "evidence": "No 'as *mut' or 'as *const' patterns found in mqtt_client.rs. The unsafe dereferences use the pattern: unsafe { &mut *socket_rx_buf.get() } and unsafe { &mut *self.socket_rx_buf.get() }",
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-003",
+      "title": "Sniffer mode uses pre-allocated hex buffer",
+      "status": "pass",
+      "steps": [
+        { "action": "rg 'format.*02X' app/src/main.rs", "expected": "No per-byte format!() allocation in sniffer loop", "observed": "format_args!(\"{:02X}\", b) is used inside bytes_to_hex() but routed through core::fmt::write() into a fixed-size HexBuf — no heap allocation. The old pattern .collect() is mentioned only in a comment as what was replaced." },
+        { "action": "Verify no .collect() pattern in sniffer code", "expected": "No .collect() on format!() iterators", "observed": "No .collect() calls found in sniffer code. The .collect() reference at line 450 is only in a doc comment describing the old pattern." }
+      ],
+      "evidence": "bytes_to_hex() at line 453 uses core::fmt::write(buf, format_args!(\"{:02X}\", b)) into a pre-allocated HexBuf. No alloc::format!().collect() pattern exists in the sniffer code path.",
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-004",
+      "title": "Sniffer hex output correctness",
+      "status": "blocked",
+      "steps": [
+        { "action": "Search for hex output tests in workspace", "expected": "Test verifying hex output for edge cases (0x00, 0x7E, 0x7D, 0xFF)", "observed": "No hex output unit tests found. The app/ crate is a no_std ESP32 binary with no #[test] or #[cfg(test)] modules. No workspace crate tests for bytes_to_hex." }
+      ],
+      "evidence": "No unit tests exist for bytes_to_hex(). The app/ crate compiles only for xtensa-esp32-none-elf target and has no test infrastructure. Cannot run cargo test for this assertion.",
+      "issues": "No automated tests for hex output correctness. The code logic is straightforward (format_args!(\"{:02X}\", b) for each byte) and would produce correct output by virtue of core::fmt::UpperHex, but no explicit test covers edge cases 0x00, 0x7E, 0x7D, 0xFF."
+    },
+    {
+      "id": "VAL-APP-005",
+      "title": "Sniffer buffer size bounded at compile time",
+      "status": "pass",
+      "steps": [
+        { "action": "Review HexBuf struct definition", "expected": "Buffer type is fixed-size array", "observed": "HexBuf struct contains data: [u8; 512] (HEX_BUF_SIZE = 512) and len: usize — a fixed-size stack array." },
+        { "action": "Verify overflow handling", "expected": "Overflow handled by truncation, not panic", "observed": "bytes_to_hex() checks buf.remaining() < 2 and breaks (truncates) rather than overflowing. write_str() returns Err(core::fmt::Error) if bytes exceed remaining capacity." }
+      ],
+      "evidence": "HexBuf at line 409: data: [u8; 512], len: usize. HEX_BUF_SIZE = 512 (line 404). Overflow handling: line 457 'if buf.remaining() < 2 { break; }' — truncation, not panic.",
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-006",
+      "title": "MQTT rate limiter drops excess commands",
+      "status": "pass",
+      "steps": [
+        { "action": "Review RateLimiter::check() logic", "expected": "Returns false when count exceeds RATE_LIMIT_MAX_COMMANDS", "observed": "RateLimiter::check() increments count and returns self.count <= RATE_LIMIT_MAX_COMMANDS. When count > 10, returns false." },
+        { "action": "Verify warn! log on drop", "expected": "warn!() called when rate limited", "observed": "check_rate_limit() (line 707) calls warn!() with 'MQTT command rate limited: exceeded {RATE_LIMIT_MAX_COMMANDS} commands per {RATE_LIMIT_WINDOW_SECS}s window' when check() returns false." },
+        { "action": "Verify named constants", "expected": "RATE_LIMIT_MAX_COMMANDS and RATE_LIMIT_WINDOW_SECS defined as named constants", "observed": "RATE_LIMIT_MAX_COMMANDS: usize = 10 (line 34), RATE_LIMIT_WINDOW_SECS: u64 = 10 (line 38)" }
+      ],
+      "evidence": "RateLimiter struct with named constants at lines 34-38. check() at line 61 returns false when count > 10. check_rate_limit() at line 707 logs warn!() on drop. Drop logic: commands exceeding 10 per 10-second window are rejected.",
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-007",
+      "title": "Commands under rate limit are not dropped",
+      "status": "pass",
+      "steps": [
+        { "action": "Review RateLimiter::check() logic", "expected": "Returns true (unconditional forward) when count <= RATE_LIMIT_MAX_COMMANDS", "observed": "check() increments count first, then returns self.count <= RATE_LIMIT_MAX_COMMANDS. For counts 1 through 10, returns true. Count 11+ returns false." },
+        { "action": "Review check_rate_limit() call site in mqtt_task", "expected": "Commands forwarded when check_rate_limit() returns true", "observed": "In main.rs mqtt_task, line with 'if mqtt.check_rate_limit() { ... cmd_sender.send(cmd).await; }' — commands are forwarded unconditionally when under limit." }
+      ],
+      "evidence": "RateLimiter::check() returns true for counts 1-10. The check_rate_limit() wrapper returns true directly (no modification). In main.rs, the command is forwarded via cmd_sender.send(cmd).await when check returns true.",
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-008",
+      "title": "Rate window resets correctly",
+      "status": "pass",
+      "steps": [
+        { "action": "Review window expiry logic in RateLimiter::check()", "expected": "After 10-second window expires, count resets to zero", "observed": "Lines 64-68: 'if now.duration_since(self.window_start) >= window_duration { self.count = 0; self.window_start = now; }'. Count resets to 0 and window_start is updated to current time." }
+      ],
+      "evidence": "RateLimiter::check() at line 61: window_duration = Duration::from_secs(RATE_LIMIT_WINDOW_SECS). Line 67: self.count = 0 when window expires. Window restarts from current instant.",
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-009",
+      "title": "Only http:// URLs accepted for OTA",
+      "status": "pass",
+      "steps": [
+        { "action": "Review parse_ota_url() scheme validation", "expected": "URL validation requires http:// prefix, rejects other schemes", "observed": "Three rejection paths: (1) scheme via :// separator checked != 'http' → None, (2) bare colon (e.g. data:...) checked → None, (3) no scheme at all → None. All non-http schemes are rejected." }
+      ],
+      "evidence": "parse_ota_url() at lines 743-771: Checks url.find('://') for scheme, compares scheme != 'http' → reject. Falls through to check bare ':' for schemes like 'data:'. Falls through to reject no-scheme URLs. Only 'http' scheme passes all checks.",
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-010",
+      "title": "Valid http:// URLs accepted for OTA",
+      "status": "pass",
+      "steps": [
+        { "action": "Review parse_ota_url() happy path", "expected": "http:// URLs with host, port, path are accepted", "observed": "When scheme is 'http', the function returns Some(String::from(url)) at line 772. The URL is extracted as the raw string between quotes, so any http://host:port/path format passes." }
+      ],
+      "evidence": "parse_ota_url() extracts URL string between quotes, validates scheme is 'http', then returns Some(String::from(url)) at line 772. Standard http:// URLs with IP, port, and path components are accepted.",
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-011",
+      "title": "OTA URL rejection logged",
+      "status": "pass",
+      "steps": [
+        { "action": "Review warn!() calls in rejection paths of parse_ota_url()", "expected": "warn!() call with scheme in each rejection path", "observed": "Three warn!() calls: (1) line 752: warn!(\"OTA URL rejected: unsupported scheme '{}' ...\", scheme), (2) line 762: warn!(\"OTA URL rejected: unsupported scheme '{}' ...\", scheme), (3) line 769: warn!(\"OTA URL rejected: no scheme ...\")" }
+      ],
+      "evidence": "All three rejection paths include warn!() with the scheme name: line 752 for http-scheme URLs (e.g. https://, ftp://), line 762 for bare-colon schemes (e.g. data:), line 769 for no scheme at all.",
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [
+    {
+      "description": "VAL-APP-004: No unit tests exist for bytes_to_hex() hex output correctness. The app/ crate is a no_std ESP32 binary without test infrastructure. Cannot verify edge cases (0x00, 0x7E, 0x7D, 0xFF) via automated tests.",
+      "affectedAssertions": ["VAL-APP-004"],
+      "quickFixAttempted": "Searched all workspace crates and test files for hex output tests — none found."
+    }
+  ],
+  "summary": "Tested 11 assertions: 10 passed, 1 blocked (VAL-APP-004: no unit tests for hex output correctness in the no_std ESP32 app crate)."
+}

@@ -1,0 +1,114 @@
+{
+  "groupId": "logging-panic",
+  "milestone": "app",
+  "testedAt": "2026-04-16T17:30:00Z",
+  "isolation": {
+    "mode": "read-only code review",
+    "workingDirectory": "C:\\dev\\launa",
+    "scope": "app/src/main.rs, app/src/config.rs"
+  },
+  "toolsUsed": ["ripgrep", "file-read"],
+  "assertions": [
+    {
+      "id": "VAL-APP-012",
+      "title": "Firmware version in diagnostics JSON",
+      "status": "pass",
+      "steps": [
+        { "action": "Searched for CARGO_PKG_VERSION in app/src/main.rs", "expected": "FIRMWARE_VERSION constant defined", "observed": "Line 95: const FIRMWARE_VERSION: &str = env!(\"CARGO_PKG_VERSION\");" },
+        { "action": "Read publish_diagnostics function", "expected": "fw_version field in JSON output", "observed": "Lines 469-493: format string includes \"fw_version\":\"{}\"  using FIRMWARE_VERSION constant" }
+      ],
+      "evidence": {
+        "codeReferences": [
+          "main.rs:95 - const FIRMWARE_VERSION: &str = env!(\"CARGO_PKG_VERSION\");",
+          "main.rs:469-493 - publish_diagnostics() includes fw_version field in JSON payload using FIRMWARE_VERSION"
+        ],
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-013",
+      "title": "WiFi SSID not logged in hw-test mode",
+      "status": "pass",
+      "steps": [
+        { "action": "Searched for wifi_ssid logging in hw-test code path", "expected": "SSID masked before logging", "observed": "Lines 793-796: masked_ssid created by showing only first 2 chars + '***'; if len <= 2, shows '***' only" },
+        { "action": "Verified log statement uses masked value", "expected": "info!() uses masked_ssid", "observed": "Line 803: info!(\"Parsed config: ssid={} ...\", masked_ssid, ...) uses masked value" }
+      ],
+      "evidence": {
+        "codeReferences": [
+          "main.rs:793-796 - let masked_ssid = if app_config.wifi_ssid.len() > 2 { format!(\"{}***\", &ssid[..2]) } else { \"***\" }",
+          "main.rs:803 - info!(\"Parsed config: ssid={} ...\", masked_ssid, ...) — only masked SSID logged"
+        ],
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-014",
+      "title": "MQTT host not logged in hw-test mode",
+      "status": "pass",
+      "steps": [
+        { "action": "Searched for mqtt_host logging in hw-test code path", "expected": "Host masked before logging", "observed": "Lines 800-802: masked_host created by showing only first 2 chars + '***'; if len <= 2, shows '***' only" },
+        { "action": "Verified log statement uses masked value", "expected": "info!() uses masked_host", "observed": "Line 803: info!(\"... mqtt={}:{} ...\", masked_host, ...) uses masked value" }
+      ],
+      "evidence": {
+        "codeReferences": [
+          "main.rs:800-802 - let masked_host = if app_config.mqtt_host.len() > 2 { format!(\"{}***\", &host[..2]) } else { \"***\" }",
+          "main.rs:803 - info!(\"... mqtt={}:{} ...\", masked_host, ...) — only masked host logged"
+        ],
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-015",
+      "title": "Custom panic handler calls software_reset",
+      "status": "pass",
+      "steps": [
+        { "action": "Read panic handler implementation", "expected": "Panic handler with #[panic_handler] that calls software_reset()", "observed": "Lines 70-90: #[panic_handler] fn panic() calls esp_hal::system::software_reset() after logging and delay" }
+      ],
+      "evidence": {
+        "codeReferences": [
+          "main.rs:73 - #[panic_handler] attribute on fn panic()",
+          "main.rs:90 - esp_hal::system::software_reset() called at end of handler (no infinite loop)"
+        ],
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-016",
+      "title": "Panic message logged before reboot",
+      "status": "pass",
+      "steps": [
+        { "action": "Verified panic info is logged before reset", "expected": "Panic location (file, line) logged", "observed": "Line 76: esp_println::println!(\"PANIC: {}\", info) — logs full PanicInfo which includes file, line, column, and message" }
+      ],
+      "evidence": {
+        "codeReferences": [
+          "main.rs:76 - esp_println::println!(\"PANIC: {}\", info) logs the full PanicInfo before any delay or reset"
+        ],
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-017",
+      "title": "Reboot delay allows log flush",
+      "status": "pass",
+      "steps": [
+        { "action": "Verified delay between logging and reset", "expected": "At least 500ms delay present", "observed": "Lines 79-87: Busy-wait loop with 5,000,000 iterations (~500ms at 240 MHz), uses compiler_fence to prevent optimization" }
+      ],
+      "evidence": {
+        "codeReferences": [
+          "main.rs:79-87 - Busy-wait ~500ms: counter loops 5,000,000 iterations with compiler_fence(SeqCst) to prevent optimization",
+          "main.rs:81 - Comment: 'Busy-wait ~500ms to allow UART TX to flush the panic message.'"
+        ],
+        "consoleErrors": "none"
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 6 assertions: all 6 passed. Firmware version is included in diagnostics JSON via CARGO_PKG_VERSION. SSID and MQTT host are masked (first 2 chars + ***) before logging in hw-test mode. Custom panic handler logs panic info via esp_println, busy-waits ~500ms for UART flush, then calls software_reset() instead of infinite loop."
+}

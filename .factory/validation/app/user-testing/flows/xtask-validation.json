@@ -1,0 +1,202 @@
+{
+  "groupId": "xtask-validation",
+  "milestone": "app",
+  "testedAt": "2026-04-16T17:09:00Z",
+  "isolation": {
+    "type": "read-only-code-review",
+    "workingDirectory": "C:\\dev\\launa",
+    "scope": "xtask crate source and tests"
+  },
+  "toolsUsed": ["ripgrep", "file-read", "cargo-test"],
+  "assertions": [
+    {
+      "id": "VAL-APP-018",
+      "title": "ota-flash verifies firmware version after update",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Code review of xtask/src/ota_flash.rs",
+          "expected": "Version comparison logic after device comes back online",
+          "observed": "Step 6/7 in ota_flash::run() reads expected version from app/Cargo.toml via read_firmware_version(), waits for device state payload on MQTT, extracts firmware_version via extract_firmware_version(), and compares reported vs expected. Logs 'Firmware version verified: {reported} (matches expected)' on success."
+        }
+      ],
+      "evidence": {
+        "sourceFile": "xtask/src/ota_flash.rs",
+        "lines": "Step [6/7] block (lines ~140-170 in run())",
+        "logic": "read_firmware_version() -> expected_version; extract_firmware_version(state_payload) -> reported; if reported == expected { ok } else { bail }",
+        "testCoverage": "test_extract_firmware_version_present, test_extract_firmware_version_missing, test_extract_firmware_version_null, test_extract_firmware_version_invalid_json, test_extract_firmware_version_empty_string, test_read_firmware_version — all 6 pass",
+        "files": ["evidence/app/xtask-validation/xtask-test-output.txt"]
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-019",
+      "title": "ota-flash detects rollback",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Code review of version mismatch error path in ota_flash.rs",
+          "expected": "Clear error message about possible rollback when version mismatch",
+          "observed": "bail!(\"Firmware version mismatch! Expected '{}', got '{}'. Possible rollback occurred.\", expected, reported) — produces descriptive error mentioning rollback"
+        }
+      ],
+      "evidence": {
+        "sourceFile": "xtask/src/ota_flash.rs",
+        "errorPath": "else branch in Step 6/7 version comparison",
+        "errorMessage": "Firmware version mismatch! Expected '{expected}', got '{reported}'. Possible rollback occurred.",
+        "files": ["evidence/app/xtask-validation/xtask-test-output.txt"]
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-020",
+      "title": "device.id format/length validation in xtask",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Code review of validate_device_id() in xtask/src/config.rs",
+          "expected": "Alphanumeric+underscore, 1-64 chars validation",
+          "observed": "validate_device_id() checks: empty string rejected, len > 64 rejected, chars must all be ascii_alphanumeric or '_'. Called from Config::validate()."
+        },
+        {
+          "action": "Verify test exists and passes",
+          "expected": "4 validation tests for device.id",
+          "observed": "test_validate_device_id_valid (valid cases: spa1, my_spa_01, A, _underscore, UPPERCASE, 12345), test_validate_device_id_empty, test_validate_device_id_too_long (65 chars fail, 64 ok), test_validate_device_id_invalid_chars (hyphen, dot, space, slash, at) — all 4 pass"
+        }
+      ],
+      "evidence": {
+        "sourceFile": "xtask/src/config.rs",
+        "function": "validate_device_id(id: &str) -> anyhow::Result<()>",
+        "testNames": ["config::tests::test_validate_device_id_valid", "config::tests::test_validate_device_id_empty", "config::tests::test_validate_device_id_too_long", "config::tests::test_validate_device_id_invalid_chars"],
+        "files": ["evidence/app/xtask-validation/xtask-test-output.txt"]
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-021",
+      "title": "Serial port existence check in xtask",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Code review of Config::validate() in xtask/src/config.rs",
+          "expected": "Port existence check using serialport::available_ports()",
+          "observed": "Config::validate() calls serialport::available_ports(), collects port_names, checks if configured serial_port is in the list. If not found, adds error: \"device.serial_port '{port}' not found. Available ports: ...\". Gracefully skips check if port enumeration fails (e.g. CI)."
+        }
+      ],
+      "evidence": {
+        "sourceFile": "xtask/src/config.rs",
+        "location": "Config::validate() method, serial port existence block",
+        "logic": "serialport::available_ports() -> Ok(ports) -> check port_names.contains(configured_port) -> error if not found",
+        "files": ["evidence/app/xtask-validation/xtask-test-output.txt"]
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-022",
+      "title": "MQTT port range validation in xtask",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Code review of validate_mqtt_port() in xtask/src/config.rs",
+          "expected": "Port range 1-65535 validation",
+          "observed": "validate_mqtt_port(port: u16) checks port == 0 and bails with 'mqtt.port must be between 1 and 65535'. Since u16 type naturally constrains max to 65535, only 0 check is needed. Called from Config::validate()."
+        },
+        {
+          "action": "Verify test exists and passes",
+          "expected": "Port validation tests",
+          "observed": "test_validate_mqtt_port_valid (ports 1, 1883, 65535 all ok), test_validate_mqtt_port_zero (port 0 rejected) — both pass"
+        }
+      ],
+      "evidence": {
+        "sourceFile": "xtask/src/config.rs",
+        "function": "validate_mqtt_port(port: u16) -> anyhow::Result<()>",
+        "testNames": ["config::tests::test_validate_mqtt_port_valid", "config::tests::test_validate_mqtt_port_zero"],
+        "files": ["evidence/app/xtask-validation/xtask-test-output.txt"]
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-023",
+      "title": "xtask --feature flag bounds check",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Code review of --feature handling in ota_flash.rs and flash.rs",
+          "expected": "--feature as last arg returns descriptive error, not panic",
+          "observed": "Both flash::run() and ota_flash::run() parse --feature with bounds check: 'i += 1; if i >= args.len() { bail!(\"--feature requires a value\") }'"
+        },
+        {
+          "action": "Verify tests exist and pass",
+          "expected": "Bounds check tests for --feature",
+          "observed": "test_flash_feature_as_last_arg_returns_error and test_ota_flash_feature_as_last_arg_returns_error both verify error message contains '--feature requires a value' — both pass"
+        }
+      ],
+      "evidence": {
+        "sourceFile": "xtask/src/main.rs (tests), xtask/src/flash.rs, xtask/src/ota_flash.rs",
+        "testNames": ["tests::test_flash_feature_as_last_arg_returns_error", "tests::test_ota_flash_feature_as_last_arg_returns_error"],
+        "files": ["evidence/app/xtask-validation/xtask-test-output.txt"]
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-024",
+      "title": "xtask --port flag bounds check",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Code review of --port handling across xtask modules",
+          "expected": "--port as last arg returns descriptive error, not panic",
+          "observed": "Multiple modules (flash, monitor, self_test, ota_serve, sniff_decode, spa_sim, config_flash, provision) all use the same bounds-check pattern: 'i += 1; if i >= args.len() { bail!(\"--port requires a value\") }'"
+        },
+        {
+          "action": "Verify tests exist and pass",
+          "expected": "Bounds check tests for --port across all subcommands",
+          "observed": "8 tests covering --port bounds: test_flash_port_as_last_arg_returns_error, test_monitor_port_as_last_arg_returns_error, test_self_test_port_as_last_arg_returns_error, test_ota_serve_port_as_last_arg_returns_error, test_sniff_decode_port_as_last_arg_returns_error, test_spa_sim_port_as_last_arg_returns_error, test_config_flash_port_as_last_arg_returns_error, test_provision_port_as_last_arg_returns_error — all pass"
+        }
+      ],
+      "evidence": {
+        "sourceFile": "xtask/src/main.rs (tests)",
+        "testNames": [
+          "tests::test_flash_port_as_last_arg_returns_error",
+          "tests::test_monitor_port_as_last_arg_returns_error",
+          "tests::test_self_test_port_as_last_arg_returns_error",
+          "tests::test_ota_serve_port_as_last_arg_returns_error",
+          "tests::test_sniff_decode_port_as_last_arg_returns_error",
+          "tests::test_spa_sim_port_as_last_arg_returns_error",
+          "tests::test_config_flash_port_as_last_arg_returns_error",
+          "tests::test_provision_port_as_last_arg_returns_error"
+        ],
+        "files": ["evidence/app/xtask-validation/xtask-test-output.txt"]
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-APP-025",
+      "title": "All xtask subcommands handle empty args",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Code review of main.rs dispatch and module run() functions",
+          "expected": "Empty args don't cause panics in any subcommand",
+          "observed": "main() checks args.is_empty() and bails with usage. Subcommand modules that can safely be tested with empty args have dedicated tests. Other modules (flash, monitor, etc.) require hardware config and would fail on config load, not panic."
+        },
+        {
+          "action": "Verify empty args tests exist and pass",
+          "expected": "Empty args tests for subcommands",
+          "observed": "test_empty_args_ota_serve_no_panic (empty vec -> error about missing --firmware), test_empty_args_spa_sim_no_panic (empty vec -> error about serial port) — both pass without panic"
+        }
+      ],
+      "evidence": {
+        "sourceFile": "xtask/src/main.rs",
+        "mainGuard": "main() checks args.is_empty() and calls usage() + bail()",
+        "testNames": ["tests::test_empty_args_ota_serve_no_panic", "tests::test_empty_args_spa_sim_no_panic"],
+        "additionalCoverage": "All other --port/--feature/--duration bounds check tests also verify empty-adjacent edge cases don't panic",
+        "files": ["evidence/app/xtask-validation/xtask-test-output.txt"]
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 8 assertions: all 8 passed. All 31 xtask tests pass. Code review confirms version verification (VAL-APP-018), rollback detection (VAL-APP-019), device.id validation (VAL-APP-020), serial port existence check (VAL-APP-021), MQTT port range validation (VAL-APP-022), --feature bounds check (VAL-APP-023), --port bounds check (VAL-APP-024), and empty args handling (VAL-APP-025) are all correctly implemented with adequate test coverage."
+}
