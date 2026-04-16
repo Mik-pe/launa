@@ -1659,11 +1659,11 @@ mod tests {
             "1000 idle 0x7E bytes should not produce any frames"
         );
 
-        // No CRC errors (idle bytes are just flag characters, not corrupt frames)
+        // No frame errors (idle bytes are just flag characters, not corrupt frames)
         assert_eq!(
-            decoder.crc_error_count(),
+            decoder.frame_error_count(),
             0,
-            "idle 0x7E bytes should not cause CRC errors"
+            "idle 0x7E bytes should not cause frame errors"
         );
 
         // Now feed a valid frame — should decode correctly
@@ -1734,7 +1734,7 @@ mod tests {
     }
 
     /// Corrupt interleaved: corrupt frame (bad CRC) then valid frame →
-    /// corrupt rejected (crc_error_count++), valid decoded.
+    /// corrupt rejected (frame_error_count++), valid decoded.
     #[test]
     fn test_frame_decoder_corrupt_then_valid() {
         let mut decoder = FrameDecoder::new();
@@ -1757,9 +1757,9 @@ mod tests {
             "corrupt frame should not produce a valid frame"
         );
         assert_eq!(
-            decoder.crc_error_count(),
+            decoder.frame_error_count(),
             1,
-            "corrupt frame should increment CRC error count"
+            "corrupt frame should increment frame error count"
         );
 
         // Now feed a valid frame — should decode correctly despite prior corruption
@@ -1778,11 +1778,11 @@ mod tests {
         assert_eq!(valid_frames[0].message_type, [0xFF, 0xAF]);
         assert_eq!(valid_frames[0].payload, vec![0xAA, 0xBB, 0xCC]);
 
-        // CRC error count should remain at 1 (not incremented by valid frame)
+        // Frame error count should remain at 1 (not incremented by valid frame)
         assert_eq!(
-            decoder.crc_error_count(),
+            decoder.frame_error_count(),
             1,
-            "CRC error count should still be 1 after valid frame"
+            "frame error count should still be 1 after valid frame"
         );
     }
 
@@ -1835,8 +1835,8 @@ mod tests {
             "payload should match original (all escape bytes unescaped correctly)"
         );
 
-        // No CRC errors
-        assert_eq!(decoder.crc_error_count(), 0);
+        // No frame errors
+        assert_eq!(decoder.frame_error_count(), 0);
     }
 
     // ========================================================================

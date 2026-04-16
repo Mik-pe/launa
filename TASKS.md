@@ -58,8 +58,8 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 
 - [ ] **Add hardware watchdog timer** (`app/src/main.rs`): Configure TIMG1 as independent WDT. Main loop pets it; if stalled, WDT resets the device. Essential for headless operation.
 - [ ] **Fix main loop blocking on `frame_rx.receive().await`** (`app/src/main.rs`): Use `embassy_futures::select::select()` to multiplex UART frames, MQTT commands, and a periodic `Timer::after()` for ticks. Currently blocks indefinitely when spa is off — no OTA, no commands, no diagnostics.
-- [ ] **Cap MQTT `rx_buffer` at fixed size** (`app/src/mqtt_client.rs`): `rx_buffer: Vec<u8>` has no bound. Cap at 2 KiB; if exceeded without a complete packet, treat as protocol error and reconnect.
-- [ ] **Fix circ_pump/mister HA entities** (`launa-mqtt`): Discovery creates switch entities with command topics, but command parser rejects them as `UnknownSubtopic`. Remove command topics; make them read-only sensors (protocol doesn't support toggling these).
+- [x] **Cap MQTT `rx_buffer` at fixed size** (`app/src/mqtt_client.rs`): `rx_buffer: Vec<u8>` has no bound. Cap at 2 KiB; if exceeded without a complete packet, treat as protocol error and reconnect.
+- [x] **Fix circ_pump/mister HA entities** (`launa-mqtt`): Changed from writable switches (with command topics) to read-only sensors — protocol doesn't support toggling these.
 - [ ] **Add firmware integrity verification to OTA** (`launa-esp-ota`, `app/src/ota.rs`): No CRC/hash of written firmware. Accept expected hash in OTA request (e.g., HTTP header or MQTT payload field). Verify after all writes, before `finalize()`. Also validate ESP32 image header magic (`\xE9`) on first write.
 - [x] **Fix JSON escaping in `status_to_json`** (`launa-mqtt/src/state.rs`): Added `escape_json_string()` helper escaping `\`, `"`, `\n`, `\r`, `\t`, and control chars U+0000-U+001F → `\uXXXX`.
 - [ ] **Set up CI pipeline** (`.github/workflows`): At minimum: `cargo test` + `cargo check` + `cargo fmt --check` on PRs to main.
@@ -67,7 +67,7 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 ### HIGH — Should Fix Before Production
 
 - [x] **`Frame::encode()` silent truncation on payloads >253 bytes** (`launa-protocol/src/frame.rs`): Returns `Err(FrameError::PayloadTooLarge(len))` when `2 + payload.len() > 255`. All callers updated.
-- [ ] **`FrameDecoder` miscounts all parse failures as CRC errors** (`launa-protocol/src/frame.rs`): Rename to `frame_error_count` or add separate counters.
+- [x] **`FrameDecoder` miscounts all parse failures as CRC errors** (`launa-protocol/src/frame.rs`): Renamed `crc_error_count` → `frame_error_count` (field, methods, tests, callers).
 - [x] **`ClientIdAssignment` defaults to 0 on missing byte** (`launa-protocol/src/dispatcher.rs`): Returns `IncomingMessage::Unknown` when ID byte is missing instead of silently assigning 0.
 - [ ] **Panic on initial MQTT connect failure — no retry** (`app/src/main.rs`): Replace `panic!("MQTT connect failed")` with retry loop + exponential backoff, or at least `software_reset()`.
 - [ ] **UnsafeCell socket buffer reuse — document safety argument** (`app/src/mqtt_client.rs`): Add formal SAFETY comment explaining single-task context, or use `MaybeUninit` pattern.

@@ -106,7 +106,7 @@ pub struct FrameDecoder {
     buffer: Vec<u8>,
     in_frame: bool,
     escape_next: bool,
-    crc_error_count: u32,
+    frame_error_count: u32,
     max_buffer_size: usize,
 }
 
@@ -116,7 +116,7 @@ impl FrameDecoder {
             buffer: Vec::new(),
             in_frame: false,
             escape_next: false,
-            crc_error_count: 0,
+            frame_error_count: 0,
             max_buffer_size: 512,
         }
     }
@@ -143,7 +143,7 @@ impl FrameDecoder {
                 match result {
                     Ok(frame) => Some(frame),
                     Err(_) => {
-                        self.crc_error_count += 1;
+                        self.frame_error_count += 1;
                         None
                     }
                 }
@@ -169,7 +169,7 @@ impl FrameDecoder {
                 self.buffer.clear();
                 self.in_frame = false;
                 self.escape_next = false;
-                self.crc_error_count += 1;
+                self.frame_error_count += 1;
             }
 
             None
@@ -189,15 +189,15 @@ impl FrameDecoder {
         frames
     }
 
-    /// Returns the total number of frames that failed CRC or other parse checks.
-    pub fn crc_error_count(&self) -> u32 {
-        self.crc_error_count
+    /// Returns the total number of frames that failed parse checks (CRC, length, etc.).
+    pub fn frame_error_count(&self) -> u32 {
+        self.frame_error_count
     }
 
-    /// Returns the current CRC error count and resets it to zero.
-    pub fn reset_crc_error_count(&mut self) -> u32 {
-        let count = self.crc_error_count;
-        self.crc_error_count = 0;
+    /// Returns the current frame error count and resets it to zero.
+    pub fn reset_frame_error_count(&mut self) -> u32 {
+        let count = self.frame_error_count;
+        self.frame_error_count = 0;
         count
     }
 }
@@ -262,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn test_crc_error_count_on_bad_crc() {
+    fn test_frame_error_count_on_bad_crc() {
         // Build a valid frame, then corrupt the CRC byte
         let frame = Frame {
             message_type: [0x0A, 0xBF],
@@ -277,11 +277,11 @@ mod tests {
         for &byte in &encoded {
             decoder.feed(byte);
         }
-        assert_eq!(decoder.crc_error_count(), 1);
+        assert_eq!(decoder.frame_error_count(), 1);
     }
 
     #[test]
-    fn test_crc_error_count_stays_zero_on_valid_frame() {
+    fn test_frame_error_count_stays_zero_on_valid_frame() {
         let frame = Frame {
             message_type: [0x0A, 0xBF],
             payload: vec![0x04],
@@ -292,11 +292,11 @@ mod tests {
         for &byte in &encoded {
             decoder.feed(byte);
         }
-        assert_eq!(decoder.crc_error_count(), 0);
+        assert_eq!(decoder.frame_error_count(), 0);
     }
 
     #[test]
-    fn test_crc_error_count_accumulates() {
+    fn test_frame_error_count_accumulates() {
         let frame = Frame {
             message_type: [0x0A, 0xBF],
             payload: vec![0x01],
@@ -314,11 +314,11 @@ mod tests {
                 decoder.feed(byte);
             }
         }
-        assert_eq!(decoder.crc_error_count(), 3);
+        assert_eq!(decoder.frame_error_count(), 3);
     }
 
     #[test]
-    fn test_reset_crc_error_count() {
+    fn test_reset_frame_error_count() {
         let frame = Frame {
             message_type: [0x0A, 0xBF],
             payload: vec![0x01],
@@ -336,12 +336,12 @@ mod tests {
                 decoder.feed(byte);
             }
         }
-        assert_eq!(decoder.crc_error_count(), 2);
+        assert_eq!(decoder.frame_error_count(), 2);
 
         // Reset and verify return value + counter reset
-        let returned = decoder.reset_crc_error_count();
+        let returned = decoder.reset_frame_error_count();
         assert_eq!(returned, 2);
-        assert_eq!(decoder.crc_error_count(), 0);
+        assert_eq!(decoder.frame_error_count(), 0);
     }
 
     #[test]
@@ -366,8 +366,8 @@ mod tests {
             decoder.feed(0x40 + (i % 10) as u8); // non-marker, non-escape bytes
         }
 
-        // Buffer should have been cleared on overflow, state reset, crc_error_count incremented
-        assert_eq!(decoder.crc_error_count(), 1);
+        // Buffer should have been cleared on overflow, state reset, frame_error_count incremented
+        assert_eq!(decoder.frame_error_count(), 1);
     }
 
     #[test]
@@ -379,7 +379,7 @@ mod tests {
         for i in 0..12 {
             decoder.feed(0x40 + (i % 10) as u8);
         }
-        assert_eq!(decoder.crc_error_count(), 1);
+        assert_eq!(decoder.frame_error_count(), 1);
 
         // Now feed a valid frame — should decode successfully
         let frame = Frame {
@@ -424,7 +424,7 @@ mod tests {
         }
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], frame);
-        assert_eq!(decoder.crc_error_count(), 0);
+        assert_eq!(decoder.frame_error_count(), 0);
     }
 
     #[test]

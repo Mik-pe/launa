@@ -74,6 +74,7 @@ impl Write for TcpTransport {
 // ── MQTT client ────────────────────────────────────────────────────────
 
 const DEFAULT_KEEP_ALIVE_SECS: u16 = 30;
+const RX_BUFFER_MAX_SIZE: usize = 2048; // 2 KiB cap
 
 pub struct MqttClient {
     transport: Option<TcpTransport>,
@@ -482,6 +483,15 @@ impl MqttClient {
             };
 
             self.rx_buffer.extend_from_slice(&buf[..n]);
+
+            if self.rx_buffer.len() > RX_BUFFER_MAX_SIZE {
+                warn!(
+                    "MQTT rx_buffer exceeded {} bytes ({}), treating as protocol error",
+                    RX_BUFFER_MAX_SIZE, self.rx_buffer.len()
+                );
+                self.rx_buffer.clear();
+                return None;
+            }
         }
     }
 
@@ -654,8 +664,8 @@ impl MqttClient {
                 r#"{{"device":{},"name":"Heat Mode","unique_id":"{}_heat_mode","state_topic":"{}","command_topic":"{}/heat_mode","value_template":"{{{{value_json.heating_mode}}}}","options":["ready","rest","ready_in_rest"],"availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            ("switch".into(), "circ_pump".into(), format!(
-                r#"{{"device":{},"name":"Circulation Pump","unique_id":"{}_circ_pump","state_topic":"{}","value_template":"{{{{value_json.circ_pump}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+            ("sensor".into(), "circ_pump".into(), format!(
+                r#"{{"device":{},"name":"Circulation Pump","unique_id":"{}_circ_pump","state_topic":"{}","value_template":"{{{{value_json.circ_pump}}}}","availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, avail_topic
             )),
             ("select".into(), "temp_range".into(), format!(
@@ -666,8 +676,8 @@ impl MqttClient {
                 r#"{{"device":{},"name":"Hold Mode","unique_id":"{}_hold_mode","state_topic":"{}","command_topic":"{}/hold_mode","value_template":"{{{{value_json.hold_mode}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, cmd_topic, avail_topic
             )),
-            ("switch".into(), "mister".into(), format!(
-                r#"{{"device":{},"name":"Mister","unique_id":"{}_mister","state_topic":"{}","value_template":"{{{{value_json.mister}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+            ("sensor".into(), "mister".into(), format!(
+                r#"{{"device":{},"name":"Mister","unique_id":"{}_mister","state_topic":"{}","value_template":"{{{{value_json.mister}}}}","availability_topic":"{}"}}"#,
                 device_info, device_id, state_topic, avail_topic
             )),
             ("sensor".into(), "fault".into(), format!(

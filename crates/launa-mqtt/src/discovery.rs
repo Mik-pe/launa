@@ -212,19 +212,21 @@ impl DiscoveryBuilder {
             &format!("{}/heat_mode", cmd_topic),
         ));
 
-        // Circulation Pump switch
-        configs.push(Self::make_switch(
-            &topics,
-            &self.device_id,
-            &device_info,
-            &origin,
-            &state_topic,
-            &avail_topic,
-            "circ_pump",
-            "Circulation Pump",
-            "{{ value_json.circ_pump }}",
-            &format!("{}/circ_pump", cmd_topic),
-        ));
+        // Circulation Pump sensor (read-only — protocol doesn't support toggling)
+        configs.push(DiscoveryMessage {
+            topic: topics.discovery_topic("sensor", "circ_pump"),
+            payload: json!({
+                "device": device_info,
+                "origin": origin,
+                "name": "Circulation Pump",
+                "unique_id": format!("{}_circ_pump", self.device_id),
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.circ_pump }}",
+                "availability_topic": avail_topic,
+            })
+            .to_string(),
+            retain: false,
+        });
 
         // Temperature Range select
         configs.push(Self::make_select(
@@ -255,19 +257,21 @@ impl DiscoveryBuilder {
             &format!("{}/hold_mode", cmd_topic),
         ));
 
-        // Mister switch
-        configs.push(Self::make_switch(
-            &topics,
-            &self.device_id,
-            &device_info,
-            &origin,
-            &state_topic,
-            &avail_topic,
-            "mister",
-            "Mister",
-            "{{ value_json.mister }}",
-            &format!("{}/mister", cmd_topic),
-        ));
+        // Mister sensor (read-only — protocol doesn't support toggling)
+        configs.push(DiscoveryMessage {
+            topic: topics.discovery_topic("sensor", "mister"),
+            payload: json!({
+                "device": device_info,
+                "origin": origin,
+                "name": "Mister",
+                "unique_id": format!("{}_mister", self.device_id),
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.mister }}",
+                "availability_topic": avail_topic,
+            })
+            .to_string(),
+            retain: false,
+        });
 
         // Fault sensor
         configs.push(DiscoveryMessage {
