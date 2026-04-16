@@ -31,7 +31,10 @@ pub use clock::VirtualClock;
 pub use controller::{ControllerEvent, SpaController};
 pub use sim_broker::SimBroker;
 pub use sim_transport::SimTransport;
-pub use spa_sim::{SpaSim, SpaState};
+pub use spa_sim::{
+    FaultLogConfig, FilterCycleConfig, FilterCyclesConfig, InformationConfig, SpaConfigConfig,
+    SpaSim, SpaState,
+};
 
 // Re-export protocol types commonly used with the sim
 pub use launa_protocol::command::ToggleItem;
