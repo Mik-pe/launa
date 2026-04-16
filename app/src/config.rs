@@ -105,12 +105,24 @@ impl AppConfig {
     /// Open the NVS partition using the given flash peripheral.
     /// The default NVS partition on ESP32 starts at offset 0x9000, size 0x6000 (24 KiB).
     /// These must match the partition table in app/partitions.csv.
-    pub fn open_nvs(flash: esp_hal::peripherals::FLASH<'static>) -> esp_nvs::Nvs<esp_storage::FlashStorage<'static>> {
-        let flash = esp_storage::FlashStorage::new(flash);
-        esp_nvs::Nvs::new(0x9000, 0x6000, flash).unwrap_or_else(|e| {
-            warn!("Failed to open NVS partition: {:?}, using defaults", e);
-            panic!("NVS init failed")
-        })
+    ///
+    /// Returns `Some(Nvs)` on success. Returns `None` on failure (e.g. corrupted
+    /// NVS partition) after logging a warning — the caller should fall back to
+    /// `AppConfig::default()`.
+    ///
+    /// Note: the flash peripheral is consumed by `FlashStorage::new()` regardless
+    /// of whether NVS init succeeds. It is not recoverable on failure.
+    pub fn open_nvs(
+        flash: esp_hal::peripherals::FLASH<'static>,
+    ) -> Option<esp_nvs::Nvs<esp_storage::FlashStorage<'static>>> {
+        let flash_storage = esp_storage::FlashStorage::new(flash);
+        match esp_nvs::Nvs::new(0x9000, 0x6000, flash_storage) {
+            Ok(nvs) => Some(nvs),
+            Err(e) => {
+                warn!("Failed to open NVS partition: {:?}, falling back to default config", e);
+                None
+            }
+        }
     }
 }
 

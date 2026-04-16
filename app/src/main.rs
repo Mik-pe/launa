@@ -574,10 +574,17 @@ async fn main(spawner: Spawner) {
     info!("Launa ESP32 sniffer mode starting...");
 
     // ── Load config from NVS ────────────────────────────────────────
-    let mut nvs = config::AppConfig::open_nvs(peripherals.FLASH);
-    let mut aes = esp_hal::aes::Aes::new(peripherals.AES);
-    let mut rng = esp_hal::rng::Rng::new();
-    let app_config = config::AppConfig::load(&mut nvs, &mut aes, &mut rng);
+    let app_config = match config::AppConfig::open_nvs(peripherals.FLASH) {
+        Some(mut nvs) => {
+            let mut aes = esp_hal::aes::Aes::new(peripherals.AES);
+            let mut rng = esp_hal::rng::Rng::new();
+            config::AppConfig::load(&mut nvs, &mut aes, &mut rng)
+        }
+        None => {
+            warn!("NVS unavailable — using default config");
+            config::AppConfig::default()
+        }
+    };
     let device_id = app_config.device_id.clone();
     info!("Config loaded: device_id={}", device_id);
 
@@ -828,14 +835,21 @@ async fn main(_spawner: Spawner) {
     );
 
     // Write to NVS
-    let mut nvs = config::AppConfig::open_nvs(peripherals.FLASH);
-    let mut aes = esp_hal::aes::Aes::new(peripherals.AES);
-    let mut rng = esp_hal::rng::Rng::new();
-    app_config.save(&mut nvs, &mut aes, &mut rng);
-
-    let _ = uart.write(b"CONFIG_OK\n");
-    let _ = uart.flush();
-    info!("Config saved to NVS successfully");
+    match config::AppConfig::open_nvs(peripherals.FLASH) {
+        Some(mut nvs) => {
+            let mut aes = esp_hal::aes::Aes::new(peripherals.AES);
+            let mut rng = esp_hal::rng::Rng::new();
+            app_config.save(&mut nvs, &mut aes, &mut rng);
+            let _ = uart.write(b"CONFIG_OK\n");
+            let _ = uart.flush();
+            info!("Config saved to NVS successfully");
+        }
+        None => {
+            warn!("NVS unavailable — cannot save config");
+            let _ = uart.write(b"CONFIG_ERROR:nvs_unavailable\n");
+            let _ = uart.flush();
+        }
+    }
 }
 
 // ── Main entry point ──────────────────────────────────────────────────
@@ -866,13 +880,27 @@ async fn main(spawner: Spawner) {
     info!("Launa ESP32 firmware starting...");
 
     // ── Load config from NVS ────────────────────────────────────────
-    let mut nvs = config::AppConfig::open_nvs(peripherals.FLASH);
-    let mut aes = esp_hal::aes::Aes::new(peripherals.AES);
-    let mut rng = esp_hal::rng::Rng::new();
-    let app_config = config::AppConfig::load(&mut nvs, &mut aes, &mut rng);
-    info!("Config loaded: device_id={}", app_config.device_id);
-    // Recover flash from NVS for OTA use
-    let flash = nvs.into_inner();
+    let app_config;
+    let mut ota;
+    let mut ota_buffers;
+    match config::AppConfig::open_nvs(peripherals.FLASH) {
+        Some(mut nvs) => {
+            let mut aes = esp_hal::aes::Aes::new(peripherals.AES);
+            let mut rng = esp_hal::rng::Rng::new();
+            app_config = config::AppConfig::load(&mut nvs, &mut aes, &mut rng);
+            info!("Config loaded: device_id={}", app_config.device_id);
+            // Recover flash from NVS for OTA use
+            let flash = nvs.into_inner();
+            ota = Some(ota::create_ota(flash));
+            ota_buffers = Some(ota::OtaBuffers::new());
+        }
+        None => {
+            warn!("NVS unavailable — using default config, OTA disabled");
+            app_config = config::AppConfig::default();
+            ota = None;
+            ota_buffers = None;
+        }
+    }
 
     // ── Initialize RS-485 UART ──────────────────────────────────────
     let uart_config = esp_hal::uart::Config::default().with_baudrate(115200);
@@ -925,16 +953,13 @@ async fn main(spawner: Spawner) {
     let _ = mqtt.subscribe_commands().await;
 
     // Mark firmware as valid (boot successful: WiFi + MQTT connected).
-    let mut ota = ota::create_ota(flash);
-    if let Err(e) = ota.mark_valid() {
-        warn!("Failed to mark firmware valid: {:?}", e);
-    } else {
-        info!("Firmware marked valid (boot validation passed)");
+    if let Some(ref mut o) = ota {
+        if let Err(e) = o.mark_valid() {
+            warn!("Failed to mark firmware valid: {:?}", e);
+        } else {
+            info!("Firmware marked valid (boot validation passed)");
+        }
     }
-
-    // Allocate OTA TCP socket buffers once — reused across attempts to avoid
-    // leaking 5 KiB of static memory on each failed OTA.
-    let mut ota_buffers = ota::OtaBuffers::new();
 
     // Spawn background tasks
     spawner
@@ -1002,14 +1027,22 @@ async fn main(spawner: Spawner) {
 
         // ── OTA update handling ─────────────────────────────────────
         if let Ok(firmware_url) = ota_rx.try_receive() {
-            info!("OTA: starting firmware download from main loop");
-            if let Err(()) = ota::perform_ota_update(wifi_stack.stack, &mut ota, &firmware_url, &mut ota_buffers).await {
-                error!("OTA update failed");
-                send_alert("error", "ota_update_failed");
+            match (ota.as_mut(), ota_buffers.as_mut()) {
+                (Some(o), Some(b)) => {
+                    info!("OTA: starting firmware download from main loop");
+                    if let Err(()) = ota::perform_ota_update(wifi_stack.stack, o, &firmware_url, b).await {
+                        error!("OTA update failed");
+                        send_alert("error", "ota_update_failed");
+                    }
+                    // If we get here without resetting, something went very wrong
+                    error!("OTA: device did not reset after update, rolling back");
+                    let _ = o.rollback_and_reboot();
+                }
+                _ => {
+                    warn!("OTA requested but NVS/flash unavailable — cannot update");
+                    send_alert("error", "ota_unavailable_no_flash");
+                }
             }
-            // If we get here without resetting, something went very wrong
-            error!("OTA: device did not reset after update, rolling back");
-            let _ = ota.rollback_and_reboot();
             esp_hal::system::software_reset();
         }
 
