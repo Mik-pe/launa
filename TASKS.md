@@ -165,14 +165,14 @@ Comprehensive code audit across all crates plus online protocol reference compar
 
 - [x] **Celsius set-temperature sends display value instead of wire value** (`app/src/mqtt_client.rs`): Fixed in `parse_command()` — after validation, Celsius display values are multiplied by 2 to produce wire values (`saturating_mul(2)`). Fahrenheit passes through unchanged.
 - [x] **MQTT v5 PUBLISH property length parsed as single byte** (`app/src/mqtt_client.rs`): Fixed — replaced single-byte read with `decode_remaining_length()` for variable-byte property length decoding.
-- [ ] **MQTT SUBACK bypasses `rx_buffer` reassembly — protocol desync risk** (`app/src/mqtt_client.rs` `subscribe()`): `read_exact(&mut buf, 5)` reads minimum 5 bytes into a 64-byte stack buffer. MQTT v5 SUBACK with properties may be longer. Any extra bytes not captured in the 64-byte buffer remain in the TCP stream and corrupt subsequent packet parsing (SUBACK reading bypasses the `rx_buffer` reassembly used for normal packets). Must read full SUBACK based on remaining length.
+- [x] **MQTT SUBACK reads full packet** (`app/src/mqtt_client.rs`): Replaced `read_exact(buf, 5)` with proper SUBACK reader: reads fixed header, variable-byte remaining length, full payload. Property length now decoded with `decode_remaining_length()`. No bytes left in TCP stream.
 - [x] **Hold mode timer re-fires on every status if spa is slow to respond** (`launa-core/src/lib.rs`): Added `fired` flag to `HoldModeTimer` — after firing, returns `None` until hold mode is released. Prevents toggle-command spam.
 - [x] **Stale command state survives bus reset** (`launa-core/src/lib.rs`): On `NewClientQuery`, `command_queue.clear()` and `cmd_tracker.reset()` are now called. Added `reset()` method to `CommandTracker`.
 
 ### HIGH — Significant Issues
 
-- [ ] **Information response `software_id` uses hex format instead of standard `M<val>_<val> V<val>.<val>`** (`launa-protocol/src/information.rs`): Current format `"64DC_1100"` is unreadable. All other Balboa implementations (pybalboa, NorthernMan54) decode as `"M100_220 V17.0"`. Users and diagnostics tools expect the standard format.
-- [ ] **HA discovery set-temperature entity hardcoded to °F min/max** (`launa-mqtt/src/discovery.rs`): `"min":50,"max":104,"step":1,"unit_of_measurement":"°F"` is hardcoded. Does not adapt for Celsius mode (should be 10-40°C, step 0.5, unit °C). The HA number entity will show wrong range and unit for Celsius spas.
+- [x] **Information response `software_id` uses standard Balboa format** (`launa-protocol/src/information.rs`): Changed from hex `"64DC_1100"` to standard `"M100_220 V17.0"` format matching pybalboa/NorthernMan54.
+- [x] **HA discovery set-temperature supports °C mode** (`launa-mqtt/src/discovery.rs`): Added `celsius(bool)` builder method. Celsius mode: min=10, max=40, step=0.5, unit=°C. Temperature sensor unit also adapts. Default remains Fahrenheit.
 - [ ] **`OTA_CHANNEL.try_send()` silently drops OTA URL** (`app/src/main.rs`): Channel capacity is 1. If an OTA URL is queued while one is already pending, the new URL is dropped. User sees MQTT acknowledgment but no OTA occurs. Should use `.send()` (blocking) or handle the error.
 - [ ] **NVS init failure causes unrecoverable boot loop** (`app/src/config.rs` `open_nvs()`): `panic!("NVS init failed")` on corrupted NVS. Device resets → panics again → infinite loop. Should fall back to default config with a warning.
 - [ ] **UART flush error silently ignored during RS-485 DE release** (`app/src/transport.rs`): `let _ = self.uart.flush();` — if flush fails, DE pin drops before all bytes are on the wire, corrupting the last byte(s) of the RS-485 frame (CRC mismatch on spa side).
@@ -189,9 +189,66 @@ Comprehensive code audit across all crates plus online protocol reference compar
 - [ ] **Pump timer auto-off when pump manually turned off — untested** (`launa-core/src/lib.rs` `PumpTimer::tick()`): `if !is_on { cancel }` path is never tested. If buggy, auto-off timer could re-start a pump the user intentionally turned off.
 - [ ] **Validated temperature integration untested end-to-end** (`launa-integration-tests`): `parse_set_temperature_validated()` is unit-tested but never called from integration tests. The full path (MQTT payload → validated parse → SpaApp queue → Ready → wire frame) is untested.
 
+### Simulator Fidelity & Adversarial Testing
+
+The simulator has solid protocol-level fidelity and basic error injection, but tests are predominantly happy-path. No integration tests exist in `launa-integration-tests` (directory is empty). The two controller implementations (`SpaController` in launa-sim vs `SpaApp` in launa-core) diverge — sim tests exercise the simplified one, not production logic. Several categories of real-world misbehavior are untested.
+
+#### Tier 1 — Integration Test Harness (Foundation)
+
+Wire SpaSim + SimTransport + SpaApp + SimBroker together for end-to-end tests. These are the highest-value improvements because they test the actual production logic path.
+
+- [ ] **Create integration test harness in `launa-integration-tests`**: Test pipeline `SpaSim.tick() → SimTransport → SpaApp.process_frame() → verify AppActions`. Replace direct `SpaController` usage with `SpaApp` so tests exercise production logic.
+- [ ] **Test: full registration handshake end-to-end**: SpaSim sends registration query → SpaApp responds → ID assignment → ID ack → `is_registered()`. Verify SpaApp sends correct frames at each step.
+- [ ] **Test: status updates flow through to MQTT publish actions**: SpaSim ticks → SpaApp processes status frames → `AppAction::PublishState` emitted → verify state JSON matches sim state.
+- [ ] **Test: MQTT command → SpaApp queue → Ready → wire frame**: SimBroker receives command → SpaApp.on_mqtt_command() → Ready frame → SpaApp sends toggle → SpaSim receives and applies → status confirms change.
+- [ ] **Test: pump timer auto-off end-to-end**: Start pump timer → SpaApp sends toggle on → SpaSim turns pump on → advance virtual clock past duration → SpaApp sends toggle off → verify SpaSim pump is off.
+- [ ] **Test: hold mode timer auto-release**: SpaSim enters hold → advance clock past 60 min → SpaApp sends hold-mode toggle → verify hold released.
+- [ ] **Test: stale detection and recovery**: SpaSim goes silent (bus silence) → advance clock past 30s → SpaApp publishes stale alert → SpaSim resumes → SpaApp publishes recovering-from-stale state.
+
+#### Tier 2 — Spa-Side Fault Scenarios
+
+Add new error injection capabilities to SpaSim and integration tests that exercise them. These test the most critical firmware robustness behaviors.
+
+- [ ] **Add `SpaSim::simulate_spa_reboot()`**: Resets to unregistered state, re-sends registration query, clears all spa state. Tests whether SpaApp re-registers cleanly, flushes command queue, resets trackers.
+- [ ] **Add `SpaSim::simulate_fault_state(FaultCode)`**: Enters fault mode (init_mode=0x02), possibly forces pumps/heater off. Tests whether SpaApp correctly reports fault state to MQTT.
+- [ ] **Add `SpaSim::simulate_sensor_noise(temp_jitter: f32)`**: Adds random noise to current_temp each tick. Tests whether SpaApp/MQTT state remains stable (no flip-flopping reported values).
+- [ ] **Add `SpaSim::simulate_unknown_temp()`**: Reports 0xFF for current_temp. Tests whether SpaApp handles `current_temp: None` correctly in MQTT JSON.
+- [ ] **Add `SpaSim::simulate_spontaneous_state_change()`**: Spa changes state (pump, heating mode, temp range) without controller command. Tests whether CommandTracker correctly does NOT treat this as a confirmation of a queued command.
+- [ ] **Test: spa reboots mid-session**: SpaSim sends status normally → reboots → SpaApp detects NewClientQuery → re-registers → command queue flushed → state resets → normal operation resumes.
+- [ ] **Test: spa silently drops toggle command**: Set command_success_rate to 0.0 → SpaApp sends toggle → SpaSim ignores → SpaApp command tracker times out → retry → eventually drops. Verify MQTT reflects correct final state.
+- [ ] **Test: bus silence mid-session**: Normal operation → 15s silence → stale probe fires → 30s silence → stale alert → silence ends → recovery. Full lifecycle.
+- [ ] **Test: corrupt frame doesn't desync parser**: SpaSim injects corrupt frame → next valid status frame still parses → SpaApp continues normally. Verify FrameDecoder recovers.
+- [ ] **Test: spontaneous filter cycle starts while command pending**: SpaSim schedules filter cycle → pump turns on from filter → SpaApp had queued a different pump toggle → CommandTracker must not misattribute the filter cycle as confirmation.
+
+#### Tier 3 — Protocol-Level Misbehavior
+
+- [ ] **Test: out-of-order frames**: SpaSim sends Ready before Status in a single tick. Verify SpaApp handles gracefully (Ready with no pending status shouldn't crash).
+- [ ] **Test: interleaved response and status**: Status frame arrives between settings request and settings response. Verify both parse correctly.
+- [ ] **Test: rapid re-registration**: SpaSim sends multiple registration queries in quick succession. Verify SpaApp doesn't double-register or assign wrong ID.
+- [ ] **Test: partial frame across tick boundary**: Use existing `inject_partial_frame_at()` in integration context. Verify SpaApp's FrameDecoder reassembles correctly.
+- [ ] **Test: duplicate status frame in one tick**: Use existing `inject_duplicate_frame()`. Verify SpaApp doesn't double-publish to MQTT.
+- [ ] **Test: multi-frame fault log walk**: Request fault entries 1..N sequentially. Verify each response is correctly captured and last_fault updates.
+
+#### Tier 4 — Physics Improvements
+
+- [ ] **Realistic thermal model**: Replace linear +/-1°/tick with rate proportional to temp delta (cooling) and heater output (heating). ~0.5°F/min heating, ~0.1°F/min cooling.
+- [ ] **Temperature sensor noise**: Small random jitter (+/-0.5°F) on current_temp each tick. Real sensors are noisy.
+- [ ] **Heater/pump interlock**: `is_heating` should only be true when circ pump or at least one pump is running. Spa won't heat without water circulation.
+- [ ] **Temperature unknown (0xFF) on startup**: First N ticks after sim creation should report current_temp as 0xFF (unknown) until sensor stabilizes.
+- [ ] **Heater overshoot**: Allow temp to overshoot set_temp by 1-2°F before thermostat cuts off. Matches real spa behavior.
+
+#### Tier 5 — Multi-Frame Protocol & Advanced
+
+- [ ] **Test: fault log walk (entries 1..N)**: SpaSim supports multiple fault entries. Test sequential request → response → request next → response cycle.
+- [ ] **Test: configuration request/response pairing**: Request config → verify SpaApp emits `ConfigurationResponse` event with correct pump/light/blower setup.
+- [ ] **Test: filter cycle edit commands**: Not just read — test setting filter cycle times if protocol supports it.
+- [ ] **Remove SpaController from launa-sim or mark deprecated**: Tests should use `SpaApp` from launa-core. `SpaController` is a simplified duplicate that diverges from production logic.
+- [ ] **Test: MQTT broker disconnect/reconnect during active session**: SimBroker.disconnect() → SpaApp publishes go silent → reconnect → verify state sync recovers.
+- [ ] **Test: rapid command flood exceeds queue cap**: Send 40 MQTT commands rapidly → verify SpaApp caps at 32 and increments dropped_count → verify remaining commands drain correctly.
+
 ### LOW — Minor Issues
 
-- [ ] **`frame_error_count: u32` can wrap on noisy buses** (`launa-protocol/src/frame.rs`): Should use `saturating_add(1)`.
+- [x] **`frame_error_count: u32` uses saturating_add** (`launa-protocol/src/frame.rs`): Both increment sites now use `saturating_add(1)` instead of `+= 1` to prevent wrap on noisy buses.
 - [ ] **Status message: missing panel_locked, notification_type, settings_lock, M8 cycle time fields** (`launa-protocol/src/status.rs`): Additional fields at offsets 9/18/19/21/24 that other implementations parse. Low priority — advanced/niche features.
 - [ ] **Missing message types: Preferences (0x26), Setup Parameters (0x25)** (`launa-protocol/src/dispatcher.rs`): Standard Balboa message types not handled. Non-essential but may appear on real spas.
 - [ ] **`protocol.md` says Pump 6 at bits 6-7 but code correctly uses bits 2-3** (`docs/protocol.md`): Documentation inconsistency inherited from NorthernMan54 header comment. Code is correct, docs are wrong.

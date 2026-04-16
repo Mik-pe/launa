@@ -12,7 +12,7 @@ use alloc::string::ToString;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InformationResponse {
-    /// Software ID string derived from SI+SV bytes (e.g. "M100_220")
+    /// Software ID string derived from SI+SV bytes (e.g. "M100_220 V17.0")
     pub software_id: String,
     /// System model string from 8 ASCII bytes, trimmed (e.g. "BFBP20")
     pub system_model: String,
@@ -79,13 +79,12 @@ impl InformationResponse {
         // Bytes 2-3: Software Version (SV) - two bytes
         let sv_bytes = &payload[2..4];
 
-        // Derive software_id string from SI+SV
-        // SI bytes are hex-encoded ASCII codes (e.g. 0x64, 0xDC → "M100")
-        // SV bytes represent version (e.g. 0x11, 0x00 → "_220")
-        // The protocol example: 64dc 1100 → "M100_220"
-        // Let's just represent as raw hex for now and let higher layers decode
+        // Derive software_id string from SI+SV using standard Balboa format:
+        // SI bytes (raw decimal): "M{si0}_{si1}"
+        // SV bytes (raw decimal): "V{sv0}.{sv1}"
+        // Example: 0x64,0xDC,0x11,0x00 → "M100_220 V17.0"
         let software_id = format!(
-            "{:02X}{:02X}_{:02X}{:02X}",
+            "M{}_{} V{}.{}",
             si_bytes[0], si_bytes[1], sv_bytes[0], sv_bytes[1]
         );
 
@@ -147,6 +146,7 @@ mod tests {
         assert_eq!(info.config_signature, "3D12382E");
         assert_eq!(info.heater_voltage, HeaterVoltage::V240);
         assert_eq!(info.heater_type, HeaterType::Standard);
+        assert_eq!(info.software_id, "M100_220 V17.0");
         assert_eq!(info.dip_switches, "0000010000000000");
     }
 

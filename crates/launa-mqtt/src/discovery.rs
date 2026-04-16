@@ -25,6 +25,8 @@ pub struct DiscoveryBuilder {
     device_model: String,
     sw_version: String,
     manufacturer: String,
+    /// If true, temperature entities use Celsius. Default: false (Fahrenheit).
+    celsius: bool,
 }
 
 impl DiscoveryBuilder {
@@ -35,7 +37,14 @@ impl DiscoveryBuilder {
             device_model: String::from("BP6013G1"),
             sw_version: String::from("unknown"),
             manufacturer: String::from("Launa"),
+            celsius: false,
         }
+    }
+
+    /// Set temperature scale to Celsius (default is Fahrenheit).
+    pub fn celsius(mut self, celsius: bool) -> Self {
+        self.celsius = celsius;
+        self
     }
 
     pub fn device_name(mut self, name: &str) -> Self {
@@ -93,6 +102,12 @@ impl DiscoveryBuilder {
         let avail_topic = topics.availability_topic();
         let cmd_topic = topics.command_topic();
 
+        let (temp_unit, temp_min, temp_max, temp_step) = if self.celsius {
+            ("°C", 10, 40, "0.5")
+        } else {
+            ("°F", 50, 104, "1")
+        };
+
         // Temperature sensor
         configs.push(Self::make_sensor(
             &topics,
@@ -104,7 +119,7 @@ impl DiscoveryBuilder {
             "temperature",
             "Water Temperature",
             "temperature",
-            "°F",
+            temp_unit,
             "{{ value_json.current_temp }}",
         ));
 
@@ -112,8 +127,8 @@ impl DiscoveryBuilder {
         configs.push(DiscoveryMessage {
             topic: topics.discovery_topic("number", "set_temperature"),
             payload: format!(
-                r#"{{"device":{},"origin":{},"name":"Set Temperature","unique_id":"{}_set_temp","device_class":"temperature","unit_of_measurement":"°F","min":50,"max":104,"step":1,"state_topic":"{}","command_topic":"{}/set_temperature","value_template":"{{{{ value_json.set_temp }}}}","availability_topic":"{}"}}"#,
-                device_info, origin, self.device_id, state_topic, cmd_topic, avail_topic
+                r#"{{"device":{},"origin":{},"name":"Set Temperature","unique_id":"{}_set_temp","device_class":"temperature","unit_of_measurement":"{}","min":{},"max":{},"step":{},"state_topic":"{}","command_topic":"{}/set_temperature","value_template":"{{{{ value_json.set_temp }}}}","availability_topic":"{}"}}"#,
+                device_info, origin, self.device_id, temp_unit, temp_min, temp_max, temp_step, state_topic, cmd_topic, avail_topic
             ),
             retain: false,
         });

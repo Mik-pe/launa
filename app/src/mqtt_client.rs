@@ -464,58 +464,81 @@ impl MqttClient {
 
         self.send_bytes(&packet).await.map_err(|_| MqttError::SubscribeFailed)?;
 
-        let mut buf = [0u8; 64];
-        let n = match self.read_exact(&mut buf, 5).await {
-            Ok(n) => n,
-            Err(_) => {
-                warn!("MQTT SUBACK read failed");
+        // Read SUBACK: fixed header byte + variable-byte remaining length + payload
+        let mut header_buf = [0u8; 5]; // max 1 + 4 bytes for fixed header
+        self.read_exact(&mut header_buf, 1).await.map_err(|_| {
+            warn!("MQTT SUBACK read failed");
+            MqttError::SubscribeFailed
+        })?;
+
+        if header_buf[0] != 0x90 {
+            warn!("MQTT SUBACK unexpected type: 0x{:02X}", header_buf[0]);
+            return Err(MqttError::SubscribeFailed);
+        }
+
+        // Read remaining length (variable-byte encoded, up to 4 bytes)
+        let mut rl_buf = [0u8; 4];
+        let mut rl_bytes = 1;
+        self.read_exact(&mut rl_buf[..1], 1).await.map_err(|_| {
+            warn!("MQTT SUBACK remaining length read failed");
+            MqttError::SubscribeFailed
+        })?;
+
+        while rl_buf[rl_bytes - 1] & 0x80 != 0 && rl_bytes < 4 {
+            self.read_exact(&mut rl_buf[rl_bytes..rl_bytes + 1], 1).await.map_err(|_| {
+                warn!("MQTT SUBACK remaining length read failed");
+                MqttError::SubscribeFailed
+            })?;
+            rl_bytes += 1;
+        }
+
+        let remaining_len = match decode_remaining_length(&rl_buf[..rl_bytes]) {
+            Some((len, _)) => len,
+            None => {
+                warn!("MQTT SUBACK invalid remaining length encoding");
                 return Err(MqttError::SubscribeFailed);
             }
         };
 
-        // Validate SUBACK packet:
-        //   Byte 0: 0x90 (packet type 9 << 4)
-        //   Byte 1+: Remaining length (variable length encoding, typically 1 byte)
-        //   Then: 2 bytes packet identifier
-        //   Then: 1 byte property length (MQTT v5)
-        //   Then: 1+ bytes return codes (one per topic filter)
-        if n < 5 || buf[0] != 0x90 {
-            warn!("MQTT SUBACK unexpected: {:02X?} ({} bytes)", &buf[..n], n);
+        // Read the full remaining payload
+        let mut payload_buf = [0u8; 64];
+        if remaining_len > payload_buf.len() {
+            warn!("MQTT SUBACK payload too large: {} bytes", remaining_len);
+            return Err(MqttError::SubscribeFailed);
+        }
+        self.read_exact(&mut payload_buf[..remaining_len], remaining_len).await.map_err(|_| {
+            warn!("MQTT SUBACK payload read failed");
+            MqttError::SubscribeFailed
+        })?;
+
+        // Parse packet identifier (first 2 bytes of payload)
+        if remaining_len < 3 {
+            warn!("MQTT SUBACK payload too short");
+            return Err(MqttError::SubscribeFailed);
+        }
+        let ack_pkt_id = u16::from_be_bytes([payload_buf[0], payload_buf[1]]);
+        if ack_pkt_id != pkt_id {
+            warn!("MQTT SUBACK packet ID mismatch: expected {}, got {}", pkt_id, ack_pkt_id);
             return Err(MqttError::SubscribeFailed);
         }
 
-        // Decode remaining length to find packet identifier offset
-        if let Some((_remaining_len, header_size)) = decode_remaining_length(&buf[..n]) {
-            let idx = header_size;
-            if idx + 2 > n {
-                warn!("MQTT SUBACK too short for packet identifier");
+        // Decode property length (variable-byte)
+        let (props_len, props_header_size) = match decode_remaining_length(&payload_buf[2..]) {
+            Some(v) => v,
+            None => {
+                warn!("MQTT SUBACK invalid property length");
                 return Err(MqttError::SubscribeFailed);
             }
-            let ack_pkt_id = u16::from_be_bytes([buf[idx], buf[idx + 1]]);
-            if ack_pkt_id != pkt_id {
-                warn!("MQTT SUBACK packet ID mismatch: expected {}, got {}", pkt_id, ack_pkt_id);
-                return Err(MqttError::SubscribeFailed);
-            }
+        };
 
-            // Skip property length byte and find return code
-            let props_idx = idx + 2;
-            if props_idx >= n {
-                warn!("MQTT SUBACK missing property length / return code");
-                return Err(MqttError::SubscribeFailed);
-            }
-            let props_len = buf[props_idx] as usize;
-            let return_code_idx = props_idx + 1 + props_len;
-            if return_code_idx >= n {
-                warn!("MQTT SUBACK missing return code");
-                return Err(MqttError::SubscribeFailed);
-            }
-            let return_code = buf[return_code_idx];
-            if return_code == 0x80 {
-                warn!("MQTT SUBACK subscription failed (return code 0x80)");
-                return Err(MqttError::SubscribeFailed);
-            }
-        } else {
-            warn!("MQTT SUBACK invalid remaining length");
+        let return_code_idx = 2 + props_header_size + props_len;
+        if return_code_idx >= remaining_len {
+            warn!("MQTT SUBACK missing return code");
+            return Err(MqttError::SubscribeFailed);
+        }
+        let return_code = payload_buf[return_code_idx];
+        if return_code == 0x80 {
+            warn!("MQTT SUBACK subscription failed (return code 0x80)");
             return Err(MqttError::SubscribeFailed);
         }
 

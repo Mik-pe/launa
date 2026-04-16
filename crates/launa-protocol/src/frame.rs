@@ -143,7 +143,7 @@ impl FrameDecoder {
                 match result {
                     Ok(frame) => Some(frame),
                     Err(_) => {
-                        self.frame_error_count += 1;
+                        self.frame_error_count = self.frame_error_count.saturating_add(1);
                         None
                     }
                 }
@@ -169,7 +169,7 @@ impl FrameDecoder {
                 self.buffer.clear();
                 self.in_frame = false;
                 self.escape_next = false;
-                self.frame_error_count += 1;
+                self.frame_error_count = self.frame_error_count.saturating_add(1);
             }
 
             None
