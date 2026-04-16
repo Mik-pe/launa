@@ -109,6 +109,39 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 - [x] **MQTT `try_extract_packet()` heap-churns every inbound packet** (`app/src/mqtt_client.rs`): Replaced double `Vec::from()` with `Vec::drain()` in `launa-mqtt/src/packet.rs`. Single allocation per packet extraction, shifts tail in-place.
 - [x] **`EspOtaFlash::set_boot_partition()` erases 4 KiB sector for 32-byte otadata entry** (`launa-esp-ota`): Fixed with read-modify-write pattern — reads full sector, patches target entry, erases, writes back. Both slots survive sequential and alternating writes.
 
+## Deployment Readiness (Review 2026-04-16)
+
+Code is feature-complete. Remaining items are deployment infrastructure and operational hardening needed to flash and run on a real ESP32.
+
+### CRITICAL — Blocks First Flash to Hardware
+
+- [x] **Create `app/partitions.csv`**: Every xtask flash command passes `--partition-table partitions.csv`. Must match hardcoded offsets: NVS at `0x9000` (24 KiB), otadata at `0x10000` (8 KiB), factory at `0x20000` (1.25 MiB), ota_0 at `0x160000` (1.25 MiB), ota_1 at `0x2A0000` (1.25 MiB).
+- [x] **Pin and document ESP32 Rust toolchain**: No `rust-toolchain.toml`. The `xtensa-esp32-none-elf` target is set in `app/.cargo/config.toml` but the toolchain channel (nightly, esp-rs rustup component, etc.) is not documented. A fresh developer has no setup guide.
+- [x] **Add `app/Cargo.lock` to git**: Currently untracked (`?? app/Cargo.lock` in git status). The app is excluded from the workspace and has its own lockfile — must be committed for reproducible ESP32 builds.
+
+### HIGH — Should Fix Before Production Deployment
+
+- [ ] **Add DNS resolution**: Both MQTT and OTA use `parse_ip()` which only accepts dotted-quad IPv4. `embassy-net` is configured without DNS (`features = ["tcp", "dhcpv4", "medium-ethernet"]`). If the MQTT broker is on a hostname (e.g. `homeassistant.local`), it won't resolve. Add `embassy-net` DNS feature + smoltcp DNS resolver.
+- [ ] **Add ESP32 cross-compilation to CI**: `.github/workflows/ci.yml` only runs `cargo check --workspace` and `cargo test --workspace` on host. Does not verify `app/` compiles for `xtensa-esp32-none-elf`. Firmware regressions in ESP32-specific code go undetected.
+- [ ] **Add firmware versioning strategy**: `FIRMWARE_VERSION` reads `env!("CARGO_PKG_VERSION")` = `"0.1.0"`. No build hash, Git SHA, or automated version bumping. The `ota-flash` xtask reads version from `app/Cargo.toml` for post-OTA verification, but there is no mechanism to increment it.
+- [x] **Fix sniffer mode MQTT connect panic**: In `#[cfg(feature = "sniff")]` main, MQTT connect failure calls `panic!("MQTT connect failed")` unlike the main firmware's retry loop. Should use the same retry-with-backoff pattern.
+- [ ] **Pin exact versions for `esp-radio` and `esp-hal` unstable features**: Both use `unstable` feature flag, meaning API may change between versions without warning. Verify exact pins in `app/Cargo.lock`.
+
+### MEDIUM — Operational Gaps
+
+- [ ] **Add WiFi reconnection integration test**: `wifi.rs` has `connection_task` handling disconnect/reconnect + MQTT signal. This critical path has no integration test.
+- [ ] **Add OTA end-to-end test on hardware**: OTA flow (HTTP download → flash partition → reboot → mark valid) cannot be tested on desktop. Integration tests use `MockOta`. No hardware test harness exists.
+- [ ] **Evaluate `esp-rtos` maturity**: v0.2.0 is relatively new. Check for known issues around task scheduling and timer accuracy before relying on it in production.
+- [ ] **Heap fragmentation analysis**: 32 KiB heap is tight for MQTT + JSON + OTA. Long-term `Vec` churn could fragment. No fragmentation analysis exists.
+- [ ] **Add remote logging capability**: Logs only visible over serial (`log` + `esp-println`). No remote logging (e.g., sending log messages to MQTT or a collector) for production diagnostics.
+- [ ] **No RS-485 transceiver reset capability**: No GPIO to hardware-reset the MAX485/MAX3485 if it gets into a bad state.
+
+### LOW — Nice-to-Have
+
+- [ ] **Add firmware binary signing for OTA**: OTA accepts any HTTP-served binary with correct ESP32 image header magic (`0xE9`). CRC is optional (only if `?crc=` in URL). An attacker on the LAN could serve malicious firmware.
+- [ ] **Add unit tests for `app/` modules**: `mqtt_client.rs` (800+ lines), `ota.rs` (400+ lines), `wifi.rs` have no unit tests — only tested through `launa-core` integration pipeline.
+- [ ] **Add `xtask` dependency pin check to CI**: `xtask` depends on `serialport`, `keyring`, `rand`, `toml` but CI does not verify xtask builds.
+
 ## Completed Work
 
 All software development is complete. The firmware compiles for xtensa-esp32-none-elf, all workspace tests pass, and the codebase has been through two full code reviews (2026-04-15).

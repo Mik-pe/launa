@@ -600,12 +600,26 @@ async fn main(spawner: Spawner) {
     )
     .await;
 
-    // ── Connect MQTT ────────────────────────────────────────────────
-    let mut mqtt = match mqtt_client::MqttClient::connect(wifi_stack.stack, &app_config).await {
-        Ok(m) => m,
-        Err(e) => {
-            error!("MQTT connect failed: {:?}", e);
-            panic!("MQTT connect failed")
+    // ── Connect MQTT (with retry + exponential backoff) ─────────────
+    let mut mqtt = {
+        let mut attempt: u32 = 0;
+        loop {
+            attempt += 1;
+            match mqtt_client::MqttClient::connect(wifi_stack.stack, &app_config).await {
+                Ok(m) => break m,
+                Err(e) => {
+                    let backoff_secs = (5u64 << attempt.saturating_sub(1).min(4)).min(60);
+                    error!(
+                        "MQTT connect attempt {} failed: {:?}, retrying in {}s",
+                        attempt, e, backoff_secs
+                    );
+                    Timer::after(Duration::from_secs(backoff_secs)).await;
+                    if attempt >= 10 {
+                        error!("MQTT connect failed after 10 attempts, resetting");
+                        esp_hal::system::software_reset();
+                    }
+                }
+            }
         }
     };
 
