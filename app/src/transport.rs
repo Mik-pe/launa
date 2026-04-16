@@ -9,7 +9,7 @@ use esp_hal::gpio::{AnyPin, Output, OutputConfig, Level};
 use esp_hal::uart::Uart;
 use esp_hal::Async;
 use launa_hal::transport::{Transport, TransportError};
-use log::trace;
+use log::{trace, warn};
 
 pub struct Rs485Transport {
     uart: Uart<'static, Async>,
@@ -53,10 +53,23 @@ impl Transport for Rs485Transport {
 
         // Flush TX FIFO + shift register to ensure all bytes are on the wire
         // before releasing DE pin. esp-hal flush() blocks until TX is complete.
-        let _ = self.uart.flush();
+        let flush_result = self.uart.flush();
 
+        // Always release DE pin: on success, TX is confirmed complete; on
+        // failure, a safety delay gives the hardware shift register time to
+        // finish draining before we drop DE.
         if let Some(ref mut de) = self.de_pin {
+            if flush_result.is_err() {
+                warn!("UART flush failed — safety delay before releasing DE pin");
+                // 1 ms is enough for the shift register to drain at any
+                // practical baud rate (≈100 bit-times at 115200).
+                Timer::after(Duration::from_millis(1)).await;
+            }
             de.set_low();
+        }
+
+        if let Err(_e) = flush_result {
+            return Err(TransportError::Io);
         }
 
         trace!("UART wrote all {} bytes", data.len());
