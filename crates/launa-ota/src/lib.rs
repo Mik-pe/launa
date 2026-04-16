@@ -19,6 +19,22 @@ pub trait OtaUpdate {
     fn mark_valid(&mut self) -> Result<(), OtaError>;
     /// Rollback to the previous firmware and reboot.
     fn rollback_and_reboot(&mut self) -> Result<(), OtaError>;
+    /// Verify the CRC32 of all written firmware data matches the expected value.
+    ///
+    /// Implementations that track a running CRC should compare it against
+    /// `expected_crc` and return `Err(OtaError::HashMismatch)` on mismatch.
+    /// The default implementation is a no-op (always succeeds).
+    fn verify_hash(&mut self, _expected_crc: u32) -> Result<(), OtaError> {
+        Ok(())
+    }
+    /// Validate the ESP32 image header magic byte (`0xE9`) in the first chunk.
+    ///
+    /// Called once before the first `write()`. Returns
+    /// `Err(OtaError::InvalidImageHeader)` if the magic byte is wrong.
+    /// The default implementation is a no-op (always succeeds).
+    fn validate_first_chunk(&mut self, _chunk: &[u8]) -> Result<(), OtaError> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -35,6 +51,10 @@ pub enum OtaError {
     InvalidFirmware,
     #[error("flash error at address {address:#x}")]
     FlashError { address: u32 },
+    #[error("firmware CRC mismatch: expected {expected:#010x}, got {actual:#010x}")]
+    HashMismatch { expected: u32, actual: u32 },
+    #[error("invalid ESP32 image header magic")]
+    InvalidImageHeader,
 }
 
 #[cfg(test)]
@@ -56,6 +76,12 @@ mod tests {
             OtaError::NoOtaPartition.to_string(),
             OtaError::InvalidFirmware.to_string(),
             OtaError::FlashError { address: 0 }.to_string(),
+            OtaError::HashMismatch {
+                expected: 0xDEADBEEF,
+                actual: 0xCAFEBABE,
+            }
+            .to_string(),
+            OtaError::InvalidImageHeader.to_string(),
         ];
         for s in &cases {
             assert!(!s.is_empty(), "OtaError variant Display output is empty");
@@ -303,6 +329,13 @@ pub mod mock {
         fn rollback_and_reboot(&mut self) -> Result<(), OtaError> {
             self.rolled_back = true;
             self.in_progress = false;
+            Ok(())
+        }
+
+        fn validate_first_chunk(&mut self, chunk: &[u8]) -> Result<(), OtaError> {
+            if chunk.is_empty() || chunk[0] != 0xE9 {
+                return Err(OtaError::InvalidImageHeader);
+            }
             Ok(())
         }
     }

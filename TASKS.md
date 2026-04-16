@@ -56,11 +56,11 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 
 ### CRITICAL — Blocks Field Deployment
 
-- [ ] **Add hardware watchdog timer** (`app/src/main.rs`): Configure TIMG1 as independent WDT. Main loop pets it; if stalled, WDT resets the device. Essential for headless operation.
-- [ ] **Fix main loop blocking on `frame_rx.receive().await`** (`app/src/main.rs`): Use `embassy_futures::select::select()` to multiplex UART frames, MQTT commands, and a periodic `Timer::after()` for ticks. Currently blocks indefinitely when spa is off — no OTA, no commands, no diagnostics.
+- [x] **Add hardware watchdog timer** (`app/src/main.rs`): TIMG1 WDT configured with 30s timeout, fed every main loop iteration. Resets device on stall.
+- [x] **Fix main loop blocking on `frame_rx.receive().await`** (`app/src/main.rs`): Uses `embassy_futures::select::select()` to multiplex UART frames, MQTT commands, and 1-second tick timer. No longer blocks when spa is off.
 - [x] **Cap MQTT `rx_buffer` at fixed size** (`app/src/mqtt_client.rs`): `rx_buffer: Vec<u8>` has no bound. Cap at 2 KiB; if exceeded without a complete packet, treat as protocol error and reconnect.
 - [x] **Fix circ_pump/mister HA entities** (`launa-mqtt`): Changed from writable switches (with command topics) to read-only sensors — protocol doesn't support toggling these.
-- [ ] **Add firmware integrity verification to OTA** (`launa-esp-ota`, `app/src/ota.rs`): No CRC/hash of written firmware. Accept expected hash in OTA request (e.g., HTTP header or MQTT payload field). Verify after all writes, before `finalize()`. Also validate ESP32 image header magic (`\xE9`) on first write.
+- [x] **Add firmware integrity verification to OTA** (`launa-esp-ota`, `app/src/ota.rs`): Validates ESP32 image header magic (0xE9) on first write. Accumulates CRC-32/MPEG-2 across all chunks. Supports expected hash via `?crc=HEX` URL parameter and Content-Length validation against partition size.
 - [x] **Fix JSON escaping in `status_to_json`** (`launa-mqtt/src/state.rs`): Added `escape_json_string()` helper escaping `\`, `"`, `\n`, `\r`, `\t`, and control chars U+0000-U+001F → `\uXXXX`.
 - [ ] **Set up CI pipeline** (`.github/workflows`): At minimum: `cargo test` + `cargo check` + `cargo fmt --check` on PRs to main.
 
@@ -69,7 +69,7 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 - [x] **`Frame::encode()` silent truncation on payloads >253 bytes** (`launa-protocol/src/frame.rs`): Returns `Err(FrameError::PayloadTooLarge(len))` when `2 + payload.len() > 255`. All callers updated.
 - [x] **`FrameDecoder` miscounts all parse failures as CRC errors** (`launa-protocol/src/frame.rs`): Renamed `crc_error_count` → `frame_error_count` (field, methods, tests, callers).
 - [x] **`ClientIdAssignment` defaults to 0 on missing byte** (`launa-protocol/src/dispatcher.rs`): Returns `IncomingMessage::Unknown` when ID byte is missing instead of silently assigning 0.
-- [ ] **Panic on initial MQTT connect failure — no retry** (`app/src/main.rs`): Replace `panic!("MQTT connect failed")` with retry loop + exponential backoff, or at least `software_reset()`.
+- [x] **Panic on initial MQTT connect failure — no retry** (`app/src/main.rs`): Replaced panic with retry loop (up to 10 attempts, exponential backoff 5s-60s), falls back to `software_reset()` if all attempts fail.
 - [ ] **UnsafeCell socket buffer reuse — document safety argument** (`app/src/mqtt_client.rs`): Add formal SAFETY comment explaining single-task context, or use `MaybeUninit` pattern.
 - [ ] **Discovery publishes ~20 JSON strings on heap — OOM burst risk** (`app/src/mqtt_client.rs`): Publish one at a time with heap checks between, or use pre-allocated buffers.
 - [ ] **Sniffer mode allocates unbounded String per frame** (`app/src/main.rs`): Replace `format!("{:02X}")` collect with `write!()` into pre-allocated buffer.
@@ -85,6 +85,10 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 - [ ] **No OTA / reconnection / stale-detection integration tests** (`launa-integration-tests`): Critical production paths untested at integration level.
 - [ ] **`ota-flash` does not verify firmware version after update** (`xtask`): Device could roll back to factory and still appear online. Check reported version.
 - [ ] **Command queue in SpaApp is unbounded** (`launa-core`): Add cap (e.g., 32 commands) and reject overflow. MQTT commands faster than Ready windows = unbounded growth.
+- [ ] **Celsius temperature commands never confirm in CommandTracker** (`launa-core/src/lib.rs:266`): `ExpectedChange::TemperatureSet` compares `(status.set_temp as u8) == *temp`. In Celsius mode, `set_temp` is `raw/2.0` (e.g. `77/2 = 38.5`), so `38.5 as u8` truncates to `38 != 77`. Every odd-wire-value Celsius set-temp command will fail confirmation and retry until dropped. Fix: compare raw wire values by multiplying back (`(status.set_temp * temp_divisor) as u8`), or store the raw value alongside `set_temp`.
+- [ ] **Duplicate divergent HA discovery implementations** (`app/src/mqtt_client.rs` vs `launa-mqtt/src/discovery.rs`): `MqttClient::publish_discovery()` hand-rolls 20 discovery configs missing `origin`, `sw_version`, and `entity_category: "diagnostic"` on alert/diagnostics sensors. The authoritative `DiscoveryBuilder` in `launa-mqtt` is only used in tests and `SimBroker`, never in production. The app's version silently overwrites correct configs on every connect + HA restart. Fix: refactor `publish_discovery()` to use `DiscoveryBuilder::build_with_retain()`.
+- [ ] **MQTT LWT Will Retain flag not set** (`app/src/mqtt_client.rs` `send_connect()`): `connect_flags = 0x2E` sets Clean Start + Will Flag + Will QoS 1, but does NOT set Will Retain (bit 5). The LWT "offline" message won't be retained by the broker, so after a broker restart during a device outage, HA won't see the offline status. Fix: set bit 5 (`connect_flags |= 0x20`).
+- [ ] **First temperature command accepted without scale/range validation** (`app/src/mqtt_client.rs`): Before any status is received, `last_scale_range` is `None`. The code falls through to accepting raw values only checked against the absolute max (108). `SetTemperature(0)` passes validation but the Balboa protocol may interpret wire value 0 as "no set temperature" / turn off heating. Fix: reject temperature commands until `last_scale_range` is populated, or use `parse_set_temperature_validated()` with sensible defaults.
 
 ### MEDIUM — Recommended
 
@@ -101,6 +105,9 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 - [ ] **xtask argument parsing panics on missing flag values** (`xtask/src/*.rs`): `--feature` as last arg = index out of bounds. Add bounds checks.
 - [ ] **No firmware versioning mechanism** (cross-cutting): No build hash or version embedded in binary or reported via MQTT.
 - [ ] **Cargo.lock gitignored at workspace root** (`.gitignore`): Workspace library builds not reproducible across machines.
+- [ ] **Stale probe sends ConfigurationRequest instead of lightweight probe** (`launa-core/src/lib.rs:755`): When the spa is stale, the 5-second probe sends `[0x0A, 0xBF, 0x04]` (ConfigurationRequest). This is heavier than necessary and triggers an unwanted full configuration response. Fix: use a no-op or status-specific request instead.
+- [ ] **MQTT `try_extract_packet()` heap-churns every inbound packet** (`app/src/mqtt_client.rs`): `self.rx_buffer = Vec::from(&self.rx_buffer[total_size..])` allocates a new `Vec` for every MQTT packet. On a 32 KiB heap with frequent traffic, this contributes to fragmentation. Fix: use `Vec::drain()` or a rotating-index buffer to avoid per-packet allocation.
+- [ ] **`EspOtaFlash::set_boot_partition()` erases 4 KiB sector for 32-byte otadata entry** (`launa-esp-ota`): Both otadata entries (32 bytes each) may share the same 4 KiB flash sector. Erasing slot 1 could destroy slot 0 on power loss. Fix: read-modify-write the sector (read full sector, modify the 32-byte entry, erase, rewrite), or verify slots are on independent sectors per the partition table.
 
 ## Completed Work
 

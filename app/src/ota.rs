@@ -83,6 +83,12 @@ pub async fn perform_ota_update(
         }
     };
 
+    // Extract expected CRC from URL query parameter (e.g. ?crc=DEADBEEF)
+    let expected_crc = parse_crc_from_url(firmware_url);
+    if let Some(crc) = expected_crc {
+        info!("OTA: expected firmware CRC: {:#010X}", crc);
+    }
+
     info!("OTA: downloading from {}:{}{}", host, port, path);
 
     // Reuse pre-allocated TCP socket buffers.
@@ -176,6 +182,25 @@ pub async fn perform_ota_update(
                 return Err(());
             }
 
+            // Validate Content-Length against partition size
+            if let Some(content_length) = parse_content_length(&header_buf) {
+                let partition_size = 0x140000u32; // OTA partition size (matches partitions.csv)
+                if content_length > partition_size {
+                    error!(
+                        "OTA: Content-Length {} exceeds partition size {}",
+                        content_length, partition_size
+                    );
+                    ota_rollback(ota);
+                    return Err(());
+                }
+                info!(
+                    "OTA: Content-Length {} bytes (partition size {})",
+                    content_length, partition_size
+                );
+            } else {
+                info!("OTA: no Content-Length header, skipping size validation");
+            }
+
             // Write any body data that arrived with the headers
             let body_start = pos + 4;
             if body_start < header_buf.len() {
@@ -209,6 +234,16 @@ pub async fn perform_ota_update(
             return Err(());
         }
         total_written += n as u32;
+    }
+
+    // Verify firmware integrity before finalizing (if expected CRC was provided)
+    if let Some(crc) = expected_crc {
+        if let Err(e) = ota.verify_hash(crc) {
+            error!("OTA: firmware integrity check failed: {:?}", e);
+            ota_rollback(ota);
+            return Err(());
+        }
+        info!("OTA: firmware CRC verified successfully");
     }
 
     // Finalize the OTA update
@@ -270,6 +305,19 @@ fn find_header_end(data: &[u8]) -> Option<usize> {
     None
 }
 
+/// Parse `crc` query parameter from URL (e.g. `?crc=DEADBEEF`).
+/// Returns `None` if not present or not a valid hex u32.
+fn parse_crc_from_url(url: &str) -> Option<u32> {
+    let query_start = url.find('?')?;
+    let query = &url[query_start + 1..];
+    for pair in query.split('&') {
+        if let Some(value) = pair.strip_prefix("crc=") {
+            return u32::from_str_radix(value, 16).ok();
+        }
+    }
+    None
+}
+
 /// Simple HTTP URL parser. Returns (host, port, path).
 fn parse_http_url(url: &str) -> Option<(String, u16, String)> {
     let url = url.strip_prefix("http://")?;
@@ -287,4 +335,44 @@ fn parse_http_url(url: &str) -> Option<(String, u16, String)> {
     };
 
     Some((host, port, String::from(path)))
+}
+
+/// Parse `Content-Length` header value from HTTP response headers.
+/// Returns `None` if the header is not found or the value is not a valid number.
+fn parse_content_length(headers: &[u8]) -> Option<u32> {
+    // Search case-insensitively for "Content-Length:"
+    let header_name = b"content-length:";
+    let headers_lower: alloc::vec::Vec<u8> = headers.iter().map(|&b| b.to_ascii_lowercase()).collect();
+
+    if let Some(pos) = find_header_value_start(&headers_lower, header_name) {
+        let value_start = pos;
+        let value_end = headers_lower[value_start..]
+            .iter()
+            .position(|&b| b == b'\r' || b == b'\n')
+            .map(|i| value_start + i)
+            .unwrap_or(headers_lower.len());
+        let value_str = core::str::from_utf8(&headers[value_start..value_end]).ok()?;
+        let trimmed = value_str.trim();
+        trimmed.parse::<u32>().ok()
+    } else {
+        None
+    }
+}
+
+/// Find the start of a header value after the header name.
+fn find_header_value_start(headers: &[u8], name: &[u8]) -> Option<usize> {
+    let search_from = 0;
+    while search_from < headers.len() {
+        if let Some(pos) = headers[search_from..].windows(name.len()).position(|w| w == name) {
+            let abs_pos = search_from + pos + name.len();
+            // Skip any leading whitespace
+            let mut start = abs_pos;
+            while start < headers.len() && headers[start] == b' ' {
+                start += 1;
+            }
+            return Some(start);
+        }
+        break;
+    }
+    None
 }

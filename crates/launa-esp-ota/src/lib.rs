@@ -90,6 +90,10 @@ pub struct EspOtaFlash<S> {
     write_offset: u32,
     bytes_written: u32,
     in_progress: bool,
+    /// Running CRC32 (CRC-32/MPEG-2) of all firmware data written so far.
+    firmware_crc: u32,
+    /// Whether the first chunk's ESP32 image header magic has been validated.
+    first_chunk_validated: bool,
 }
 
 impl<S> EspOtaFlash<S>
@@ -113,6 +117,8 @@ where
             write_offset: 0,
             bytes_written: 0,
             in_progress: false,
+            firmware_crc: 0xFFFFFFFF,
+            first_chunk_validated: false,
         }
     }
 
@@ -282,6 +288,8 @@ where
         self.write_offset = 0;
         self.bytes_written = 0;
         self.in_progress = true;
+        self.firmware_crc = 0xFFFFFFFF;
+        self.first_chunk_validated = false;
 
         info!("OTA: target partition erased");
         Ok(())
@@ -290,6 +298,22 @@ where
     fn write(&mut self, chunk: &[u8]) -> Result<(), OtaError> {
         if !self.in_progress {
             return Err(OtaError::WriteFailed { byte_offset: 0 });
+        }
+
+        if chunk.is_empty() {
+            return Ok(());
+        }
+
+        // Validate ESP32 image header magic on first chunk
+        if !self.first_chunk_validated {
+            if chunk[0] != 0xE9 {
+                warn!(
+                    "OTA: invalid ESP32 image header magic: 0x{:02X}, expected 0xE9",
+                    chunk[0]
+                );
+                return Err(OtaError::InvalidImageHeader);
+            }
+            self.first_chunk_validated = true;
         }
 
         if self.write_offset + chunk.len() as u32 > self.target.size() {
@@ -305,6 +329,10 @@ where
         }
 
         self.aligned_write(self.write_offset, chunk)?;
+
+        // Accumulate CRC of firmware data
+        self.firmware_crc = crc32_update(self.firmware_crc, chunk);
+
         self.write_offset += chunk.len() as u32;
         self.bytes_written += chunk.len() as u32;
 
@@ -369,6 +397,32 @@ where
         info!("OTA: otadata updated for rollback. Caller must reset.");
         Ok(())
     }
+
+    fn verify_hash(&mut self, expected_crc: u32) -> Result<(), OtaError> {
+        if self.firmware_crc != expected_crc {
+            warn!(
+                "OTA: CRC mismatch: expected {:#010X}, actual {:#010X}",
+                expected_crc, self.firmware_crc
+            );
+            return Err(OtaError::HashMismatch {
+                expected: expected_crc,
+                actual: self.firmware_crc,
+            });
+        }
+        info!("OTA: firmware CRC verified: {:#010X}", self.firmware_crc);
+        Ok(())
+    }
+
+    fn validate_first_chunk(&mut self, chunk: &[u8]) -> Result<(), OtaError> {
+        if chunk.is_empty() || chunk[0] != 0xE9 {
+            warn!(
+                "OTA: invalid ESP32 image header magic in pre-check: 0x{:02X}",
+                chunk.first().copied().unwrap_or(0)
+            );
+            return Err(OtaError::InvalidImageHeader);
+        }
+        Ok(())
+    }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -377,9 +431,9 @@ fn u32_from_be(bytes: &[u8]) -> u32 {
     u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
 
-/// CRC32 (CRC-32/MPEG-2) for otadata entries. Polynomial 0x04C11DB7.
-fn crc32(data: &[u8]) -> u32 {
-    let mut crc: u32 = 0xFFFFFFFF;
+/// CRC32 (CRC-32/MPEG-2) incremental update. Polynomial 0x04C11DB7.
+fn crc32_update(crc: u32, data: &[u8]) -> u32 {
+    let mut crc = crc;
     for &byte in data {
         crc ^= (byte as u32) << 24;
         for _ in 0..8 {
@@ -391,6 +445,11 @@ fn crc32(data: &[u8]) -> u32 {
         }
     }
     crc
+}
+
+/// CRC32 (CRC-32/MPEG-2) for otadata entries. Polynomial 0x04C11DB7.
+fn crc32(data: &[u8]) -> u32 {
+    crc32_update(0xFFFFFFFF, data)
 }
 
 #[cfg(test)]
@@ -495,7 +554,7 @@ mod tests {
 
         ota.begin().unwrap();
 
-        let firmware: &[u8] = &[0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04];
+        let firmware: &[u8] = &[0xE9, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04];
         ota.write(firmware).unwrap();
         ota.write(firmware).unwrap();
         ota.finalize().unwrap();
@@ -544,7 +603,8 @@ mod tests {
         let flash = MockFlash::new(total_flash_size());
         let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
         ota.begin().unwrap();
-        let big_data = alloc::vec![0xAAu8; OTA_0_SIZE as usize + 1];
+        let mut big_data = alloc::vec![0xAAu8; OTA_0_SIZE as usize + 1];
+        big_data[0] = 0xE9; // Valid ESP32 image header magic
         assert!(ota.write(&big_data).is_err());
     }
 
@@ -604,7 +664,8 @@ mod tests {
 
         // OTA update to ota_1
         ota.begin().unwrap();
-        let fw = alloc::vec![0xABu8; 1024];
+        let mut fw = alloc::vec![0xABu8; 1024];
+        fw[0] = 0xE9; // Valid ESP32 image header magic
         ota.write(&fw).unwrap();
         ota.finalize().unwrap();
 
@@ -614,5 +675,160 @@ mod tests {
 
         let detected = ota2.detect_running_partition().unwrap();
         assert_eq!(detected, Partition::Ota1);
+    }
+
+    // ── Firmware integrity verification tests ──────────────────────────
+
+    #[test]
+    fn test_invalid_image_header_rejected() {
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        ota.begin().unwrap();
+        // First byte NOT 0xE9 → should be rejected
+        let result = ota.write(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        assert!(
+            matches!(result, Err(OtaError::InvalidImageHeader)),
+            "Expected InvalidImageHeader, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_valid_image_header_accepted() {
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        ota.begin().unwrap();
+        // First byte 0xE9 → should succeed
+        let result = ota.write(&[0xE9, 0x01, 0x02, 0x03]);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+    }
+
+    #[test]
+    fn test_header_validated_only_once() {
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        ota.begin().unwrap();
+        // First write with valid header
+        ota.write(&[0xE9, 0x01, 0x02, 0x03]).unwrap();
+        // Second write without 0xE9 header — should succeed (already validated)
+        let result = ota.write(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+    }
+
+    #[test]
+    fn test_crc_accumulation_across_writes() {
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        ota.begin().unwrap();
+
+        let chunk1: &[u8] = &[0xE9, 0x01, 0x02, 0x03];
+        let chunk2: &[u8] = &[0x04, 0x05, 0x06, 0x07];
+        ota.write(chunk1).unwrap();
+        ota.write(chunk2).unwrap();
+
+        // Compute expected CRC: crc32 of the concatenated data
+        let all_data: alloc::vec::Vec<u8> = [chunk1, chunk2].concat();
+        let expected_crc = crc32(&all_data);
+        assert_eq!(ota.firmware_crc, expected_crc);
+    }
+
+    #[test]
+    fn test_verify_hash_matches() {
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        ota.begin().unwrap();
+
+        let chunk1: &[u8] = &[0xE9, 0x01, 0x02, 0x03];
+        let chunk2: &[u8] = &[0x04, 0x05, 0x06, 0x07];
+        ota.write(chunk1).unwrap();
+        ota.write(chunk2).unwrap();
+
+        let all_data: alloc::vec::Vec<u8> = [chunk1, chunk2].concat();
+        let expected_crc = crc32(&all_data);
+
+        assert!(ota.verify_hash(expected_crc).is_ok());
+    }
+
+    #[test]
+    fn test_verify_hash_mismatch() {
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        ota.begin().unwrap();
+
+        ota.write(&[0xE9, 0x01, 0x02, 0x03]).unwrap();
+
+        let result = ota.verify_hash(0x00000000);
+        assert!(
+            matches!(
+                result,
+                Err(OtaError::HashMismatch {
+                    expected: 0x00000000,
+                    actual: _
+                })
+            ),
+            "Expected HashMismatch, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_validate_first_chunk_valid() {
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        let result = ota.validate_first_chunk(&[0xE9, 0x01, 0x02, 0x03]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_first_chunk_invalid() {
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        let result = ota.validate_first_chunk(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        assert!(
+            matches!(result, Err(OtaError::InvalidImageHeader)),
+            "Expected InvalidImageHeader, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_validate_first_chunk_empty() {
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        let result = ota.validate_first_chunk(&[]);
+        assert!(
+            matches!(result, Err(OtaError::InvalidImageHeader)),
+            "Expected InvalidImageHeader for empty chunk, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_crc_resets_on_begin() {
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        ota.begin().unwrap();
+        ota.write(&[0xE9, 0x01, 0x02, 0x03]).unwrap();
+        assert_ne!(ota.firmware_crc, 0xFFFFFFFF);
+
+        // Finalize the first session, then begin a new one
+        ota.finalize().unwrap();
+        ota.begin().unwrap();
+        assert_eq!(ota.firmware_crc, 0xFFFFFFFF);
+        assert!(!ota.first_chunk_validated);
+    }
+
+    #[test]
+    fn test_write_empty_chunk_ok() {
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        ota.begin().unwrap();
+        // Empty chunk should succeed and not trigger header validation
+        assert!(ota.write(&[]).is_ok());
+        // Still not validated, so next write with non-0xE9 should fail
+        assert!(matches!(
+            ota.write(&[0xDE, 0xAD]),
+            Err(OtaError::InvalidImageHeader)
+        ));
     }
 }

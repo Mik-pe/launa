@@ -42,6 +42,7 @@ impl FaultBuf {
     }
 }
 use embassy_executor::Spawner;
+use embassy_futures::select::{select, Either};
 use embassy_sync::channel::Channel;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
@@ -724,6 +725,16 @@ async fn main(spawner: Spawner) {
     let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
 
+    // Configure TIMG1 as independent hardware watchdog (30s timeout)
+    let timg1 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG1);
+    let mut wdt = timg1.wdt;
+    wdt.set_timeout(
+        esp_hal::timer::timg::MwdtStage::Stage0,
+        esp_hal::time::Duration::from_secs(30),
+    );
+    wdt.enable();
+    info!("Hardware watchdog enabled (30s timeout)");
+
     info!("Launa ESP32 firmware starting...");
 
     // ── Load config from NVS ────────────────────────────────────────
@@ -758,12 +769,26 @@ async fn main(spawner: Spawner) {
     )
     .await;
 
-    // ── Connect MQTT ────────────────────────────────────────────────
-    let mut mqtt = match mqtt_client::MqttClient::connect(wifi_stack.stack, &app_config).await {
-        Ok(m) => m,
-        Err(e) => {
-            error!("MQTT connect failed: {:?}", e);
-            panic!("MQTT connect failed")
+    // ── Connect MQTT (with retry + exponential backoff) ─────────────
+    let mut mqtt = {
+        let mut attempt: u32 = 0;
+        loop {
+            attempt += 1;
+            match mqtt_client::MqttClient::connect(wifi_stack.stack, &app_config).await {
+                Ok(m) => break m,
+                Err(e) => {
+                    let backoff_secs = (5u64 << attempt.saturating_sub(1).min(4)).min(60);
+                    error!(
+                        "MQTT connect attempt {} failed: {:?}, retrying in {}s",
+                        attempt, e, backoff_secs
+                    );
+                    Timer::after(Duration::from_secs(backoff_secs)).await;
+                    if attempt >= 10 {
+                        error!("MQTT connect failed after 10 attempts, resetting");
+                        esp_hal::system::software_reset();
+                    }
+                }
+            }
         }
     };
 
@@ -803,19 +828,37 @@ async fn main(spawner: Spawner) {
     let mut app = SpaApp::new(&clock);
     let device_id_str: &str = &app_config.device_id;
 
-    loop {
-        // Wait for a frame from the UART task
-        let frame = frame_rx.receive().await;
-        let actions = app.process_frame(&frame);
-        execute_actions(&actions, device_id_str).await;
+    let tick_interval = Duration::from_secs(1);
 
-        // Drain all available frames
-        while let Ok(frame) = frame_rx.try_receive() {
-            let actions = app.process_frame(&frame);
-            execute_actions(&actions, device_id_str).await;
+    loop {
+        // Feed the hardware watchdog each iteration
+        wdt.feed();
+
+        // Multiplex: wait for either a UART frame, an MQTT command, or a
+        // 1-second tick timer. This replaces the old blocking receive() that
+        // hung indefinitely when the spa was off (no OTA, no commands, no ticks).
+        match select(frame_rx.receive(), select(cmd_rx.receive(), Timer::after(tick_interval))).await {
+            // UART frame received
+            Either::First(frame) => {
+                let actions = app.process_frame(&frame);
+                execute_actions(&actions, device_id_str).await;
+
+                // Drain all available frames
+                while let Ok(frame) = frame_rx.try_receive() {
+                    let actions = app.process_frame(&frame);
+                    execute_actions(&actions, device_id_str).await;
+                }
+            }
+            // MQTT command received
+            Either::Second(Either::First(cmd)) => {
+                let actions = app.on_mqtt_command(cmd);
+                execute_actions(&actions, device_id_str).await;
+            }
+            // Tick timer expired
+            Either::Second(Either::Second(_)) => {}
         }
 
-        // Drain MQTT commands into SpaApp's command queue
+        // Drain MQTT commands (non-blocking)
         while let Ok(cmd) = cmd_rx.try_receive() {
             let actions = app.on_mqtt_command(cmd);
             execute_actions(&actions, device_id_str).await;
