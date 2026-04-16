@@ -342,6 +342,14 @@ pub struct SpaSim {
     /// emitted at the beginning of the next tick() output, followed by a Ready frame.
     partial_frame_remainder: Option<Vec<u8>>,
 
+    // Fault injection: fault state
+    /// If set, the status frame reports init_mode=0x02 (fault active).
+    fault_active: bool,
+    /// If set, the status frame reports 0xFF for current_temp (unknown temperature).
+    report_unknown_temp: bool,
+    /// If > 0.0, each status frame adds ±jitter to current_temp using deterministic PRNG.
+    sensor_noise_jitter: f32,
+
     // Configurable response data
     /// Custom fault log configuration. Defaults to the hardcoded fault log data.
     fault_log_config: FaultLogConfig,
@@ -378,6 +386,10 @@ impl SpaSim {
 
             partial_frame_split: None,
             partial_frame_remainder: None,
+
+            fault_active: false,
+            report_unknown_temp: false,
+            sensor_noise_jitter: 0.0,
 
             fault_log_config: FaultLogConfig::default(),
             filter_cycles_config: FilterCyclesConfig::default(),
@@ -423,6 +435,48 @@ impl SpaSim {
     /// The status frame bytes will be emitted twice in a single tick.
     pub fn inject_duplicate_frame(&mut self) {
         self.duplicate_next = true;
+    }
+
+    /// Simulate a spa reboot.
+    ///
+    /// Resets registration state (unregistered, client_id cleared),
+    /// re-sends registration query on the next tick.
+    /// Does NOT reset spa state (temperatures, pump states, etc.) to simulate
+    /// a real spa that retains its physical state across reboots.
+    pub fn simulate_spa_reboot(&mut self) {
+        self.registered = false;
+        self.client_id = None;
+        // Note: don't reset state (temps, pumps, etc.) — real spa retains physical state
+    }
+
+    /// Simulate a fault state.
+    ///
+    /// Sets the internal fault flag so status frames report init_mode=0x02 (fault active).
+    /// The fault log response will carry the given `FaultCode`.
+    pub fn simulate_fault_state(&mut self, code: FaultCode) {
+        self.fault_active = true;
+        self.fault_log_config.message_code = code;
+    }
+
+    /// Simulate temperature sensor noise.
+    ///
+    /// Each status frame will add ±`jitter` to the reported `current_temp`
+    /// using a deterministic PRNG. Set jitter to 0.0 to disable noise.
+    pub fn simulate_sensor_noise(&mut self, jitter: f32) {
+        self.sensor_noise_jitter = jitter.abs();
+    }
+
+    /// Simulate unknown temperature.
+    ///
+    /// Status frames will report 0xFF for current_temp (decoded as `None`)
+    /// until `clear_unknown_temp()` is called.
+    pub fn simulate_unknown_temp(&mut self) {
+        self.report_unknown_temp = true;
+    }
+
+    /// Clear the unknown temperature simulation, resuming normal temperature reporting.
+    pub fn clear_unknown_temp(&mut self) {
+        self.report_unknown_temp = false;
     }
 
     /// Inject a partial frame split at the given byte position.
@@ -829,12 +883,28 @@ impl SpaSim {
         if self.state.hold {
             payload[0] = 0x05;
         }
-        // Offset 1: Init Mode (0x00=Idle, 0x01=Priming)
+        // Offset 1: Init Mode (0x00=Idle, 0x01=Priming, 0x02=Fault)
         if self.state.priming {
             payload[1] = 0x01;
         }
+        if self.fault_active {
+            payload[1] = 0x02;
+        }
         // Offset 2: Current Temperature
-        payload[2] = SpaState::encode_temp(self.state.current_temp, self.state.temp_scale);
+        if self.report_unknown_temp {
+            payload[2] = 0xFF; // Unknown temperature
+        } else {
+            let mut reported_temp = self.state.current_temp;
+            if self.sensor_noise_jitter > 0.0 {
+                // Deterministic PRNG: use ready_rng_state to generate jitter
+                let rand_val = self.next_ready_rand();
+                // Map u64 to [-1.0, 1.0] range
+                let normalized = ((rand_val as i64 as f64) / (i64::MAX as f64)) as f32;
+                let jitter = normalized * self.sensor_noise_jitter;
+                reported_temp += jitter;
+            }
+            payload[2] = SpaState::encode_temp(reported_temp, self.state.temp_scale);
+        }
         // Offset 3: Hour, Offset 4: Minute
         payload[3] = self.state.hour;
         payload[4] = self.state.minute;
@@ -894,12 +964,16 @@ impl SpaSim {
 
         let mut frame = FrameEncoder::encode([0xFF, 0xAF], &payload).unwrap();
 
-        // Corrupt frame injection: flip last byte of the encoded frame
+        // Corrupt frame injection: flip a byte in the middle of the encoded frame
+        // to guarantee a CRC mismatch on decode. Corrupting the end marker doesn't
+        // work because the parser finds a valid frame in the buffer before it.
         if self.inject_corrupt_next {
             self.inject_corrupt_next = false;
-            if !frame.is_empty() {
-                let last = frame.len() - 1;
-                frame[last] ^= 0xFF;
+            // Corrupt a byte in the middle of the frame body (index 5 is well past the
+            // start marker and length byte, safely inside the payload area).
+            // Skip the start marker (index 0) and target a payload byte.
+            if frame.len() > 6 {
+                frame[5] ^= 0xFF;
             }
         }
 
@@ -1349,6 +1423,17 @@ mod tests {
 
         // Corrupt frame should still be parseable as bytes (just has bad CRC)
         assert!(!corrupt.is_empty());
+
+        // Verify that the corrupt frame actually triggers a CRC error in the decoder
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&corrupt);
+        // The corrupt byte should cause a CRC mismatch → no valid frames decoded
+        assert!(
+            frames.is_empty() || decoder.frame_error_count() > 0,
+            "corrupt frame should cause frame error (frames={}, errors={})",
+            frames.len(),
+            decoder.frame_error_count()
+        );
     }
 
     #[test]
@@ -2397,5 +2482,400 @@ mod tests {
             }
             other => panic!("Expected ControlConfiguration, got {:?}", other),
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Tests for new SpaSim methods (VAL-IT-008 through VAL-IT-012)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // VAL-IT-008: SpaSim::simulate_spa_reboot() resets registration, sends NewClientQuery
+    #[test]
+    fn test_simulate_spa_reboot_resets_registration() {
+        let mut sim = SpaSim::new();
+
+        // First, register a client
+        sim.registered = true;
+        sim.client_id = Some(0x05);
+
+        // Reboot
+        sim.simulate_spa_reboot();
+
+        // Registration should be reset
+        assert!(!sim.registered, "should be unregistered after reboot");
+        assert!(
+            sim.client_id.is_none(),
+            "client_id should be cleared after reboot"
+        );
+
+        // Next tick should produce a registration query (FE BF 00)
+        let bytes = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&bytes);
+
+        // Should contain at least one frame with a registration query
+        let has_reg_query = frames
+            .iter()
+            .any(|f| f.message_type == [0xFE, 0xBF] && f.payload.contains(&0x00));
+        assert!(
+            has_reg_query,
+            "tick after reboot should produce a registration query"
+        );
+    }
+
+    // VAL-IT-008: SpaSim::simulate_spa_reboot() preserves physical state
+    #[test]
+    fn test_simulate_spa_reboot_preserves_physical_state() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 98.0;
+        sim.state.set_temp = 102.0;
+        sim.state.pumps[0] = PumpState::Low;
+        sim.state.lights[0] = true;
+
+        sim.simulate_spa_reboot();
+
+        // Physical state should be preserved
+        assert_eq!(sim.state.current_temp, 98.0);
+        assert_eq!(sim.state.set_temp, 102.0);
+        assert_eq!(sim.state.pumps[0], PumpState::Low);
+        assert!(sim.state.lights[0]);
+    }
+
+    // VAL-IT-008: Rebooted sim can re-register
+    #[test]
+    fn test_simulate_spa_reboot_reregistration() {
+        let mut sim = SpaSim::new();
+
+        // Register, then reboot
+        sim.registered = true;
+        sim.client_id = Some(0x05);
+        sim.simulate_spa_reboot();
+
+        // Should be able to re-register via process_frame
+        let _ack_frame = launa_protocol::frame::Frame {
+            message_type: [0xFE, 0xBF],
+            payload: vec![0x02, 0x03],
+        };
+        // First send the ID request
+        let request_frame = launa_protocol::frame::Frame {
+            message_type: [0xFE, 0xBF],
+            payload: vec![0x01],
+        };
+        let assignment = sim.process_frame(&request_frame);
+        assert!(assignment.is_some(), "should assign client ID");
+
+        // Feed the assignment back to register
+        let mut decoder = FrameDecoder::new();
+        let assignment_frames = decoder.feed_slice(&assignment.unwrap());
+        // The assignment frame is FE BF 02 <id>
+        let id_frame = &assignment_frames[0];
+        let msg = launa_protocol::dispatcher::dispatch_frame(id_frame);
+        if let launa_protocol::dispatcher::IncomingMessage::ClientIdAssignment { id } = msg {
+            // Send ack
+            let ack = launa_protocol::frame::FrameEncoder::encode([id, 0xBF], &[0x03]).unwrap();
+            let ack_frames = decoder.feed_slice(&ack);
+            sim.process_frame(&ack_frames[0]);
+        }
+
+        assert!(sim.registered, "should be registered after re-registration");
+        assert!(sim.client_id.is_some());
+    }
+
+    // VAL-IT-009: SpaSim::simulate_fault_state() sets fault flag, fault log carries FaultCode
+    #[test]
+    fn test_simulate_fault_state_sets_fault_flag() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        // No fault initially
+        let normal_bytes = sim.generate_status_frame();
+        let mut decoder = FrameDecoder::new();
+        let normal_frames = decoder.feed_slice(&normal_bytes);
+        let normal_msg = launa_protocol::dispatcher::dispatch_frame(&normal_frames[0]);
+        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = normal_msg {
+            assert!(!s.is_priming, "should not be in fault initially");
+        }
+
+        // Simulate fault
+        sim.simulate_fault_state(FaultCode::HeaterDry);
+
+        // Status frame should show fault (init_mode = 0x02 in payload offset 1)
+        let fault_bytes = sim.generate_status_frame();
+        let fault_frames = decoder.feed_slice(&fault_bytes);
+        // The raw payload byte 1 should be 0x02
+        assert_eq!(
+            fault_frames[0].payload[1], 0x02,
+            "init_mode should be 0x02 (fault) after simulate_fault_state"
+        );
+    }
+
+    // VAL-IT-009: Fault log response carries the FaultCode
+    #[test]
+    fn test_simulate_fault_state_fault_log_carries_code() {
+        let mut sim = SpaSim::new();
+        sim.simulate_fault_state(FaultCode::LowFlow);
+
+        let response = sim.generate_fault_log_response();
+        let msg = dispatch_response(&response);
+
+        match msg {
+            launa_protocol::dispatcher::IncomingMessage::FaultLogResponse(entry) => {
+                assert_eq!(
+                    entry.message_code,
+                    FaultCode::LowFlow,
+                    "fault log should carry the simulated fault code"
+                );
+            }
+            other => panic!("Expected FaultLogResponse, got {:?}", other),
+        }
+    }
+
+    // VAL-IT-009: Different fault codes
+    #[test]
+    fn test_simulate_fault_state_different_codes() {
+        let codes = [
+            FaultCode::HeaterDry,
+            FaultCode::LowFlow,
+            FaultCode::WaterTooHot,
+            FaultCode::SensorAFault,
+            FaultCode::Unknown(99),
+        ];
+
+        for code in &codes {
+            let mut sim = SpaSim::new();
+            sim.simulate_fault_state(*code);
+
+            let response = sim.generate_fault_log_response();
+            let msg = dispatch_response(&response);
+
+            if let launa_protocol::dispatcher::IncomingMessage::FaultLogResponse(entry) = msg {
+                assert_eq!(
+                    entry.message_code, *code,
+                    "fault log should carry {:?}",
+                    code
+                );
+            } else {
+                panic!("Expected FaultLogResponse for code {:?}", code);
+            }
+        }
+    }
+
+    // VAL-IT-010: SpaSim::simulate_sensor_noise() adds ±jitter to reported temp
+    #[test]
+    fn test_simulate_sensor_noise_with_jitter() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.current_temp = 100.0;
+        sim.state.set_temp = 100.0;
+        sim.simulate_sensor_noise(2.0);
+
+        // Collect temps from 100 ticks
+        let mut temps: Vec<f32> = Vec::new();
+        for _ in 0..100 {
+            let bytes = sim.generate_status_frame();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
+            if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
+                if let Some(t) = s.current_temp {
+                    temps.push(t);
+                }
+            }
+        }
+
+        // All temps should be within ±2.0 of baseline (100.0)
+        for &t in &temps {
+            assert!(
+                t >= 98.0 && t <= 102.0,
+                "temp {} should be within ±2.0 of 100.0",
+                t
+            );
+        }
+
+        // With jitter=2.0, not all temps should be exactly 100.0
+        let exact_count = temps.iter().filter(|&&t| t == 100.0).count();
+        assert!(
+            exact_count < temps.len(),
+            "with jitter=2.0, not all temps should be exactly 100.0 (got {}/{})",
+            exact_count,
+            temps.len()
+        );
+    }
+
+    // VAL-IT-010: SpaSim::simulate_sensor_noise() with jitter=0.0 → all exact
+    #[test]
+    fn test_simulate_sensor_noise_zero_jitter() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.current_temp = 100.0;
+        sim.state.set_temp = 100.0;
+        sim.simulate_sensor_noise(0.0); // No noise
+
+        for _ in 0..20 {
+            let bytes = sim.generate_status_frame();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
+            if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
+                assert_eq!(
+                    s.current_temp,
+                    Some(100.0),
+                    "with jitter=0.0, temp should be exact"
+                );
+            }
+        }
+    }
+
+    // VAL-IT-010: Sensor noise is deterministic
+    #[test]
+    fn test_simulate_sensor_noise_deterministic() {
+        let mut sim1 = SpaSim::new();
+        sim1.registered = true;
+        sim1.state.current_temp = 100.0;
+        sim1.state.set_temp = 100.0;
+        sim1.simulate_sensor_noise(1.5);
+
+        let mut temps1: Vec<f32> = Vec::new();
+        for _ in 0..50 {
+            let bytes = sim1.generate_status_frame();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
+            if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
+                if let Some(t) = s.current_temp {
+                    temps1.push(t);
+                }
+            }
+        }
+
+        // Create identical sim
+        let mut sim2 = SpaSim::new();
+        sim2.registered = true;
+        sim2.state.current_temp = 100.0;
+        sim2.state.set_temp = 100.0;
+        sim2.simulate_sensor_noise(1.5);
+
+        let mut temps2: Vec<f32> = Vec::new();
+        for _ in 0..50 {
+            let bytes = sim2.generate_status_frame();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
+            if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
+                if let Some(t) = s.current_temp {
+                    temps2.push(t);
+                }
+            }
+        }
+
+        // Same initial state → same sequence
+        assert_eq!(
+            temps1, temps2,
+            "identical sims should produce identical noise sequences"
+        );
+    }
+
+    // VAL-IT-011: SpaSim::simulate_unknown_temp() reports 0xFF for current_temp
+    #[test]
+    fn test_simulate_unknown_temp_reports_none() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.current_temp = 100.0; // Internal temp is known
+
+        // Before: temp is known
+        let normal_bytes = sim.generate_status_frame();
+        let mut decoder = FrameDecoder::new();
+        let normal_frames = decoder.feed_slice(&normal_bytes);
+        let normal_msg = launa_protocol::dispatcher::dispatch_frame(&normal_frames[0]);
+        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = normal_msg {
+            assert!(s.current_temp.is_some(), "should have temp before unknown");
+        }
+
+        // Enable unknown temp
+        sim.simulate_unknown_temp();
+
+        let unknown_bytes = sim.generate_status_frame();
+        let unknown_frames = decoder.feed_slice(&unknown_bytes);
+        let unknown_msg = launa_protocol::dispatcher::dispatch_frame(&unknown_frames[0]);
+        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = unknown_msg {
+            assert_eq!(
+                s.current_temp, None,
+                "current_temp should be None after simulate_unknown_temp"
+            );
+        }
+
+        // Internal state still has the temp
+        assert_eq!(
+            sim.state.current_temp, 100.0,
+            "internal state should still have the real temp"
+        );
+    }
+
+    // VAL-IT-011: clear_unknown_temp restores normal reporting
+    #[test]
+    fn test_simulate_unknown_temp_clear_restores() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.current_temp = 100.0;
+
+        sim.simulate_unknown_temp();
+        sim.clear_unknown_temp();
+
+        let bytes = sim.generate_status_frame();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&bytes);
+        let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
+        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
+            assert_eq!(
+                s.current_temp,
+                Some(100.0),
+                "temp should be restored after clear_unknown_temp"
+            );
+        }
+    }
+
+    // VAL-IT-012: SpaSim::simulate_spontaneous_state_change() works via schedule_event
+    #[test]
+    fn test_simulate_spontaneous_state_change_via_schedule_event() {
+        let mut sim = SpaSim::new();
+        assert_eq!(sim.state.pumps[0], PumpState::Off);
+
+        // Schedule pump1 to turn on at tick 3
+        sim.schedule_event(3, SpaEventType::FilterCycleStart { pump_index: 0 });
+
+        // Ticks 1-2: pump still off
+        sim.tick();
+        sim.tick();
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::Off,
+            "pump should be off before event"
+        );
+
+        // Tick 3: event fires
+        sim.tick();
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::Low,
+            "pump should start from scheduled event"
+        );
+    }
+
+    // VAL-IT-012: simulate_filter_cycle_start is a convenience wrapper
+    #[test]
+    fn test_simulate_spontaneous_state_change_filter_cycle() {
+        let mut sim = SpaSim::new();
+        sim.simulate_filter_cycle_start(2, 5); // pump 3 at tick 5
+
+        for _ in 0..4 {
+            sim.tick();
+        }
+        assert_eq!(sim.state.pumps[2], PumpState::Off);
+
+        sim.tick(); // tick 5
+        assert_eq!(
+            sim.state.pumps[2],
+            PumpState::Low,
+            "pump 3 should start from filter cycle"
+        );
     }
 }

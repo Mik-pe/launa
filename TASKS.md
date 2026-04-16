@@ -209,16 +209,16 @@ Wire SpaSim + SimTransport + SpaApp + SimBroker together for end-to-end tests. T
 
 Add new error injection capabilities to SpaSim and integration tests that exercise them. These test the most critical firmware robustness behaviors.
 
-- [ ] **Add `SpaSim::simulate_spa_reboot()`**: Resets to unregistered state, re-sends registration query, clears all spa state. Tests whether SpaApp re-registers cleanly, flushes command queue, resets trackers.
-- [ ] **Add `SpaSim::simulate_fault_state(FaultCode)`**: Enters fault mode (init_mode=0x02), possibly forces pumps/heater off. Tests whether SpaApp correctly reports fault state to MQTT.
-- [ ] **Add `SpaSim::simulate_sensor_noise(temp_jitter: f32)`**: Adds random noise to current_temp each tick. Tests whether SpaApp/MQTT state remains stable (no flip-flopping reported values).
-- [ ] **Add `SpaSim::simulate_unknown_temp()`**: Reports 0xFF for current_temp. Tests whether SpaApp handles `current_temp: None` correctly in MQTT JSON.
-- [ ] **Add `SpaSim::simulate_spontaneous_state_change()`**: Spa changes state (pump, heating mode, temp range) without controller command. Tests whether CommandTracker correctly does NOT treat this as a confirmation of a queued command.
-- [ ] **Test: spa reboots mid-session**: SpaSim sends status normally → reboots → SpaApp detects NewClientQuery → re-registers → command queue flushed → state resets → normal operation resumes.
-- [ ] **Test: spa silently drops toggle command**: Set command_success_rate to 0.0 → SpaApp sends toggle → SpaSim ignores → SpaApp command tracker times out → retry → eventually drops. Verify MQTT reflects correct final state.
-- [ ] **Test: bus silence mid-session**: Normal operation → 15s silence → stale probe fires → 30s silence → stale alert → silence ends → recovery. Full lifecycle.
-- [ ] **Test: corrupt frame doesn't desync parser**: SpaSim injects corrupt frame → next valid status frame still parses → SpaApp continues normally. Verify FrameDecoder recovers.
-- [ ] **Test: spontaneous filter cycle starts while command pending**: SpaSim schedules filter cycle → pump turns on from filter → SpaApp had queued a different pump toggle → CommandTracker must not misattribute the filter cycle as confirmation.
+- [x] **Add `SpaSim::simulate_spa_reboot()`**: Resets to unregistered state, re-sends registration query, clears all spa state. Tests whether SpaApp re-registers cleanly, flushes command queue, resets trackers.
+- [x] **Add `SpaSim::simulate_fault_state(FaultCode)`**: Enters fault mode (init_mode=0x02), possibly forces pumps/heater off. Tests whether SpaApp correctly reports fault state to MQTT.
+- [x] **Add `SpaSim::simulate_sensor_noise(temp_jitter: f32)`**: Adds random noise to current_temp each tick. Tests whether SpaApp/MQTT state remains stable (no flip-flopping reported values).
+- [x] **Add `SpaSim::simulate_unknown_temp()`**: Reports 0xFF for current_temp. Tests whether SpaApp handles `current_temp: None` correctly in MQTT JSON.
+- [x] **Add `SpaSim::simulate_spontaneous_state_change()`**: Spa changes state (pump, heating mode, temp range) without controller command. Tests whether CommandTracker correctly does NOT treat this as a confirmation of a queued command.
+- [x] **Test: spa reboots mid-session**: SpaSim sends status normally → reboots → SpaApp detects NewClientQuery → re-registers → command queue flushed → state resets → normal operation resumes.
+- [x] **Test: spa silently drops toggle command**: Set command_success_rate to 0.0 → SpaApp sends toggle → SpaSim ignores → SpaApp command tracker times out → retry → eventually drops. Verify MQTT reflects correct final state.
+- [x] **Test: bus silence mid-session**: Normal operation → 15s silence → stale probe fires → 30s silence → stale alert → silence ends → recovery. Full lifecycle.
+- [x] **Test: corrupt frame doesn't desync parser**: SpaSim injects corrupt frame → next valid status frame still parses → SpaApp continues normally. Verify FrameDecoder recovers.
+- [x] **Test: spontaneous filter cycle starts while command pending**: SpaSim schedules filter cycle → pump turns on from filter → SpaApp had queued a different pump toggle → CommandTracker must not misattribute the filter cycle as confirmation.
 
 #### Tier 3 — Protocol-Level Misbehavior
 

@@ -8,6 +8,13 @@
 //! 5. Pump timer auto-off
 //! 6. Hold mode auto-release
 //! 7. Stale detection and recovery
+//!
+//! Implements the Tier 2 fault scenario tests:
+//! 8. Spa reboot mid-session → re-registration
+//! 9. Silently dropped commands → retry/drop
+//! 10. Bus silence lifecycle → stale alert and recovery
+//! 11. Corrupt frame no-desync
+//! 12. Spontaneous filter cycle while command pending
 
 use launa_core::{AppAction, SpaApp};
 use launa_protocol::command::{Command, ToggleItem};
@@ -233,6 +240,11 @@ impl SpaAppTestHarness {
                 false
             }
         })
+    }
+
+    /// Get the frame error count from the internal decoder.
+    pub fn frame_error_count(&self) -> u32 {
+        self.decoder.frame_error_count()
     }
 }
 
@@ -623,5 +635,374 @@ fn test_stale_detection_and_recovery() {
     assert!(
         recovering,
         "recovery flag should be set on first status after stale"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Tier 2 — Spa-Side Fault Scenarios
+// ══════════════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════════════
+// Test 8: VAL-IT-013 — Spa reboots mid-session → clean re-registration
+// ══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_spa_reboot_mid_session() {
+    let mut harness = SpaAppTestHarness::new();
+
+    // Phase 1: Establish a stable session
+    harness.complete_registration(5);
+    assert!(harness.app.is_registered());
+    let _client_id = harness.app.client_id();
+
+    // Get some status updates
+    for _ in 0..3 {
+        harness.collect_actions();
+    }
+    assert!(harness.app.last_status().is_some());
+    assert!(
+        !harness.app.is_stale(),
+        "should not be stale during normal operation"
+    );
+
+    // Queue a command
+    harness.send_command(Command::ToggleItem(ToggleItem::Pump1));
+    assert_eq!(harness.app.queued_command_count(), 1);
+
+    // Phase 2: Spa reboots
+    harness.sim.simulate_spa_reboot();
+
+    // The sim is now unregistered, so the next tick will produce a NewClientQuery
+    // SpaApp should detect the NewClientQuery, reset registration, and clear command queue
+    let _reboot_actions = harness.collect_actions();
+
+    // SpaApp should detect the NewClientQuery and reset
+    assert!(
+        !harness.app.is_registered(),
+        "should be unregistered after spa reboot NewClientQuery"
+    );
+    assert_eq!(
+        harness.app.queued_command_count(),
+        0,
+        "command queue should be cleared on bus reset"
+    );
+
+    // Phase 3: Re-registration
+    // Continue ticking until re-registered
+    let ticks = harness.complete_registration(5);
+    assert!(
+        harness.app.is_registered(),
+        "should re-register within 5 ticks after reboot (took {})",
+        ticks
+    );
+
+    // Phase 4: Verify normal operation resumes
+    // Pre-reboot stale state should NOT leak
+    assert!(
+        !harness.app.is_stale(),
+        "should not be stale after re-registration"
+    );
+
+    // Status should resume being published
+    let resume_actions = harness.collect_actions();
+    let has_publish = resume_actions
+        .iter()
+        .any(|a| matches!(a, AppAction::PublishState { .. }));
+    assert!(
+        has_publish,
+        "status publishing should resume after re-registration"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Test 9: VAL-IT-014 — Spa silently drops toggle command → retry/drop
+// ══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_dropped_commands_retry_and_drop() {
+    let mut harness = SpaAppTestHarness::new();
+
+    // Complete registration
+    harness.complete_registration(5);
+
+    // Make SpaSim ignore all commands
+    harness.sim.set_command_success_rate(0.0);
+
+    // Get initial status for CommandTracker baseline
+    harness.collect_actions();
+
+    // Queue toggle pump1
+    harness.send_command(Command::ToggleItem(ToggleItem::Pump1));
+    assert_eq!(harness.app.queued_command_count(), 1);
+
+    // Tick to send command on Ready
+    let send_actions = harness.collect_actions();
+    let has_send = send_actions
+        .iter()
+        .any(|a| matches!(a, AppAction::SendFrame(_)));
+    assert!(has_send, "should send command on Ready");
+    assert_eq!(harness.app.queued_command_count(), 0);
+
+    // Initial counters
+    assert_eq!(harness.app.total_retries(), 0);
+    assert_eq!(harness.app.total_dropped(), 0);
+
+    // Retry cycle 1: advance 6s, status shows pump still off
+    harness.advance_ms(6_000);
+    harness.collect_actions();
+    assert!(
+        harness.app.total_retries() >= 1,
+        "should have at least 1 retry after first timeout"
+    );
+
+    // Retry cycle 2: advance another 6s
+    harness.advance_ms(6_000);
+    harness.collect_actions();
+    assert!(
+        harness.app.total_retries() >= 2,
+        "should have at least 2 retries after second timeout"
+    );
+
+    // Drop cycle: advance another 6s — MAX_COMMAND_RETRIES=2 exceeded
+    harness.advance_ms(6_000);
+    harness.collect_actions();
+    assert!(
+        harness.app.total_dropped() >= 1,
+        "command should be dropped after max retries"
+    );
+
+    // Pump state should never have changed in the sim
+    assert_eq!(
+        harness.sim.state.pumps[0],
+        PumpState::Off,
+        "pump should remain off — sim dropped all commands"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Test 10: VAL-IT-015 — Bus silence mid-session → stale lifecycle
+// ══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_bus_silence_lifecycle() {
+    let mut harness = SpaAppTestHarness::new();
+
+    // Phase 1: Normal operation
+    harness.complete_registration(5);
+    harness.collect_actions();
+    assert!(!harness.app.is_stale());
+
+    // Phase 2: Bus silence — suppress spa output for 40 ticks (40 seconds)
+    harness.sim.simulate_bus_silence(40);
+
+    let mut stale_alert_seen = false;
+    let mut stale_availability_seen = false;
+
+    // Advance through silence period
+    for _sec in 1..=35 {
+        harness.advance_ms(1_000);
+        let tick_actions = harness.tick_app();
+        harness.execute_actions_on_broker(&tick_actions);
+
+        for action in &tick_actions {
+            if let AppAction::PublishAlert { message, .. } = action {
+                if message == "spa_communication_lost" {
+                    stale_alert_seen = true;
+                }
+            }
+            if matches!(action, AppAction::PublishStaleAvailability) {
+                stale_availability_seen = true;
+            }
+        }
+
+        // Tick the spa (silenced, produces no output)
+        let spa_actions = harness.tick_spa();
+        harness.process_outgoing(&spa_actions);
+        harness.execute_actions_on_broker(&spa_actions);
+    }
+
+    // Stale alert should fire at 30s
+    assert!(stale_alert_seen, "stale alert should fire at 30s");
+    assert!(
+        stale_availability_seen,
+        "stale availability should fire at 30s"
+    );
+    assert!(harness.app.is_stale(), "should be stale after 30s silence");
+
+    // Phase 3: Silence ends — spa resumes
+    // The bus_silence was set to 40 ticks. We've done 35 ticks (each loop iter does one tick_spa),
+    // so we need 5 more to exhaust the silence.
+    for _ in 0..5 {
+        harness.advance_ms(1_000);
+        harness.tick_spa();
+    }
+
+    // Now silence is over, spa will produce frames again
+    let recovery_actions = harness.collect_actions();
+
+    // Should recover from stale
+    assert!(
+        !harness.app.is_stale(),
+        "should recover after status resumes"
+    );
+
+    // Recovery flag should be set
+    let recovering = recovery_actions.iter().any(|a| {
+        matches!(
+            a,
+            AppAction::PublishState {
+                recovering_from_stale: true,
+                ..
+            }
+        )
+    });
+    assert!(recovering, "should indicate stale recovery on first status");
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Test 11: VAL-IT-016 — Corrupt frame doesn't desync parser
+// ══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_corrupt_frame_no_desync() {
+    let mut harness = SpaAppTestHarness::new();
+
+    // Complete registration
+    harness.complete_registration(5);
+
+    // Get initial status (no errors)
+    harness.collect_actions();
+    let initial_errors = harness.frame_error_count();
+
+    // Inject a corrupt frame into the spa sim
+    harness.sim.inject_corrupt_frame();
+
+    // Tick — corrupt frame is produced and decoded
+    let corrupt_actions = harness.tick_spa();
+    harness.process_outgoing(&corrupt_actions);
+
+    // Frame error count should have incremented
+    let after_corrupt_errors = harness.frame_error_count();
+    assert!(
+        after_corrupt_errors > initial_errors,
+        "frame error count should increment after corrupt frame (was {}, now {})",
+        initial_errors,
+        after_corrupt_errors
+    );
+
+    // Phase 2: Next valid frame should decode fine (no desync)
+    let next_actions = harness.collect_actions();
+
+    // Should produce valid actions (PublishState, etc.)
+    let has_publish = next_actions
+        .iter()
+        .any(|a| matches!(a, AppAction::PublishState { .. }));
+    assert!(
+        has_publish,
+        "next valid frame should decode and produce PublishState"
+    );
+
+    // Frame error count should NOT increase from the valid frame
+    let final_errors = harness.frame_error_count();
+    assert_eq!(
+        final_errors, after_corrupt_errors,
+        "frame error count should not increase from valid frame"
+    );
+
+    // SpaApp should still be functioning normally
+    assert!(
+        harness.app.last_status().is_some(),
+        "SpaApp should have a valid last status"
+    );
+    assert!(
+        !harness.app.is_stale(),
+        "should not be stale after valid frame recovery"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Test 12: VAL-IT-017 — Spontaneous filter cycle while command pending
+// ══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_spontaneous_filter_cycle_while_command_pending() {
+    let mut harness = SpaAppTestHarness::new();
+
+    // Complete registration
+    harness.complete_registration(5);
+
+    // Get initial status for CommandTracker baseline
+    harness.collect_actions();
+
+    // Record initial counters
+    let initial_retries = harness.app.total_retries();
+    let initial_drops = harness.app.total_dropped();
+
+    // Schedule a spontaneous filter cycle to start at tick 3 (pump 1 turns on by itself)
+    // The current tick count after registration and status is roughly 6-8 ticks,
+    // so schedule for a near-future tick.
+    let at_tick = harness.sim.tick_count() + 3;
+    harness.sim.simulate_filter_cycle_start(0, at_tick);
+
+    // Queue a DIFFERENT pump toggle (pump 2) so it doesn't conflict with pump 1's
+    // spontaneous change. The spontaneous change is for pump 1.
+    harness.send_command(Command::ToggleItem(ToggleItem::Pump2));
+    assert_eq!(harness.app.queued_command_count(), 1);
+
+    // Send command on Ready
+    let send_actions = harness.collect_actions();
+    let has_send = send_actions
+        .iter()
+        .any(|a| matches!(a, AppAction::SendFrame(_)));
+    assert!(has_send, "should send pump2 toggle on Ready");
+
+    // Tick to reach the scheduled filter cycle start
+    // The filter cycle will start pump1 = Low spontaneously
+    for _ in 0..3 {
+        harness.collect_actions();
+    }
+
+    // Pump 1 should be on from the spontaneous filter cycle
+    assert_eq!(
+        harness.sim.state.pumps[0],
+        PumpState::Low,
+        "pump1 should be on from spontaneous filter cycle"
+    );
+
+    // Now feed a status that shows pump2 still off (the command for pump2
+    // hasn't been confirmed yet). The tracker should only confirm based on
+    // the actual expected change (pump2 toggle), NOT the spontaneous pump1 change.
+    // Advance clock and check for status confirmation
+    harness.advance_ms(6_000);
+
+    // Get status — pump2 is still off, so the command is NOT confirmed
+    // But pump1 was a spontaneous change, not from our command
+    let _actions = harness.collect_actions();
+
+    // Now manually toggle pump2 in the sim to confirm our command
+    harness.sim.state.pumps[1] = PumpState::Low;
+
+    // Get the next status — pump2 is now on, confirming our command
+    harness.collect_actions();
+
+    // The command tracker should have confirmed pump2 toggle via the status update.
+    // No retries for the pump2 command, no drops.
+    // Note: The spontaneous pump1 change should not affect pump2 tracking.
+    let final_retries = harness.app.total_retries();
+    let final_drops = harness.app.total_dropped();
+
+    // The pump2 command should be confirmed with 0 retries and 0 drops
+    // (we immediately saw the change in status)
+    let retries_for_cmd = final_retries - initial_retries;
+    let drops_for_cmd = final_drops - initial_drops;
+    assert_eq!(
+        retries_for_cmd, 0,
+        "no retries expected — pump2 command confirmed via status (retries={})",
+        retries_for_cmd
+    );
+    assert_eq!(
+        drops_for_cmd, 0,
+        "no drops expected — pump2 command confirmed via status (drops={})",
+        drops_for_cmd
     );
 }
