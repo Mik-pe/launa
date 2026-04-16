@@ -1,0 +1,17 @@
+{
+  "milestone": "core-cleanup",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 0,
+    "passed": 0,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null,
+  "notes": "core-cleanup is a housekeeping milestone with one feature (update-tasks-md-core) that has fulfills=[]. No testable assertions to validate. Verified codebase health: cargo test --workspace (426 tests passed), cargo check --workspace (clean), cargo fmt --check (clean). All prior milestone assertions (core, mqtt, app) remain passed in validation-state.json."
+}
