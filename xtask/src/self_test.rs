@@ -18,6 +18,9 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         match args[i].as_str() {
             "--port" => {
                 i += 1;
+                if i >= args.len() {
+                    bail!("--port requires a value");
+                }
                 port_name = Some(args[i].clone());
             }
             other => bail!("Unknown argument: {}", other),

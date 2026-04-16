@@ -11,14 +11,23 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         match args[i].as_str() {
             "--host" => {
                 i += 1;
+                if i >= args.len() {
+                    bail!("--host requires a value");
+                }
                 host = args[i].clone();
             }
             "--port" => {
                 i += 1;
+                if i >= args.len() {
+                    bail!("--port requires a value");
+                }
                 port = args[i].parse().context("Invalid port")?;
             }
             "--output" | "-o" => {
                 i += 1;
+                if i >= args.len() {
+                    bail!("--output requires a value");
+                }
                 output_file = Some(args[i].clone());
             }
             other => bail!("Unknown argument: {}", other),

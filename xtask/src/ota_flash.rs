@@ -1,4 +1,5 @@
 use anyhow::{bail, Context};
+use serde::Deserialize;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
@@ -10,6 +11,35 @@ fn project_root() -> PathBuf {
         .to_path_buf()
 }
 
+/// Read the firmware version from app/Cargo.toml.
+fn read_firmware_version() -> anyhow::Result<String> {
+    let app_cargo_toml = project_root().join("app").join("Cargo.toml");
+    let contents =
+        std::fs::read_to_string(&app_cargo_toml).context("Failed to read app/Cargo.toml")?;
+
+    #[derive(Deserialize)]
+    struct CargoToml {
+        package: CargoPackage,
+    }
+    #[derive(Deserialize)]
+    struct CargoPackage {
+        version: String,
+    }
+
+    let cargo: CargoToml = toml::from_str(&contents).context("Failed to parse app/Cargo.toml")?;
+    Ok(cargo.package.version)
+}
+
+/// Extract the firmware_version field from a state JSON payload.
+/// Returns None if the field is missing or the payload is not valid JSON.
+pub fn extract_firmware_version(state_json: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(state_json).ok()?;
+    value
+        .get("firmware_version")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut feature = "default".to_string();
     let mut device_id_override = None;
@@ -18,10 +48,16 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         match args[i].as_str() {
             "--feature" => {
                 i += 1;
+                if i >= args.len() {
+                    bail!("--feature requires a value");
+                }
                 feature = args[i].clone();
             }
             "--device-id" => {
                 i += 1;
+                if i >= args.len() {
+                    bail!("--device-id requires a value");
+                }
                 device_id_override = Some(args[i].clone());
             }
             other => bail!("Unknown argument: {}", other),
@@ -33,13 +69,21 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let device_id = device_id_override.unwrap_or(config.device.id.clone());
     let ota_port = config.ota.serve_port;
 
+    // Read expected firmware version
+    let expected_version = read_firmware_version().ok();
+    if let Some(ref v) = expected_version {
+        println!("Expected firmware version: {}", v);
+    } else {
+        println!("Warning: Could not read firmware version from app/Cargo.toml");
+    }
+
     println!(
         "OTA flash: device={}, feature={}, ota_port={}",
         device_id, feature, ota_port
     );
 
     // Step 1: Run cargo test
-    println!("\n[1/6] Running cargo test...");
+    println!("\n[1/7] Running cargo test...");
     let test_status = Command::new("cargo")
         .arg("test")
         .current_dir(project_root())
@@ -51,7 +95,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     println!("Tests passed.");
 
     // Step 2: Build firmware
-    println!("\n[2/6] Building firmware...");
+    println!("\n[2/7] Building firmware...");
     let bin_path = project_root().join("target").join("launa.bin");
     let app_dir = project_root().join("app");
 
@@ -78,7 +122,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     println!("Firmware built: {}", bin_path.display());
 
     // Step 3: Start OTA server in background
-    println!("\n[3/6] Starting OTA server...");
+    println!("\n[3/7] Starting OTA server...");
     let xtask_bin = std::env::current_exe().context("Failed to get current exe path")?;
     let mut ota_serve_cmd = Command::new(&xtask_bin);
     ota_serve_cmd
@@ -97,7 +141,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     std::thread::sleep(Duration::from_secs(2));
 
     // Step 4: Publish OTA command via MQTT
-    println!("\n[4/6] Publishing OTA command via MQTT...");
+    println!("\n[4/7] Publishing OTA command via MQTT...");
     let ota_host = if config.ota.host.is_empty() {
         &config.mqtt.host
     } else {
@@ -129,12 +173,13 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     println!("OTA command published to {}", topic);
 
     // Step 5: Wait for device to come back online
-    println!("\n[5/6] Waiting for device to come back online (timeout 120s)...");
+    println!("\n[5/7] Waiting for device to come back online (timeout 120s)...");
     let status_topic = format!("launa/{}/state", device_id);
     client.subscribe(&status_topic, rumqttc::QoS::AtLeastOnce)?;
 
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
     let mut came_online = false;
+    let mut state_payload: Option<String> = None;
 
     for notification in connection.iter() {
         if std::time::Instant::now() > deadline {
@@ -144,6 +189,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
                 if publish.topic.contains(&device_id) && publish.topic.contains("state") {
                     came_online = true;
+                    state_payload = Some(String::from_utf8_lossy(&publish.payload).to_string());
                     println!("Device {} is back online!", device_id);
                     break;
                 }
@@ -155,8 +201,38 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         }
     }
 
-    // Step 6: Cleanup
-    println!("\n[6/6] Cleaning up...");
+    // Step 6: Verify firmware version
+    println!("\n[6/7] Verifying firmware version...");
+    if came_online {
+        if let Some(ref expected) = expected_version {
+            if let Some(ref payload) = state_payload {
+                match extract_firmware_version(payload) {
+                    Some(reported) => {
+                        if reported == *expected {
+                            println!("Firmware version verified: {} (matches expected)", reported);
+                        } else {
+                            bail!(
+                                "Firmware version mismatch! Expected '{}', got '{}'. Possible rollback occurred.",
+                                expected, reported
+                            );
+                        }
+                    }
+                    None => {
+                        println!(
+                            "Warning: firmware_version field not found in state payload. Cannot verify version."
+                        );
+                    }
+                }
+            } else {
+                println!("Warning: no state payload captured. Cannot verify version.");
+            }
+        } else {
+            println!("Warning: could not determine expected version. Skipping version check.");
+        }
+    }
+
+    // Step 7: Cleanup
+    println!("\n[7/7] Cleaning up...");
     let _ = ota_serve_child.kill();
     let _ = ota_serve_child.wait();
     println!("OTA server stopped.");
@@ -169,5 +245,50 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         Ok(())
     } else {
         bail!("OTA flash timed out. Device did not come back online within 120s.");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_firmware_version_present() {
+        let json = r#"{"temperature": 38.5, "firmware_version": "0.3.0", "heating": true}"#;
+        assert_eq!(extract_firmware_version(json), Some("0.3.0".to_string()));
+    }
+
+    #[test]
+    fn test_extract_firmware_version_missing() {
+        let json = r#"{"temperature": 38.5, "heating": true}"#;
+        assert_eq!(extract_firmware_version(json), None);
+    }
+
+    #[test]
+    fn test_extract_firmware_version_null() {
+        let json = r#"{"temperature": 38.5, "firmware_version": null, "heating": true}"#;
+        assert_eq!(extract_firmware_version(json), None);
+    }
+
+    #[test]
+    fn test_extract_firmware_version_invalid_json() {
+        assert_eq!(extract_firmware_version("not json"), None);
+    }
+
+    #[test]
+    fn test_extract_firmware_version_empty_string() {
+        let json = r#"{"firmware_version": ""}"#;
+        assert_eq!(extract_firmware_version(json), Some("".to_string()));
+    }
+
+    #[test]
+    fn test_read_firmware_version() {
+        // This should successfully parse app/Cargo.toml
+        let version = read_firmware_version();
+        assert!(version.is_ok(), "Should be able to read app/Cargo.toml");
+        let v = version.unwrap();
+        assert!(!v.is_empty(), "Version should not be empty");
+        // Should be a valid semver-like string
+        assert!(v.contains('.'), "Version '{}' should contain dots", v);
     }
 }

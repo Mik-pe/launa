@@ -64,3 +64,220 @@ fn main() -> anyhow::Result<()> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper: call a module's run() and return whether it errored with expected substring
+    fn run_returns_error_containing(result: anyhow::Result<()>, expected: &str) -> bool {
+        match result {
+            Err(e) => e.to_string().contains(expected),
+            Ok(()) => false,
+        }
+    }
+
+    // --- flash.rs argument parsing tests ---
+    #[test]
+    fn test_flash_feature_as_last_arg_returns_error() {
+        let args = vec!["--feature".to_string()];
+        let result = flash::run(&args);
+        assert!(
+            run_returns_error_containing(result, "--feature requires a value"),
+            "Should error about --feature requiring a value"
+        );
+    }
+
+    #[test]
+    fn test_flash_port_as_last_arg_returns_error() {
+        let args = vec!["--port".to_string()];
+        let result = flash::run(&args);
+        assert!(
+            run_returns_error_containing(result, "--port requires a value"),
+            "Should error about --port requiring a value"
+        );
+    }
+
+    // --- monitor.rs argument parsing tests ---
+    #[test]
+    fn test_monitor_port_as_last_arg_returns_error() {
+        let args = vec!["--port".to_string()];
+        let result = monitor::run(&args);
+        assert!(
+            run_returns_error_containing(result, "--port requires a value"),
+            "Should error about --port requiring a value"
+        );
+    }
+
+    #[test]
+    fn test_monitor_duration_as_last_arg_returns_error() {
+        let args = vec!["--duration".to_string()];
+        let result = monitor::run(&args);
+        assert!(
+            run_returns_error_containing(result, "--duration requires a value"),
+            "Should error about --duration requiring a value"
+        );
+    }
+
+    // --- self_test.rs argument parsing tests ---
+    #[test]
+    fn test_self_test_port_as_last_arg_returns_error() {
+        let args = vec!["--port".to_string()];
+        let result = self_test::run(&args);
+        assert!(
+            run_returns_error_containing(result, "--port requires a value"),
+            "Should error about --port requiring a value"
+        );
+    }
+
+    // --- ota_serve.rs argument parsing tests ---
+    #[test]
+    fn test_ota_serve_firmware_as_last_arg_returns_error() {
+        let args = vec!["--firmware".to_string()];
+        let result = ota_serve::run(&args);
+        assert!(
+            run_returns_error_containing(result, "--firmware requires a value"),
+            "Should error about --firmware requiring a value"
+        );
+    }
+
+    #[test]
+    fn test_ota_serve_port_as_last_arg_returns_error() {
+        let args = vec![
+            "--firmware".to_string(),
+            "/dev/null".to_string(),
+            "--port".to_string(),
+        ];
+        let result = ota_serve::run(&args);
+        assert!(
+            run_returns_error_containing(result, "--port requires a value"),
+            "Should error about --port requiring a value"
+        );
+    }
+
+    // --- sniff_decode.rs argument parsing tests ---
+    #[test]
+    fn test_sniff_decode_host_as_last_arg_returns_error() {
+        let args = vec!["--host".to_string()];
+        let result = sniff_decode::run(&args);
+        assert!(
+            run_returns_error_containing(result, "--host requires a value"),
+            "Should error about --host requiring a value"
+        );
+    }
+
+    #[test]
+    fn test_sniff_decode_port_as_last_arg_returns_error() {
+        let args = vec!["--port".to_string()];
+        let result = sniff_decode::run(&args);
+        assert!(
+            run_returns_error_containing(result, "--port requires a value"),
+            "Should error about --port requiring a value"
+        );
+    }
+
+    #[test]
+    fn test_sniff_decode_output_as_last_arg_returns_error() {
+        let args = vec!["--output".to_string()];
+        let result = sniff_decode::run(&args);
+        assert!(
+            run_returns_error_containing(result, "--output requires a value"),
+            "Should error about --output requiring a value"
+        );
+    }
+
+    // --- spa_sim.rs argument parsing tests ---
+    #[test]
+    fn test_spa_sim_port_as_last_arg_returns_error() {
+        let args = vec!["--port".to_string()];
+        let result = spa_sim::run(&args);
+        assert!(
+            run_returns_error_containing(result, "--port requires a value"),
+            "Should error about --port requiring a value"
+        );
+    }
+
+    #[test]
+    fn test_spa_sim_duration_as_last_arg_returns_error() {
+        let args = vec!["--duration".to_string()];
+        let result = spa_sim::run(&args);
+        assert!(
+            run_returns_error_containing(result, "--duration requires a value"),
+            "Should error about --duration requiring a value"
+        );
+    }
+
+    // --- config_flash.rs argument parsing tests ---
+    #[test]
+    fn test_config_flash_port_as_last_arg_returns_error() {
+        let args = vec!["--port".to_string()];
+        let result = config_flash::run(&args);
+        assert!(
+            run_returns_error_containing(result, "--port requires a value"),
+            "Should error about --port requiring a value"
+        );
+    }
+
+    // --- ota_flash.rs argument parsing tests ---
+    #[test]
+    fn test_ota_flash_feature_as_last_arg_returns_error() {
+        let args = vec!["--feature".to_string()];
+        let result = ota_flash::run(&args);
+        assert!(
+            run_returns_error_containing(result, "--feature requires a value"),
+            "Should error about --feature requiring a value"
+        );
+    }
+
+    #[test]
+    fn test_ota_flash_device_id_as_last_arg_returns_error() {
+        let args = vec!["--device-id".to_string()];
+        let result = ota_flash::run(&args);
+        assert!(
+            run_returns_error_containing(result, "--device-id requires a value"),
+            "Should error about --device-id requiring a value"
+        );
+    }
+
+    // --- provision.rs argument parsing tests ---
+    #[test]
+    fn test_provision_port_as_last_arg_returns_error() {
+        let args = vec!["--port".to_string()];
+        let result = provision::run(&args);
+        assert!(
+            run_returns_error_containing(result, "--port requires a value"),
+            "Should error about --port requiring a value"
+        );
+    }
+
+    // --- Empty args handling ---
+    // These tests verify empty args don't cause panics (no index out of bounds).
+    // Most modules attempt external connections with empty args, so we only test
+    // the ones that will fail fast without hanging.
+    #[test]
+    fn test_empty_args_ota_serve_no_panic() {
+        let empty: Vec<String> = vec![];
+        let result = ota_serve::run(&empty);
+        // Should error about missing --firmware, not panic
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_empty_args_spa_sim_no_panic() {
+        let empty: Vec<String> = vec![];
+        // spa_sim tries to open a serial port, which will fail immediately
+        let result = spa_sim::run(&empty);
+        assert!(result.is_err());
+    }
+
+    // --- Unknown argument handling ---
+    #[test]
+    fn test_unknown_argument_returns_error() {
+        let args = vec!["--bogus".to_string()];
+        let result = flash::run(&args);
+        assert!(
+            run_returns_error_containing(result, "Unknown argument"),
+            "Should error about unknown argument"
+        );
+    }
+}

@@ -10,10 +10,16 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         match args[i].as_str() {
             "--port" => {
                 i += 1;
+                if i >= args.len() {
+                    bail!("--port requires a value");
+                }
                 port_name = Some(args[i].clone());
             }
             "--duration" => {
                 i += 1;
+                if i >= args.len() {
+                    bail!("--duration requires a value");
+                }
                 duration_secs = args[i].parse().context("Invalid duration")?;
             }
             other => bail!("Unknown argument: {}", other),

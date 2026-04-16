@@ -10,10 +10,16 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         match args[i].as_str() {
             "--firmware" => {
                 i += 1;
+                if i >= args.len() {
+                    bail!("--firmware requires a value");
+                }
                 firmware_path = Some(PathBuf::from(&args[i]));
             }
             "--port" => {
                 i += 1;
+                if i >= args.len() {
+                    bail!("--port requires a value");
+                }
                 port = args[i].parse().context("Invalid port")?;
             }
             other => bail!("Unknown argument: {}", other),

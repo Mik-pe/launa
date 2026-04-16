@@ -83,7 +83,7 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 - [x] **Transport trait is sync but production is async** (`launa-hal`): Unified Transport trait to async using `async fn` in trait. MockTransport (std feature), SimTransport, and Rs485Transport all implement the unified `launa_hal::Transport` trait directly. Tests use a lightweight `block_on` helper to poll async methods synchronously.
 - [ ] **Integration tests use SpaController not real SpaApp** (`launa-integration-tests`): Tests validate sim framework, not production logic. Rewrite to exercise `SpaApp` through sim pipeline.
 - [ ] **No OTA / reconnection / stale-detection integration tests** (`launa-integration-tests`): Critical production paths untested at integration level.
-- [ ] **`ota-flash` does not verify firmware version after update** (`xtask`): Device could roll back to factory and still appear online. Check reported version.
+- [x] **`ota-flash` does not verify firmware version after update** (`xtask`): Device could roll back to factory and still appear online. Check reported version.
 - [x] **Command queue in SpaApp is unbounded** (`launa-core`): Capped at 32 commands; overflow increments `dropped_count` via `record_dropped()`.
 - [x] **Celsius temperature commands never confirm in CommandTracker** (`launa-core/src/lib.rs:266`): `ExpectedChange::TemperatureSet` compares `(status.set_temp as u8) == *temp`. In Celsius mode, `set_temp` is `raw/2.0` (e.g. `77/2 = 38.5`), so `38.5 as u8` truncates to `38 != 77`. Every odd-wire-value Celsius set-temp command will fail confirmation and retry until dropped. Fix: compare raw wire values by multiplying back (`(status.set_temp * temp_divisor) as u8`), or store the raw value alongside `set_temp`.
 - [x] **Duplicate divergent HA discovery implementations** (`app/src/mqtt_client.rs` vs `launa-mqtt/src/discovery.rs`): Refactored `publish_discovery()` to use `DiscoveryBuilder::build_with_retain()`. Discovery module now works in `no_std` (manual JSON, no serde_json). All 20 configs include `origin`, `sw_version`, and `entity_category: "diagnostic"` on diagnostics/alert sensors.
@@ -101,8 +101,8 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 - [x] **Missing entity_category "diagnostic" on alert/diagnostics sensors** (`launa-mqtt`): Should appear in HA diagnostics section, not alongside primary sensors.
 - [x] **Sim responses are static/hardcoded** (`launa-sim`): Fault log, filter cycles, information, config all return fixed data. Add configurability for testing edge cases.
 - [x] **SpaController ignores config/fault/filter/info responses** (`launa-sim`): Only handles StatusUpdate, Ready, NewClientQuery. Other responses discarded in integration tests.
-- [ ] **Config validation gaps in xtask** (`xtask/src/config.rs`): No validation of `device.id` format/length, serial port existence, or MQTT port range.
-- [ ] **xtask argument parsing panics on missing flag values** (`xtask/src/*.rs`): `--feature` as last arg = index out of bounds. Add bounds checks.
+- [x] **Config validation gaps in xtask** (`xtask/src/config.rs`): No validation of `device.id` format/length, serial port existence, or MQTT port range.
+- [x] **xtask argument parsing panics on missing flag values** (`xtask/src/*.rs`): `--feature` as last arg = index out of bounds. Add bounds checks.
 - [x] **No firmware versioning mechanism** (cross-cutting): No build hash or version embedded in binary or reported via MQTT.
 - [ ] **Cargo.lock gitignored at workspace root** (`.gitignore`): Workspace library builds not reproducible across machines.
 - [x] **Stale probe sends ConfigurationRequest instead of lightweight probe** (`launa-core/src/lib.rs:755`): When the spa is stale, the 5-second probe sends `[0x0A, 0xBF, 0x04]` (ConfigurationRequest). This is heavier than necessary and triggers an unwanted full configuration response. Fix: use a no-op or status-specific request instead.

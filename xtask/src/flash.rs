@@ -17,10 +17,16 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         match args[i].as_str() {
             "--feature" => {
                 i += 1;
+                if i >= args.len() {
+                    bail!("--feature requires a value");
+                }
                 feature = Some(args[i].clone());
             }
             "--port" => {
                 i += 1;
+                if i >= args.len() {
+                    bail!("--port requires a value");
+                }
                 port = Some(args[i].clone());
             }
             other => bail!("Unknown argument: {}", other),
