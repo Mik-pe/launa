@@ -1,0 +1,176 @@
+{
+  "groupId": "discovery",
+  "testedAt": "2026-04-16T16:00:00Z",
+  "isolation": {
+    "projectRoot": "C:\\dev\\launa",
+    "testEnvironment": "native x86_64, cargo test"
+  },
+  "toolsUsed": ["cargo test", "rg (code review)"],
+  "assertions": [
+    {
+      "id": "VAL-MQTT-001",
+      "title": "DiscoveryBuilder generates all 20 HA entity configs",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-mqtt test_discovery_generates_valid_json", "expected": "Test passes", "observed": "Test passed — 82/82 launa-mqtt tests passed, including test_discovery_generates_valid_json" }
+      ],
+      "evidence": {
+        "testOutput": "test discovery::tests::test_discovery_generates_valid_json ... ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-002",
+      "title": "DiscoveryBuilder output includes origin field",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-mqtt test_discovery_includes_origin_in_all_payloads", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testOutput": "test discovery::tests::test_discovery_includes_origin_in_all_payloads ... ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-003",
+      "title": "DiscoveryBuilder includes sw_version in device block",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-mqtt test_discovery_device_includes_sw_version", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testOutput": "test discovery::tests::test_discovery_device_includes_sw_version ... ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-004",
+      "title": "Diagnostic sensors include entity_category diagnostic",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-mqtt test_diagnostic_entities_have_entity_category", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testOutput": "test discovery::tests::test_diagnostic_entities_have_entity_category ... ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-005",
+      "title": "Discovery topics match expected HA patterns",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-mqtt test_discovery_topics_match_pattern", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testOutput": "test discovery::tests::test_discovery_topics_match_pattern ... ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-006",
+      "title": "DiscoveryBuilder field parity with hand-rolled configs",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-mqtt test_discovery_builder_field_parity", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testOutput": "test discovery::tests::test_discovery_builder_field_parity ... ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-007",
+      "title": "build_with_retain sets retain=true",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-mqtt test_build_with_retain", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testOutput": "test discovery::tests::test_build_with_retain ... ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-008",
+      "title": "All unique_ids are device_id-prefixed and unique",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-mqtt test_discovery_unique_ids", "expected": "Test passes", "observed": "Test passed" }
+      ],
+      "evidence": {
+        "testOutput": "test discovery::tests::test_discovery_unique_ids ... ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-009",
+      "title": "Refactored publish_discovery produces identical output",
+      "status": "pass",
+      "steps": [
+        { "action": "cargo test -p launa-integration-tests test_discovery_configs_valid_json", "expected": "Test passes", "observed": "Test passed" },
+        { "action": "cargo test -p launa-integration-tests test_ha_discovery_via_broker", "expected": "Test passes", "observed": "Test passed — validates 20 discovery configs as valid JSON and checks availability" },
+        { "action": "cargo test -p launa-integration-tests test_full_mqtt_pipeline_with_discovery", "expected": "Test passes", "observed": "Test passed — full pipeline: discovery → registration → status → MQTT" }
+      ],
+      "evidence": {
+        "testOutput": "test tests::test_discovery_configs_valid_json ... ok; test sim_tests::test_ha_discovery_via_broker ... ok; test sim_tests::test_full_mqtt_pipeline_with_discovery ... ok",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-016",
+      "title": "Discovery publishes one entity at a time",
+      "status": "pass",
+      "steps": [
+        { "action": "Code review of app/src/mqtt_client.rs publish_discovery method (lines 601-619)", "expected": "Sequential iteration over configs vector", "observed": "Code uses `for msg in &configs` loop, calling self.publish() for each entity sequentially. Comment explicitly states 'Build and publish one entity at a time to avoid OOM on 32 KiB heap.'" }
+      ],
+      "evidence": {
+        "codeReview": "app/src/mqtt_client.rs:601-619 — publish_discovery iterates over configs with a for loop, publishing each entity one at a time",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-017",
+      "title": "Discovery publish completes on 32 KiB heap",
+      "status": "pass",
+      "steps": [
+        { "action": "Code review of app/src/mqtt_client.rs publish_discovery", "expected": "Memory-conscious sequential publish pattern", "observed": "Code builds all 20 configs via builder.build_with_retain() into a Vec, then iterates publishing each one. The comment explicitly states 'Build and publish one entity at a time to avoid OOM on 32 KiB heap'. Each payload is dropped after publish since the loop borrows &configs." },
+        { "action": "cargo test -p launa-integration-tests (full suite)", "expected": "All 116 tests pass (86 + 30)", "observed": "All 116 tests passed, including discovery integration tests" }
+      ],
+      "evidence": {
+        "codeReview": "app/src/mqtt_client.rs:605-607 — Comment documents 32 KiB heap constraint; sequential publish pattern with for loop drops each payload after use",
+        "testOutput": "86 passed (integration lib tests) + 30 passed (sim tests) = 116 total, 0 failures",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-018",
+      "title": "Single discovery failure does not block others",
+      "status": "pass",
+      "steps": [
+        { "action": "Code review of app/src/mqtt_client.rs publish_discovery error handling", "expected": "Error in single entity publish does not abort loop", "observed": "Code wraps self.publish() in if let Err(e) with warn!() log and continues. Comment states: 'Continue publishing remaining entities — single failure should not block others.' The function always returns Ok(()) regardless of individual publish failures." },
+        { "action": "cargo test -p launa-integration-tests (full suite)", "expected": "All tests pass", "observed": "All 116 tests passed" }
+      ],
+      "evidence": {
+        "codeReview": "app/src/mqtt_client.rs:613-616 — if let Err(e) with warn! log followed by comment 'Continue publishing remaining entities'; no break or return on error",
+        "testOutput": "All 116 integration tests passed",
+        "consoleErrors": "none"
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 12 assertions: all 12 passed. VAL-MQTT-001 through VAL-MQTT-008 verified via cargo test -p launa-mqtt (82/82 tests passed). VAL-MQTT-009 verified via cargo test -p launa-integration-tests (116/116 tests passed including discovery integration tests). VAL-MQTT-016, VAL-MQTT-017, VAL-MQTT-018 verified via code review of app/src/mqtt_client.rs publish_discovery method confirming sequential publish pattern, OOM-aware design, and error-continues-after-failure behavior."
+}

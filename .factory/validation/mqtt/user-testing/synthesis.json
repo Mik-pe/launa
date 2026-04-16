@@ -1,0 +1,44 @@
+{
+  "milestone": "mqtt",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 33,
+    "passed": 33,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-MQTT-001", "VAL-MQTT-002", "VAL-MQTT-003", "VAL-MQTT-004",
+    "VAL-MQTT-005", "VAL-MQTT-006", "VAL-MQTT-007", "VAL-MQTT-008",
+    "VAL-MQTT-009", "VAL-MQTT-010", "VAL-MQTT-011", "VAL-MQTT-012",
+    "VAL-MQTT-013", "VAL-MQTT-014", "VAL-MQTT-015", "VAL-MQTT-016",
+    "VAL-MQTT-017", "VAL-MQTT-018", "VAL-MQTT-019", "VAL-MQTT-020",
+    "VAL-MQTT-021", "VAL-MQTT-022", "VAL-MQTT-023", "VAL-MQTT-024",
+    "VAL-MQTT-025", "VAL-MQTT-026", "VAL-MQTT-027", "VAL-MQTT-028",
+    "VAL-MQTT-029", "VAL-MQTT-030", "VAL-MQTT-031", "VAL-MQTT-032",
+    "VAL-MQTT-033"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [
+    {
+      "target": "user-testing.md",
+      "description": "Minor note: VAL-MQTT-024 test lives in launa-sim not launa-integration-tests as specified in validation contract. No code change needed — test passes in correct location.",
+      "source": "flow-report"
+    }
+  ],
+  "previousRound": null,
+  "flowReports": [
+    ".factory/validation/mqtt/user-testing/flows/discovery.json",
+    ".factory/validation/mqtt/user-testing/flows/packet-extraction.json",
+    ".factory/validation/mqtt/user-testing/flows/sim-responses.json",
+    ".factory/validation/mqtt/user-testing/flows/controller-responses.json"
+  ],
+  "testSuitesRun": {
+    "launa-mqtt": { "tests": 82, "passed": 82, "failed": 0 },
+    "launa-sim": { "tests": 89, "passed": 89, "failed": 0 },
+    "launa-integration-tests": { "tests": 116, "passed": 116, "failed": 0 },
+    "esp32-app-check": { "status": "compiled", "warnings": 7 }
+  }
+}

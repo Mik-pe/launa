@@ -1,0 +1,141 @@
+{
+  "groupId": "controller-responses",
+  "testedAt": "2026-04-16T15:30:00Z",
+  "isolation": {
+    "projectRoot": "C:\\dev\\launa",
+    "testCommand": "cargo test -p launa-sim",
+    "platform": "win32 x86_64"
+  },
+  "toolsUsed": ["cargo test"],
+  "assertions": [
+    {
+      "id": "VAL-MQTT-025",
+      "title": "SpaController emits event for FaultLogResponse",
+      "status": "pass",
+      "steps": [
+        { "action": "Run cargo test -p launa-sim test_controller_handles_fault_log_response", "expected": "Test passes", "observed": "Test passed — controller correctly emits a typed ControllerEvent for fault log response bytes" }
+      ],
+      "evidence": {
+        "testName": "test_controller_handles_fault_log_response",
+        "testResult": "ok",
+        "sourceFile": "crates/launa-sim/src/controller.rs:428"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-026",
+      "title": "SpaController emits event for FilterCyclesResponse",
+      "status": "pass",
+      "steps": [
+        { "action": "Run cargo test -p launa-sim test_controller_handles_filter_cycles_response", "expected": "Test passes", "observed": "Test passed — filter cycle response bytes produce a typed ControllerEvent" }
+      ],
+      "evidence": {
+        "testName": "test_controller_handles_filter_cycles_response",
+        "testResult": "ok",
+        "sourceFile": "crates/launa-sim/src/controller.rs:459"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-027",
+      "title": "SpaController emits event for InformationResponse",
+      "status": "pass",
+      "steps": [
+        { "action": "Run cargo test -p launa-sim test_controller_handles_information_response", "expected": "Test passes", "observed": "Test passed — information response bytes produce a typed ControllerEvent" }
+      ],
+      "evidence": {
+        "testName": "test_controller_handles_information_response",
+        "testResult": "ok",
+        "sourceFile": "crates/launa-sim/src/controller.rs:492"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-028",
+      "title": "SpaController emits event for ConfigurationResponse",
+      "status": "pass",
+      "steps": [
+        { "action": "Run cargo test -p launa-sim test_controller_handles_configuration_response", "expected": "Test passes", "observed": "Test passed — config response bytes produce a typed ControllerEvent" }
+      ],
+      "evidence": {
+        "testName": "test_controller_handles_configuration_response",
+        "testResult": "ok",
+        "sourceFile": "crates/launa-sim/src/controller.rs:523"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-029",
+      "title": "SpaController preserves all response data without loss",
+      "status": "pass",
+      "steps": [
+        { "action": "Run cargo test -p launa-sim test_controller_response_data_fidelity", "expected": "Test passes", "observed": "Test passed — all parsed fields in events match original wire data for each response type" }
+      ],
+      "evidence": {
+        "testName": "test_controller_response_data_fidelity",
+        "testResult": "ok",
+        "sourceFile": "crates/launa-sim/src/controller.rs:554"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-030",
+      "title": "SpaController handles mixed StatusUpdate and response events",
+      "status": "pass",
+      "steps": [
+        { "action": "Run cargo test -p launa-sim test_controller_mixed_status_and_response", "expected": "Test passes", "observed": "Test passed — multi-frame byte streams produce all expected events without loss" }
+      ],
+      "evidence": {
+        "testName": "test_controller_mixed_status_and_response",
+        "testResult": "ok",
+        "sourceFile": "crates/launa-sim/src/controller.rs:700"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-031",
+      "title": "Response handling does not interfere with registration",
+      "status": "pass",
+      "steps": [
+        { "action": "Run cargo test -p launa-sim test_response_frames_during_registration", "expected": "Test passes", "observed": "Test passed — fault/config/filter/info frames during registration don't disrupt the state machine" }
+      ],
+      "evidence": {
+        "testName": "test_response_frames_during_registration",
+        "testResult": "ok",
+        "sourceFile": "crates/launa-sim/src/controller.rs:747"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-032",
+      "title": "Response handling does not interfere with pump timers",
+      "status": "pass",
+      "steps": [
+        { "action": "Run cargo test -p launa-sim test_response_handling_preserves_pump_timers", "expected": "Test passes", "observed": "Test passed — processing response frames doesn't reset or cancel running pump timers" }
+      ],
+      "evidence": {
+        "testName": "test_response_handling_preserves_pump_timers",
+        "testResult": "ok",
+        "sourceFile": "crates/launa-sim/src/controller.rs:828"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-033",
+      "title": "SpaController exposes last received response data",
+      "status": "pass",
+      "steps": [
+        { "action": "Run cargo test -p launa-sim test_controller_exposes_last_responses", "expected": "Test passes", "observed": "Test passed — accessors like last_fault_log(), last_config() return the most recently received data" }
+      ],
+      "evidence": {
+        "testName": "test_controller_exposes_last_responses",
+        "testResult": "ok",
+        "sourceFile": "crates/launa-sim/src/controller.rs:869"
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 9 assertions: all 9 passed. All SpaController response handling tests in launa-sim pass successfully — controller correctly emits typed events for fault log, filter cycles, information, and configuration responses, preserves data fidelity, handles mixed event types, doesn't interfere with registration or pump timers, and exposes last-received response data."
+}

@@ -1,0 +1,111 @@
+{
+  "groupId": "packet-extraction",
+  "testedAt": "2026-04-16T00:00:00Z",
+  "isolation": {
+    "projectRoot": "C:\\dev\\launa",
+    "testCommand": "cargo test -p launa-mqtt",
+    "codeReviewFile": "crates/launa-mqtt/src/packet.rs"
+  },
+  "toolsUsed": ["cargo test", "rg (code review)"],
+  "assertions": [
+    {
+      "id": "VAL-MQTT-010",
+      "title": "try_extract_packet does not double-allocate",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Code review of crates/launa-mqtt/src/packet.rs",
+          "expected": "Extraction uses drain() or rotating index instead of two Vec::from() calls",
+          "observed": "Line 70 uses buffer.drain(..total_size).collect() — single allocation. Vec::from() appears only in doc comments (lines 55-56) describing the old pattern being replaced. No double Vec::from() allocation in actual implementation code."
+        }
+      ],
+      "evidence": {
+        "codeReview": "crates/launa-mqtt/src/packet.rs line 70: `let packet: Vec<u8> = buffer.drain(..total_size).collect();` — single drain-based allocation. rg confirms Vec::from() only in doc comments, not in executable code."
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-011",
+      "title": "Packet extraction correctness preserved",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Ran cargo test -p launa-mqtt -- test_try_extract_packet_two_packets_in_sequence",
+          "expected": "Two concatenated packets are extracted correctly in sequence",
+          "observed": "test_try_extract_packet_two_packets_in_sequence ... ok"
+        }
+      ],
+      "evidence": {
+        "testOutput": "test_try_extract_packet_two_packets_in_sequence ... ok (11 try_extract_packet tests passed, 0 failed)"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-012",
+      "title": "Partial packet not extracted prematurely",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Ran cargo test -p launa-mqtt -- test_try_extract_packet_partial_packet",
+          "expected": "Incomplete packet returns None and leaves rx_buffer unchanged",
+          "observed": "test_try_extract_packet_partial_packet ... ok"
+        }
+      ],
+      "evidence": {
+        "testOutput": "test_try_extract_packet_partial_packet ... ok"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-013",
+      "title": "Empty and single-byte buffers handled",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Ran cargo test -p launa-mqtt -- test_try_extract_packet_empty_buffer test_try_extract_packet_single_byte",
+          "expected": "try_extract_packet() returns None for empty or single-byte buffers",
+          "observed": "test_try_extract_packet_empty_buffer ... ok, test_try_extract_packet_single_byte ... ok"
+        }
+      ],
+      "evidence": {
+        "testOutput": "test_try_extract_packet_empty_buffer ... ok, test_try_extract_packet_single_byte ... ok"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-014",
+      "title": "Extraction handles multi-byte remaining length",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Ran cargo test -p launa-mqtt -- test_try_extract_packet_multibyte_remaining_length",
+          "expected": "Packets with multi-byte MQTT remaining length encoding are extracted correctly",
+          "observed": "test_try_extract_packet_multibyte_remaining_length ... ok (two-byte encoding for remaining=128 handled correctly)"
+        }
+      ],
+      "evidence": {
+        "testOutput": "test_try_extract_packet_multibyte_remaining_length ... ok, test_try_extract_packet_multibyte_remaining_length_partial ... ok"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-MQTT-015",
+      "title": "Drain-based extraction preserves remainder bytes",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Ran cargo test -p launa-mqtt -- test_try_extract_packet_drain_preserves_remainder",
+          "expected": "After extracting packet from buffer, remaining bytes are preserved exactly",
+          "observed": "test_try_extract_packet_drain_preserves_remainder ... ok"
+        }
+      ],
+      "evidence": {
+        "testOutput": "test_try_extract_packet_drain_preserves_remainder ... ok (also test_try_extract_packet_three_packets_with_remainder ... ok)"
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 6 assertions: all 6 passed. Code review confirms drain-based extraction with no double allocation. All 11 try_extract_packet tests pass including edge cases."
+}
