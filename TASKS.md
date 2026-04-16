@@ -125,7 +125,7 @@ Code is feature-complete. Remaining items are deployment infrastructure and oper
 - [x] **Add ESP32 cross-compilation to CI**: Added `esp-check` job to `.github/workflows/ci.yml` using `esp-rs/xtensa-toolchain@v1.5` to verify `app/` compiles for `xtensa-esp32-none-elf`.
 - [x] **Add firmware versioning strategy**: Added `app/build.rs` that captures Git short SHA via `git rev-parse --short HEAD`. `FIRMWARE_VERSION` now includes it: `"0.1.0 (abc1234)"`. Falls back to `GITHUB_SHA` in CI or `"unknown"`.
 - [x] **Fix sniffer mode MQTT connect panic**: In `#[cfg(feature = "sniff")]` main, MQTT connect failure calls `panic!("MQTT connect failed")` unlike the main firmware's retry loop. Should use the same retry-with-backoff pattern.
-- [ ] **Pin exact versions for `esp-radio` and `esp-hal` unstable features**: Both use `unstable` feature flag, meaning API may change between versions without warning. Verify exact pins in `app/Cargo.lock`.
+- [x] **Pin exact versions for `esp-radio` and `esp-hal` unstable features**: Both use `unstable` feature flag, meaning API may change between versions without warning. Verify exact pins in `app/Cargo.lock`.
 
 ### MEDIUM — Operational Gaps
 
@@ -138,9 +138,9 @@ Code is feature-complete. Remaining items are deployment infrastructure and oper
 
 ### LOW — Nice-to-Have
 
-- [ ] **Add firmware binary signing for OTA**: OTA accepts any HTTP-served binary with correct ESP32 image header magic (`0xE9`). CRC is optional (only if `?crc=` in URL). An attacker on the LAN could serve malicious firmware.
+- [x] **Add firmware binary signing for OTA**: OTA accepts any HTTP-served binary with correct ESP32 image header magic (`0xE9`). CRC is optional (only if `?crc=` in URL). An attacker on the LAN could serve malicious firmware.
 - [ ] **Add unit tests for `app/` modules**: `mqtt_client.rs` (800+ lines), `ota.rs` (400+ lines), `wifi.rs` have no unit tests — only tested through `launa-core` integration pipeline.
-- [ ] **Add `xtask` dependency pin check to CI**: `xtask` depends on `serialport`, `keyring`, `rand`, `toml` but CI does not verify xtask builds.
+- [x] **Add `xtask` dependency pin check to CI**: `xtask` depends on `serialport`, `keyring`, `rand`, `toml` but CI does not verify xtask builds.
 
 ## Completed Work
 

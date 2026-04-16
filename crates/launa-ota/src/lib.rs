@@ -35,6 +35,15 @@ pub trait OtaUpdate {
     fn validate_first_chunk(&mut self, _chunk: &[u8]) -> Result<(), OtaError> {
         Ok(())
     }
+    /// Verify the HMAC-SHA256 signature of all written firmware data.
+    ///
+    /// Implementations that track a running MAC should compare it against
+    /// `expected_signature` (truncated to 32 bits) and return
+    /// `Err(OtaError::SignatureMismatch)` on mismatch.
+    /// The default implementation is a no-op (always succeeds).
+    fn verify_signature(&mut self, _expected_signature: u32) -> Result<(), OtaError> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -55,6 +64,8 @@ pub enum OtaError {
     HashMismatch { expected: u32, actual: u32 },
     #[error("invalid ESP32 image header magic")]
     InvalidImageHeader,
+    #[error("firmware signature mismatch: expected {expected}, got {actual}")]
+    SignatureMismatch { expected: u32, actual: u32 },
 }
 
 #[cfg(test)]
@@ -82,6 +93,11 @@ mod tests {
             }
             .to_string(),
             OtaError::InvalidImageHeader.to_string(),
+            OtaError::SignatureMismatch {
+                expected: 0xDEADBEEF,
+                actual: 0xCAFEBABE,
+            }
+            .to_string(),
         ];
         for s in &cases {
             assert!(!s.is_empty(), "OtaError variant Display output is empty");

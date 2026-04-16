@@ -25,9 +25,9 @@ opt-level = 3
 opt-level = 3
 
 [dependencies]
-esp-hal = { version = "1.0.0", features = ["esp32", "unstable"] }
+esp-hal = { version = "=1.0.0", features = ["esp32", "unstable"] }
 esp-rtos = { version = "0.2.0", features = ["esp32", "embassy", "log-04"] }
-esp-radio = { version = "0.17", features = ["esp32", "unstable", "wifi", "smoltcp", "log-04"] }
+esp-radio = { version = "=0.17.0", features = ["esp32", "unstable", "wifi", "smoltcp", "log-04"] }
 esp-alloc = "0.9"
 esp-nvs = { version = "0.4", features = ["esp32"] }
 esp-storage = { version = "0.8", features = ["esp32"] }

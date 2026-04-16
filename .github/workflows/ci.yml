@@ -36,6 +36,15 @@ jobs:
           components: rustfmt
       - run: cargo fmt --check --all
 
+  xtask-check:
+    name: Xtask Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p xtask
+
   esp-check:
     name: ESP32 Check
     runs-on: ubuntu-latest
