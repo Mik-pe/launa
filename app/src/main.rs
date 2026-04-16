@@ -67,6 +67,10 @@ mod wifi;
 
 use esp_backtrace as _;
 
+/// Firmware version embedded at compile time from Cargo.toml [package].version.
+/// Used in HA discovery (sw_version), MQTT state JSON, and diagnostics payload.
+const FIRMWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 // ── Diagnostic counters (static, accessible from all tasks) ───────────
 
 static MQTT_RECONNECT_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -385,7 +389,7 @@ fn publish_diagnostics(
     let heap_free = esp_alloc::HEAP.free();
 
     let json = alloc::format!(
-        r#"{{"device_id":"{}","uptime_secs":{},"mqtt_reconnect_count":{},"mqtt_loss_count":{},"command_retry_count":{},"command_drop_count":{},"frames_received":{},"heap_free":{}}}"#,
+        r#"{{"device_id":"{}","uptime_secs":{},"mqtt_reconnect_count":{},"mqtt_loss_count":{},"command_retry_count":{},"command_drop_count":{},"frames_received":{},"heap_free":{},"fw_version":"{}"}}"#,
         device_id,
         uptime_secs,
         mqtt_reconnects,
@@ -394,6 +398,7 @@ fn publish_diagnostics(
         command_drops,
         frames_received,
         heap_free,
+        FIRMWARE_VERSION,
     );
 
     debug!("Diagnostics: {}", json);

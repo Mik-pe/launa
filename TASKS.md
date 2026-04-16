@@ -95,7 +95,7 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 - [ ] **Add panic-reboot handler** (`app/`): `esp-backtrace` panic handler loops forever. Add custom handler that logs backtrace, waits, then `software_reset()`.
 - [ ] **Add MQTT command rate limiting** (`app/src/mqtt_client.rs`): Max N commands per 10 seconds. Drop excess to protect spa bus.
 - [ ] **Validate OTA URL scheme** (`app/src/mqtt_client.rs`): Require `http://`, reject arbitrary schemes.
-- [ ] **Add firmware version to diagnostics JSON** (`app/src/main.rs`): Include `env!("CARGO_PKG_VERSION")` in periodic diagnostics payload.
+- [x] **Add firmware version to diagnostics JSON** (`app/src/main.rs`): Include `env!("CARGO_PKG_VERSION")` in periodic diagnostics payload.
 - [ ] **Mask sensitive fields in hw-test logging** (`app/src/main.rs`): Don't log WiFi SSID/MQTT host in production.
 - [x] **`SpaApp::device_id` stored but never read** (`launa-core`): Removed dead `device_id` field and `new()` parameter — callers pass it separately.
 - [x] **Missing entity_category "diagnostic" on alert/diagnostics sensors** (`launa-mqtt`): Should appear in HA diagnostics section, not alongside primary sensors.
@@ -103,7 +103,7 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 - [ ] **SpaController ignores config/fault/filter/info responses** (`launa-sim`): Only handles StatusUpdate, Ready, NewClientQuery. Other responses discarded in integration tests.
 - [ ] **Config validation gaps in xtask** (`xtask/src/config.rs`): No validation of `device.id` format/length, serial port existence, or MQTT port range.
 - [ ] **xtask argument parsing panics on missing flag values** (`xtask/src/*.rs`): `--feature` as last arg = index out of bounds. Add bounds checks.
-- [ ] **No firmware versioning mechanism** (cross-cutting): No build hash or version embedded in binary or reported via MQTT.
+- [x] **No firmware versioning mechanism** (cross-cutting): No build hash or version embedded in binary or reported via MQTT.
 - [ ] **Cargo.lock gitignored at workspace root** (`.gitignore`): Workspace library builds not reproducible across machines.
 - [x] **Stale probe sends ConfigurationRequest instead of lightweight probe** (`launa-core/src/lib.rs:755`): When the spa is stale, the 5-second probe sends `[0x0A, 0xBF, 0x04]` (ConfigurationRequest). This is heavier than necessary and triggers an unwanted full configuration response. Fix: use a no-op or status-specific request instead.
 - [ ] **MQTT `try_extract_packet()` heap-churns every inbound packet** (`app/src/mqtt_client.rs`): `self.rx_buffer = Vec::from(&self.rx_buffer[total_size..])` allocates a new `Vec` for every MQTT packet. On a 32 KiB heap with frequent traffic, this contributes to fragmentation. Fix: use `Vec::drain()` or a rotating-index buffer to avoid per-packet allocation.

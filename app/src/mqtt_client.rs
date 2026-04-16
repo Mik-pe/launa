@@ -571,7 +571,7 @@ impl MqttClient {
     pub async fn publish_state(&mut self, status: &StatusUpdate, last_fault: Option<&str>) -> Result<(), MqttError> {
         let topics = TopicBuilder::new(&self.device_id);
         let state_topic = topics.state_topic();
-        let json = status_to_json(status, last_fault, None);
+        let json = status_to_json(status, last_fault, Some(crate::FIRMWARE_VERSION));
         self.publish(&state_topic, json.as_bytes(), 1, false).await
     }
 
@@ -614,8 +614,8 @@ impl MqttClient {
         let cmd_topic = topics.command_topic();
 
         let device_info = format!(
-            r#"{{"identifiers":["{}"],"name":"Launa Spa","manufacturer":"Launa","model":"BP6013G1"}}"#,
-            device_id
+            r#"{{"identifiers":["{}"],"name":"Launa Spa","manufacturer":"Launa","model":"BP6013G1","sw_version":"{}"}}"#,
+            device_id, crate::FIRMWARE_VERSION
         );
 
         let mut configs: Vec<(String, String, String)> = alloc::vec![
