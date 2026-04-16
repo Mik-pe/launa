@@ -174,7 +174,7 @@ Comprehensive code audit across all crates plus online protocol reference compar
 - [x] **Information response `software_id` uses standard Balboa format** (`launa-protocol/src/information.rs`): Changed from hex `"64DC_1100"` to standard `"M100_220 V17.0"` format matching pybalboa/NorthernMan54.
 - [x] **HA discovery set-temperature supports °C mode** (`launa-mqtt/src/discovery.rs`): Added `celsius(bool)` builder method. Celsius mode: min=10, max=40, step=0.5, unit=°C. Temperature sensor unit also adapts. Default remains Fahrenheit.
 - [ ] **`OTA_CHANNEL.try_send()` silently drops OTA URL** (`app/src/main.rs`): Channel capacity is 1. If an OTA URL is queued while one is already pending, the new URL is dropped. User sees MQTT acknowledgment but no OTA occurs. Should use `.send()` (blocking) or handle the error.
-- [ ] **NVS init failure causes unrecoverable boot loop** (`app/src/config.rs` `open_nvs()`): `panic!("NVS init failed")` on corrupted NVS. Device resets → panics again → infinite loop. Should fall back to default config with a warning.
+- [x] **NVS init failure causes unrecoverable boot loop** (`app/src/config.rs` `open_nvs()`): `panic!("NVS init failed")` on corrupted NVS. Device resets → panics again → infinite loop. Should fall back to default config with a warning.
 - [ ] **UART flush error silently ignored during RS-485 DE release** (`app/src/transport.rs`): `let _ = self.uart.flush();` — if flush fails, DE pin drops before all bytes are on the wire, corrupting the last byte(s) of the RS-485 frame (CRC mismatch on spa side).
 - [ ] **Unbounded `line_buf` in hw-test config mode** (`app/src/main.rs`): `Vec::push(byte)` without size limit on a 32 KiB heap. Continuous serial data without newlines causes OOM panic → device reset.
 
