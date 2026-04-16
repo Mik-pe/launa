@@ -774,7 +774,7 @@ fn test_ha_discovery_via_broker() {
     broker.publish_availability(true);
 
     let discoveries = broker.discovery_payloads();
-    assert_eq!(discoveries.len(), 20, "should have 20 discovery configs");
+    assert_eq!(discoveries.len(), 27, "should have 27 discovery configs");
 
     for payload in &discoveries {
         let _: serde_json::Value =
@@ -808,7 +808,7 @@ fn test_full_mqtt_pipeline_with_discovery() {
         }
     }
 
-    assert_eq!(broker.discovery_payloads().len(), 20);
+    assert_eq!(broker.discovery_payloads().len(), 27);
     assert!(broker.last_state().is_some());
 
     let state = broker.last_state().unwrap();

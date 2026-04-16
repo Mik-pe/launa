@@ -180,7 +180,7 @@ Comprehensive code audit across all crates plus online protocol reference compar
 
 ### MEDIUM — Should Fix
 
-- [ ] **Missing 9 toggle item codes** (`launa-protocol/src/command.rs`): MISTER (0x0E), CIRCULATION_PUMP (0x3D), LIGHT_3 (0x13), LIGHT_4 (0x14), AUX_1 (0x16), AUX_2 (0x17), SOAK_MODE (0x1D), NORMAL_OPERATION (0x01), CLEAR_NOTIFICATION (0x03). Status parser already handles mister and circ_pump but can't toggle them.
+- [x] **Missing 9 toggle item codes** (`launa-protocol/src/command.rs`): MISTER (0x0E), CIRCULATION_PUMP (0x3D), LIGHT_3 (0x13), LIGHT_4 (0x14), AUX_1 (0x16), AUX_2 (0x17), SOAK_MODE (0x1D), NORMAL_OPERATION (0x01), CLEAR_NOTIFICATION (0x03). Status parser already handles mister and circ_pump but can't toggle them.
 - [ ] **MQTT task diagnostics/alert `try_receive` + `continue` starves command processing** (`app/src/main.rs` mqtt_task): A burst of diagnostics/alert publishes prevents incoming MQTT commands from being processed. Should limit consecutive non-command receives.
 - [ ] **`from_hex()` in crypto.rs allocates without size limit** (`app/src/crypto.rs`): `Vec::with_capacity(hex.len() / 2)` — a malformed NVS value with a very long hex string causes OOM on 32 KiB heap during config loading.
 - [ ] **All-zeros eFuse key produces weak predictable encryption** (`app/src/crypto.rs` `read_key()`): On unprovisioned devices, BLOCK3 is all zeros. After XOR mixing, key = `[0xA5, 0x3C, 0x96, 0xF0]` repeated — identical across all unprovisioned devices. Should log warning.

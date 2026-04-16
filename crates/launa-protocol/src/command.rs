@@ -82,9 +82,18 @@ pub enum ToggleItem {
     Blower,
     Light1,
     Light2,
+    Light3,
+    Light4,
+    Mister,
+    Aux1,
+    Aux2,
     HoldMode,
     HeatingMode,
     TemperatureRange,
+    CirculationPump,
+    SoakMode,
+    NormalOperation,
+    ClearNotification,
 }
 
 impl ToggleItem {
@@ -99,9 +108,18 @@ impl ToggleItem {
             ToggleItem::Blower => 0x0C,
             ToggleItem::Light1 => 0x11,
             ToggleItem::Light2 => 0x12,
+            ToggleItem::Light3 => 0x13,
+            ToggleItem::Light4 => 0x14,
+            ToggleItem::Mister => 0x0E,
+            ToggleItem::Aux1 => 0x16,
+            ToggleItem::Aux2 => 0x17,
             ToggleItem::HoldMode => 0x3C,
             ToggleItem::HeatingMode => 0x51,
             ToggleItem::TemperatureRange => 0x50,
+            ToggleItem::CirculationPump => 0x3D,
+            ToggleItem::SoakMode => 0x1D,
+            ToggleItem::NormalOperation => 0x01,
+            ToggleItem::ClearNotification => 0x03,
         }
     }
 
@@ -118,11 +136,13 @@ impl ToggleItem {
         }
     }
 
-    /// Get the 0-based light index (0-1), or None if not a light.
+    /// Get the 0-based light index (0-3), or None if not a light.
     pub fn light_index(self) -> Option<usize> {
         match self {
             ToggleItem::Light1 => Some(0),
             ToggleItem::Light2 => Some(1),
+            ToggleItem::Light3 => Some(2),
+            ToggleItem::Light4 => Some(3),
             _ => None,
         }
     }
@@ -140,11 +160,13 @@ impl ToggleItem {
         }
     }
 
-    /// Create a ToggleItem from a light index (0-1).
+    /// Create a ToggleItem from a light index (0-3).
     pub fn from_light_index(i: usize) -> Option<Self> {
         match i {
             0 => Some(ToggleItem::Light1),
             1 => Some(ToggleItem::Light2),
+            2 => Some(ToggleItem::Light3),
+            3 => Some(ToggleItem::Light4),
             _ => None,
         }
     }
@@ -451,5 +473,135 @@ mod tests {
             validate_set_temperature(0, TemperatureScale::Fahrenheit, TempRange::High),
             Err(TempError::BelowMin)
         );
+    }
+
+    // --- New ToggleItem variant code() tests ---
+
+    #[test]
+    fn test_toggle_mister_code() {
+        assert_eq!(ToggleItem::Mister.code(), 0x0E);
+    }
+
+    #[test]
+    fn test_toggle_circulation_pump_code() {
+        assert_eq!(ToggleItem::CirculationPump.code(), 0x3D);
+    }
+
+    #[test]
+    fn test_toggle_light3_code() {
+        assert_eq!(ToggleItem::Light3.code(), 0x13);
+    }
+
+    #[test]
+    fn test_toggle_light4_code() {
+        assert_eq!(ToggleItem::Light4.code(), 0x14);
+    }
+
+    #[test]
+    fn test_toggle_aux1_code() {
+        assert_eq!(ToggleItem::Aux1.code(), 0x16);
+    }
+
+    #[test]
+    fn test_toggle_aux2_code() {
+        assert_eq!(ToggleItem::Aux2.code(), 0x17);
+    }
+
+    #[test]
+    fn test_toggle_soak_mode_code() {
+        assert_eq!(ToggleItem::SoakMode.code(), 0x1D);
+    }
+
+    #[test]
+    fn test_toggle_normal_operation_code() {
+        assert_eq!(ToggleItem::NormalOperation.code(), 0x01);
+    }
+
+    #[test]
+    fn test_toggle_clear_notification_code() {
+        assert_eq!(ToggleItem::ClearNotification.code(), 0x03);
+    }
+
+    // --- Wire frame encoding tests for new variants ---
+
+    #[test]
+    fn test_encode_toggle_mister() {
+        let (mt, payload) = Command::ToggleItem(ToggleItem::Mister).encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x11, 0x0E, 0x00]);
+    }
+
+    #[test]
+    fn test_encode_toggle_circulation_pump() {
+        let (mt, payload) = Command::ToggleItem(ToggleItem::CirculationPump).encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x11, 0x3D, 0x00]);
+    }
+
+    #[test]
+    fn test_encode_toggle_light3() {
+        let (mt, payload) = Command::ToggleItem(ToggleItem::Light3).encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x11, 0x13, 0x00]);
+    }
+
+    #[test]
+    fn test_encode_toggle_light4() {
+        let (mt, payload) = Command::ToggleItem(ToggleItem::Light4).encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x11, 0x14, 0x00]);
+    }
+
+    #[test]
+    fn test_encode_toggle_aux1() {
+        let (mt, payload) = Command::ToggleItem(ToggleItem::Aux1).encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x11, 0x16, 0x00]);
+    }
+
+    #[test]
+    fn test_encode_toggle_aux2() {
+        let (mt, payload) = Command::ToggleItem(ToggleItem::Aux2).encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x11, 0x17, 0x00]);
+    }
+
+    #[test]
+    fn test_encode_toggle_soak_mode() {
+        let (mt, payload) = Command::ToggleItem(ToggleItem::SoakMode).encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x11, 0x1D, 0x00]);
+    }
+
+    #[test]
+    fn test_encode_toggle_normal_operation() {
+        let (mt, payload) = Command::ToggleItem(ToggleItem::NormalOperation).encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x11, 0x01, 0x00]);
+    }
+
+    #[test]
+    fn test_encode_toggle_clear_notification() {
+        let (mt, payload) = Command::ToggleItem(ToggleItem::ClearNotification).encode();
+        assert_eq!(mt, [0x0A, 0xBF]);
+        assert_eq!(payload, vec![0x11, 0x03, 0x00]);
+    }
+
+    // --- light_index() extended for new lights ---
+
+    #[test]
+    fn test_light3_light_index() {
+        assert_eq!(ToggleItem::Light3.light_index(), Some(2));
+    }
+
+    #[test]
+    fn test_light4_light_index() {
+        assert_eq!(ToggleItem::Light4.light_index(), Some(3));
+    }
+
+    #[test]
+    fn test_from_light_index_extended() {
+        assert_eq!(ToggleItem::from_light_index(2), Some(ToggleItem::Light3));
+        assert_eq!(ToggleItem::from_light_index(3), Some(ToggleItem::Light4));
     }
 }

@@ -24,10 +24,19 @@ const ALLOWED_SUBTOPICS: &[&str] = &[
     "pump6_timer",
     "light1",
     "light2",
+    "light3",
+    "light4",
     "blower",
+    "mister",
+    "circulation_pump",
+    "aux1",
+    "aux2",
     "heat_mode",
     "temp_range",
     "hold_mode",
+    "soak_mode",
+    "normal_operation",
+    "clear_notification",
     "set_temperature",
 ];
 
@@ -109,7 +118,7 @@ pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8]) -> P
             // "light<N>" → parse N and map to ToggleItem via from_light_index
             let num_str = &s[5..];
             let idx: usize = match num_str.parse() {
-                Ok(n) if n >= 1 && n <= 2 => n,
+                Ok(n) if n >= 1 && n <= 4 => n,
                 _ => return ParseResult::UnknownSubtopic(subtopic.to_string()),
             };
             if let Some(item) = ToggleItem::from_light_index(idx - 1) {
@@ -119,9 +128,16 @@ pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8]) -> P
             }
         }
         "blower" => parse_toggle(payload_str, ToggleItem::Blower),
+        "mister" => parse_toggle(payload_str, ToggleItem::Mister),
+        "circulation_pump" => parse_toggle(payload_str, ToggleItem::CirculationPump),
+        "aux1" => parse_toggle(payload_str, ToggleItem::Aux1),
+        "aux2" => parse_toggle(payload_str, ToggleItem::Aux2),
         "heat_mode" => parse_toggle(payload_str, ToggleItem::HeatingMode),
         "temp_range" => parse_toggle(payload_str, ToggleItem::TemperatureRange),
         "hold_mode" => parse_toggle(payload_str, ToggleItem::HoldMode),
+        "soak_mode" => parse_toggle(payload_str, ToggleItem::SoakMode),
+        "normal_operation" => parse_toggle(payload_str, ToggleItem::NormalOperation),
+        "clear_notification" => parse_toggle(payload_str, ToggleItem::ClearNotification),
         "set_temperature" => parse_set_temperature(payload_str),
         _ => ParseResult::UnknownSubtopic(subtopic.to_string()),
     }
@@ -463,5 +479,100 @@ mod tests {
         // 0 is valid wire value ("no temp set")
         let result = parse_command(CMD_BASE, "launa/test_spa_001/command/set_temperature", b"0");
         assert_eq!(result, ParseResult::Valid(Command::SetTemperature(0)));
+    }
+
+    // --- New toggle subtopic tests ---
+
+    #[test]
+    fn test_parse_mister() {
+        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/mister", b"true");
+        assert_eq!(
+            result,
+            ParseResult::Valid(Command::ToggleItem(ToggleItem::Mister))
+        );
+    }
+
+    #[test]
+    fn test_parse_circulation_pump() {
+        let result = parse_command(
+            CMD_BASE,
+            "launa/test_spa_001/command/circulation_pump",
+            b"true",
+        );
+        assert_eq!(
+            result,
+            ParseResult::Valid(Command::ToggleItem(ToggleItem::CirculationPump))
+        );
+    }
+
+    #[test]
+    fn test_parse_light3() {
+        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/light3", b"true");
+        assert_eq!(
+            result,
+            ParseResult::Valid(Command::ToggleItem(ToggleItem::Light3))
+        );
+    }
+
+    #[test]
+    fn test_parse_light4() {
+        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/light4", b"true");
+        assert_eq!(
+            result,
+            ParseResult::Valid(Command::ToggleItem(ToggleItem::Light4))
+        );
+    }
+
+    #[test]
+    fn test_parse_aux1() {
+        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/aux1", b"true");
+        assert_eq!(
+            result,
+            ParseResult::Valid(Command::ToggleItem(ToggleItem::Aux1))
+        );
+    }
+
+    #[test]
+    fn test_parse_aux2() {
+        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/aux2", b"true");
+        assert_eq!(
+            result,
+            ParseResult::Valid(Command::ToggleItem(ToggleItem::Aux2))
+        );
+    }
+
+    #[test]
+    fn test_parse_soak_mode() {
+        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/soak_mode", b"true");
+        assert_eq!(
+            result,
+            ParseResult::Valid(Command::ToggleItem(ToggleItem::SoakMode))
+        );
+    }
+
+    #[test]
+    fn test_parse_normal_operation() {
+        let result = parse_command(
+            CMD_BASE,
+            "launa/test_spa_001/command/normal_operation",
+            b"true",
+        );
+        assert_eq!(
+            result,
+            ParseResult::Valid(Command::ToggleItem(ToggleItem::NormalOperation))
+        );
+    }
+
+    #[test]
+    fn test_parse_clear_notification() {
+        let result = parse_command(
+            CMD_BASE,
+            "launa/test_spa_001/command/clear_notification",
+            b"true",
+        );
+        assert_eq!(
+            result,
+            ParseResult::Valid(Command::ToggleItem(ToggleItem::ClearNotification))
+        );
     }
 }

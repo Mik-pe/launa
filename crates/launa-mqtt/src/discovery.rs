@@ -164,7 +164,7 @@ impl DiscoveryBuilder {
         }
 
         // Lights
-        for i in 1..=2 {
+        for i in 1..=4 {
             let name = if i == 1 {
                 String::from("Spa Light")
             } else {
@@ -205,15 +205,19 @@ impl DiscoveryBuilder {
             &format!("{}/heat_mode", cmd_topic),
         ));
 
-        // Circulation Pump sensor (read-only \u2014 protocol doesn't support toggling)
-        configs.push(DiscoveryMessage {
-            topic: topics.discovery_topic("sensor", "circ_pump"),
-            payload: format!(
-                r#"{{"device":{},"origin":{},"name":"Circulation Pump","unique_id":"{}_circ_pump","state_topic":"{}","value_template":"{{{{ value_json.circ_pump }}}}","availability_topic":"{}"}}"#,
-                device_info, origin, self.device_id, state_topic, avail_topic
-            ),
-            retain: false,
-        });
+        // Circulation Pump switch (now toggleable via ToggleItem::CirculationPump)
+        configs.push(Self::make_switch(
+            &topics,
+            &self.device_id,
+            &device_info,
+            &origin,
+            &state_topic,
+            &avail_topic,
+            "circulation_pump",
+            "Circulation Pump",
+            "{{ value_json.circ_pump }}",
+            &format!("{}/circulation_pump", cmd_topic),
+        ));
 
         // Temperature Range select
         configs.push(Self::make_select(
@@ -244,15 +248,89 @@ impl DiscoveryBuilder {
             &format!("{}/hold_mode", cmd_topic),
         ));
 
-        // Mister sensor (read-only \u2014 protocol doesn't support toggling)
-        configs.push(DiscoveryMessage {
-            topic: topics.discovery_topic("sensor", "mister"),
-            payload: format!(
-                r#"{{"device":{},"origin":{},"name":"Mister","unique_id":"{}_mister","state_topic":"{}","value_template":"{{{{ value_json.mister }}}}","availability_topic":"{}"}}"#,
-                device_info, origin, self.device_id, state_topic, avail_topic
-            ),
-            retain: false,
-        });
+        // AUX 1 switch
+        configs.push(Self::make_switch(
+            &topics,
+            &self.device_id,
+            &device_info,
+            &origin,
+            &state_topic,
+            &avail_topic,
+            "aux1",
+            "AUX 1",
+            "{{ value_json.aux1 }}",
+            &format!("{}/aux1", cmd_topic),
+        ));
+
+        // AUX 2 switch
+        configs.push(Self::make_switch(
+            &topics,
+            &self.device_id,
+            &device_info,
+            &origin,
+            &state_topic,
+            &avail_topic,
+            "aux2",
+            "AUX 2",
+            "{{ value_json.aux2 }}",
+            &format!("{}/aux2", cmd_topic),
+        ));
+
+        // Soak Mode switch
+        configs.push(Self::make_switch(
+            &topics,
+            &self.device_id,
+            &device_info,
+            &origin,
+            &state_topic,
+            &avail_topic,
+            "soak_mode",
+            "Soak Mode",
+            "{{ value_json.soak_mode }}",
+            &format!("{}/soak_mode", cmd_topic),
+        ));
+
+        // Normal Operation switch
+        configs.push(Self::make_switch(
+            &topics,
+            &self.device_id,
+            &device_info,
+            &origin,
+            &state_topic,
+            &avail_topic,
+            "normal_operation",
+            "Normal Operation",
+            "{{ value_json.normal_operation }}",
+            &format!("{}/normal_operation", cmd_topic),
+        ));
+
+        // Clear Notification switch
+        configs.push(Self::make_switch(
+            &topics,
+            &self.device_id,
+            &device_info,
+            &origin,
+            &state_topic,
+            &avail_topic,
+            "clear_notification",
+            "Clear Notification",
+            "{{ value_json.clear_notification }}",
+            &format!("{}/clear_notification", cmd_topic),
+        ));
+
+        // Mister switch (now toggleable via ToggleItem::Mister)
+        configs.push(Self::make_switch(
+            &topics,
+            &self.device_id,
+            &device_info,
+            &origin,
+            &state_topic,
+            &avail_topic,
+            "mister",
+            "Mister",
+            "{{ value_json.mister }}",
+            &format!("{}/mister", cmd_topic),
+        ));
 
         // Fault sensor
         configs.push(DiscoveryMessage {
@@ -451,7 +529,11 @@ mod tests {
         let builder = DiscoveryBuilder::new("test_spa_001");
         let configs = builder.build();
 
-        assert_eq!(configs.len(), 20);
+        assert!(
+            configs.len() >= 27,
+            "expected at least 27 discovery configs, got {}",
+            configs.len()
+        );
 
         for (topic, json_str) in &configs {
             let _: serde_json::Value = serde_json::from_str(json_str)
@@ -464,7 +546,11 @@ mod tests {
         let builder = DiscoveryBuilder::new("test_spa_001");
         let messages = builder.build_with_retain();
 
-        assert_eq!(messages.len(), 20);
+        assert!(
+            messages.len() >= 27,
+            "expected at least 27 discovery messages, got {}",
+            messages.len()
+        );
         for msg in &messages {
             assert!(msg.retain, "discovery messages should have retain=true");
             let _: serde_json::Value = serde_json::from_str(&msg.payload)
@@ -610,5 +696,164 @@ mod tests {
                 topic
             );
         }
+    }
+
+    // --- New toggle item discovery tests ---
+
+    #[test]
+    fn test_discovery_includes_mister_switch() {
+        let builder = DiscoveryBuilder::new("test_spa_001");
+        let configs = builder.build();
+        let mister = configs.iter().find(|(t, _)| t.contains("/mister"));
+        assert!(mister.is_some(), "mister discovery entity missing");
+        let v = parse_json(&mister.unwrap().1);
+        assert!(
+            v.get("command_topic").is_some(),
+            "mister should be a switch with command_topic"
+        );
+        assert!(v["unique_id"].as_str().unwrap().contains("mister"));
+    }
+
+    #[test]
+    fn test_discovery_includes_circulation_pump_switch() {
+        let builder = DiscoveryBuilder::new("test_spa_001");
+        let configs = builder.build();
+        let circ = configs
+            .iter()
+            .find(|(t, _)| t.contains("/circulation_pump"));
+        assert!(circ.is_some(), "circulation_pump discovery entity missing");
+        let v = parse_json(&circ.unwrap().1);
+        assert!(
+            v.get("command_topic").is_some(),
+            "circulation_pump should be a switch with command_topic"
+        );
+        assert!(v["unique_id"]
+            .as_str()
+            .unwrap()
+            .contains("circulation_pump"));
+    }
+
+    #[test]
+    fn test_discovery_includes_light3() {
+        let builder = DiscoveryBuilder::new("test_spa_001");
+        let configs = builder.build();
+        let light3 = configs.iter().find(|(t, _)| t.contains("/light3"));
+        assert!(light3.is_some(), "light3 discovery entity missing");
+        let v = parse_json(&light3.unwrap().1);
+        assert!(
+            v.get("command_topic").is_some(),
+            "light3 should have command_topic"
+        );
+        assert!(v["unique_id"].as_str().unwrap().contains("light3"));
+    }
+
+    #[test]
+    fn test_discovery_includes_light4() {
+        let builder = DiscoveryBuilder::new("test_spa_001");
+        let configs = builder.build();
+        let light4 = configs.iter().find(|(t, _)| t.contains("/light4"));
+        assert!(light4.is_some(), "light4 discovery entity missing");
+        let v = parse_json(&light4.unwrap().1);
+        assert!(
+            v.get("command_topic").is_some(),
+            "light4 should have command_topic"
+        );
+        assert!(v["unique_id"].as_str().unwrap().contains("light4"));
+    }
+
+    #[test]
+    fn test_discovery_includes_aux1_switch() {
+        let builder = DiscoveryBuilder::new("test_spa_001");
+        let configs = builder.build();
+        let aux1 = configs.iter().find(|(t, _)| t.contains("/aux1"));
+        assert!(aux1.is_some(), "aux1 discovery entity missing");
+        let v = parse_json(&aux1.unwrap().1);
+        assert!(v.get("command_topic").is_some());
+        assert!(v["unique_id"].as_str().unwrap().contains("aux1"));
+    }
+
+    #[test]
+    fn test_discovery_includes_aux2_switch() {
+        let builder = DiscoveryBuilder::new("test_spa_001");
+        let configs = builder.build();
+        let aux2 = configs.iter().find(|(t, _)| t.contains("/aux2"));
+        assert!(aux2.is_some(), "aux2 discovery entity missing");
+        let v = parse_json(&aux2.unwrap().1);
+        assert!(v.get("command_topic").is_some());
+        assert!(v["unique_id"].as_str().unwrap().contains("aux2"));
+    }
+
+    #[test]
+    fn test_discovery_includes_soak_mode_switch() {
+        let builder = DiscoveryBuilder::new("test_spa_001");
+        let configs = builder.build();
+        let soak = configs.iter().find(|(t, _)| t.contains("/soak_mode"));
+        assert!(soak.is_some(), "soak_mode discovery entity missing");
+        let v = parse_json(&soak.unwrap().1);
+        assert!(v.get("command_topic").is_some());
+        assert!(v["unique_id"].as_str().unwrap().contains("soak_mode"));
+    }
+
+    #[test]
+    fn test_discovery_includes_normal_operation_switch() {
+        let builder = DiscoveryBuilder::new("test_spa_001");
+        let configs = builder.build();
+        let norm = configs
+            .iter()
+            .find(|(t, _)| t.contains("/normal_operation"));
+        assert!(norm.is_some(), "normal_operation discovery entity missing");
+        let v = parse_json(&norm.unwrap().1);
+        assert!(v.get("command_topic").is_some());
+        assert!(v["unique_id"]
+            .as_str()
+            .unwrap()
+            .contains("normal_operation"));
+    }
+
+    #[test]
+    fn test_discovery_includes_clear_notification_switch() {
+        let builder = DiscoveryBuilder::new("test_spa_001");
+        let configs = builder.build();
+        let clear = configs
+            .iter()
+            .find(|(t, _)| t.contains("/clear_notification"));
+        assert!(
+            clear.is_some(),
+            "clear_notification discovery entity missing"
+        );
+        let v = parse_json(&clear.unwrap().1);
+        assert!(v.get("command_topic").is_some());
+        assert!(v["unique_id"]
+            .as_str()
+            .unwrap()
+            .contains("clear_notification"));
+    }
+
+    #[test]
+    fn test_discovery_new_entities_have_valid_json() {
+        let builder = DiscoveryBuilder::new("test_spa_001");
+        let configs = builder.build();
+        // All configs should produce valid JSON
+        for (topic, json_str) in &configs {
+            let _: serde_json::Value = serde_json::from_str(json_str)
+                .unwrap_or_else(|e| panic!("Invalid JSON for topic {}: {}", topic, e));
+        }
+    }
+
+    #[test]
+    fn test_discovery_entity_count_increased() {
+        let builder = DiscoveryBuilder::new("test_spa_001");
+        let configs = builder.build();
+        // Original was 20 entities, now we have:
+        // - mister changed from sensor to switch (still 1 entity)
+        // - circ_pump changed from sensor to switch (still 1 entity)
+        // - light3, light4 added (2 new light entities)
+        // - aux1, aux2, soak_mode, normal_operation, clear_notification added (5 new switches)
+        // Total: 20 + 7 = 27
+        assert!(
+            configs.len() >= 27,
+            "should have at least 27 entities after adding new toggle items, got {}",
+            configs.len()
+        );
     }
 }

@@ -436,7 +436,7 @@ mod tests {
         let builder = launa_mqtt::discovery::DiscoveryBuilder::new("test_spa_001");
         let configs = builder.build();
 
-        assert_eq!(configs.len(), 20);
+        assert_eq!(configs.len(), 27);
 
         for (topic, json_str) in &configs {
             let _: serde_json::Value = serde_json::from_str(json_str)
@@ -1099,8 +1099,8 @@ mod tests {
 
         assert_eq!(
             configs.len(),
-            20,
-            "should produce exactly 20 discovery configs"
+            27,
+            "should produce exactly 27 discovery configs"
         );
 
         let mut topics_seen = std::collections::HashSet::new();
