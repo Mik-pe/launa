@@ -14,6 +14,31 @@ use launa_sim::spa_sim::SpaState;
 use launa_sim::{ControllerEvent, SimBroker, SimTransport, SpaController, SpaSim};
 use launa_sim::{HeatingMode, PumpState, TempRange, TemperatureScale, ToggleItem};
 
+/// Helper: poll an async future to completion synchronously.
+/// SimTransport's async methods always complete immediately,
+/// so this is safe for test use.
+fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+    fn dummy_raw_waker() -> RawWaker {
+        fn no_op(_: *const ()) {}
+        fn clone(_: *const ()) -> RawWaker {
+            dummy_raw_waker()
+        }
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+
+    let waker = unsafe { Waker::from_raw(dummy_raw_waker()) };
+    let mut cx = Context::from_waker(&waker);
+
+    let mut future = std::pin::pin!(future);
+    match future.as_mut().poll(&mut cx) {
+        Poll::Ready(val) => val,
+        Poll::Pending => panic!("SimTransport async method should not return Pending"),
+    }
+}
+
 /// Helper to run one full tick cycle: spa generates bytes → controller processes them.
 fn run_tick(
     spa: &mut SpaSim,
@@ -23,7 +48,7 @@ fn run_tick(
     let spa_bytes = spa.tick();
     transport.inject_from_spa(&spa_bytes);
     let mut buf = [0u8; 512];
-    let n = transport.read(&mut buf).unwrap();
+    let n = block_on(transport.read(&mut buf)).unwrap();
     controller.process_bytes(&buf[..n])
 }
 
@@ -45,7 +70,7 @@ fn run_tick_with_responses(
     }
 
     if !reg_bytes.is_empty() {
-        transport.write(&reg_bytes).unwrap();
+        block_on(transport.write(&reg_bytes)).unwrap();
     }
 
     // Process any bytes the controller wrote back (including reg bytes above)
@@ -55,7 +80,7 @@ fn run_tick_with_responses(
         if !responses.is_empty() {
             transport.inject_from_spa(&responses);
             let mut buf = [0u8; 512];
-            let n = transport.read(&mut buf).unwrap();
+            let n = block_on(transport.read(&mut buf)).unwrap();
             if n > 0 {
                 let mut more_events = controller.process_bytes(&buf[..n]);
                 // Write any additional reg sends (e.g. ack)
@@ -66,7 +91,7 @@ fn run_tick_with_responses(
                     }
                 }
                 if !more_reg_bytes.is_empty() {
-                    transport.write(&more_reg_bytes).unwrap();
+                    block_on(transport.write(&more_reg_bytes)).unwrap();
                     let final_bytes = transport.take_from_controller();
                     if !final_bytes.is_empty() {
                         spa.process_incoming_bytes(&final_bytes);
@@ -94,7 +119,7 @@ fn send_command(
     let encoded = controller
         .encode_command(cmd)
         .expect("controller should be registered");
-    transport.write(&encoded).unwrap();
+    block_on(transport.write(&encoded)).unwrap();
     let bytes = transport.take_from_controller();
     spa.process_incoming_bytes(&bytes);
 }
@@ -115,7 +140,7 @@ fn complete_registration(
         transport.inject_from_spa(&spa_bytes);
 
         let mut buf = [0u8; 512];
-        let n = transport.read(&mut buf).unwrap();
+        let n = block_on(transport.read(&mut buf)).unwrap();
         let mut events = Vec::new();
         if n > 0 {
             events = controller.process_bytes(&buf[..n]);
@@ -124,7 +149,7 @@ fn complete_registration(
         // Write any RegistrationSend bytes to the transport and process responses
         for event in &events {
             if let ControllerEvent::RegistrationSend { bytes } = event {
-                transport.write(bytes).unwrap();
+                block_on(transport.write(bytes)).unwrap();
             }
         }
 
@@ -133,13 +158,13 @@ fn complete_registration(
             let responses = spa.process_incoming_bytes(&controller_bytes);
             if !responses.is_empty() {
                 transport.inject_from_spa(&responses);
-                let n = transport.read(&mut buf).unwrap();
+                let n = block_on(transport.read(&mut buf)).unwrap();
                 if n > 0 {
                     let more_events = controller.process_bytes(&buf[..n]);
                     // Write any additional RegistrationSend (the ID ack)
                     for event in &more_events {
                         if let ControllerEvent::RegistrationSend { bytes } = event {
-                            transport.write(bytes).unwrap();
+                            block_on(transport.write(bytes)).unwrap();
                         }
                     }
                     events.extend(more_events);
@@ -231,7 +256,7 @@ fn test_registration_trace() {
     let spa_bytes = spa.tick();
     transport.inject_from_spa(&spa_bytes);
     let mut buf = [0u8; 512];
-    let n = transport.read(&mut buf).unwrap();
+    let n = block_on(transport.read(&mut buf)).unwrap();
     assert!(n > 0, "round 1: controller should read bytes");
     let events = controller.process_bytes(&buf[..n]);
     assert!(!controller.is_registered(), "round 1: not registered yet");
@@ -246,7 +271,7 @@ fn test_registration_trace() {
         .expect("round 1: should have RegistrationSend");
 
     // Send controller's ID request to spa via transport
-    transport.write(&id_request_bytes).unwrap();
+    block_on(transport.write(&id_request_bytes)).unwrap();
     let controller_bytes = transport.take_from_controller();
     assert!(
         !controller_bytes.is_empty(),
@@ -260,7 +285,7 @@ fn test_registration_trace() {
 
     // Feed assignment back to controller
     transport.inject_from_spa(&responses);
-    let n = transport.read(&mut buf).unwrap();
+    let n = block_on(transport.read(&mut buf)).unwrap();
     assert!(n > 0, "should read assignment bytes");
     let events = controller.process_bytes(&buf[..n]);
     assert!(
@@ -280,7 +305,7 @@ fn test_registration_trace() {
             _ => None,
         })
         .expect("should have ack RegistrationSend");
-    transport.write(&ack_bytes).unwrap();
+    block_on(transport.write(&ack_bytes)).unwrap();
     let controller_bytes = transport.take_from_controller();
     spa.process_incoming_bytes(&controller_bytes);
     assert_eq!(spa.client_id, Some(0x02));
@@ -806,7 +831,7 @@ fn test_noise_bytes_ignored() {
 
     transport.inject_from_spa(&[0x00, 0x01, 0x02, 0x03, 0xAA, 0xBB]);
     let mut buf = [0u8; 256];
-    let n = transport.read(&mut buf).unwrap();
+    let n = block_on(transport.read(&mut buf)).unwrap();
     let events = controller.process_bytes(&buf[..n]);
 
     assert!(events.is_empty());
@@ -834,7 +859,7 @@ fn test_empty_read_no_events() {
     let mut controller = SpaController::new();
 
     let mut buf = [0u8; 256];
-    let n = transport.read(&mut buf).unwrap();
+    let n = block_on(transport.read(&mut buf)).unwrap();
     assert_eq!(n, 0);
 
     let events = controller.process_bytes(&buf[..n]);
@@ -1009,7 +1034,7 @@ fn test_multiple_ticks_buffered_together() {
     transport.inject_from_spa(&all_bytes);
 
     let mut buf = [0u8; 1024];
-    let n = transport.read(&mut buf).unwrap();
+    let n = block_on(transport.read(&mut buf)).unwrap();
     let events = controller.process_bytes(&buf[..n]);
 
     let status_count = events

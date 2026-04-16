@@ -80,7 +80,7 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 - [x] **Otadata both slots may share same 4 KiB sector** (`launa-esp-ota`): Fixed with read-modify-write pattern — reads full sector, patches target entry, erases, writes back. Both slots survive.
 - [ ] **Write offset tracking on unaligned chunks** (`launa-esp-ota`): `write_offset` increments by raw chunk length, but flash writes are word-aligned. Padding bytes overlap with next write.
 - [ ] **Verify CRC32 matches ESP-IDF bootloader expectations** (`launa-esp-ota`): MPEG-2 variant may not match. Validate against ESP-IDF source or hardware test.
-- [ ] **Transport trait is sync but production is async** (`launa-hal`): False abstraction — production uses `embedded_io_async`, tests use sync trait. Document or align.
+- [x] **Transport trait is sync but production is async** (`launa-hal`): Unified Transport trait to async using `async fn` in trait. MockTransport (std feature), SimTransport, and Rs485Transport all implement the unified `launa_hal::Transport` trait directly. Tests use a lightweight `block_on` helper to poll async methods synchronously.
 - [ ] **Integration tests use SpaController not real SpaApp** (`launa-integration-tests`): Tests validate sim framework, not production logic. Rewrite to exercise `SpaApp` through sim pipeline.
 - [ ] **No OTA / reconnection / stale-detection integration tests** (`launa-integration-tests`): Critical production paths untested at integration level.
 - [ ] **`ota-flash` does not verify firmware version after update** (`xtask`): Device could roll back to factory and still appear online. Check reported version.

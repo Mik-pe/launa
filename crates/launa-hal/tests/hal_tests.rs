@@ -5,6 +5,31 @@ use launa_hal::transport::mock::MockTransport;
 use launa_hal::Network;
 use launa_hal::Transport;
 
+/// Helper: poll an async future to completion synchronously.
+/// MockTransport's async methods always complete immediately,
+/// so this is safe for test use.
+fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+    fn dummy_raw_waker() -> RawWaker {
+        fn no_op(_: *const ()) {}
+        fn clone(_: *const ()) -> RawWaker {
+            dummy_raw_waker()
+        }
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+
+    let waker = unsafe { Waker::from_raw(dummy_raw_waker()) };
+    let mut cx = Context::from_waker(&waker);
+
+    let mut future = std::pin::pin!(future);
+    match future.as_mut().poll(&mut cx) {
+        Poll::Ready(val) => val,
+        Poll::Pending => panic!("MockTransport async method should not return Pending"),
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // MockTransport tests
 // ═══════════════════════════════════════════════════════════════════════════
@@ -27,7 +52,7 @@ fn test_mock_transport_write_and_read_back() {
     let mut t = MockTransport::new();
 
     // Write data
-    t.write(&[0x01, 0x02, 0x03]).unwrap();
+    block_on(t.write(&[0x01, 0x02, 0x03])).unwrap();
     assert_eq!(t.written(), &[0x01, 0x02, 0x03]);
 
     // Inject data to read
@@ -35,7 +60,7 @@ fn test_mock_transport_write_and_read_back() {
     assert!(t.has_incoming());
 
     let mut buf = [0u8; 3];
-    let n = t.read(&mut buf).unwrap();
+    let n = block_on(t.read(&mut buf)).unwrap();
     assert_eq!(n, 3);
     assert_eq!(buf, [0xAA, 0xBB, 0xCC]);
     assert!(!t.has_incoming());
@@ -45,14 +70,14 @@ fn test_mock_transport_write_and_read_back() {
 fn test_mock_transport_returns_0_when_empty() {
     let mut t = MockTransport::new();
     let mut buf = [0u8; 10];
-    let n = t.read(&mut buf).unwrap();
+    let n = block_on(t.read(&mut buf)).unwrap();
     assert_eq!(n, 0, "reading from empty transport should return 0 bytes");
 }
 
 #[test]
 fn test_mock_transport_clear_written() {
     let mut t = MockTransport::new();
-    t.write(&[0x42]).unwrap();
+    block_on(t.write(&[0x42])).unwrap();
     assert_eq!(t.written(), &[0x42]);
 
     t.clear_written();
@@ -67,7 +92,7 @@ fn test_mock_transport_incremental_inject() {
     t.inject(&[0x03]);
 
     let mut buf = [0u8; 10];
-    let n = t.read(&mut buf).unwrap();
+    let n = block_on(t.read(&mut buf)).unwrap();
     assert_eq!(n, 3);
     assert_eq!(&buf[..3], &[0x01, 0x02, 0x03]);
 }
@@ -78,7 +103,7 @@ fn test_mock_transport_partial_read() {
     t.inject(&[0x01, 0x02, 0x03, 0x04, 0x05]);
 
     let mut buf = [0u8; 2];
-    let n = t.read(&mut buf).unwrap();
+    let n = block_on(t.read(&mut buf)).unwrap();
     assert_eq!(n, 2);
     assert_eq!(buf, [0x01, 0x02]);
 
@@ -86,7 +111,7 @@ fn test_mock_transport_partial_read() {
     assert!(t.has_incoming());
 
     let mut buf2 = [0u8; 10];
-    let n2 = t.read(&mut buf2).unwrap();
+    let n2 = block_on(t.read(&mut buf2)).unwrap();
     assert_eq!(n2, 3);
     assert_eq!(&buf2[..3], &[0x03, 0x04, 0x05]);
     assert!(!t.has_incoming());
@@ -95,20 +120,20 @@ fn test_mock_transport_partial_read() {
 #[test]
 fn test_mock_transport_flush_is_noop() {
     let mut t = MockTransport::new();
-    assert!(t.flush().is_ok());
+    block_on(t.flush()).unwrap();
 }
 
 #[test]
 fn test_mock_transport_multiple_writes() {
     let mut t = MockTransport::new();
-    t.write(&[0x01]).unwrap();
-    t.write(&[0x02]).unwrap();
-    t.write(&[0x03]).unwrap();
+    block_on(t.write(&[0x01])).unwrap();
+    block_on(t.write(&[0x02])).unwrap();
+    block_on(t.write(&[0x03])).unwrap();
     assert_eq!(t.written(), &[0x01, 0x02, 0x03]);
 
     // Clear and write again
     t.clear_written();
-    t.write(&[0xAA]).unwrap();
+    block_on(t.write(&[0xAA])).unwrap();
     assert_eq!(t.written(), &[0xAA]);
 }
 
@@ -121,11 +146,11 @@ fn test_mock_transport_full_lifecycle() {
 
     // 2. Read it back
     let mut buf = [0u8; 7];
-    let n = t.read(&mut buf).unwrap();
+    let n = block_on(t.read(&mut buf)).unwrap();
     assert_eq!(n, 7);
 
     // 3. Write a response
-    t.write(&[0x0A, 0xBF, 0x04]).unwrap();
+    block_on(t.write(&[0x0A, 0xBF, 0x04])).unwrap();
     assert_eq!(t.written(), &[0x0A, 0xBF, 0x04]);
 
     // 4. Clear written
@@ -222,12 +247,12 @@ fn test_mock_network_tracks_connect_params() {
 
 #[test]
 fn test_mock_transport_implements_trait() {
-    fn use_transport<T: Transport>(t: &mut T) {
-        t.write(&[0x01]).unwrap();
-        t.flush().unwrap();
+    async fn use_transport<T: Transport>(t: &mut T) {
+        t.write(&[0x01]).await.unwrap();
+        t.flush().await.unwrap();
     }
     let mut mock = MockTransport::new();
-    use_transport(&mut mock);
+    block_on(use_transport(&mut mock));
     assert_eq!(mock.written(), &[0x01]);
 }
 

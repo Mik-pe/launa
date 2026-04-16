@@ -51,7 +51,7 @@ impl SimTransport {
 }
 
 impl Transport for SimTransport {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, TransportError> {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, TransportError> {
         let n = self.spa_to_controller.len().min(buf.len());
         for byte in buf.iter_mut().take(n) {
             *byte = self.spa_to_controller.pop_front().unwrap();
@@ -59,12 +59,12 @@ impl Transport for SimTransport {
         Ok(n)
     }
 
-    fn write(&mut self, data: &[u8]) -> Result<(), TransportError> {
+    async fn write(&mut self, data: &[u8]) -> Result<(), TransportError> {
         self.controller_to_spa.extend(data.iter().copied());
         Ok(())
     }
 
-    fn flush(&mut self) -> Result<(), TransportError> {
+    async fn flush(&mut self) -> Result<(), TransportError> {
         Ok(())
     }
 }
@@ -72,6 +72,32 @@ impl Transport for SimTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use launa_hal::Transport;
+
+    /// Helper: poll an async future to completion synchronously.
+    /// SimTransport's async methods always complete immediately,
+    /// so this is safe for test use.
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+        fn dummy_raw_waker() -> RawWaker {
+            fn no_op(_: *const ()) {}
+            fn clone(_: *const ()) -> RawWaker {
+                dummy_raw_waker()
+            }
+            static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
+            RawWaker::new(std::ptr::null(), &VTABLE)
+        }
+
+        let waker = unsafe { Waker::from_raw(dummy_raw_waker()) };
+        let mut cx = Context::from_waker(&waker);
+
+        let mut future = std::pin::pin!(future);
+        match future.as_mut().poll(&mut cx) {
+            Poll::Ready(val) => val,
+            Poll::Pending => panic!("SimTransport async method should not return Pending"),
+        }
+    }
 
     #[test]
     fn test_bidirectional_flow() {
@@ -82,12 +108,12 @@ mod tests {
 
         // Controller reads it
         let mut buf = [0u8; 16];
-        let n = transport.read(&mut buf).unwrap();
+        let n = block_on(transport.read(&mut buf)).unwrap();
         assert_eq!(n, 3);
         assert_eq!(&buf[..3], &[0x7E, 0x01, 0x7E]);
 
         // Controller writes a command
-        transport.write(&[0x7E, 0x02, 0x7E]).unwrap();
+        block_on(transport.write(&[0x7E, 0x02, 0x7E])).unwrap();
 
         // Spa reads controller's output
         let outgoing = transport.take_from_controller();
@@ -98,7 +124,7 @@ mod tests {
     fn test_empty_read() {
         let mut transport = SimTransport::new();
         let mut buf = [0u8; 16];
-        let n = transport.read(&mut buf).unwrap();
+        let n = block_on(transport.read(&mut buf)).unwrap();
         assert_eq!(n, 0);
     }
 
@@ -108,11 +134,11 @@ mod tests {
         transport.inject_from_spa(&[1, 2, 3, 4, 5]);
 
         let mut buf = [0u8; 3];
-        let n = transport.read(&mut buf).unwrap();
+        let n = block_on(transport.read(&mut buf)).unwrap();
         assert_eq!(n, 3);
         assert_eq!(&buf, &[1, 2, 3]);
 
-        let n = transport.read(&mut buf).unwrap();
+        let n = block_on(transport.read(&mut buf)).unwrap();
         assert_eq!(n, 2);
         assert_eq!(&buf[..2], &[4, 5]);
     }

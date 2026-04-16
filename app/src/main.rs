@@ -47,7 +47,7 @@ use embassy_sync::channel::Channel;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
-use embedded_io_async::{Read as _, Write as _};
+use launa_hal::Transport as _;
 use launa_core::{AppAction, SpaApp};
 use launa_protocol::command::Command;
 use launa_protocol::frame::{Frame, FrameDecoder};
@@ -149,7 +149,7 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
 
         // Check for outgoing data after reads
         if let Ok(data) = uart_rx.try_receive() {
-            if let Err(e) = transport.write_all(&data).await {
+            if let Err(e) = transport.write(&data).await {
                 error!("UART write error: {:?}", e);
             }
         }
