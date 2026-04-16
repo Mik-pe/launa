@@ -1,0 +1,15 @@
+{
+  "featureId": "update-tasks-md-core",
+  "reviewedAt": "2026-04-16T15:30:00.000Z",
+  "commitId": "1e4706c",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The worker correctly identified 4 unchecked items in TASKS.md that correspond to completed features and checked them off. Each check was verified against actual code evidence before the edit was made. The diff shows exactly 4 lines changed from `- [ ]` to `- [x]`, with updated descriptions reflecting the completed work. All remaining unchecked items in TASKS.md are legitimately incomplete hardware/field-testing tasks (USB driver installation, bench wiring, field sessions) that are not part of any completed software feature.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS — The update-tasks-md-core feature correctly checked off 4 software items in TASKS.md that were previously left unchecked despite corresponding to completed features: (1) Content-Length OTA validation, (2) Cargo.lock un-gitignore, (3) try_extract_packet drain fix, (4) EspOtaFlash otadata read-modify-write fix. The worker verified each item against actual code (Content-Length present in app/src/ota.rs, Cargo.lock tracked in git, drain() in launa-mqtt/src/packet.rs, read-modify-write in launa-esp-ota/src/lib.rs) before marking it complete. All remaining unchecked items are hardware/field-testing tasks that cannot be completed in software. The TASKS.md formatting is consistent throughout. No items were incorrectly checked off, and no completed software items were missed."
+}
