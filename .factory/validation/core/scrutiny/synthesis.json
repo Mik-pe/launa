@@ -1,0 +1,98 @@
+{
+  "milestone": "core",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "cargo test --workspace",
+      "exitCode": 0,
+      "observation": "All workspace tests pass: 27 launa-core, 34 launa-esp-ota, 18 hal_tests, 86 integration_tests, 30 sim_tests, 61 launa-mqtt, 14 launa-ota, 82 launa-protocol, 27 fuzz_tests, 17 property_tests, 63 launa-sim, 2 doc-tests. Total: 461+ tests pass."
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "cargo check --workspace",
+      "exitCode": 0,
+      "observation": "Workspace compiles cleanly with no errors or warnings."
+    },
+    "lint": {
+      "passed": true,
+      "command": "cargo fmt --check",
+      "exitCode": 0,
+      "observation": "No formatting violations."
+    }
+  },
+  "reviewsSummary": {
+    "total": 5,
+    "passed": 5,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "nonBlockingIssues": [
+    {
+      "featureId": "fix-stale-probe-lightweight",
+      "severity": "non_blocking",
+      "description": "last_probe_time is unconditionally set even when client_id is None (no frame sent). Pre-existing behavior, not a regression. Practically benign since stale detection requires last_status_time to be Some.",
+      "file": "crates/launa-core/src/lib.rs",
+      "line": 780
+    },
+    {
+      "featureId": "unify-transport-trait-async",
+      "severity": "non_blocking",
+      "description": "block_on() helper duplicated identically in 3 test files (launa-hal/tests/hal_tests.rs, launa-sim/src/sim_transport.rs, launa-integration-tests/tests/sim_tests.rs). Could be extracted to a shared test utility.",
+      "file": "crates/launa-hal/tests/hal_tests.rs",
+      "line": 11
+    },
+    {
+      "featureId": "unify-transport-trait-async",
+      "severity": "suggestion",
+      "description": "app/src/transport.rs write() silently ignores flush errors with `let _ = self.uart.flush()`. Pre-existing but a log warning on flush failure would be helpful for diagnostics.",
+      "file": "app/src/transport.rs",
+      "line": 52
+    },
+    {
+      "featureId": "verify-esp-ota-fixes",
+      "severity": "non_blocking",
+      "description": "Overflow check in write() uses write_offset + chunk.len() but doesn't account for pending_bytes. In practice partitions are 1.25 MiB and firmware images are smaller, so extremely unlikely to cause overflow.",
+      "file": "crates/launa-esp-ota/src/lib.rs",
+      "line": 343
+    },
+    {
+      "featureId": "verify-esp-ota-fixes",
+      "severity": "non_blocking",
+      "description": "begin() resets pending_len to 0 but does not clear pending_bytes array. Functionally safe since pending_len gates reads, but explicit clearing would be more defensive.",
+      "file": "crates/launa-esp-ota/src/lib.rs",
+      "line": 318
+    },
+    {
+      "featureId": "add-firmware-versioning",
+      "severity": "non_blocking",
+      "description": "publish_discovery() hand-rolls device_info JSON with format!() including sw_version without escape_json_string(). Low-risk since CARGO_PKG_VERSION is from Cargo.toml (controlled source). This will be addressed by the refactor-discovery-to-builder feature in milestone mqtt.",
+      "file": "app/src/mqtt_client.rs",
+      "line": 617
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Fixed inaccuracy in architecture.md: 'MqttClient uses DiscoveryBuilder from launa-mqtt for HA auto-discovery' → corrected to state that publish_discovery() hand-rolls discovery configs and does NOT use DiscoveryBuilder (refactor planned for milestone 2).",
+      "sourceFeature": "add-firmware-versioning"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Consider adding a convention note about the block_on() pattern for testing async traits: when testing async Transport methods in synchronous test contexts, workers should use the manual RawWaker + single-poll block_on() pattern. Could also suggest extracting to a shared utility.",
+      "evidence": "block_on() helper duplicated identically in 3 test files across crates (launa-hal, launa-sim, launa-integration-tests). Feature unify-transport-trait-async introduced this pattern.",
+      "isSystemic": true
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "architecture.md already documents CommandTracker handles both Fahrenheit and Celsius temperature confirmation",
+      "reason": "already-documented"
+    }
+  ],
+  "previousRound": null
+}

@@ -1,0 +1,67 @@
+{
+  "featureId": "unify-transport-trait-async",
+  "milestone": "core",
+  "reviewedAt": "2026-04-16T14:15:00Z",
+  "commitId": "f16d1f2",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean, well-executed refactoring that unifies the Transport trait to async. The trait definition, all 3 implementations (MockTransport, SimTransport, Rs485Transport), and all callers were updated correctly. All 422 workspace tests pass, the ESP32 app compiles, and formatting is clean.",
+    "issues": [
+      {
+        "severity": "non_blocking",
+        "description": "The `block_on()` helper is duplicated identically in 3 files (launa-hal/tests/hal_tests.rs, launa-sim/src/sim_transport.rs, launa-integration-tests/tests/sim_tests.rs). Consider extracting to a shared test utility to reduce duplication.",
+        "file": "crates/launa-hal/tests/hal_tests.rs",
+        "line": 11
+      },
+      {
+        "severity": "suggestion",
+        "description": "In app/src/transport.rs, `write()` silently ignores flush errors with `let _ = self.uart.flush()`. The original code did this too, but since this is a critical RS-485 DE pin timing path, a log warning on flush failure would be helpful for diagnostics.",
+        "file": "app/src/transport.rs",
+        "line": 52
+      }
+    ]
+  },
+  "assertionChecks": {
+    "VAL-CORE-010": {
+      "description": "Transport trait uses async read/write signatures",
+      "status": "pass",
+      "evidence": "crates/launa-hal/src/transport.rs defines `async fn read(&mut self, buf: &mut [u8]) -> Result<usize, TransportError>`, `async fn write(&mut self, data: &[u8]) -> Result<(), TransportError>`, and `async fn flush(&mut self) -> Result<(), TransportError>`"
+    },
+    "VAL-CORE-011": {
+      "description": "MockTransport implements async Transport trait",
+      "status": "pass",
+      "evidence": "MockTransport in crates/launa-hal/src/transport.rs:69 implements `super::Transport` with `async fn read`, `async fn write`, `async fn flush`. All existing MockTransport tests pass via block_on() wrapper."
+    },
+    "VAL-CORE-012": {
+      "description": "SimTransport updated to async",
+      "status": "pass",
+      "evidence": "SimTransport in crates/launa-sim/src/sim_transport.rs:53 implements `Transport` with `async fn read`, `async fn write`, `async fn flush`. Internal unit tests updated to use block_on() helper."
+    },
+    "VAL-CORE-013": {
+      "description": "All callers of Transport compile with async trait",
+      "status": "pass",
+      "evidence": "hal_tests.rs (18 tests), sim_tests.rs (86+ tests), and sim_transport.rs internal tests all updated to use block_on(). app/src/main.rs uses .await in async context. cargo test --workspace (422 tests) and cargo check --workspace both pass."
+    },
+    "VAL-CORE-014": {
+      "description": "Production app Transport implements launa-hal trait",
+      "status": "pass",
+      "evidence": "app/src/transport.rs:30 `impl Transport for Rs485Transport` — directly implements launa_hal::Transport, removing the previous embedded_io_async Read/Write adapter. ESP32 app compiles with `cargo +esp check`."
+    }
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The `block_on()` pattern (manual RawWaker + single poll) is duplicated in 3 test files for testing async Transport methods synchronously. This pattern may be needed again if other traits become async. It could be documented in AGENTS.md as the project's approach for testing async traits in synchronous test contexts.",
+      "evidence": "Identical block_on() helpers in crates/launa-hal/tests/hal_tests.rs:11, crates/launa-sim/src/sim_transport.rs:80, crates/launa-integration-tests/tests/sim_tests.rs:20"
+    },
+    {
+      "area": "skills",
+      "observation": "Worker followed the rust-worker skill procedure correctly. No deviations. All verification steps completed: cargo test --workspace (422 pass), cargo check --workspace (clean), cd app && cargo +esp check (clean), cargo fmt --check (clean).",
+      "evidence": "Transcript shows systematic approach: read context, read source, run baseline tests, implement changes, verify each step, commit."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The Transport trait unification is well-implemented. All 5 assertions (VAL-CORE-010 through VAL-CORE-014) are satisfied. The trait is properly async, all 3 implementations (Mock, Sim, Rs485) implement it correctly, all callers are updated, and the production app implements the unified trait directly. Two minor notes: the block_on() helper is triplicated (non-blocking — a future cleanup opportunity), and the uart flush error is silently ignored (pre-existing behavior, not introduced by this change). All 422 workspace tests pass and the ESP32 app compiles cleanly."
+}

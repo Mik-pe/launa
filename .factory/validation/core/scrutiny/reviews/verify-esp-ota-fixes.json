@@ -1,0 +1,21 @@
+{
+  "featureId": "verify-esp-ota-fixes",
+  "milestone": "core",
+  "status": "pass",
+  "issues": [
+    {
+      "severity": "non_blocking",
+      "description": "Overflow check in write() uses `write_offset + chunk.len()` but actual flash write position includes pending bytes from prior partial-word buffering. When pending_len > 0, the combined data is `pending_len + chunk.len()`, so the correct boundary check should be `write_offset + pending_len + chunk.len()`. In practice the target partitions are 1.25 MiB and firmware images are smaller, so this is extremely unlikely to cause a real overflow in production, but it's a correctness gap.",
+      "file": "crates/launa-esp-ota/src/lib.rs",
+      "line": 343
+    },
+    {
+      "severity": "non_blocking",
+      "description": "begin() resets pending_len to 0 but does not clear the pending_bytes array. This is functionally safe because pending_len gates all reads from pending_bytes, but explicit clearing would be more defensive against future code changes.",
+      "file": "crates/launa-esp-ota/src/lib.rs",
+      "line": 318
+    }
+  ],
+  "sharedStateObservations": [],
+  "summary": "The verify-esp-ota-fixes feature (commit c9e69e0) correctly fixes a real data corruption bug in EspOtaFlash::write() and adds comprehensive test coverage. The implementation adds pending_bytes/pending_len fields to buffer partial-word data between consecutive writes, ensuring contiguous data layout. All 15 validation assertions (VAL-CORE-015 through VAL-CORE-029) are covered: 8 new tests cover write offset tracking, CRC32 MPEG-2 verification, and sector boundary writes; 7 pre-existing tests cover otadata read-modify-write, CRC reset, hash mismatch, and basic OTA cycle. All 34 launa-esp-ota tests pass. Two non-blocking issues noted: (1) overflow check doesn't account for pending bytes when computing effective write position, (2) begin() doesn't clear pending_bytes array (only pending_len). Neither has practical impact given partition sizes but are minor correctness gaps."
+}

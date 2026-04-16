@@ -1,0 +1,45 @@
+{
+  "featureId": "fix-stale-probe-lightweight",
+  "milestone": "core",
+  "reviewedAt": "2026-04-16T12:00:00Z",
+  "commitId": "9328492",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "issues": [
+    {
+      "severity": "non_blocking",
+      "description": "When client_id is None, last_probe_time is set but no frame is sent. This means the probe timer is 'consumed' without probing. In practice this is benign because stale detection requires last_status_time to be Some (i.e., we've received at least one status), which implies registration has completed and client_id should be Some. But there's a theoretical window between status reception and client_id assignment (or after NewClientQuery resets client_id) where probes would silently do nothing. The old code also had this issue (it sent a hardcoded frame independent of client_id), so this is not a regression.",
+      "file": "crates/launa-core/src/lib.rs",
+      "line": 780
+    }
+  ],
+  "codeReview": {
+    "summary": "Clean, minimal change that correctly replaces ConfigurationRequest with NothingToSend in the stale probe path. 4 well-structured tests cover all 4 validation assertions. Tests follow TDD (written first, verified to fail, then implementation added). Code follows existing patterns (same NothingToSend usage as in Ready handler at line 696).",
+    "issues": [
+      {
+        "file": "crates/launa-core/src/lib.rs",
+        "line": 780,
+        "severity": "non_blocking",
+        "description": "last_probe_time is unconditionally set even when client_id is None (no frame sent). Pre-existing behavior, not a regression."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "tests": {
+    "added": [
+      {
+        "file": "crates/launa-core/src/lib.rs",
+        "cases": [
+          { "name": "test_stale_probe_not_configuration_request", "verifies": "VAL-CORE-006" },
+          { "name": "test_stale_probe_uses_lightweight_command", "verifies": "VAL-CORE-007" },
+          { "name": "test_stale_probe_interval_preserved", "verifies": "VAL-CORE-008" },
+          { "name": "test_stale_threshold_unchanged_after_probe_fix", "verifies": "VAL-CORE-009" }
+        ]
+      }
+    ],
+    "verified": true
+  },
+  "summary": "PASS. The stale probe in SpaApp::tick() was correctly changed from ConfigurationRequest [0x0A, 0xBF, 0x04] to NothingToSend { client_id }, which is a lightweight no-op command already used elsewhere in the codebase (Ready handler). The 5s probe interval (STALE_PROBE_INTERVAL_MS) and 30s stale threshold (STALE_THRESHOLD_MS) are unchanged. 4 new tests directly verify all 4 validation assertions (VAL-CORE-006 through VAL-CORE-009), and all 6 stale-related tests pass (2 pre-existing + 4 new). The worker followed the rust-worker skill procedure (TDD: tests first, then implementation) and the handoff confirms zero regressions across 442 workspace tests. One minor non-blocking observation: last_probe_time is set even when client_id is None, but this is pre-existing behavior and practically benign."
+}

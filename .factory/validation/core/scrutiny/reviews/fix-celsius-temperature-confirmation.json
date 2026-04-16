@@ -1,0 +1,23 @@
+{
+  "featureId": "fix-celsius-temperature-confirmation",
+  "milestone": "core",
+  "reviewedAt": "2026-04-16T14:30:00.000Z",
+  "commitId": "891200c",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean, well-targeted fix for the Celsius temperature confirmation bug. The implementation correctly multiplies set_temp back by the temp_divisor (2.0 for Celsius, 1.0 for Fahrenheit) before casting to u8 and comparing against the raw wire value. This is the inverse of the decode operation in StatusUpdate::parse() where set_temp = payload[20] as f32 / temp_divisor. Five new tests cover all five validation assertions: Fahrenheit confirmation (VAL-CORE-001), Celsius even raw (VAL-CORE-002), Celsius odd raw (VAL-CORE-003), Celsius boundary odd (VAL-CORE-004), and mismatch retry for both scales (VAL-CORE-005). All 27 launa-core tests pass. Worker followed TDD methodology per transcript.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "library",
+      "observation": "The architecture.md already documents that CommandTracker handles both Fahrenheit and Celsius temperature confirmation by comparing raw wire values. This is good — the knowledge was captured after this fix.",
+      "evidence": ".factory/library/architecture.md under 'launa-core' section: 'CommandTracker correctly handles both Fahrenheit and Celsius temperature confirmation by comparing raw wire values.'"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "issues": [],
+  "summary": "PASS. The fix correctly addresses the Celsius temperature confirmation bug by multiplying set_temp back by the temp_divisor before comparing to the raw wire value. The approach is the exact inverse of StatusUpdate::parse() and is mathematically sound for all integer raw values. All five validation assertions are covered by dedicated tests. Code quality is high: clear comments, well-structured test helpers, and the fix is minimal and focused. No blocking or non-blocking issues found."
+}

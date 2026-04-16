@@ -18,7 +18,7 @@ How the launa system works at a high level.
 
 - ESP32 firmware binary using esp-hal 1.0 + embassy + esp-radio + esp-nvs + esp-storage
 - 32 KiB heap via esp_alloc — all allocations must be bounded
-- MqttClient uses DiscoveryBuilder from launa-mqtt for HA auto-discovery
+- MqttClient hand-rolls HA auto-discovery JSON configs in publish_discovery() (does NOT use launa-mqtt's DiscoveryBuilder — refactor planned as milestone-2 task)
 - Firmware version (FIRMWARE_VERSION const from env!("CARGO_PKG_VERSION")) embedded in discovery, state, and diagnostics
 - Panic handler logs + waits 500ms + software_reset() instead of infinite loop
 - MQTT command rate limiting protects spa bus

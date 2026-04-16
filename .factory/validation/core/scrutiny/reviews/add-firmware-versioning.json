@@ -1,0 +1,56 @@
+{
+  "featureId": "add-firmware-versioning",
+  "milestone": "core",
+  "reviewedAt": "2026-04-16T14:10:00Z",
+  "commitId": "d30c9cc",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean, minimal implementation that correctly wires FIRMWARE_VERSION to all three MQTT surfaces (state JSON, HA discovery, diagnostics). The feature leverages existing test coverage in launa-mqtt rather than adding redundant tests in the app crate, which is appropriate since app/ cannot run unit tests on native.",
+    "issues": [
+      {
+        "file": "app/src/mqtt_client.rs",
+        "line": 617,
+        "severity": "non_blocking",
+        "description": "The publish_discovery() method hand-rolls the device_info JSON string with embedded sw_version using format!(), while launa-mqtt's DiscoveryBuilder already handles sw_version via serde_json. This is a pre-existing pattern (not introduced by this commit), but the hand-rolled JSON is fragile — if FIRMWARE_VERSION contained unescaped quotes, the JSON would break. The existing launa-mqtt tests cover this for status_to_json via escape_json_string(), but the hand-rolled discovery configs in mqtt_client.rs have no such escaping. This is low-risk since CARGO_PKG_VERSION comes from Cargo.toml (a controlled source), but worth noting for future refactoring to use DiscoveryBuilder."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The app/src/mqtt_client.rs publish_discovery() hand-rolls JSON device_info strings instead of using launa-mqtt's DiscoveryBuilder. This architectural pattern (duplicate hand-rolled discovery vs. using the library's builder) is documented in architecture.md as 'MqttClient uses DiscoveryBuilder from launa-mqtt for HA auto-discovery', which is inaccurate — publish_discovery() does NOT use DiscoveryBuilder, it hand-rolls all discovery config JSON strings inline.",
+      "evidence": "app/src/mqtt_client.rs:600-640 hand-rolls all discovery configs with format!() strings; crates/launa-mqtt/src/discovery.rs has DiscoveryBuilder that does the same thing properly. architecture.md line 'MqttClient uses DiscoveryBuilder from launa-mqtt for HA auto-discovery' is misleading."
+    }
+  ],
+  "assertions": {
+    "VAL-CORE-030": {
+      "description": "Firmware version embedded in binary",
+      "status": "pass",
+      "evidence": "app/src/main.rs:71 defines `const FIRMWARE_VERSION: &str = env!(\"CARGO_PKG_VERSION\");` which is evaluated at compile time and embedded in the binary. Cargo.toml version is 0.1.0."
+    },
+    "VAL-CORE-031": {
+      "description": "Firmware version included in MQTT state JSON",
+      "status": "pass",
+      "evidence": "app/src/mqtt_client.rs:574 passes `Some(crate::FIRMWARE_VERSION)` to `status_to_json()` as the firmware_version parameter. launa-mqtt state.rs:91-93 correctly formats this as a quoted JSON string. Test `test_status_to_json_with_firmware_version` verifies this."
+    },
+    "VAL-CORE-032": {
+      "description": "Firmware version included in HA discovery config",
+      "status": "pass",
+      "evidence": "app/src/mqtt_client.rs:617-618 includes `\"sw_version\":\"{}\"` in the device_info format string, populated with `crate::FIRMWARE_VERSION`. This sw_version appears in every HA discovery config payload via the device_info variable."
+    },
+    "VAL-CORE-033": {
+      "description": "Firmware version included in diagnostics payload",
+      "status": "pass",
+      "evidence": "app/src/main.rs:389 adds `\"fw_version\":\"{}\"` to the diagnostics JSON format string, populated with FIRMWARE_VERSION constant at line 398."
+    },
+    "VAL-CORE-034": {
+      "description": "Firmware version null-safe in state JSON",
+      "status": "pass",
+      "evidence": "launa-mqtt state.rs:91-93 handles `None` by producing the JSON literal `null` (unquoted), and `Some(v)` by producing a properly escaped quoted string. Test `test_status_to_json_all_fields` verifies firmware_version is null when None is passed. Test `test_escape_json_string_firmware_with_special_chars` verifies proper escaping."
+    }
+  },
+  "addressesFailureFrom": null,
+  "summary": "The add-firmware-versioning feature is correctly implemented. The FIRMWARE_VERSION const is properly defined using env!(\"CARGO_PKG_VERSION\") in app/src/main.rs and wired to all three required surfaces: MQTT state JSON (via status_to_json), HA auto-discovery configs (via sw_version in device_info), and diagnostics payload (via fw_version field). Existing test coverage in launa-mqtt adequately covers the null-safety and string-escaping requirements. One non-blocking concern: the hand-rolled JSON in publish_discovery() doesn't escape the version string (unlike status_to_json which uses escape_json_string), but this is low-risk since CARGO_PKG_VERSION is a controlled value from Cargo.toml. The worker followed the rust-app-worker skill procedure correctly, ran all required verification commands, and the feature passes all 5 validation assertions."
+}
