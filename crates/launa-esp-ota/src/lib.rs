@@ -94,6 +94,13 @@ pub struct EspOtaFlash<S> {
     firmware_crc: u32,
     /// Whether the first chunk's ESP32 image header magic has been validated.
     first_chunk_validated: bool,
+    /// Buffered partial word bytes not yet flushed to flash.
+    /// NOR flash requires word-aligned (4-byte) writes; this buffer holds
+    /// 0–3 bytes that didn't fit in the last aligned write. On the next
+    /// `write()` call they are prepended to form complete words.
+    pending_bytes: [u8; 3],
+    /// Number of valid bytes in `pending_bytes` (0..=3).
+    pending_len: usize,
 }
 
 impl<S> EspOtaFlash<S>
@@ -119,6 +126,8 @@ where
             in_progress: false,
             firmware_crc: 0xFFFFFFFF,
             first_chunk_validated: false,
+            pending_bytes: [0xFF; 3],
+            pending_len: 0,
         }
     }
 
@@ -305,6 +314,7 @@ where
         self.in_progress = true;
         self.firmware_crc = 0xFFFFFFFF;
         self.first_chunk_validated = false;
+        self.pending_len = 0;
 
         info!("OTA: target partition erased");
         Ok(())
@@ -343,12 +353,43 @@ where
             });
         }
 
-        self.aligned_write(self.write_offset, chunk)?;
-
-        // Accumulate CRC of firmware data
+        // Accumulate CRC of firmware data (before any buffering)
         self.firmware_crc = crc32_update(self.firmware_crc, chunk);
 
-        self.write_offset += chunk.len() as u32;
+        // Prepend any pending partial-word bytes from the previous write.
+        let combined: alloc::vec::Vec<u8>;
+        let data = if self.pending_len > 0 {
+            combined = self.pending_bytes[..self.pending_len]
+                .iter()
+                .chain(chunk.iter())
+                .copied()
+                .collect();
+            self.pending_len = 0;
+            &combined[..]
+        } else {
+            chunk
+        };
+
+        // Split data into whole words and a trailing partial word.
+        let whole_words = data.len() / WORD_SIZE as usize;
+        let remainder = data.len() % WORD_SIZE as usize;
+
+        // Write all whole-word-aligned chunks.
+        if whole_words > 0 {
+            let aligned_end = whole_words * WORD_SIZE as usize;
+            self.aligned_write(self.write_offset, &data[..aligned_end])?;
+            self.write_offset += aligned_end as u32;
+        }
+
+        // Buffer any trailing partial word for the next write.
+        if remainder > 0 {
+            let tail_start = whole_words * WORD_SIZE as usize;
+            self.pending_bytes[..remainder].copy_from_slice(&data[tail_start..data.len()]);
+            self.pending_len = remainder;
+            // Note: write_offset does NOT advance for pending bytes yet —
+            // they haven't been committed to flash.
+        }
+
         self.bytes_written += chunk.len() as u32;
 
         if self.bytes_written % (32 * 1024) < chunk.len() as u32 {
@@ -371,6 +412,15 @@ where
             warn!("OTA: finalize called with zero bytes written — refusing to boot into empty partition");
             self.in_progress = false;
             return Err(OtaError::FinalizeFailed);
+        }
+
+        // Flush any remaining partial-word bytes to flash.
+        if self.pending_len > 0 {
+            let pending: [u8; 3] = self.pending_bytes;
+            let len = self.pending_len;
+            self.aligned_write(self.write_offset, &pending[..len])?;
+            self.write_offset += len as u32;
+            self.pending_len = 0;
         }
 
         info!(
@@ -959,5 +1009,271 @@ mod tests {
         ota.set_boot_partition(Partition::Ota0).unwrap(); // seq increments again
         let detected = ota.detect_running_partition().unwrap();
         assert_eq!(detected, Partition::Ota0);
+    }
+
+    // ── Write offset / bytes_written tracking tests ────────────────────
+
+    #[test]
+    fn test_unaligned_consecutive_writes_correct() {
+        // VAL-CORE-015: Write chunk of 5 bytes then chunk of 3 bytes.
+        // Read back first 8 bytes must match exact data with no corruption
+        // from alignment padding.
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        ota.begin().unwrap();
+
+        let chunk1: &[u8] = &[0xE9, 0x01, 0x02, 0x03, 0x04]; // 5 bytes (unaligned)
+        let chunk2: &[u8] = &[0x05, 0x06, 0x07]; // 3 bytes (unaligned)
+        ota.write(chunk1).unwrap();
+        ota.write(chunk2).unwrap();
+
+        // Read back data from target partition
+        let inner = &ota.flash;
+        let base = OTA_1_OFFSET as usize;
+        let first_8 = &inner.data[base..base + 8];
+        assert_eq!(
+            first_8,
+            &[0xE9, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07],
+            "consecutive unaligned writes must produce correct data"
+        );
+
+        // Padding bytes (bytes 8..12) should be 0xFF
+        let padding = &inner.data[base + 8..base + 12];
+        assert!(
+            padding.iter().all(|&b| b == 0xFF),
+            "padding bytes should be 0xFF, got {:?}",
+            padding
+        );
+    }
+
+    #[test]
+    fn test_single_byte_chunks_write_offset() {
+        // VAL-CORE-016: Write 8 individual single-byte chunks.
+        // Read back must show sequential data at correct positions.
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        ota.begin().unwrap();
+
+        let data: [u8; 8] = [0xE9, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22];
+        for (i, &byte) in data.iter().enumerate() {
+            ota.write(&[byte]).unwrap();
+            // bytes_written advances by 1 each time
+            assert_eq!(
+                ota.bytes_written,
+                (i + 1) as u32,
+                "bytes_written after byte {}",
+                i
+            );
+        }
+
+        // After 8 single-byte writes:
+        // - First 4 bytes form word 0, flushed to flash at offset 0
+        // - Next 4 bytes form word 1, flushed to flash at offset 4
+        // So write_offset should be 8 (two complete words)
+        assert_eq!(
+            ota.write_offset, 8,
+            "write_offset should be 8 after 8 bytes"
+        );
+        assert_eq!(ota.pending_len, 0, "no pending bytes after 8 (aligned)");
+
+        // Read back from flash — data should be contiguous
+        let inner = &ota.flash;
+        let base = OTA_1_OFFSET as usize;
+        assert_eq!(
+            &inner.data[base..base + 8],
+            &[0xE9, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22],
+            "8 single-byte writes should produce contiguous data"
+        );
+    }
+
+    #[test]
+    fn test_aligned_chunks_no_padding_gap() {
+        // VAL-CORE-017: Two 4-byte aligned writes: write_offset must be 4
+        // after first, 8 after second.
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        ota.begin().unwrap();
+
+        let chunk1: &[u8] = &[0xE9, 0x01, 0x02, 0x03]; // 4 bytes (aligned)
+        let chunk2: &[u8] = &[0x04, 0x05, 0x06, 0x07]; // 4 bytes (aligned)
+
+        ota.write(chunk1).unwrap();
+        assert_eq!(
+            ota.write_offset, 4,
+            "write_offset should be 4 after first aligned write"
+        );
+
+        ota.write(chunk2).unwrap();
+        assert_eq!(
+            ota.write_offset, 8,
+            "write_offset should be 8 after second aligned write"
+        );
+    }
+
+    #[test]
+    fn test_bytes_written_excludes_padding() {
+        // VAL-CORE-018: After writing 5 + 3 bytes, bytes_written must equal 8
+        // (actual data), while write_offset may differ due to alignment.
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        ota.begin().unwrap();
+
+        let chunk1: &[u8] = &[0xE9, 0x01, 0x02, 0x03, 0x04]; // 5 bytes
+        let chunk2: &[u8] = &[0x05, 0x06, 0x07]; // 3 bytes
+
+        ota.write(chunk1).unwrap();
+        assert_eq!(
+            ota.bytes_written, 5,
+            "bytes_written should be 5 after first chunk"
+        );
+        // 5 bytes: first 4 written as a word, 1 byte pending
+        assert_eq!(
+            ota.write_offset, 4,
+            "write_offset should be 4 (one word flushed) after 5-byte chunk"
+        );
+        assert_eq!(ota.pending_len, 1, "1 byte pending");
+
+        ota.write(chunk2).unwrap();
+        assert_eq!(
+            ota.bytes_written, 8,
+            "bytes_written should be 8 after both chunks (5+3)"
+        );
+        // Pending 1 byte + 3 new = 4 bytes = one more word → flushed
+        // write_offset: 4 + 4 = 8
+        assert_eq!(
+            ota.write_offset, 8,
+            "write_offset should be 8 after both chunks"
+        );
+        assert_eq!(ota.pending_len, 0, "no pending bytes");
+
+        // bytes_written == write_offset in this case (8 == 8)
+        // because the total (5+3=8) is word-aligned.
+        // The distinction matters more when total is unaligned:
+    }
+
+    #[test]
+    fn test_bytes_written_vs_write_offset_unaligned() {
+        // Supplementary: verify bytes_written differs from write_offset when
+        // the total data written is not word-aligned.
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        ota.begin().unwrap();
+
+        // Write exactly 5 bytes (total unaligned)
+        ota.write(&[0xE9, 0x01, 0x02, 0x03, 0x04]).unwrap();
+        assert_eq!(ota.bytes_written, 5);
+        assert_eq!(ota.write_offset, 4); // only first word flushed
+        assert_eq!(ota.pending_len, 1); // 1 byte pending
+        assert_ne!(
+            ota.bytes_written, ota.write_offset,
+            "bytes_written must differ from write_offset when pending bytes exist"
+        );
+    }
+
+    #[test]
+    fn test_unaligned_write_across_sector_boundary() {
+        // VAL-CORE-019: Write 4093 bytes then 7 bytes straddling sector
+        // boundary. Data must be correct at boundary.
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        ota.begin().unwrap();
+
+        // First chunk: 4093 bytes (ends at byte 4093, 3 bytes before sector end)
+        let mut chunk1 = alloc::vec![0xAAu8; 4093];
+        chunk1[0] = 0xE9; // Valid ESP32 image header
+                          // Put distinctive bytes at the end of chunk1 and start of chunk2
+        chunk1[4090] = 0xDE;
+        chunk1[4091] = 0xAD;
+        chunk1[4092] = 0xBE;
+
+        // Second chunk: 7 bytes straddling into next sector
+        let chunk2: &[u8] = &[0xEF, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06];
+
+        ota.write(&chunk1).unwrap();
+        ota.write(chunk2).unwrap();
+
+        // Finalize to flush any pending bytes
+        ota.finalize().unwrap();
+
+        // Read back from flash
+        let inner = &ota.flash;
+        let base = OTA_1_OFFSET as usize;
+
+        // Verify tail of chunk1
+        assert_eq!(
+            inner.data[base + 4090],
+            0xDE,
+            "byte at offset 4090 should be 0xDE"
+        );
+        assert_eq!(
+            inner.data[base + 4091],
+            0xAD,
+            "byte at offset 4091 should be 0xAD"
+        );
+        assert_eq!(
+            inner.data[base + 4092],
+            0xBE,
+            "byte at offset 4092 should be 0xBE (end of chunk1)"
+        );
+
+        // Verify start of chunk2 — data is contiguous since we buffered partial words
+        assert_eq!(
+            inner.data[base + 4093],
+            0xEF,
+            "byte at offset 4093 should be 0xEF (start of chunk2)"
+        );
+        assert_eq!(
+            inner.data[base + 4094],
+            0x01,
+            "byte at offset 4094 should be 0x01"
+        );
+
+        // bytes_written tracks actual data
+        assert_eq!(
+            ota.bytes_written, 4100,
+            "bytes_written should be 4100 (4093 + 7)"
+        );
+    }
+
+    // ── CRC-32/MPEG-2 verification tests ───────────────────────────────
+
+    #[test]
+    fn test_crc32_mpeg2_known_vector() {
+        // VAL-CORE-021: CRC-32/MPEG-2 of "123456789" must equal 0x0376E6E7.
+        let data = b"123456789";
+        let result = crc32(data);
+        assert_eq!(
+            result, 0x0376E6E7,
+            "CRC-32/MPEG-2 of '123456789' should be 0x0376E6E7, got {:#010X}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_crc32_incremental_matches_oneshot() {
+        // VAL-CORE-022: Incremental CRC across chunks must equal one-shot CRC
+        // of concatenated data.
+        let chunk1 = b"The quick brown ";
+        let chunk2 = b"fox jumps over ";
+        let chunk3 = b"the lazy dog";
+
+        // One-shot
+        let mut all = alloc::vec![];
+        all.extend_from_slice(chunk1);
+        all.extend_from_slice(chunk2);
+        all.extend_from_slice(chunk3);
+        let expected = crc32(&all);
+
+        // Incremental
+        let mut crc = 0xFFFFFFFFu32;
+        crc = crc32_update(crc, chunk1);
+        crc = crc32_update(crc, chunk2);
+        crc = crc32_update(crc, chunk3);
+
+        assert_eq!(
+            crc, expected,
+            "incremental CRC ({:#010X}) must match one-shot ({:#010X})",
+            crc, expected
+        );
     }
 }
