@@ -9,7 +9,6 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::format;
-use alloc::string::ToString;
 use core::cell::UnsafeCell;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{IpAddress, IpEndpoint, Ipv4Address, Stack};
@@ -17,6 +16,7 @@ use embassy_time::{Duration, Instant, Timer};
 use embedded_io_async::{self, Read, Write, ErrorType};
 use launa_mqtt::topics::TopicBuilder;
 use launa_mqtt::command_parser::{self, ParseResult};
+use launa_mqtt::discovery::DiscoveryBuilder;
 use launa_mqtt::state::status_to_json;
 use launa_protocol::command::{Command, validate_set_temperature};
 use launa_protocol::status::{TemperatureScale, TempRange, StatusUpdate};
@@ -607,103 +607,24 @@ impl MqttClient {
     }
 
     pub async fn publish_discovery(&mut self) -> Result<(), MqttError> {
-        let device_id = self.device_id.clone();
-        let topics = TopicBuilder::new(&device_id);
-        let state_topic = topics.state_topic();
-        let avail_topic = topics.availability_topic();
-        let cmd_topic = topics.command_topic();
+        let builder = DiscoveryBuilder::new(&self.device_id)
+            .sw_version(crate::FIRMWARE_VERSION);
 
-        let device_info = format!(
-            r#"{{"identifiers":["{}"],"name":"Launa Spa","manufacturer":"Launa","model":"BP6013G1","sw_version":"{}"}}"#,
-            device_id, crate::FIRMWARE_VERSION
-        );
+        // Build and publish one entity at a time to avoid OOM on 32 KiB heap.
+        // Each call to build() creates all 20 configs in a Vec, but we iterate
+        // and publish immediately, dropping each payload after publish.
+        let configs = builder.build_with_retain();
+        let count = configs.len();
 
-        let mut configs: Vec<(String, String, String)> = alloc::vec![
-            ("sensor".into(), "temperature".into(), format!(
-                r#"{{"device":{},"name":"Water Temperature","unique_id":"{}_temperature","device_class":"temperature","unit_of_measurement":"°F","state_topic":"{}","value_template":"{{{{value_json.current_temp}}}}","availability_topic":"{}"}}"#,
-                device_info, device_id, state_topic, avail_topic
-            )),
-            ("number".into(), "set_temperature".into(), format!(
-                r#"{{"device":{},"name":"Set Temperature","unique_id":"{}_set_temp","device_class":"temperature","unit_of_measurement":"°F","min":50,"max":104,"step":1,"state_topic":"{}","command_topic":"{}/set_temperature","value_template":"{{{{value_json.set_temp}}}}","availability_topic":"{}"}}"#,
-                device_info, device_id, state_topic, cmd_topic, avail_topic
-            )),
-            ("binary_sensor".into(), "heating".into(), format!(
-                r#"{{"device":{},"name":"Heating","unique_id":"{}_heating","device_class":"heat","state_topic":"{}","value_template":"{{{{value_json.is_heating}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
-                device_info, device_id, state_topic, avail_topic
-            )),
-        ];
-
-        // Pumps 1-6
-        for i in 1..=6u8 {
-            let name = format!("Pump {}", i);
-            let unique_id = format!("{}_pump{}", device_id, i);
-            let value_template = format!("{{{{value_json.pump{}_on}}}}", i);
-            let payload = format!(
-                r#"{{"device":{},"name":"{}","unique_id":"{}","state_topic":"{}","command_topic":"{}/pump{}","value_template":"{}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
-                device_info, name, unique_id, state_topic, cmd_topic, i, value_template, avail_topic
-            );
-            configs.push(("switch".into(), format!("pump{}", i), payload));
-        }
-
-        // Lights 1-2
-        for i in 1..=2u8 {
-            let name = if i == 1 { "Spa Light".to_string() } else { format!("Light {}", i) };
-            let unique_id = format!("{}_light{}", device_id, i);
-            let value_template = format!("{{{{value_json.light{} }}}}", i);
-            let payload = format!(
-                r#"{{"device":{},"name":"{}","unique_id":"{}","state_topic":"{}","command_topic":"{}/light{}","value_template":"{}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
-                device_info, name, unique_id, state_topic, cmd_topic, i, value_template, avail_topic
-            );
-            configs.push(("light".into(), format!("light{}", i), payload));
-        }
-
-        configs.extend_from_slice(&[
-            ("fan".into(), "blower".into(), format!(
-                r#"{{"device":{},"name":"Blower","unique_id":"{}_blower","state_topic":"{}","command_topic":"{}/blower","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
-                device_info, device_id, state_topic, cmd_topic, avail_topic
-            )),
-            ("select".into(), "heat_mode".into(), format!(
-                r#"{{"device":{},"name":"Heat Mode","unique_id":"{}_heat_mode","state_topic":"{}","command_topic":"{}/heat_mode","value_template":"{{{{value_json.heating_mode}}}}","options":["ready","rest","ready_in_rest"],"availability_topic":"{}"}}"#,
-                device_info, device_id, state_topic, cmd_topic, avail_topic
-            )),
-            ("sensor".into(), "circ_pump".into(), format!(
-                r#"{{"device":{},"name":"Circulation Pump","unique_id":"{}_circ_pump","state_topic":"{}","value_template":"{{{{value_json.circ_pump}}}}","availability_topic":"{}"}}"#,
-                device_info, device_id, state_topic, avail_topic
-            )),
-            ("select".into(), "temp_range".into(), format!(
-                r#"{{"device":{},"name":"Temperature Range","unique_id":"{}_temp_range","state_topic":"{}","command_topic":"{}/temp_range","value_template":"{{{{value_json.temp_range}}}}","options":["high","low"],"availability_topic":"{}"}}"#,
-                device_info, device_id, state_topic, cmd_topic, avail_topic
-            )),
-            ("switch".into(), "hold_mode".into(), format!(
-                r#"{{"device":{},"name":"Hold Mode","unique_id":"{}_hold_mode","state_topic":"{}","command_topic":"{}/hold_mode","value_template":"{{{{value_json.hold_mode}}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
-                device_info, device_id, state_topic, cmd_topic, avail_topic
-            )),
-            ("sensor".into(), "mister".into(), format!(
-                r#"{{"device":{},"name":"Mister","unique_id":"{}_mister","state_topic":"{}","value_template":"{{{{value_json.mister}}}}","availability_topic":"{}"}}"#,
-                device_info, device_id, state_topic, avail_topic
-            )),
-            ("sensor".into(), "fault".into(), format!(
-                r#"{{"device":{},"name":"Last Fault","unique_id":"{}_fault","state_topic":"{}","value_template":"{{{{value_json.last_fault}}}}","availability_topic":"{}"}}"#,
-                device_info, device_id, state_topic, avail_topic
-            )),
-            ("sensor".into(), "diagnostics".into(), format!(
-                r#"{{"device":{},"name":"Diagnostics","unique_id":"{}_diagnostics","state_topic":"{}","availability_topic":"{}"}}"#,
-                device_info, device_id, topics.diagnostics_topic(), avail_topic
-            )),
-            ("sensor".into(), "alert".into(), format!(
-                r#"{{"device":{},"name":"Alert","unique_id":"{}_alert","state_topic":"{}","availability_topic":"{}"}}"#,
-                device_info, device_id, topics.alert_topic(), avail_topic
-            )),
-        ]);
-
-        for (component, object_id, payload) in &configs {
-            let topic = format!("homeassistant/{}/{}/{}/config", component, device_id, object_id);
-            if let Err(e) = self.publish(&topic, payload.as_bytes(), 1, true).await {
-                warn!("Failed to publish discovery for {}: {:?}", object_id, e);
+        for msg in &configs {
+            if let Err(e) = self.publish(&msg.topic, msg.payload.as_bytes(), 1, msg.retain).await {
+                warn!("Failed to publish discovery for {}: {:?}", msg.topic, e);
+                // Continue publishing remaining entities — single failure
+                // should not block others.
             }
         }
 
-        info!("Published {} HA discovery configs", configs.len());
+        info!("Published {} HA discovery configs", count);
         Ok(())
     }
 

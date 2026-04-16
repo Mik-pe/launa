@@ -1,9 +1,15 @@
 //! Home Assistant MQTT auto-discovery message generation.
+//!
+//! Generates JSON discovery payloads for 20 HA entities using `alloc` only
+//! (no serde_json dependency), so this works in `no_std` environments.
+
+extern crate alloc;
+
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use crate::topics::TopicBuilder;
-use serde_json::json;
-use std::string::String;
-use std::vec::Vec;
 
 /// A discovery config payload with its topic and retain flag.
 #[derive(Debug, Clone)]
@@ -24,26 +30,26 @@ pub struct DiscoveryBuilder {
 impl DiscoveryBuilder {
     pub fn new(device_id: &str) -> Self {
         DiscoveryBuilder {
-            device_id: device_id.to_string(),
-            device_name: "Launa Spa".to_string(),
-            device_model: "BP6013G1".to_string(),
-            sw_version: "unknown".to_string(),
-            manufacturer: "Launa".to_string(),
+            device_id: String::from(device_id),
+            device_name: String::from("Launa Spa"),
+            device_model: String::from("BP6013G1"),
+            sw_version: String::from("unknown"),
+            manufacturer: String::from("Launa"),
         }
     }
 
     pub fn device_name(mut self, name: &str) -> Self {
-        self.device_name = name.to_string();
+        self.device_name = String::from(name);
         self
     }
 
     pub fn device_model(mut self, model: &str) -> Self {
-        self.device_model = model.to_string();
+        self.device_model = String::from(model);
         self
     }
 
     pub fn sw_version(mut self, version: &str) -> Self {
-        self.sw_version = version.to_string();
+        self.sw_version = String::from(version);
         self
     }
 
@@ -74,18 +80,14 @@ impl DiscoveryBuilder {
         let topics = TopicBuilder::new(&self.device_id);
         let mut configs = Vec::new();
 
-        let device_info = json!({
-            "identifiers": [self.device_id],
-            "name": self.device_name,
-            "manufacturer": self.manufacturer,
-            "model": self.device_model,
-            "sw_version": self.sw_version,
-        });
-
-        let origin = json!({
-            "name": "launa-firmware",
-            "sw_version": self.sw_version,
-        });
+        let device_info = json_device_block(
+            &self.device_id,
+            &self.device_name,
+            &self.manufacturer,
+            &self.device_model,
+            &self.sw_version,
+        );
+        let origin = json_origin(&self.sw_version);
 
         let state_topic = topics.state_topic();
         let avail_topic = topics.availability_topic();
@@ -109,22 +111,10 @@ impl DiscoveryBuilder {
         // Set temperature number
         configs.push(DiscoveryMessage {
             topic: topics.discovery_topic("number", "set_temperature"),
-            payload: json!({
-                "device": device_info,
-                "origin": origin,
-                "name": "Set Temperature",
-                "unique_id": format!("{}_set_temp", self.device_id),
-                "device_class": "temperature",
-                "unit_of_measurement": "°F",
-                "min": 50,
-                "max": 104,
-                "step": 1,
-                "state_topic": state_topic,
-                "command_topic": format!("{}/set_temperature", cmd_topic),
-                "value_template": "{{ value_json.set_temp }}",
-                "availability_topic": avail_topic,
-            })
-            .to_string(),
+            payload: format!(
+                r#"{{"device":{},"origin":{},"name":"Set Temperature","unique_id":"{}_set_temp","device_class":"temperature","unit_of_measurement":"°F","min":50,"max":104,"step":1,"state_topic":"{}","command_topic":"{}/set_temperature","value_template":"{{{{ value_json.set_temp }}}}","availability_topic":"{}"}}"#,
+                device_info, origin, self.device_id, state_topic, cmd_topic, avail_topic
+            ),
             retain: false,
         });
 
@@ -161,25 +151,16 @@ impl DiscoveryBuilder {
         // Lights
         for i in 1..=2 {
             let name = if i == 1 {
-                "Spa Light".to_string()
+                String::from("Spa Light")
             } else {
                 format!("Spa Light {}", i)
             };
             configs.push(DiscoveryMessage {
                 topic: topics.discovery_topic("light", &format!("light{}", i)),
-                payload: json!({
-                    "device": device_info,
-                    "origin": origin,
-                    "name": name,
-                    "unique_id": format!("{}_light{}", self.device_id, i),
-                    "state_topic": state_topic,
-                    "command_topic": format!("{}/light{}", cmd_topic, i),
-                    "value_template": format!("{{{{ value_json.light{} }}}}", i),
-                    "payload_on": "true",
-                    "payload_off": "false",
-                    "availability_topic": avail_topic,
-                })
-                .to_string(),
+                payload: format!(
+                    r#"{{"device":{},"origin":{},"name":"{}","unique_id":"{}_light{}","state_topic":"{}","command_topic":"{}/light{}","value_template":"{{{{ value_json.light{} }}}}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                    device_info, origin, name, self.device_id, i, state_topic, cmd_topic, i, i, avail_topic
+                ),
                 retain: false,
             });
         }
@@ -187,18 +168,10 @@ impl DiscoveryBuilder {
         // Blower fan
         configs.push(DiscoveryMessage {
             topic: topics.discovery_topic("fan", "blower"),
-            payload: json!({
-                "device": device_info,
-                "origin": origin,
-                "name": "Blower",
-                "unique_id": format!("{}_blower", self.device_id),
-                "state_topic": state_topic,
-                "command_topic": format!("{}/blower", cmd_topic),
-                "payload_on": "true",
-                "payload_off": "false",
-                "availability_topic": avail_topic,
-            })
-            .to_string(),
+            payload: format!(
+                r#"{{"device":{},"origin":{},"name":"Blower","unique_id":"{}_blower","state_topic":"{}","command_topic":"{}/blower","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                device_info, origin, self.device_id, state_topic, cmd_topic, avail_topic
+            ),
             retain: false,
         });
 
@@ -212,24 +185,18 @@ impl DiscoveryBuilder {
             &avail_topic,
             "heat_mode",
             "Heat Mode",
-            json!(["ready", "rest", "ready_in_rest"]),
+            r#"["ready","rest","ready_in_rest"]"#,
             "{{ value_json.heating_mode }}",
             &format!("{}/heat_mode", cmd_topic),
         ));
 
-        // Circulation Pump sensor (read-only — protocol doesn't support toggling)
+        // Circulation Pump sensor (read-only \u2014 protocol doesn't support toggling)
         configs.push(DiscoveryMessage {
             topic: topics.discovery_topic("sensor", "circ_pump"),
-            payload: json!({
-                "device": device_info,
-                "origin": origin,
-                "name": "Circulation Pump",
-                "unique_id": format!("{}_circ_pump", self.device_id),
-                "state_topic": state_topic,
-                "value_template": "{{ value_json.circ_pump }}",
-                "availability_topic": avail_topic,
-            })
-            .to_string(),
+            payload: format!(
+                r#"{{"device":{},"origin":{},"name":"Circulation Pump","unique_id":"{}_circ_pump","state_topic":"{}","value_template":"{{{{ value_json.circ_pump }}}}","availability_topic":"{}"}}"#,
+                device_info, origin, self.device_id, state_topic, avail_topic
+            ),
             retain: false,
         });
 
@@ -243,7 +210,7 @@ impl DiscoveryBuilder {
             &avail_topic,
             "temp_range",
             "Temperature Range",
-            json!(["high", "low"]),
+            r#"["high","low"]"#,
             "{{ value_json.temp_range }}",
             &format!("{}/temp_range", cmd_topic),
         ));
@@ -262,67 +229,43 @@ impl DiscoveryBuilder {
             &format!("{}/hold_mode", cmd_topic),
         ));
 
-        // Mister sensor (read-only — protocol doesn't support toggling)
+        // Mister sensor (read-only \u2014 protocol doesn't support toggling)
         configs.push(DiscoveryMessage {
             topic: topics.discovery_topic("sensor", "mister"),
-            payload: json!({
-                "device": device_info,
-                "origin": origin,
-                "name": "Mister",
-                "unique_id": format!("{}_mister", self.device_id),
-                "state_topic": state_topic,
-                "value_template": "{{ value_json.mister }}",
-                "availability_topic": avail_topic,
-            })
-            .to_string(),
+            payload: format!(
+                r#"{{"device":{},"origin":{},"name":"Mister","unique_id":"{}_mister","state_topic":"{}","value_template":"{{{{ value_json.mister }}}}","availability_topic":"{}"}}"#,
+                device_info, origin, self.device_id, state_topic, avail_topic
+            ),
             retain: false,
         });
 
         // Fault sensor
         configs.push(DiscoveryMessage {
             topic: topics.discovery_topic("sensor", "fault"),
-            payload: json!({
-                "device": device_info,
-                "origin": origin,
-                "name": "Last Fault",
-                "unique_id": format!("{}_fault", self.device_id),
-                "state_topic": state_topic,
-                "value_template": "{{ value_json.last_fault }}",
-                "availability_topic": avail_topic,
-            })
-            .to_string(),
+            payload: format!(
+                r#"{{"device":{},"origin":{},"name":"Last Fault","unique_id":"{}_fault","state_topic":"{}","value_template":"{{{{ value_json.last_fault }}}}","availability_topic":"{}"}}"#,
+                device_info, origin, self.device_id, state_topic, avail_topic
+            ),
             retain: false,
         });
 
         // Diagnostics sensor
         configs.push(DiscoveryMessage {
             topic: topics.discovery_topic("sensor", "diagnostics"),
-            payload: json!({
-                "device": device_info,
-                "origin": origin,
-                "name": "Diagnostics",
-                "unique_id": format!("{}_diagnostics", self.device_id),
-                "state_topic": topics.diagnostics_topic(),
-                "availability_topic": avail_topic,
-                "entity_category": "diagnostic",
-            })
-            .to_string(),
+            payload: format!(
+                r#"{{"device":{},"origin":{},"name":"Diagnostics","unique_id":"{}_diagnostics","state_topic":"{}","availability_topic":"{}","entity_category":"diagnostic"}}"#,
+                device_info, origin, self.device_id, topics.diagnostics_topic(), avail_topic
+            ),
             retain: false,
         });
 
         // Alert sensor
         configs.push(DiscoveryMessage {
             topic: topics.discovery_topic("sensor", "alert"),
-            payload: json!({
-                "device": device_info,
-                "origin": origin,
-                "name": "Alert",
-                "unique_id": format!("{}_alert", self.device_id),
-                "state_topic": topics.alert_topic(),
-                "availability_topic": avail_topic,
-                "entity_category": "diagnostic",
-            })
-            .to_string(),
+            payload: format!(
+                r#"{{"device":{},"origin":{},"name":"Alert","unique_id":"{}_alert","state_topic":"{}","availability_topic":"{}","entity_category":"diagnostic"}}"#,
+                device_info, origin, self.device_id, topics.alert_topic(), avail_topic
+            ),
             retain: false,
         });
 
@@ -332,8 +275,8 @@ impl DiscoveryBuilder {
     fn make_sensor(
         topics: &TopicBuilder,
         device_id: &str,
-        device: &serde_json::Value,
-        origin: &serde_json::Value,
+        device_info: &str,
+        origin: &str,
         state_topic: &str,
         avail_topic: &str,
         object_id: &str,
@@ -344,18 +287,19 @@ impl DiscoveryBuilder {
     ) -> DiscoveryMessage {
         DiscoveryMessage {
             topic: topics.discovery_topic("sensor", object_id),
-            payload: json!({
-                "device": device,
-                "origin": origin,
-                "name": name,
-                "unique_id": format!("{}_{}", device_id, object_id),
-                "device_class": device_class,
-                "unit_of_measurement": unit,
-                "state_topic": state_topic,
-                "value_template": value_template,
-                "availability_topic": avail_topic,
-            })
-            .to_string(),
+            payload: format!(
+                r#"{{"device":{},"origin":{},"name":"{}","unique_id":"{}_{}","device_class":"{}","unit_of_measurement":"{}","state_topic":"{}","value_template":"{}","availability_topic":"{}"}}"#,
+                device_info,
+                origin,
+                name,
+                device_id,
+                object_id,
+                device_class,
+                unit,
+                state_topic,
+                value_template,
+                avail_topic
+            ),
             retain: false,
         }
     }
@@ -363,8 +307,8 @@ impl DiscoveryBuilder {
     fn make_binary_sensor(
         topics: &TopicBuilder,
         device_id: &str,
-        device: &serde_json::Value,
-        origin: &serde_json::Value,
+        device_info: &str,
+        origin: &str,
         state_topic: &str,
         avail_topic: &str,
         object_id: &str,
@@ -374,19 +318,18 @@ impl DiscoveryBuilder {
     ) -> DiscoveryMessage {
         DiscoveryMessage {
             topic: topics.discovery_topic("binary_sensor", object_id),
-            payload: json!({
-                "device": device,
-                "origin": origin,
-                "name": name,
-                "unique_id": format!("{}_{}", device_id, object_id),
-                "device_class": device_class,
-                "state_topic": state_topic,
-                "value_template": value_template,
-                "payload_on": "true",
-                "payload_off": "false",
-                "availability_topic": avail_topic,
-            })
-            .to_string(),
+            payload: format!(
+                r#"{{"device":{},"origin":{},"name":"{}","unique_id":"{}_{}","device_class":"{}","state_topic":"{}","value_template":"{}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                device_info,
+                origin,
+                name,
+                device_id,
+                object_id,
+                device_class,
+                state_topic,
+                value_template,
+                avail_topic
+            ),
             retain: false,
         }
     }
@@ -394,8 +337,8 @@ impl DiscoveryBuilder {
     fn make_switch(
         topics: &TopicBuilder,
         device_id: &str,
-        device: &serde_json::Value,
-        origin: &serde_json::Value,
+        device_info: &str,
+        origin: &str,
         state_topic: &str,
         avail_topic: &str,
         object_id: &str,
@@ -405,19 +348,18 @@ impl DiscoveryBuilder {
     ) -> DiscoveryMessage {
         DiscoveryMessage {
             topic: topics.discovery_topic("switch", object_id),
-            payload: json!({
-                "device": device,
-                "origin": origin,
-                "name": name,
-                "unique_id": format!("{}_{}", device_id, object_id),
-                "state_topic": state_topic,
-                "command_topic": command_topic,
-                "value_template": value_template,
-                "payload_on": "true",
-                "payload_off": "false",
-                "availability_topic": avail_topic,
-            })
-            .to_string(),
+            payload: format!(
+                r#"{{"device":{},"origin":{},"name":"{}","unique_id":"{}_{}","state_topic":"{}","command_topic":"{}","value_template":"{}","payload_on":"true","payload_off":"false","availability_topic":"{}"}}"#,
+                device_info,
+                origin,
+                name,
+                device_id,
+                object_id,
+                state_topic,
+                command_topic,
+                value_template,
+                avail_topic
+            ),
             retain: false,
         }
     }
@@ -425,38 +367,69 @@ impl DiscoveryBuilder {
     fn make_select(
         topics: &TopicBuilder,
         device_id: &str,
-        device: &serde_json::Value,
-        origin: &serde_json::Value,
+        device_info: &str,
+        origin: &str,
         state_topic: &str,
         avail_topic: &str,
         object_id: &str,
         name: &str,
-        options: serde_json::Value,
+        options: &str,
         value_template: &str,
         command_topic: &str,
     ) -> DiscoveryMessage {
         DiscoveryMessage {
             topic: topics.discovery_topic("select", object_id),
-            payload: json!({
-                "device": device,
-                "origin": origin,
-                "name": name,
-                "unique_id": format!("{}_{}", device_id, object_id),
-                "state_topic": state_topic,
-                "command_topic": command_topic,
-                "value_template": value_template,
-                "options": options,
-                "availability_topic": avail_topic,
-            })
-            .to_string(),
+            payload: format!(
+                r#"{{"device":{},"origin":{},"name":"{}","unique_id":"{}_{}","state_topic":"{}","command_topic":"{}","value_template":"{}","options":{},"availability_topic":"{}"}}"#,
+                device_info,
+                origin,
+                name,
+                device_id,
+                object_id,
+                state_topic,
+                command_topic,
+                value_template,
+                options,
+                avail_topic
+            ),
             retain: false,
         }
     }
 }
 
+// \u2500\u2500 JSON helper functions \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+/// Build the `"device"` JSON block.
+fn json_device_block(
+    device_id: &str,
+    name: &str,
+    manufacturer: &str,
+    model: &str,
+    sw_version: &str,
+) -> String {
+    format!(
+        r#"{{"identifiers":["{}"],"name":"{}","manufacturer":"{}","model":"{}","sw_version":"{}"}}"#,
+        device_id, name, manufacturer, model, sw_version
+    )
+}
+
+/// Build the `"origin"` JSON block.
+fn json_origin(sw_version: &str) -> String {
+    format!(
+        r#"{{"name":"launa-firmware","sw_version":"{}"}}"#,
+        sw_version
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Helper: parse a JSON payload string into a serde_json::Value for assertions.
+    /// Only available in test builds (which use the std feature).
+    fn parse_json(s: &str) -> serde_json::Value {
+        serde_json::from_str(s).expect("valid JSON")
+    }
 
     #[test]
     fn test_discovery_generates_valid_json() {
@@ -490,7 +463,6 @@ mod tests {
         let configs = builder.build();
 
         for (topic, _) in &configs {
-            // All discovery topics should follow homeassistant/<component>/<device_id>/<object_id>/config
             let parts: Vec<&str> = topic.split('/').collect();
             assert_eq!(parts[0], "homeassistant");
             assert_eq!(parts[2], "test_spa_001");
@@ -515,7 +487,6 @@ mod tests {
             unique_ids.push(uid);
         }
 
-        // All unique IDs should be distinct
         let mut sorted = unique_ids.clone();
         sorted.sort();
         sorted.dedup();
@@ -536,6 +507,93 @@ mod tests {
                     cmd_topic
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_discovery_includes_origin_in_all_payloads() {
+        let builder = DiscoveryBuilder::new("test_spa_001");
+        let configs = builder.build();
+
+        for (topic, json_str) in &configs {
+            let v = parse_json(json_str);
+            let origin = v
+                .get("origin")
+                .unwrap_or_else(|| panic!("Missing 'origin' field in payload for topic {}", topic));
+            assert_eq!(origin["name"].as_str(), Some("launa-firmware"));
+            assert!(
+                origin.get("sw_version").is_some(),
+                "origin missing sw_version"
+            );
+        }
+    }
+
+    #[test]
+    fn test_discovery_device_includes_sw_version() {
+        let builder = DiscoveryBuilder::new("test_spa_001").sw_version("1.2.3");
+        let configs = builder.build();
+
+        for (topic, json_str) in &configs {
+            let v = parse_json(json_str);
+            let device = v
+                .get("device")
+                .unwrap_or_else(|| panic!("Missing 'device' field in payload for topic {}", topic));
+            assert_eq!(
+                device["sw_version"].as_str(),
+                Some("1.2.3"),
+                "device sw_version mismatch in topic {}",
+                topic
+            );
+        }
+    }
+
+    #[test]
+    fn test_diagnostic_entities_have_entity_category() {
+        let builder = DiscoveryBuilder::new("test_spa_001");
+        let configs = builder.build();
+
+        let mut diag_count = 0;
+        for (topic, json_str) in &configs {
+            if topic.contains("/diagnostics/") || topic.contains("/alert/") {
+                let v = parse_json(json_str);
+                let category = v.get("entity_category").and_then(|c| c.as_str());
+                assert_eq!(
+                    category,
+                    Some("diagnostic"),
+                    "entity_category should be 'diagnostic' for topic {}",
+                    topic
+                );
+                diag_count += 1;
+            }
+        }
+        assert_eq!(diag_count, 2, "should find exactly 2 diagnostic entities");
+    }
+
+    #[test]
+    fn test_discovery_builder_field_parity() {
+        let builder = DiscoveryBuilder::new("test_spa_001").sw_version("0.1.0");
+        let configs = builder.build();
+
+        for (topic, json_str) in &configs {
+            let v = parse_json(json_str);
+            assert!(v.get("device").is_some(), "missing 'device' in {}", topic);
+            assert!(v.get("origin").is_some(), "missing 'origin' in {}", topic);
+            assert!(v.get("name").is_some(), "missing 'name' in {}", topic);
+            assert!(
+                v.get("unique_id").is_some(),
+                "missing 'unique_id' in {}",
+                topic
+            );
+            assert!(
+                v.get("state_topic").is_some(),
+                "missing 'state_topic' in {}",
+                topic
+            );
+            assert!(
+                v.get("availability_topic").is_some(),
+                "missing 'availability_topic' in {}",
+                topic
+            );
         }
     }
 }

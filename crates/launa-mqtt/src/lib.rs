@@ -8,12 +8,10 @@
 extern crate alloc;
 
 pub mod command_parser;
-#[cfg(feature = "std")]
 pub mod discovery;
 pub mod state;
 pub mod topics;
 
-#[cfg(feature = "std")]
 pub use discovery::{DiscoveryBuilder, DiscoveryMessage};
 pub use topics::{
     birth_config, lwt_config, BirthConfig, LwtConfig, TopicBuilder, AVAILABILITY_OFFLINE,
