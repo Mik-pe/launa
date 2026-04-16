@@ -54,8 +54,14 @@ impl Frame {
     /// Bytes inside the frame body that equal `0x7E` or `0x7D` are escaped
     /// using HDLC-style byte stuffing (`0x7D` followed by the byte XOR'd
     /// with `0x20`). The decoder un-stuffs them on the way in.
-    pub fn encode(&self) -> Vec<u8> {
-        // Length field = type(2) + payload length
+    ///
+    /// Returns `Err(FrameError::PayloadTooLarge(len))` if the payload exceeds
+    /// 253 bytes (the maximum that fits in the u8 length field).
+    pub fn encode(&self) -> Result<Vec<u8>, FrameError> {
+        // Length field = type(2) + payload length; must fit in u8
+        if 2 + self.payload.len() > u8::MAX as usize {
+            return Err(FrameError::PayloadTooLarge(self.payload.len()));
+        }
         let length = (2 + self.payload.len()) as u8;
 
         let mut body = Vec::with_capacity(1 + 2 + self.payload.len() + 1);
@@ -80,7 +86,7 @@ impl Frame {
             }
         }
         buf.push(FRAME_MARKER);
-        buf
+        Ok(buf)
     }
 }
 
@@ -89,6 +95,7 @@ pub enum FrameError {
     TooShort(usize),
     Incomplete { expected: usize, got: usize },
     CrcMismatch { expected: u8, got: u8 },
+    PayloadTooLarge(usize),
 }
 
 /// Streaming frame decoder. Feed bytes one at a time; yields complete frames.
@@ -201,7 +208,10 @@ pub struct FrameEncoder;
 impl FrameEncoder {
     /// Build a frame with the given message type and payload, returning the
     /// complete byte sequence including start/end markers.
-    pub fn encode(message_type: [u8; 2], payload: &[u8]) -> Vec<u8> {
+    ///
+    /// Returns `Err(FrameError::PayloadTooLarge(len))` if the payload exceeds
+    /// 253 bytes (the maximum that fits in the u8 length field).
+    pub fn encode(message_type: [u8; 2], payload: &[u8]) -> Result<Vec<u8>, FrameError> {
         let frame = Frame {
             message_type,
             payload: payload.to_vec(),
@@ -225,7 +235,7 @@ mod tests {
             message_type: [0x0A, 0xBF],
             payload: vec![0x04],
         };
-        let encoded = original.encode();
+        let encoded = original.encode().unwrap();
         // Strip markers for parse
         let inner = &encoded[1..encoded.len() - 1];
         let decoded = Frame::parse(inner).unwrap();
@@ -238,7 +248,7 @@ mod tests {
             message_type: [0x0A, 0xBF],
             payload: vec![],
         };
-        let encoded = frame.encode();
+        let encoded = frame.encode().unwrap();
 
         let mut decoder = FrameDecoder::new();
         let mut results = Vec::new();
@@ -258,7 +268,7 @@ mod tests {
             message_type: [0x0A, 0xBF],
             payload: vec![0x01, 0x02],
         };
-        let mut encoded = frame.encode();
+        let mut encoded = frame.encode().unwrap();
         // Corrupt the byte before the final 0x7E marker (the CRC)
         let crc_idx = encoded.len() - 2;
         encoded[crc_idx] ^= 0xFF;
@@ -276,7 +286,7 @@ mod tests {
             message_type: [0x0A, 0xBF],
             payload: vec![0x04],
         };
-        let encoded = frame.encode();
+        let encoded = frame.encode().unwrap();
 
         let mut decoder = FrameDecoder::new();
         for &byte in &encoded {
@@ -291,7 +301,7 @@ mod tests {
             message_type: [0x0A, 0xBF],
             payload: vec![0x01],
         };
-        let encoded = frame.encode();
+        let encoded = frame.encode().unwrap();
 
         let mut decoder = FrameDecoder::new();
 
@@ -313,7 +323,7 @@ mod tests {
             message_type: [0x0A, 0xBF],
             payload: vec![0x01],
         };
-        let encoded = frame.encode();
+        let encoded = frame.encode().unwrap();
 
         let mut decoder = FrameDecoder::new();
 
@@ -376,7 +386,7 @@ mod tests {
             message_type: [0x0A, 0xBF],
             payload: vec![0x04],
         };
-        let encoded = frame.encode();
+        let encoded = frame.encode().unwrap();
 
         let mut results = Vec::new();
         for &byte in &encoded {
@@ -398,7 +408,7 @@ mod tests {
             message_type: [0x0A, 0xBF],
             payload: vec![0x01, 0x02, 0x03, 0x04],
         };
-        let encoded = frame.encode();
+        let encoded = frame.encode().unwrap();
 
         // Set max buffer to exactly the inner frame size
         // Count inner bytes (between markers)
@@ -415,5 +425,34 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], frame);
         assert_eq!(decoder.crc_error_count(), 0);
+    }
+
+    #[test]
+    fn test_encode_payload_too_large() {
+        // 254-byte payload: length = 2 + 254 = 256 > u8::MAX
+        let frame = Frame {
+            message_type: [0xFF, 0xAF],
+            payload: vec![0x00; 254],
+        };
+        let result = frame.encode();
+        assert!(result.is_err());
+        match result {
+            Err(FrameError::PayloadTooLarge(len)) => assert_eq!(len, 254),
+            other => panic!("expected PayloadTooLarge, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_encode_max_payload_succeeds() {
+        // 253-byte payload: length = 2 + 253 = 255 = u8::MAX (valid)
+        let frame = Frame {
+            message_type: [0xFF, 0xAF],
+            payload: vec![0x42; 253],
+        };
+        let result = frame.encode();
+        assert!(
+            result.is_ok(),
+            "253-byte payload should fit in u8 length field"
+        );
     }
 }

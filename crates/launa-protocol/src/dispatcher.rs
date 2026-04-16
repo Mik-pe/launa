@@ -63,8 +63,16 @@ pub fn dispatch_frame(frame: &Frame) -> IncomingMessage {
             match frame.payload[0] {
                 0x00 => IncomingMessage::NewClientQuery,
                 0x02 => {
-                    let id = frame.payload.get(1).copied().unwrap_or(0);
-                    IncomingMessage::ClientIdAssignment { id }
+                    if frame.payload.len() >= 2 {
+                        IncomingMessage::ClientIdAssignment {
+                            id: frame.payload[1],
+                        }
+                    } else {
+                        IncomingMessage::Unknown {
+                            message_type: frame.message_type,
+                            payload: frame.payload.clone(),
+                        }
+                    }
                 }
                 _ => IncomingMessage::Unknown {
                     message_type: frame.message_type,
@@ -377,6 +385,26 @@ mod tests {
 
         let msg = dispatch_frame(&frame);
         assert_eq!(msg, IncomingMessage::ClientIdAssignment { id: 0x05 });
+    }
+
+    #[test]
+    fn test_dispatch_client_id_assignment_missing_id() {
+        let frame = Frame {
+            message_type: [0xFE, 0xBF],
+            payload: vec![0x02], // no second byte
+        };
+
+        let msg = dispatch_frame(&frame);
+        match msg {
+            IncomingMessage::Unknown {
+                message_type,
+                payload,
+            } => {
+                assert_eq!(message_type, [0xFE, 0xBF]);
+                assert_eq!(payload, vec![0x02]);
+            }
+            _ => panic!("Expected Unknown for missing client ID byte, got {:?}", msg),
+        }
     }
 
     #[test]

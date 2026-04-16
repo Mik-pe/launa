@@ -324,6 +324,12 @@ where
             return Err(OtaError::FinalizeFailed);
         }
 
+        if self.bytes_written == 0 {
+            warn!("OTA: finalize called with zero bytes written — refusing to boot into empty partition");
+            self.in_progress = false;
+            return Err(OtaError::FinalizeFailed);
+        }
+
         info!(
             "OTA: finalizing {} bytes written to {:?}",
             self.bytes_written, self.target
@@ -572,6 +578,23 @@ mod tests {
         let flash = MockFlash::new(total_flash_size());
         let ota = EspOtaFlash::new(flash, Partition::Ota1);
         assert_eq!(ota.target_partition(), Partition::Ota0);
+    }
+
+    #[test]
+    fn test_finalize_empty_image_rejected() {
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        ota.begin().unwrap();
+        // Finalize without writing any data should fail
+        let result = ota.finalize();
+        assert!(
+            result.is_err(),
+            "finalize with zero bytes written should return an error"
+        );
+        assert!(
+            !ota.in_progress,
+            "in_progress should be reset after empty finalize rejection"
+        );
     }
 
     #[test]

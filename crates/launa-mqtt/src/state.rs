@@ -7,6 +7,33 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use launa_protocol::status::{HeatingMode, PumpState, StatusUpdate, TempRange, TemperatureScale};
 
+/// Escape a string value for safe embedding in a JSON string literal.
+///
+/// Handles the escapes required by RFC 8259:
+///   `\` → `\\`
+///   `"` → `\"`
+///   `\n` → `\\n`
+///   `\r` → `\\r`
+///   `\t` → `\\t`
+///   Other control chars (U+0000..=U+001F) → `\uXXXX`
+fn escape_json_string(s: &str) -> String {
+    let mut out = String::new();
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) <= 0x1F => {
+                out.push_str(&alloc::format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Serialize a `StatusUpdate` into a JSON string suitable for publishing
 /// to the Home Assistant state topic.
 ///
@@ -62,7 +89,7 @@ pub fn status_to_json(
     };
 
     let firmware_ver = match firmware_version {
-        Some(v) => alloc::format!("\"{}\"", v.replace('"', "\\\"")),
+        Some(v) => alloc::format!("\"{}\"", escape_json_string(v)),
         None => alloc::string::String::from("null"),
     };
 
@@ -85,7 +112,7 @@ pub fn status_to_json(
         status.hour,
         status.minute,
         match last_fault {
-            Some(f) => alloc::format!("\"{}\"", f.replace('"', "\\\"")),
+            Some(f) => alloc::format!("\"{}\"", escape_json_string(f)),
             None => alloc::string::String::from("null"),
         },
         firmware_ver,
@@ -234,5 +261,83 @@ mod tests {
         let json_str = status_to_json(&status, None, Some("1.2.3"));
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["firmware_version"], "1.2.3");
+    }
+
+    #[test]
+    fn test_escape_json_string_backslash() {
+        // Backslash in a fault string must be escaped
+        let status = sample_status();
+        let json_str = status_to_json(&status, Some("Fault:\\path\\to\\issue"), None);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["last_fault"], "Fault:\\path\\to\\issue");
+    }
+
+    #[test]
+    fn test_escape_json_string_newline_tab() {
+        // Newline and tab must be escaped
+        let status = sample_status();
+        let json_str = status_to_json(&status, Some("Line1\nLine2\tTabbed"), None);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["last_fault"], "Line1\nLine2\tTabbed");
+    }
+
+    #[test]
+    fn test_escape_json_string_control_chars() {
+        // Control characters (0x00-0x1F) must be escaped as \uXXXX
+        let status = sample_status();
+        let fault = alloc::format!("Bad{}char", '\x07'); // BEL character
+        let json_str = status_to_json(&status, Some(&fault), None);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["last_fault"], "Bad\u{0007}char");
+    }
+
+    #[test]
+    fn test_escape_json_string_carriage_return() {
+        let status = sample_status();
+        let json_str = status_to_json(&status, Some("Line1\rLine2"), None);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["last_fault"], "Line1\rLine2");
+    }
+
+    #[test]
+    fn test_escape_json_string_all_special() {
+        // A string containing all escapable characters at once
+        let status = sample_status();
+        let fault = alloc::format!("a\\b\"c\nd\re\tf{}g", '\x01');
+        let json_str = status_to_json(&status, Some(&fault), None);
+        // The main assertion: the JSON must parse successfully
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(
+            parsed["last_fault"],
+            alloc::format!("a\\b\"c\nd\re\tf\u{0001}g")
+        );
+    }
+
+    #[test]
+    fn test_escape_json_string_firmware_with_special_chars() {
+        // Firmware version field also gets proper escaping
+        let status = sample_status();
+        let json_str = status_to_json(&status, None, Some("v1.0\nbeta"));
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["firmware_version"], "v1.0\nbeta");
+    }
+
+    #[test]
+    fn test_escape_json_string_quote_in_fault() {
+        // Double-quote in a fault string must be escaped (existing behaviour)
+        let status = sample_status();
+        let json_str = status_to_json(&status, Some("Heater \"dry\" fire"), None);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["last_fault"], "Heater \"dry\" fire");
+    }
+
+    #[test]
+    fn test_escape_json_string_null_char() {
+        // Null byte must be escaped as \u0000
+        let status = sample_status();
+        let fault = alloc::format!("before{}after", '\x00');
+        let json_str = status_to_json(&status, Some(&fault), None);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["last_fault"], "before\u{0000}after");
     }
 }

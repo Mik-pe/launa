@@ -55,7 +55,7 @@ mod tests {
         let mut sim = SpaSim::new();
 
         let (mt, payload) = Command::ConfigurationRequest.encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
@@ -86,7 +86,7 @@ mod tests {
         let mut sim = SpaSim::new();
 
         let (mt, payload) = Command::InformationRequest.encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
@@ -113,7 +113,7 @@ mod tests {
         let mut sim = SpaSim::new();
 
         let (mt, payload) = Command::FaultLogRequest { entry: 0xFF }.encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
@@ -138,7 +138,7 @@ mod tests {
         let mut sim = SpaSim::new();
 
         let (mt, payload) = Command::FilterCyclesRequest.encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
@@ -170,7 +170,7 @@ mod tests {
         assert_eq!(sim.state.pumps[0], PumpState::Off);
 
         let (mt, payload) = Command::ToggleItem(ToggleItem::Pump1).encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
         let frame = &frames[0];
@@ -191,7 +191,7 @@ mod tests {
         assert!(!sim.state.lights[0]);
 
         let (mt, payload) = Command::ToggleItem(ToggleItem::Light1).encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
         let frame = &frames[0];
@@ -209,7 +209,7 @@ mod tests {
         assert_eq!(sim.state.set_temp, 104.0);
 
         let (mt, payload) = Command::SetTemperature(100).encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
         let frame = &frames[0];
@@ -249,7 +249,7 @@ mod tests {
         assert_eq!(client_sm.state(), &RegistrationState::WaitingForAssignment);
 
         // Step 2: Client sends ID request (FE BF 01)
-        let client_request = FrameEncoder::encode([0xFE, 0xBF], &[0x01]);
+        let client_request = FrameEncoder::encode([0xFE, 0xBF], &[0x01]).unwrap();
         let request_frames = decoder.feed_slice(&client_request);
         let request_frame = &request_frames[0];
 
@@ -272,7 +272,7 @@ mod tests {
                 assert_eq!(client_sm.client_id(), Some(0x02));
 
                 // Step 4: Client sends ack (<ID> BF 03)
-                let ack = FrameEncoder::encode([id, 0xBF], &[0x03]);
+                let ack = FrameEncoder::encode([id, 0xBF], &[0x03]).unwrap();
                 let ack_frames = decoder.feed_slice(&ack);
                 sim.process_frame(&ack_frames[0]);
                 assert_eq!(sim.client_id, Some(0x02));
@@ -323,7 +323,7 @@ mod tests {
         assert_eq!(cmd, Command::ToggleItem(ToggleItem::Pump1));
 
         let (mt, payload) = cmd.encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
@@ -354,7 +354,7 @@ mod tests {
         assert_eq!(cmd, Command::SetTemperature(102));
 
         let (mt, payload) = cmd.encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
@@ -529,7 +529,7 @@ mod tests {
             message_type: [0xFF, 0xAF],
             payload: vec![0u8; 24],
         };
-        let mut encoded = frame.encode();
+        let mut encoded = frame.encode().unwrap();
 
         let crc_idx = encoded.len() - 2;
         encoded[crc_idx] ^= 0xFF;
@@ -549,7 +549,7 @@ mod tests {
             message_type: [0xFF, 0xAF],
             payload: vec![0u8; 24],
         };
-        let encoded = frame.encode();
+        let encoded = frame.encode().unwrap();
 
         let truncated = &encoded[..encoded.len() - 5];
 
@@ -797,7 +797,7 @@ mod tests {
             message_type: [0xFF, 0xAF],
             payload: vec![0x42; 24],
         };
-        let encoded = frame.encode();
+        let encoded = frame.encode().unwrap();
 
         assert_eq!(encoded.first(), Some(&0x7E));
         assert_eq!(encoded.last(), Some(&0x7E));
@@ -865,7 +865,7 @@ mod tests {
 
         for item in &toggles {
             let (mt, payload) = Command::ToggleItem(*item).encode();
-            let encoded = FrameEncoder::encode(mt, &payload);
+            let encoded = FrameEncoder::encode(mt, &payload).unwrap();
             let mut decoder = FrameDecoder::new();
             let frames = decoder.feed_slice(&encoded);
             sim.process_frame(&frames[0]);
@@ -876,21 +876,21 @@ mod tests {
         assert_eq!(sim.state.pumps[2], PumpState::Low);
 
         let (mt, payload) = Command::ToggleItem(ToggleItem::Blower).encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
         sim.process_frame(&frames[0]);
         assert!(sim.state.blower);
 
         let (mt, payload) = Command::ToggleItem(ToggleItem::HeatingMode).encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
         sim.process_frame(&frames[0]);
         assert_eq!(sim.state.heating_mode, HeatingMode::Rest);
 
         let (mt, payload) = Command::ToggleItem(ToggleItem::TemperatureRange).encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
         sim.process_frame(&frames[0]);
@@ -1040,7 +1040,7 @@ mod tests {
 
         // Encode to frame
         let (mt, payload) = cmd.encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
         // Feed to simulator
         let mut decoder = FrameDecoder::new();
@@ -1081,12 +1081,11 @@ mod tests {
         assert_eq!(cmd, Command::SetTemperature(100));
 
         let (mt, payload) = cmd.encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
         sim.process_frame(&frames[0]);
-
         assert_eq!(sim.state.set_temp, 100.0);
     }
 
@@ -1672,7 +1671,7 @@ mod tests {
             message_type: [0xFF, 0xAF],
             payload: vec![0x42; 24],
         };
-        let encoded = frame.encode();
+        let encoded = frame.encode().unwrap();
         let valid_frames = decoder.feed_slice(&encoded);
 
         assert_eq!(
@@ -1692,7 +1691,7 @@ mod tests {
             message_type: [0xFF, 0xAF],
             payload: vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08],
         };
-        let encoded = frame.encode();
+        let encoded = frame.encode().unwrap();
 
         // Try every possible split point
         for split_at in 0..encoded.len() {
@@ -1745,7 +1744,7 @@ mod tests {
             message_type: [0x0A, 0xBF],
             payload: vec![0x01, 0x02, 0x03],
         };
-        let mut corrupt_encoded = frame.encode();
+        let mut corrupt_encoded = frame.encode().unwrap();
         // Corrupt the CRC byte (second-to-last byte before the end marker)
         let crc_idx = corrupt_encoded.len() - 2;
         corrupt_encoded[crc_idx] ^= 0xFF;
@@ -1768,7 +1767,7 @@ mod tests {
             message_type: [0xFF, 0xAF],
             payload: vec![0xAA, 0xBB, 0xCC],
         };
-        let valid_encoded = valid_frame.encode();
+        let valid_encoded = valid_frame.encode().unwrap();
         let valid_frames = decoder.feed_slice(&valid_encoded);
 
         assert_eq!(
@@ -1802,7 +1801,7 @@ mod tests {
             message_type: [0xFF, 0xAF],
             payload: payload.clone(),
         };
-        let encoded = frame.encode();
+        let encoded = frame.encode().unwrap();
 
         // Verify the encoded form actually contains escape sequences
         assert!(
@@ -2637,7 +2636,7 @@ mod tests {
             .rev()
             .map(|cmd| {
                 let (mt, payload) = cmd.encode();
-                FrameEncoder::encode(mt, &payload)
+                FrameEncoder::encode(mt, &payload).unwrap()
             })
             .collect();
 
@@ -2681,7 +2680,7 @@ mod tests {
         // Verify it's a NothingToSend for client_id 0x03
         let expected_nts = {
             let (mt, payload) = Command::NothingToSend { client_id: 0x03 }.encode();
-            FrameEncoder::encode(mt, &payload)
+            FrameEncoder::encode(mt, &payload).unwrap()
         };
         assert_eq!(nts_frame, expected_nts, "should send NothingToSend");
     }

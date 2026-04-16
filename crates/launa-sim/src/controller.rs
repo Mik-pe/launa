@@ -178,12 +178,14 @@ impl SpaController {
                         let encoded = launa_protocol::frame::FrameEncoder::encode(
                             [0xFE, 0xBF],
                             &[0x01, 0x02, 0xF1, 0x73],
-                        );
+                        )
+                        .unwrap();
                         events.push(ControllerEvent::RegistrationSend { bytes: encoded });
                     }
                     RegistrationAction::SendIdAck { client_id } => {
                         let encoded =
-                            launa_protocol::frame::FrameEncoder::encode([client_id, 0xBF], &[0x03]);
+                            launa_protocol::frame::FrameEncoder::encode([client_id, 0xBF], &[0x03])
+                                .unwrap();
                         events.push(ControllerEvent::Registered { client_id });
                         events.push(ControllerEvent::RegistrationSend { bytes: encoded });
                     }
@@ -229,9 +231,7 @@ impl SpaController {
         let _ = self.registration.client_id()?;
 
         let (msg_type, payload) = cmd.encode();
-        Some(launa_protocol::frame::FrameEncoder::encode(
-            msg_type, &payload,
-        ))
+        Some(launa_protocol::frame::FrameEncoder::encode(msg_type, &payload).ok()?)
     }
 
     /// Start a pump timer (for P1 mode auto-off after 20 minutes).

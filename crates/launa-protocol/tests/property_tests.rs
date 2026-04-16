@@ -65,7 +65,7 @@ fn round_trip_frame(msg_type: [u8; 2], payload: &[u8]) {
         assert_ne!(b, 0x7D, "payload byte {} must not be escape char 0x7D", i);
     }
 
-    let encoded = frame.encode();
+    let encoded = frame.encode().unwrap();
 
     // Verify markers
     assert_eq!(encoded[0], 0x7E, "start marker");
@@ -370,8 +370,8 @@ fn test_frame_encoder_matches_frame_encode() {
             message_type: msg_type_bytes,
             payload: payload.clone(),
         };
-        let frame_encoded = frame.encode();
-        let encoder_encoded = FrameEncoder::encode(msg_type_bytes, &payload);
+        let frame_encoded = frame.encode().unwrap();
+        let encoder_encoded = FrameEncoder::encode(msg_type_bytes, &payload).unwrap();
 
         assert_eq!(
             frame_encoded, encoder_encoded,

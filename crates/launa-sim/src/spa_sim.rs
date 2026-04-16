@@ -664,7 +664,7 @@ impl SpaSim {
         // Offset 20: Set Temperature
         payload[20] = SpaState::encode_temp(self.state.set_temp, self.state.temp_scale);
 
-        let mut frame = FrameEncoder::encode([0xFF, 0xAF], &payload);
+        let mut frame = FrameEncoder::encode([0xFF, 0xAF], &payload).unwrap();
 
         // Corrupt frame injection: flip last byte of the encoded frame
         if self.inject_corrupt_next {
@@ -680,17 +680,17 @@ impl SpaSim {
 
     /// Generate a `Ready` frame (`10 BF 06`).
     pub fn generate_ready_frame(&self) -> Vec<u8> {
-        FrameEncoder::encode([0x10, 0xBF], &[0x06])
+        FrameEncoder::encode([0x10, 0xBF], &[0x06]).unwrap()
     }
 
     /// Generate a registration query (`FE BF 00`).
     pub fn generate_registration_query(&self) -> Vec<u8> {
-        FrameEncoder::encode([0xFE, 0xBF], &[0x00])
+        FrameEncoder::encode([0xFE, 0xBF], &[0x00]).unwrap()
     }
 
     /// Generate a client ID assignment (`FE BF 02 <ID>`).
     fn generate_client_id_assignment(&self, id: u8) -> Vec<u8> {
-        FrameEncoder::encode([0xFE, 0xBF], &[0x02, id])
+        FrameEncoder::encode([0xFE, 0xBF], &[0x02, id]).unwrap()
     }
 
     /// Generate a configuration response.
@@ -708,7 +708,7 @@ impl SpaSim {
 
         let mut full_payload = vec![0x2E];
         full_payload.extend_from_slice(&config_payload);
-        FrameEncoder::encode([0x0A, 0xBF], &full_payload)
+        FrameEncoder::encode([0x0A, 0xBF], &full_payload).unwrap()
     }
 
     /// Generate an information response.
@@ -732,7 +732,7 @@ impl SpaSim {
 
         let mut full_payload = vec![0x24];
         full_payload.extend_from_slice(&info_data);
-        FrameEncoder::encode([0x0A, 0xBF], &full_payload)
+        FrameEncoder::encode([0x0A, 0xBF], &full_payload).unwrap()
     }
 
     /// Generate a fault log response.
@@ -740,7 +740,7 @@ impl SpaSim {
         let fault_data: [u8; 10] = [0x03, 0x01, 0x1B, 0x02, 0x0E, 0x1E, 0x04, 0x68, 0x68, 0x66];
         let mut full_payload = vec![0x28];
         full_payload.extend_from_slice(&fault_data);
-        FrameEncoder::encode([0x0A, 0xBF], &full_payload)
+        FrameEncoder::encode([0x0A, 0xBF], &full_payload).unwrap()
     }
 
     /// Generate a filter cycles response.
@@ -748,7 +748,7 @@ impl SpaSim {
         let filter_data: [u8; 8] = [0x08, 0x00, 0x04, 0x00, 0x90, 0x00, 0x02, 0x00];
         let mut full_payload = vec![0x23];
         full_payload.extend_from_slice(&filter_data);
-        FrameEncoder::encode([0x0A, 0xBF], &full_payload)
+        FrameEncoder::encode([0x0A, 0xBF], &full_payload).unwrap()
     }
 
     /// Handle a toggle command by raw protocol item code.
@@ -892,7 +892,7 @@ mod tests {
             launa_protocol::command::ToggleItem::Pump1,
         )
         .encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
         sim.process_incoming_bytes(&encoded);
         assert_eq!(sim.state.pumps[0], PumpState::Low);
@@ -943,7 +943,7 @@ mod tests {
 
         // Simulate a SetTemperature(100) command coming in
         let (mt, payload) = launa_protocol::command::Command::SetTemperature(100).encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
         sim.process_incoming_bytes(&encoded);
 
         assert_eq!(sim.state.set_temp, 100.0);
@@ -956,7 +956,7 @@ mod tests {
 
         // SetTemperature sends raw value 80 (= 40°C on wire)
         let (mt, payload) = launa_protocol::command::Command::SetTemperature(80).encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
         sim.process_incoming_bytes(&encoded);
 
         assert_eq!(sim.state.set_temp, 40.0);
@@ -973,7 +973,7 @@ mod tests {
             launa_protocol::command::ToggleItem::Pump1,
         )
         .encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
         sim.process_incoming_bytes(&encoded);
 
         // Pump should still be Off (command was ignored)
@@ -989,7 +989,7 @@ mod tests {
             launa_protocol::command::ToggleItem::Pump1,
         )
         .encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
         sim.process_incoming_bytes(&encoded);
 
         // Pump should be Low (command was accepted)
@@ -1003,7 +1003,7 @@ mod tests {
         sim.set_command_success_rate(0.0); // Never accept commands
 
         let (mt, payload) = launa_protocol::command::Command::SetTemperature(90).encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
         sim.process_incoming_bytes(&encoded);
 
         // Set temp should remain at default (104.0)
@@ -1017,7 +1017,7 @@ mod tests {
         sim.set_command_success_rate(1.0); // Always accept commands
 
         let (mt, payload) = launa_protocol::command::Command::SetTemperature(100).encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
         sim.process_incoming_bytes(&encoded);
 
         assert_eq!(sim.state.set_temp, 100.0);
@@ -1197,7 +1197,7 @@ mod tests {
             launa_protocol::command::ToggleItem::Pump1,
         )
         .encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
         sim.process_incoming_bytes(&encoded);
         assert_eq!(
@@ -1216,7 +1216,7 @@ mod tests {
             launa_protocol::command::ToggleItem::Pump1,
         )
         .encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
         // Send command
         sim.process_incoming_bytes(&encoded);
@@ -1255,13 +1255,13 @@ mod tests {
             launa_protocol::command::ToggleItem::Pump1,
         )
         .encode();
-        let encoded1 = FrameEncoder::encode(mt, &payload);
+        let encoded1 = FrameEncoder::encode(mt, &payload).unwrap();
 
         let (mt, payload) = launa_protocol::command::Command::ToggleItem(
             launa_protocol::command::ToggleItem::Pump2,
         )
         .encode();
-        let encoded2 = FrameEncoder::encode(mt, &payload);
+        let encoded2 = FrameEncoder::encode(mt, &payload).unwrap();
 
         sim.process_incoming_bytes(&encoded1);
         sim.process_incoming_bytes(&encoded2);
@@ -1343,7 +1343,7 @@ mod tests {
             launa_protocol::command::ToggleItem::Pump1,
         )
         .encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
         sim.process_incoming_bytes(&encoded);
 
         // Jitter should work (variable output), latency should defer command
@@ -1524,7 +1524,7 @@ mod tests {
             launa_protocol::command::ToggleItem::Pump1,
         )
         .encode();
-        let encoded = FrameEncoder::encode(mt, &payload);
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
         sim.process_incoming_bytes(&encoded);
 
         // Tick through several cycles

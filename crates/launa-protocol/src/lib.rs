@@ -15,6 +15,6 @@ pub use command::Command;
 pub use dispatcher::{dispatch_frame, IncomingMessage};
 pub use fault::{FaultCode, FaultLogEntry};
 pub use filter::FilterCycles;
-pub use frame::{Frame, FrameDecoder, FrameEncoder};
+pub use frame::{Frame, FrameDecoder, FrameEncoder, FrameError};
 pub use information::InformationResponse;
 pub use status::StatusUpdate;

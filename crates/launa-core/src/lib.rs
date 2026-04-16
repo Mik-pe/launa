@@ -613,12 +613,14 @@ impl<'a> SpaApp<'a> {
                 .process(frame.message_type, &frame.payload);
             match action {
                 RegistrationAction::SendIdRequest => {
-                    let encoded = FrameEncoder::encode([0xFE, 0xBF], &[0x01, 0x02, 0xF1, 0x73]);
+                    let encoded = FrameEncoder::encode([0xFE, 0xBF], &[0x01, 0x02, 0xF1, 0x73])
+                        .expect("registration payload should fit in frame");
                     actions.push(AppAction::SendFrame(encoded));
                     self.registration_started_at = Some(now);
                 }
                 RegistrationAction::SendIdAck { client_id: id } => {
-                    let encoded = FrameEncoder::encode([id, 0xBF], &[0x03]);
+                    let encoded = FrameEncoder::encode([id, 0xBF], &[0x03])
+                        .expect("ack payload should fit in frame");
                     actions.push(AppAction::SendFrame(encoded));
                     self.client_id = Some(id);
                     self.registration_started_at = None;
@@ -752,7 +754,8 @@ impl<'a> SpaApp<'a> {
                 .map_or(true, |lp| now.elapsed_since(lp) >= STALE_PROBE_INTERVAL_MS);
 
             if elapsed >= STALE_PROBE_INTERVAL_MS && should_probe {
-                let encoded = FrameEncoder::encode([0x0A, 0xBF], &[0x04]);
+                let encoded = FrameEncoder::encode([0x0A, 0xBF], &[0x04])
+                    .expect("probe payload should fit in frame");
                 actions.push(AppAction::SendFrame(encoded));
                 self.last_probe_time = Some(now);
             }
@@ -819,7 +822,7 @@ impl<'a> SpaApp<'a> {
 
 fn encode_command(cmd: &Command) -> Vec<u8> {
     let (msg_type, payload) = cmd.encode();
-    FrameEncoder::encode(msg_type, &payload)
+    FrameEncoder::encode(msg_type, &payload).expect("command payload should fit in frame")
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────

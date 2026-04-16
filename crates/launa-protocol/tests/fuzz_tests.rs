@@ -190,7 +190,7 @@ fn test_very_long_payload_frame() {
         message_type: [0xFF, 0xAF],
         payload,
     };
-    let encoded = frame.encode();
+    let encoded = frame.encode().unwrap();
 
     // Use FrameDecoder to handle byte stuffing
     let mut decoder = FrameDecoder::new();
@@ -205,7 +205,7 @@ fn test_empty_payload_frame() {
         message_type: [0x10, 0xBF],
         payload: vec![],
     };
-    let encoded = frame.encode();
+    let encoded = frame.encode().unwrap();
     let inner = &encoded[1..encoded.len() - 1];
     let decoded = Frame::parse(inner).unwrap();
     assert_eq!(decoded, frame);
@@ -233,7 +233,7 @@ fn test_frame_bad_crc() {
         message_type: [0xFF, 0xAF],
         payload: vec![0x01, 0x02],
     };
-    let encoded = frame.encode();
+    let encoded = frame.encode().unwrap();
     let inner = &encoded[1..encoded.len() - 1];
     let mut corrupted = inner.to_vec();
     // Corrupt the CRC byte (last byte)
@@ -256,12 +256,12 @@ fn test_frame_decoder_multiple_frames() {
     let mut decoder = FrameDecoder::new();
     let mut results = Vec::new();
 
-    for &byte in &frame1.encode() {
+    for &byte in &frame1.encode().unwrap() {
         if let Some(f) = decoder.feed(byte) {
             results.push(f);
         }
     }
-    for &byte in &frame2.encode() {
+    for &byte in &frame2.encode().unwrap() {
         if let Some(f) = decoder.feed(byte) {
             results.push(f);
         }
@@ -278,7 +278,7 @@ fn test_frame_decoder_feed_slice() {
         message_type: [0x0A, 0xBF],
         payload: vec![0x04],
     };
-    let encoded = frame.encode();
+    let encoded = frame.encode().unwrap();
 
     let mut decoder = FrameDecoder::new();
     let results = decoder.feed_slice(&encoded);
@@ -293,7 +293,7 @@ fn test_frame_decoder_inter_frame_garbage() {
         message_type: [0x10, 0xBF],
         payload: vec![0x06],
     };
-    let encoded = frame.encode();
+    let encoded = frame.encode().unwrap();
 
     let mut data = Vec::new();
     // Some garbage before the frame
