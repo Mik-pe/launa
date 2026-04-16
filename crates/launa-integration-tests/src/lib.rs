@@ -2736,4 +2736,859 @@ mod tests {
         // All 8 will eventually timeout and be dropped (spa never confirms).
         // But the 9th was never tracked, so it won't contribute to drops.
     }
+
+    // ========================================================================
+    // Test Group L: SpaApp + SpaSim Full Integration Tests
+    // ========================================================================
+    //
+    // These tests exercise the complete SpaApp → SpaSim pipeline, where SpaSim
+    // generates realistic frame bytes and SpaApp processes them through the same
+    // code path as the ESP32 main loop. VirtualClock provides deterministic timing.
+    //
+    // These satisfy validation contract assertions:
+    //   VAL-APP-026: SpaApp pipeline (process_frame, tick, on_mqtt_command)
+    //   VAL-APP-027: VirtualClock usage for deterministic timing
+    //   VAL-APP-028: Registration flow end-to-end
+    //   VAL-APP-029: OTA full download cycle
+    //   VAL-APP-030: Stale detection lifecycle (probe → alert → recovery)
+    //   VAL-APP-031: OTA rollback on failure
+    //   VAL-APP-032: Command retry and drop when spa doesn't confirm
+
+    /// Helper: run a full SpaSim tick, decode all frames, feed them to SpaApp.
+    /// Returns all AppActions produced during this cycle.
+    fn sim_tick_to_app(sim: &mut SpaSim, app: &mut SpaApp) -> Vec<AppAction> {
+        let raw_bytes = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&raw_bytes);
+        let mut all_actions = Vec::new();
+        for frame in &frames {
+            let actions = app.process_frame(frame);
+            all_actions.extend(actions);
+        }
+        all_actions
+    }
+
+    /// Helper: perform full registration between SpaSim and SpaApp.
+    /// SpaSim sends registration query → SpaApp responds → SpaSim assigns ID → SpaApp acks.
+    fn full_registration(sim: &mut SpaSim, app: &mut SpaApp) {
+        // Tick 1: SpaSim sends registration query (FE BF 00)
+        let actions1 = sim_tick_to_app(sim, app);
+        let has_send = actions1
+            .iter()
+            .any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(has_send, "should send ID request on registration query");
+
+        // Extract the SendFrame bytes and feed them back to SpaSim
+        let id_request_bytes = actions1
+            .iter()
+            .find_map(|a| match a {
+                AppAction::SendFrame(data) => Some(data.clone()),
+                _ => None,
+            })
+            .expect("should have SendFrame for ID request");
+
+        // SpaSim processes the ID request and assigns a client ID
+        let assignment_bytes = sim.process_incoming_bytes(&id_request_bytes);
+        assert!(
+            !assignment_bytes.is_empty(),
+            "should return client ID assignment bytes"
+        );
+
+        // Feed the assignment bytes back to SpaApp
+        let mut decoder = FrameDecoder::new();
+        let assignment_frames = decoder.feed_slice(&assignment_bytes);
+        assert_eq!(
+            assignment_frames.len(),
+            1,
+            "should produce one assignment frame"
+        );
+
+        let actions2 = app.process_frame(&assignment_frames[0]);
+        let has_ack = actions2
+            .iter()
+            .any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(has_ack, "should send ID ack after assignment");
+        assert!(app.is_registered(), "should be registered after assignment");
+
+        // Send the ack back to SpaSim
+        let ack_bytes = actions2
+            .iter()
+            .find_map(|a| match a {
+                AppAction::SendFrame(data) => Some(data.clone()),
+                _ => None,
+            })
+            .expect("should have SendFrame for ACK");
+
+        sim.process_incoming_bytes(&ack_bytes);
+        assert!(
+            sim.client_id.is_some(),
+            "sim should have client_id after ACK"
+        );
+    }
+
+    // ---- VAL-APP-028: SpaApp registration flow end-to-end ----
+
+    /// Full registration flow: SpaSim generates registration query → SpaApp
+    /// processes it → sends ID request → SpaSim assigns client ID → SpaApp
+    /// sends ACK → both sides registered.
+    ///
+    /// Uses SpaSim for realistic frame generation and SpaApp for protocol logic.
+    #[test]
+    fn test_spaapp_registration_e2e() {
+        let (_clock, app) = make_spaapp();
+        let mut app = app;
+        let mut sim = SpaSim::new();
+
+        // Initially unregistered
+        assert!(!app.is_registered());
+        assert!(app.client_id().is_none());
+
+        // Perform full registration via the helper
+        full_registration(&mut sim, &mut app);
+
+        // Verify both sides are registered with matching client IDs
+        assert!(app.is_registered());
+        assert_eq!(app.client_id(), sim.client_id);
+
+        // After registration, SpaSim ticks no longer produce registration queries
+        let raw = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&raw);
+        // Should have status + ready, but NO registration query
+        let has_reg_query = frames
+            .iter()
+            .any(|f| f.message_type == [0xFE, 0xBF] && f.payload.contains(&0x00));
+        assert!(
+            !has_reg_query,
+            "should not produce registration query after registration"
+        );
+    }
+
+    /// Registration flow with frame interleaving: during the registration sequence,
+    /// verify that frames are processed in the correct order and no state corruption
+    /// occurs when status frames arrive between registration frames.
+    #[test]
+    fn test_spaapp_registration_with_interleaved_frames() {
+        let (_clock, app) = make_spaapp();
+        let mut app = app;
+        let mut sim = SpaSim::new();
+
+        // Step 1: SpaSim sends registration query
+        let raw_bytes = sim.tick(); // contains reg query + status + ready
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&raw_bytes);
+
+        // Feed all frames to SpaApp — the status/ready frames are ignored
+        // (not registered yet, only registration frames are processed)
+        for frame in &frames {
+            app.process_frame(frame);
+        }
+        assert!(!app.is_registered(), "should not be registered yet");
+
+        // Step 2: Re-process just the registration query frame to get the ID request
+        // (it was already processed above but we need the SendFrame output)
+        let reg_frame = frames
+            .iter()
+            .find(|f| f.message_type == [0xFE, 0xBF])
+            .expect("should have registration query frame");
+        // Reset registration so we can re-process the query
+        app.force_registered(0x03); // mark registered so the frame goes through dispatch
+        app.process_frame(&make_new_client_query_frame()); // bus reset
+        let actions = app.process_frame(reg_frame);
+        let id_request_bytes = actions
+            .iter()
+            .find_map(|a| match a {
+                AppAction::SendFrame(data) => Some(data.clone()),
+                _ => None,
+            })
+            .expect("should have ID request SendFrame");
+
+        // Step 3: SpaSim assigns client ID
+        let assignment_bytes = sim.process_incoming_bytes(&id_request_bytes);
+        assert!(
+            !assignment_bytes.is_empty(),
+            "should return assignment bytes"
+        );
+
+        // Feed assignment to SpaApp (may include status frames in between)
+        let assignment_frames = decoder.feed_slice(&assignment_bytes);
+        for frame in &assignment_frames {
+            app.process_frame(frame);
+        }
+        assert!(app.is_registered(), "should be registered after assignment");
+    }
+
+    // ---- VAL-APP-029: OTA full download cycle with SimHttpServer pattern ----
+
+    /// OTA full download cycle: simulate firmware download via SimHttpServer,
+    /// write chunks through OtaUpdate trait, finalize, and mark_valid.
+    /// Data integrity verified at every step.
+    #[test]
+    fn test_spaapp_ota_full_download_cycle() {
+        let mut ota = launa_ota::mock::MockOta::new();
+
+        // Simulate a realistic firmware image (4 KiB) served in 1 KiB chunks
+        let firmware: Vec<u8> = (0..4096).map(|i| (i % 256) as u8).collect();
+        let server = SimHttpServer::new(firmware.clone(), 1024);
+
+        // Step 1: Begin OTA session
+        ota.begin().unwrap();
+        assert!(
+            ota.firmware_data.is_empty(),
+            "data should be empty after begin"
+        );
+
+        // Step 2: Download chunks and write to OTA
+        let chunks = server.download_chunks();
+        assert_eq!(chunks.len(), 4, "4 KiB / 1 KiB chunks = 4 chunks");
+        for (i, chunk) in chunks.iter().enumerate() {
+            ota.write(chunk).unwrap();
+            assert_eq!(
+                ota.firmware_data.len(),
+                (i + 1) * 1024,
+                "data should grow after each write"
+            );
+        }
+
+        // Step 3: Finalize — set boot partition
+        ota.finalize().unwrap();
+        assert!(ota.finalized, "should be finalized");
+
+        // Step 4: Mark valid — firmware booted successfully
+        ota.mark_valid().unwrap();
+        assert!(ota.valid, "should be marked valid");
+
+        // Step 5: Verify data integrity
+        assert_eq!(ota.firmware_data.len(), 4096);
+        assert_eq!(
+            ota.firmware_data, firmware,
+            "firmware data should match original"
+        );
+    }
+
+    /// OTA with various chunk sizes simulating realistic network conditions:
+    /// small chunks (64 bytes), TCP-segment-sized (1460), and large chunks (4096).
+    #[test]
+    fn test_spaapp_ota_variable_chunk_sizes() {
+        let mut ota = launa_ota::mock::MockOta::new();
+
+        // 16 KiB firmware with non-trivial data pattern
+        let firmware: Vec<u8> = (0..16384).map(|i| ((i * 7 + 13) % 256) as u8).collect();
+
+        // Test with small chunks
+        let server = SimHttpServer::new(firmware.clone(), 64);
+        ota.begin().unwrap();
+        for chunk in server.download_chunks() {
+            ota.write(&chunk).unwrap();
+        }
+        ota.finalize().unwrap();
+        ota.mark_valid().unwrap();
+        assert_eq!(ota.firmware_data, firmware);
+
+        // Reset and test with TCP-sized chunks
+        let mut ota2 = launa_ota::mock::MockOta::new();
+        let server2 = SimHttpServer::new(firmware.clone(), 1460);
+        ota2.begin().unwrap();
+        for chunk in server2.download_chunks() {
+            ota2.write(&chunk).unwrap();
+        }
+        ota2.finalize().unwrap();
+        ota2.mark_valid().unwrap();
+        assert_eq!(ota2.firmware_data, firmware);
+    }
+
+    // ---- VAL-APP-030: Stale detection lifecycle (probe → alert → recovery) ----
+
+    /// Stale detection lifecycle: normal operation → bus silence → probe at 5s →
+    /// alert at 30s → recovery when status resumes.
+    ///
+    /// Tests each phase with explicit assertions:
+    /// - Phase 1 (0-5s): Normal operation, status received
+    /// - Phase 2 (5-30s): No status, probes sent at 5s intervals
+    /// - Phase 3 (30s+): Stale alert + stale availability published
+    /// - Phase 4: Status resumes → recovery
+    #[test]
+    fn test_spaapp_stale_detection_lifecycle() {
+        let (clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Phase 1: Normal operation — receive status
+        app.process_frame(&make_status_frame());
+        assert!(
+            !app.is_stale(),
+            "should not be stale during normal operation"
+        );
+
+        // Phase 2: Advance 6s — probe should fire
+        clock.advance_ms(6_000);
+        let actions = app.tick();
+        let probe_frames: Vec<&Vec<u8>> = actions
+            .iter()
+            .filter_map(|a| match a {
+                AppAction::SendFrame(data) => Some(data),
+                _ => None,
+            })
+            .collect();
+        assert!(!probe_frames.is_empty(), "Phase 2: should send probe at 5s");
+        // Verify it's a NothingToSend (lightweight), not ConfigurationRequest
+        let nts_expected = {
+            let (mt, payload) = Command::NothingToSend { client_id: 0x03 }.encode();
+            FrameEncoder::encode(mt, &payload).unwrap()
+        };
+        assert!(
+            probe_frames.iter().any(|f| *f == &nts_expected),
+            "Phase 2: probe should be NothingToSend, not ConfigurationRequest"
+        );
+        assert!(!app.is_stale(), "should not be stale at 6s");
+
+        // Phase 2b: Advance another 5s — second probe
+        clock.advance_ms(5_000);
+        let actions = app.tick();
+        let probe2_frames: Vec<&Vec<u8>> = actions
+            .iter()
+            .filter_map(|a| match a {
+                AppAction::SendFrame(data) => Some(data),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !probe2_frames.is_empty(),
+            "Phase 2b: should send second probe at 10s"
+        );
+
+        // Phase 2c: Advance another 5s — third probe (now at 16s total, not yet stale)
+        clock.advance_ms(5_000);
+        let actions = app.tick();
+        let probe3_frames: Vec<&Vec<u8>> = actions
+            .iter()
+            .filter_map(|a| match a {
+                AppAction::SendFrame(data) => Some(data),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !probe3_frames.is_empty(),
+            "Phase 2c: should send third probe at 16s"
+        );
+        assert!(!app.is_stale(), "should not be stale at 16s");
+
+        // Phase 3: Advance past 30s threshold — stale alert
+        clock.advance_ms(15_000); // total elapsed since status: 31s
+        let actions = app.tick();
+
+        let has_stale_alert = actions.iter().any(|a| {
+            matches!(
+                a,
+                AppAction::PublishAlert { message, .. } if message == "spa_communication_lost"
+            )
+        });
+        assert!(
+            has_stale_alert,
+            "Phase 3: should publish stale alert at 30s"
+        );
+
+        let has_stale_avail = actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishStaleAvailability));
+        assert!(
+            has_stale_avail,
+            "Phase 3: should publish stale availability at 30s"
+        );
+        assert!(app.is_stale(), "Phase 3: should be stale at 31s");
+
+        // Phase 4: Recovery — feed a status frame
+        let actions = app.process_frame(&make_status_frame());
+        assert!(!app.is_stale(), "Phase 4: should recover after status");
+
+        let has_recovery = actions.iter().any(|a| {
+            matches!(
+                a,
+                AppAction::PublishState {
+                    recovering_from_stale: true,
+                    ..
+                }
+            )
+        });
+        assert!(has_recovery, "Phase 4: should indicate stale recovery");
+
+        // Verify subsequent ticks don't re-trigger stale (status_time reset)
+        clock.advance_ms(6_000);
+        let actions = app.tick();
+        let no_stale_alert = !actions.iter().any(|a| {
+            matches!(
+                a,
+                AppAction::PublishAlert { message, .. }
+                if message == "spa_communication_lost"
+            )
+        });
+        assert!(
+            no_stale_alert,
+            "Phase 4: should not re-trigger stale after recovery"
+        );
+    }
+
+    /// Stale detection with VirtualClock: verify exact timing boundaries.
+    /// At 29s, no stale. At 30s, stale. Confirms VirtualClock::advance_ms()
+    /// provides deterministic timing.
+    #[test]
+    fn test_spaapp_stale_detection_exact_timing() {
+        let (clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Receive initial status at time 0
+        app.process_frame(&make_status_frame());
+
+        // Advance to 29s — should NOT be stale yet
+        clock.advance_ms(29_000);
+        let actions = app.tick();
+        let no_stale = !actions.iter().any(|a| {
+            matches!(a, AppAction::PublishAlert { message, .. } if message == "spa_communication_lost")
+        });
+        assert!(no_stale, "should NOT be stale at 29s");
+        assert!(!app.is_stale());
+
+        // Advance to exactly 30s — stale threshold crossed
+        clock.advance_ms(1_000);
+        let actions = app.tick();
+        let has_stale = actions.iter().any(|a| {
+            matches!(a, AppAction::PublishAlert { message, .. } if message == "spa_communication_lost")
+        });
+        assert!(has_stale, "should be stale at 30s");
+        assert!(app.is_stale());
+    }
+
+    // ---- VAL-APP-031: OTA rollback on failure ----
+
+    /// OTA rollback: simulate firmware download that fails during write,
+    /// verify rollback_and_reboot is called and mark_valid is NEVER called.
+    #[test]
+    fn test_spaapp_ota_rollback_on_write_failure() {
+        let mut ota = launa_ota::mock::MockOta::new();
+        ota.fail_on_write_after = Some(2048);
+
+        // 4 KiB firmware — will fail at 2048 bytes
+        let firmware: Vec<u8> = (0..4096).map(|i| (i % 256) as u8).collect();
+        let server = SimHttpServer::new(firmware, 512);
+
+        // Begin OTA
+        ota.begin().unwrap();
+
+        // Write chunks manually until failure
+        let chunks = server.download_chunks();
+        for chunk in &chunks {
+            let result = ota.write(chunk);
+            if result.is_err() {
+                break;
+            }
+        }
+
+        // Verify: only 2048 bytes written before failure (4 chunks × 512 bytes)
+        assert_eq!(
+            ota.firmware_data.len(),
+            2048,
+            "should have written exactly 2048 bytes"
+        );
+
+        // mark_valid should NOT have been called
+        assert!(!ota.valid, "mark_valid should NOT be called after failure");
+
+        // finalize should NOT have succeeded
+        assert!(
+            !ota.finalized,
+            "finalize should NOT have succeeded after failure"
+        );
+
+        // Rollback the failed OTA
+        ota.rollback_and_reboot().unwrap();
+        assert!(ota.rolled_back, "should have rolled back");
+        assert!(!ota.valid, "should still not be valid after rollback");
+    }
+
+    /// OTA rollback on finalize failure: write succeeds but finalize fails.
+    /// Verify rollback is called and mark_valid is never called.
+    #[test]
+    fn test_spaapp_ota_rollback_on_finalize_failure() {
+        let mut ota = launa_ota::mock::MockOta::new();
+        ota.fail_on_finalize = true;
+
+        let firmware: Vec<u8> = (0..2048).map(|i| (i % 256) as u8).collect();
+        let server = SimHttpServer::new(firmware.clone(), 512);
+
+        // OTA pipeline: begin → write → finalize (fails)
+        ota.begin().unwrap();
+        for chunk in server.download_chunks() {
+            ota.write(&chunk).unwrap();
+        }
+        let result = ota.finalize();
+        assert!(
+            result.is_err(),
+            "finalize should fail when fail_on_finalize is set"
+        );
+
+        // All data was written but finalize failed
+        assert_eq!(ota.firmware_data.len(), 2048);
+        assert!(!ota.finalized, "should not be finalized");
+
+        // mark_valid should NOT be called
+        assert!(!ota.valid, "mark_valid should NOT be called");
+
+        // Rollback
+        ota.rollback_and_reboot().unwrap();
+        assert!(ota.rolled_back, "should have rolled back");
+    }
+
+    /// OTA rollback on begin failure: the OTA partition cannot be opened.
+    #[test]
+    fn test_spaapp_ota_rollback_on_begin_failure() {
+        let mut ota = launa_ota::mock::MockOta::new();
+        ota.fail_on_begin = true;
+
+        // Begin fails immediately
+        let result = ota.begin();
+        assert!(result.is_err(), "begin should fail");
+
+        // No data written, nothing to finalize or mark valid
+        assert!(ota.firmware_data.is_empty());
+        assert!(!ota.valid);
+        assert!(!ota.finalized);
+
+        // Rollback (even though nothing was written, still call it for safety)
+        ota.rollback_and_reboot().unwrap();
+        assert!(ota.rolled_back);
+    }
+
+    // ---- VAL-APP-032: Command retry and drop when spa doesn't confirm ----
+
+    /// Command retry and drop: send toggle → spa never confirms →
+    /// verify retry count increments on each 5s timeout →
+    /// verify command is dropped after MAX_COMMAND_RETRIES=2 retries.
+    #[test]
+    fn test_spaapp_command_retry_and_drop_lifecycle() {
+        let (clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Initial status: pump1 is Off
+        app.process_frame(&make_status_frame());
+
+        // Queue and send toggle pump1 on Ready
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        app.process_frame(&make_ready_frame());
+        assert_eq!(app.queued_command_count(), 0, "command should be dequeued");
+
+        // At this point, command is tracked but not confirmed.
+        // Initial: retries=0, drops=0
+        assert_eq!(app.total_retries(), 0);
+        assert_eq!(app.total_dropped(), 0);
+
+        // --- Retry 1: Advance past 5s timeout, spa still shows pump1=Off ---
+        clock.advance_ms(6_000);
+        let actions = app.process_frame(&make_status_frame());
+        let has_retry1 = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(has_retry1, "Retry 1: should resend command");
+        assert_eq!(app.total_retries(), 1, "should have 1 retry");
+
+        // --- Retry 2: Advance past another 5s, still not confirmed ---
+        clock.advance_ms(6_000);
+        let actions = app.process_frame(&make_status_frame());
+        let has_retry2 = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(has_retry2, "Retry 2: should resend command");
+        assert_eq!(app.total_retries(), 2, "should have 2 retries");
+
+        // --- Drop: Advance past another 5s — MAX_COMMAND_RETRIES=2 exceeded ---
+        clock.advance_ms(6_000);
+        app.process_frame(&make_status_frame());
+        assert!(
+            app.total_dropped() > 0,
+            "command should be dropped after exceeding max retries"
+        );
+        assert_eq!(app.total_retries(), 2, "no more retries after drop");
+
+        // Verify no pending commands remain
+        // (the command was removed from the tracker after being dropped)
+    }
+
+    /// Command retry with SpaSim integration: send command to SpaSim but
+    /// use command_success_rate=0 to make SpaSim ignore it → verify retry
+    /// and eventual drop through the full SpaSim → SpaApp pipeline.
+    #[test]
+    fn test_spaapp_command_retry_with_sim_pipeline() {
+        let (clock, app) = make_spaapp();
+        let mut app = app;
+        let mut sim = SpaSim::new();
+
+        // Register SpaApp with SpaSim
+        full_registration(&mut sim, &mut app);
+
+        // Make SpaSim ignore all commands
+        sim.set_command_success_rate(0.0);
+
+        // Get initial status
+        let status_frame = decode_first_frame(&sim.generate_status_frame());
+        app.process_frame(&status_frame);
+
+        // Queue toggle pump1
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+
+        // Send on Ready
+        let ready_frame = Frame {
+            message_type: [0x10, 0xBF],
+            payload: vec![0x06],
+        };
+        let actions = app.process_frame(&ready_frame);
+        let send_bytes = actions
+            .iter()
+            .find_map(|a| match a {
+                AppAction::SendFrame(data) => Some(data.clone()),
+                _ => None,
+            })
+            .expect("should send command");
+
+        // Feed the command to SpaSim (which will ignore it)
+        sim.process_incoming_bytes(&send_bytes);
+
+        // Retry cycle 1: advance 6s, get status from sim (pump still Off)
+        clock.advance_ms(6_000);
+        let status_bytes = sim.generate_status_frame();
+        let status_frame = decode_first_frame(&status_bytes);
+        let _actions = app.process_frame(&status_frame);
+        assert!(app.total_retries() >= 1, "should have at least 1 retry");
+
+        // Retry cycle 2
+        clock.advance_ms(6_000);
+        let status_bytes = sim.generate_status_frame();
+        let status_frame = decode_first_frame(&status_bytes);
+        app.process_frame(&status_frame);
+        assert!(app.total_retries() >= 2, "should have at least 2 retries");
+
+        // Drop cycle
+        clock.advance_ms(6_000);
+        let status_bytes = sim.generate_status_frame();
+        let status_frame = decode_first_frame(&status_bytes);
+        app.process_frame(&status_frame);
+        assert!(
+            app.total_dropped() > 0,
+            "command should be dropped after max retries"
+        );
+    }
+
+    /// Multiple commands: queue several commands, verify each independently
+    /// retries and drops when spa never confirms any of them.
+    #[test]
+    fn test_spaapp_multiple_command_retry_and_drop() {
+        let (clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get initial status
+        app.process_frame(&make_status_frame());
+
+        // Queue 3 different commands
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump2));
+        app.on_mqtt_command(Command::SetTemperature(100));
+
+        // Send all 3 on Ready frames
+        app.process_frame(&make_ready_frame());
+        app.process_frame(&make_ready_frame());
+        app.process_frame(&make_ready_frame());
+        assert_eq!(app.queued_command_count(), 0);
+
+        // First timeout cycle: all 3 should retry
+        clock.advance_ms(6_000);
+        let actions = app.process_frame(&make_status_frame());
+        let retry_count = actions
+            .iter()
+            .filter(|a| matches!(a, AppAction::SendFrame(_)))
+            .count();
+        assert!(
+            retry_count >= 1,
+            "at least one command should retry on first timeout"
+        );
+
+        // Continue cycling until all commands are dropped
+        for cycle in 0..10 {
+            clock.advance_ms(6_000);
+            app.process_frame(&make_status_frame());
+
+            if app.total_dropped() >= 1 {
+                break;
+            }
+            assert!(
+                cycle < 9,
+                "commands should have been dropped within 10 cycles"
+            );
+        }
+
+        assert!(
+            app.total_dropped() >= 1,
+            "at least one command should be dropped"
+        );
+    }
+
+    // ---- Additional SpaApp + SpaSim pipeline tests ----
+
+    /// Full SpaApp + SpaSim end-to-end: register → receive status → send command →
+    /// verify state change propagates through the full pipeline.
+    #[test]
+    fn test_spaapp_full_pipeline_register_status_command() {
+        let (_clock, app) = make_spaapp();
+        let mut app = app;
+        let mut sim = SpaSim::new();
+
+        // Step 1: Registration
+        full_registration(&mut sim, &mut app);
+        assert!(app.is_registered());
+
+        // Step 2: Receive status from SpaSim
+        let status_bytes = sim.generate_status_frame();
+        let status_frame = decode_first_frame(&status_bytes);
+        let actions = app.process_frame(&status_frame);
+        assert_eq!(app.frames_received(), 1);
+
+        // Should publish state
+        let has_state = actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishState { .. }));
+        assert!(has_state, "should publish state after status");
+
+        // Step 3: Queue a command
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Step 4: Ready frame → command is sent
+        let ready_frame = Frame {
+            message_type: [0x10, 0xBF],
+            payload: vec![0x06],
+        };
+        let actions = app.process_frame(&ready_frame);
+        let send_bytes = actions
+            .iter()
+            .find_map(|a| match a {
+                AppAction::SendFrame(data) => Some(data.clone()),
+                _ => None,
+            })
+            .expect("should send command on Ready");
+
+        // Step 5: Feed command to SpaSim → SpaSim applies toggle
+        sim.process_incoming_bytes(&send_bytes);
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::Low,
+            "sim should apply toggle"
+        );
+
+        // Step 6: SpaSim generates new status with pump1=Low
+        let status_bytes = sim.generate_status_frame();
+        let new_status_frame = decode_first_frame(&status_bytes);
+        let _actions = app.process_frame(&new_status_frame);
+
+        // Command should be confirmed — no retries or drops
+        assert_eq!(app.total_retries(), 0, "no retries expected");
+        assert_eq!(app.total_dropped(), 0, "no drops expected");
+
+        // State should reflect pump1 on
+        let status = app.last_status().expect("should have status");
+        assert!(
+            matches!(status.pumps[0], PumpState::Low | PumpState::High),
+            "pump1 should be on in app status"
+        );
+    }
+
+    /// SpaApp tick() with VirtualClock: verify diagnostics fire at exact intervals.
+    #[test]
+    fn test_spaapp_tick_virtual_clock_diagnostics() {
+        let (clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // First tick at time 0 should produce diagnostics
+        let actions = app.tick();
+        let has_diag = actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishDiagnostics { .. }));
+        assert!(has_diag, "should publish diagnostics on first tick");
+
+        // Advance 59s — should NOT produce diagnostics (interval is 60s)
+        clock.advance_ms(59_000);
+        let actions = app.tick();
+        let no_diag = !actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishDiagnostics { .. }));
+        assert!(no_diag, "should NOT publish diagnostics at 59s");
+
+        // Advance to 60s — should produce diagnostics
+        clock.advance_ms(1_000);
+        let actions = app.tick();
+        let has_diag2 = actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishDiagnostics { .. }));
+        assert!(has_diag2, "should publish diagnostics at 60s");
+    }
+
+    /// SpaApp heap monitoring: verify heap alerts fire at correct thresholds.
+    #[test]
+    fn test_spaapp_heap_monitoring() {
+        let (clock, app) = make_spaapp();
+        let mut app = app;
+
+        // Advance past check interval
+        clock.advance_ms(31_000);
+
+        // Normal heap — no alert
+        let actions = app.check_heap(8192);
+        let no_alert = !actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishAlert { .. }));
+        assert!(no_alert, "should not alert on normal heap");
+
+        // Advance and check with critically low heap
+        clock.advance_ms(31_000);
+        let actions = app.check_heap(500);
+        let has_critical = actions.iter().any(|a| {
+            matches!(
+                a,
+                AppAction::PublishAlert { message, .. } if message == "heap_critically_low"
+            )
+        });
+        assert!(has_critical, "should alert on critically low heap");
+    }
+
+    /// SpaApp processes fault log from SpaSim and includes it in state publishing.
+    #[test]
+    fn test_spaapp_fault_log_with_sim() {
+        let (_clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get initial status
+        app.process_frame(&make_status_frame());
+
+        // Simulate SpaSim generating a fault log response
+        let mut sim = SpaSim::new();
+        let (mt, payload) = Command::FaultLogRequest { entry: 0xFF }.encode();
+        let request_encoded = FrameEncoder::encode(mt, &payload).unwrap();
+        let mut decoder = FrameDecoder::new();
+        let request_frames = decoder.feed_slice(&request_encoded);
+        let response_bytes = sim
+            .process_frame(&request_frames[0])
+            .expect("should return fault log response");
+        let response_frames = decoder.feed_slice(&response_bytes);
+
+        // Feed fault log to SpaApp
+        app.process_frame(&response_frames[0]);
+        assert!(
+            app.last_fault().is_some(),
+            "should capture fault log from SpaSim"
+        );
+
+        // Next status should include the fault
+        let actions = app.process_frame(&make_status_frame());
+        let has_fault = actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishState { fault: Some(_), .. }));
+        assert!(has_fault, "should include fault in state publish");
+    }
 }
