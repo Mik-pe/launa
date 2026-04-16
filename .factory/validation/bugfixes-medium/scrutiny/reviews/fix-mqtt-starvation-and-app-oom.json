@@ -1,0 +1,34 @@
+{
+  "featureId": "fix-mqtt-starvation-and-app-oom",
+  "reviewedAt": "2026-04-17T00:30:00.000Z",
+  "commitId": "6a03974",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "All four fixes are correctly implemented with clean code and no regressions. The MQTT starvation fix uses a bounding counter (MAX_NON_CMD_RECEIVES=5) that resets each loop iteration. The from_hex() OOM fix adds a MAX_HEX_LEN=1024 guard before Vec::with_capacity. The OTA header_buf is replaced with a fixed-size stack array [0u8; 4096] with explicit header_len tracking. The weak eFuse key warning correctly detects all-zero BLOCK3 after XOR mixing.",
+    "issues": [
+      {
+        "file": "app/src/main.rs",
+        "line": 275,
+        "severity": "non_blocking",
+        "description": "The all-zero check in crypto.rs read_key() compares the raw word values (word2, word4, word6, word7) AFTER they have been XOR-mixed into the key array. However, the all_zero check uses the original word variables which are still in scope — this is correct since the XOR only modified key[], not the wordN variables. No issue, just noting the subtlety for future readers."
+      },
+      {
+        "file": "app/src/main.rs",
+        "line": 267,
+        "severity": "non_blocking",
+        "description": "The bounding counter approach is sound but has a subtle behavioral change: when non_cmd_count reaches MAX_NON_CMD_RECEIVES (5), the remaining non-command channels (state_rx, alert_rx) are skipped for this iteration even if they have pending data. This is intentional and documented — the trade-off ensures mqtt.recv() is reached promptly. However, if diagnostics fills the budget, alerts and state updates are delayed until the next iteration. This is acceptable given the 5-slot budget is generous."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The worker noted that expression-level #[allow(unused_assignments)] is not available on the ESP32 toolchain (requires stmt_expr_attributes feature). This is an ESP32/Rust toolchain limitation that could affect future workers adding similar patterns.",
+      "evidence": "Handoff skillFeedback.suggestedChanges: 'The non_cmd_count unused_assignment warnings are cosmetic... Expression-level #[allow] is not available on the ESP32 toolchain (requires stmt_expr_attributes feature).'"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS — All four fixes are well-implemented and verified. (1) MQTT bounding counter limits non-command receives to 5 per iteration, preventing starvation of mqtt.recv(). (2) from_hex() rejects inputs >1024 hex chars, preventing OOM on the 32 KiB ESP32 heap. (3) OTA header_buf uses a fixed-size [0u8; 4096] stack array with explicit header_len tracking, eliminating a 4 KiB heap allocation. (4) Weak eFuse key warning detects all-zero BLOCK3 and logs actionable advice. Worker followed the rust-app-worker skill procedure, ran all required verification commands (cargo +esp check for 3 feature sets, cargo test --workspace with all 490 tests passing, cargo fmt). No regressions. Two non-blocking notes: (a) the counter budget is shared across all 3 non-command channels per iteration, and (b) expression-level #[allow] is unavailable on ESP32 toolchain."
+}

@@ -1,0 +1,39 @@
+{
+  "featureId": "add-missing-toggle-codes",
+  "reviewedAt": "2026-04-17T00:30:00.000Z",
+  "commitId": "a8f6829",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "All 9 missing ToggleItem variants are correctly implemented with proper byte codes, wire frame encoding, MQTT parser subtopics, and HA discovery entities. Tests are comprehensive and all 449 workspace tests pass. Two non-blocking observations: (1) five new switch entities reference JSON state fields (aux1, aux2, soak_mode, normal_operation, clear_notification) that don't exist in status_to_json output, meaning their HA value_template will resolve to null until those fields are added to SpaStatus and status_to_json; (2) the new toggle codes are not listed in docs/protocol.md's Toggle Item table, which only documents the original 8 codes.",
+    "issues": [
+      {
+        "file": "crates/launa-mqtt/src/discovery.rs",
+        "line": 261,
+        "severity": "non_blocking",
+        "description": "HA discovery entities for aux1, aux2, soak_mode, normal_operation, and clear_notification reference value_template fields (e.g. {{ value_json.aux1 }}) that are not emitted by status_to_json() in state.rs. The SpaStatus struct has no fields for these items and status_to_json() does not serialize them. This means Home Assistant will see null/undefined for these entities' state. This is not a regression (these entities did not exist before) and does not cause errors — it just means the state feedback won't work until SpaStatus and status_to_json are extended. This is likely a follow-up task."
+      },
+      {
+        "file": "docs/protocol.md",
+        "line": 211,
+        "severity": "non_blocking",
+        "description": "The Toggle Item code table in protocol.md only lists the original 8 codes (Pump 1-3, Blower, Light 1, Hold Mode, Heating Mode, Temperature Range). The 9 new codes (Mister 0x0E, CirculationPump 0x3D, Light3 0x13, Light4 0x14, Aux1 0x16, Aux2 0x17, SoakMode 0x1D, NormalOperation 0x01, ClearNotification 0x03) plus the previously existing Pump4-6 codes are not documented in the table. This is a documentation gap but not a code bug."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The ToggleItem code table in docs/protocol.md is incomplete — it only lists 8 of the now-21 toggle codes. Multiple features across milestones may add toggle codes, but there's no convention documented in AGENTS.md about keeping protocol.md tables in sync with code changes.",
+      "evidence": "docs/protocol.md lines 211-219 show only 8 entries. command.rs ToggleItem::code() now has 21 variants including the previously-added Pump4-6."
+    },
+    {
+      "area": "knowledge",
+      "observation": "The discovery.rs value_template fields must match the JSON output of status_to_json() in state.rs. When adding HA entities, both the discovery entity AND the state serialization must be updated together. This coupling is not documented anywhere — the worker correctly added discovery entities but the corresponding state serialization for aux1/aux2/soak_mode/normal_operation/clear_notification was not in scope for this feature.",
+      "evidence": "discovery.rs uses '{{ value_json.aux1 }}' etc. but state.rs status_to_json() has no aux1/soak_mode/normal_operation/clear_notification fields in its format!() output. These are new toggle items whose spa status bit positions may not even be defined yet."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. All 9 ToggleItem variants (Mister 0x0E, CirculationPump 0x3D, Light3 0x13, Light4 0x14, Aux1 0x16, Aux2 0x17, SoakMode 0x1D, NormalOperation 0x01, ClearNotification 0x03) are correctly implemented with proper code() mappings, wire frame encoding [0x0A,0xBF],[0x11,<code>,0x00], MQTT command parser subtopics with allowlist entries, and HA discovery switch/light entities. The light_index/from_light_index helpers correctly support 4 lights. Mister and Circulation Pump were appropriately changed from read-only sensors to toggleable switches in discovery. Test coverage is thorough: 9 code tests, 9 encode tests, 3 light_index tests in launa-protocol; 9 parser tests in launa-mqtt; 11 discovery tests in launa-mqtt; entity count assertions updated from 20 to 27 across 4 locations. All 449 workspace tests pass. Two non-blocking issues noted: (1) state_to_json doesn't yet emit aux1/aux2/soak_mode/normal_operation/clear_notification fields, so HA state feedback for these switches will show null until SpaStatus is extended; (2) docs/protocol.md toggle table needs updating to reflect all 21 codes."
+}

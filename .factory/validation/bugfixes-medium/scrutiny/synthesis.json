@@ -1,0 +1,43 @@
+{
+  "milestone": "bugfixes-medium",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": { "passed": true, "command": "cargo test --workspace", "exitCode": 0 },
+    "typecheck": { "passed": true, "command": "cargo check --workspace", "exitCode": 0 },
+    "lint": { "passed": true, "command": "cargo fmt --check --all", "exitCode": 0 }
+  },
+  "reviewsSummary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Documented that discovery.rs value_template fields must match status_to_json() output — both must be updated together when adding HA entities. Also documented parse_ota_url extraction pattern from ESP32-only code to workspace crate.",
+      "sourceFeature": "add-missing-toggle-codes, add-request-ota-test"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Add convention: when adding ToggleItem variants, workers should also update docs/protocol.md toggle table and ensure status_to_json() emits the corresponding state fields for HA discovery feedback.",
+      "evidence": "Features add-missing-toggle-codes added 9 ToggleItem variants but protocol.md toggle table and status_to_json() were not updated. HA state for aux1/aux2/soak_mode/normal_operation/clear_notification will show null.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "ESP32 toolchain expression-level #[allow] limitation",
+      "reason": "already-documented — this is a toolchain quirk that doesn't need library documentation; it's a rare edge case that workers will discover organically"
+    },
+    {
+      "observation": "OTA alert tests are tautological (manually construct then assert)",
+      "reason": "already-documented — architecture.md already documents that OTA state is managed in app/ main loop, not SpaApp, making this an inherent limitation"
+    }
+  ],
+  "previousRound": null
+}

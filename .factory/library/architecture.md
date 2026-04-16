@@ -6,7 +6,7 @@ How the launa system works at a high level.
 
 - **launa-protocol** — Balboa spa RS-485 protocol: frame encode/decode (CRC-8 + HDLC byte stuffing), message dispatch, status/config/fault/filter/info parsing, command encoding, registration state machine
 - **launa-hal** — Hardware abstraction traits: Transport (async, using embedded_io_async), Clock, Network. Mock impls behind `std` feature. Transport trait is async: `async fn read()`, `async fn write()`, `async fn flush()`.
-- **launa-mqtt** — MQTT topics, discovery builder (20 HA entities), command parser (allowlist), state JSON serializer, packet extraction (try_extract_packet, decode_remaining_length). no_std compatible. DiscoveryBuilder generates all HA auto-discovery configs with origin, sw_version, entity_category. JSON construction uses manual alloc::format! with helper functions, not serde.
+- **launa-mqtt** — MQTT topics, discovery builder (27 HA entities), command parser (allowlist), state JSON serializer, packet extraction (try_extract_packet, decode_remaining_length), OTA URL parser (`parse_ota_url()` extracted from app/ for desktop testability). no_std compatible. DiscoveryBuilder generates all HA auto-discovery configs with origin, sw_version, entity_category. JSON construction uses manual alloc::format! with helper functions, not serde. **Important coupling:** discovery entity `value_template` fields must match `status_to_json()` output — both must be updated together when adding new entities.
 - **launa-ota** — OTA firmware update trait + MockOta. no_std, mock behind `mock` feature. MockOta session state machine: `not_started → in_progress → finalized/rolled_back`. begin() sets in_progress=true, successful finalize() sets in_progress=false, rollback_and_reboot() resets state. Failed operations leave state unchanged. MAX_FIRMWARE_SIZE=1_835_008 bytes (1.75 MiB). Failure injection fields: fail_on_begin, fail_on_write_after(N), fail_on_finalize.
 - **launa-esp-ota** — ESP32 OTA implementation using esp-storage directly. CRC-32/MPEG-2 (polynomial 0x04C11DB7, init 0xFFFFFFFF). Otadata read-modify-write for shared sectors. Write offset tracks word-aligned positions.
 - **launa-sim** — Spa simulator (SpaSim/SpaState), SimBroker (functional mock MQTT broker with QoS 1 tracking, subscription matching, loss rate, disconnect/reconnect), SimTransport (virtual RS-485), SpaController, VirtualClock. **Note: launa-sim is NOT `#![no_std]`** — it's a desktop-only crate using `std`. SpaSim supports configurable responses for fault/filter/info/config. SpaController handles all response types. **Note:** SpaSim's generate_config_response() always produces 0x2E (ControlConfiguration), never 0x94 (ConfigurationResponse), so the ConfigurationResponse path cannot be end-to-end tested with the sim.
@@ -18,7 +18,7 @@ How the launa system works at a high level.
 
 - ESP32 firmware binary using esp-hal 1.0 + embassy + esp-radio + esp-nvs + esp-storage
 - 32 KiB heap via esp_alloc — all allocations must be bounded
-- MqttClient uses DiscoveryBuilder from launa-mqtt for HA auto-discovery (20 entities published sequentially with retain=true)
+- MqttClient uses DiscoveryBuilder from launa-mqtt for HA auto-discovery (27 entities published sequentially with retain=true)
 - Firmware version (FIRMWARE_VERSION const from env!("CARGO_PKG_VERSION")) embedded in discovery, state, and diagnostics
 - Panic handler logs + waits 500ms + software_reset() instead of infinite loop
 - MQTT command rate limiting protects spa bus (10 commands per 10-second window, pump timers exempted)

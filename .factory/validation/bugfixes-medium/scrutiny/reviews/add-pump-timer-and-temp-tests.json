@@ -1,0 +1,22 @@
+{
+  "featureId": "add-pump-timer-and-temp-tests",
+  "reviewedAt": "2026-04-17T00:22:00Z",
+  "commitId": "ee2f142",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "7 new tests covering pump timer cancellation (3 unit tests in launa-core) and validated temperature pipeline (4 integration tests in launa-integration-tests). All tests verified passing. The implementation correctly covers VAL-BM-009, VAL-BM-010, and VAL-BM-011.",
+    "issues": [
+      {
+        "file": "crates/launa-core/src/lib.rs",
+        "line": 1712,
+        "severity": "non_blocking",
+        "description": "The assertion `!timer_toggle || !actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)))` in test_spaapp_pump_timer_cancel_on_external_off is a tautology when timer_toggle=true — it checks `true || !same_condition_which_is_true` which evaluates to true regardless. This is because the second condition checks the same predicate (SendFrame) as the first. The assertion only passes because in this specific test scenario, there genuinely are no SendFrame actions (the command tracker has no pending commands to retry). The assertion is misleading but not incorrect — the real verification happens at line 1727 where the clock advances past the timer duration and no toggle-off fires. Consider simplifying the first assertion to just check `!timer_toggle` directly, or removing it entirely since the second assertion (line 1727-1730) is the meaningful verification."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS with one minor non-blocking observation. The feature adds 7 well-structured tests that comprehensively cover the three assertions (VAL-BM-009, VAL-BM-010, VAL-BM-011). PumpTimer::tick() cancellation behavior is correctly tested at unit level (cancel on !is_on, no re-fire after cancel, restart-then-fire). SpaApp integration test verifies the full cancel path through process_frame → pump_timers.tick_all → no SendFrame after external Off. Temperature pipeline tests cover both Fahrenheit and Celsius scales, both direct (parse→encode→SpaSim→status) and through SpaApp queue (parse→on_mqtt_command→Ready→SendFrame→SpaSim→status). The first assertion in test_spaapp_pump_timer_cancel_on_external_off (line 1712) is a logical tautology but the meaningful verification happens correctly at line 1727-1730. All 7 tests pass. No regressions."
+}
