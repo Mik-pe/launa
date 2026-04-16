@@ -1,0 +1,15 @@
+{
+  "featureId": "fix-unbounded-line-buf",
+  "reviewedAt": "2026-04-16T21:35:00.000Z",
+  "commitId": "7d623d3",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean, minimal fix that adds a MAX_LINE_LEN=256 constant and guards the line_buf.push(byte) call with a length check. The change is well-scoped — only the hw-test config receiver is affected, config parsing logic is unchanged beyond the push guard. Excess bytes are silently dropped, which is appropriate for per-byte handling to avoid serial output flooding.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS — All three validation assertions verified: VAL-BH-010 (MAX_LINE_LEN constant defined, push is within length-guarded branch), VAL-BH-011 (excess bytes silently dropped, no OOM/panic possible), VAL-BH-012 (config parsing logic unchanged — newline processing, key=value parsing, CONFIG_START/CONFIG_END handling all identical). The fix is minimal, well-commented, and correctly scoped to the hw-test config receiver only. Worker followed the rust-app-worker skill procedure faithfully and verified with cargo +esp check --features hw-test, cargo check --workspace, and cargo test --workspace (all 486 tests passing)."
+}

@@ -1,0 +1,26 @@
+{
+  "featureId": "fix-nvs-boot-loop",
+  "reviewedAt": "2026-04-16T21:34:00.000Z",
+  "commitId": "441fb99",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean, well-structured fix. The panic!(\"NVS init failed\") in open_nvs() has been replaced with an Option<Nvs> return type that returns None on failure after logging a warning. All three main() entry points (normal, sniff, hw-test) correctly handle the new return type with appropriate fallback behavior. The normal mode entry point additionally disables OTA when NVS is unavailable (since flash is consumed by FlashStorage::new regardless of outcome), which is a sensible design decision. The OTA handling in the main loop correctly uses match (ota.as_mut(), ota_buffers.as_mut()) to safely handle the Option-wrapped OTA objects.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "FlashStorage::new() consumes the FLASH peripheral unconditionally — even if Nvs::new() fails, the peripheral is not recoverable. This is now documented in open_nvs()'s doc comment, but could be useful in .factory/library/ for future workers modifying NVS-related code.",
+      "evidence": "app/src/config.rs:119-121 — doc comment noting 'the flash peripheral is consumed by FlashStorage::new() regardless of whether NVS init succeeds. It is not recoverable on failure.'"
+    },
+    {
+      "area": "conventions",
+      "observation": "The hw-test config mode main() sends structured error messages over UART (CONFIG_ERROR:nvs_unavailable) when NVS fails. This pattern of UART status responses could be documented as a convention for the hw-test config receiver protocol.",
+      "evidence": "app/src/main.rs:858-860 — 'let _ = uart.write(b\"CONFIG_ERROR:nvs_unavailable\\n\");'"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS — All three validation assertions are satisfied. VAL-BH-004: panic! is completely removed from config.rs (grep confirms zero matches). VAL-BH-005: open_nvs() returns None with warn!() on failure, and all callers fall back to AppConfig::default() or report error over UART. VAL-BH-006: Normal mode (line 897), sniff mode (line 577), and hw-test config mode (line 849) all handle the Option<Nvs> return type with proper match blocks. The implementation is thorough, including sensible OTA-disabling behavior when NVS/flash is unavailable in normal mode. No blocking or non-blocking issues found."
+}

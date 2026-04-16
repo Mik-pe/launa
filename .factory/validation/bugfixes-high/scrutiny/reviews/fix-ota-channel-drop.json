@@ -1,0 +1,15 @@
+{
+  "featureId": "fix-ota-channel-drop",
+  "reviewedAt": "2026-04-16T21:40:00.000Z",
+  "commitId": "cfacade3f625f0374422179d97b0f342e7365cbe",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The fix correctly replaces the silent `let _ = OTA_CHANNEL.try_send(url.clone())` pattern with explicit error handling that logs a warn!() and sends an error alert via send_alert() when the OTA channel is full. The change is minimal (4 lines added, 1 removed), focused, and follows existing patterns in the codebase (send_alert is used similarly for other error conditions like ota_update_failed and ota_unavailable_no_flash). All three validation assertions are satisfied.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS — The fix is correct and complete. VAL-BH-001: `let _ = OTA_CHANNEL.try_send(...)` pattern is gone (confirmed via grep — zero matches). VAL-BH-002: Error branch emits `warn!(\"OTA channel full, dropping URL: {:?}\", url)` and calls `send_alert(\"error\", \"ota_channel_full\")`. VAL-BH-003: Full OTA flow is structurally correct — MQTT task receives URL, performs graceful shutdown (publish offline, disconnect, drain UART), sends URL via `ota_tx.send(url).await` (blocking send in MQTT task context — appropriate since it's an async task), main loop receives via `ota_rx.try_receive()`, calls `perform_ota_update()`, handles failure with error log + alert + rollback. The `cargo +esp check` compiled cleanly, `cargo test --workspace` passed all 527 tests, and `cargo fmt --check --all` was clean."
+}

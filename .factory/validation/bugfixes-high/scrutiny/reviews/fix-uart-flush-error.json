@@ -1,0 +1,21 @@
+{
+  "featureId": "fix-uart-flush-error",
+  "reviewedAt": "2026-04-16T23:45:00Z",
+  "commitId": "861b881d1d5e3659334a642bf9bdbcbd26829899",
+  "transcriptSkeletonReviewed": false,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The fix correctly replaces the silent `let _ = self.uart.flush()` with explicit error handling. On flush failure, a 1ms safety delay is inserted before releasing the DE pin (ensuring the shift register has time to drain), then TransportError::Io is returned to the caller. The implementation is clean and well-commented.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "Other locations in app/src/main.rs still use the `let _ = uart.flush()` silent-ignore pattern (lines 790, 811, 855, 861). These are outside this feature's scope but represent the same class of potential issue.",
+      "evidence": "app/src/main.rs:790, :811, :855, :861 all contain `let _ = uart.flush();`"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS — All three validation assertions are satisfied. VAL-BH-007: `let _ = self.uart.flush()` is completely removed from transport.rs. VAL-BH-008: DE pin is only released after successful flush or a 1ms safety delay on failure. VAL-BH-009: Flush failure returns Err(TransportError::Io) to the caller. The fix is well-structured with clear comments explaining the safety-delay rationale. No blocking issues found."
+}
