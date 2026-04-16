@@ -1,0 +1,98 @@
+{
+  "milestone": "core",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 34,
+    "passed": 34,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-CORE-001",
+    "VAL-CORE-002",
+    "VAL-CORE-003",
+    "VAL-CORE-004",
+    "VAL-CORE-005",
+    "VAL-CORE-006",
+    "VAL-CORE-007",
+    "VAL-CORE-008",
+    "VAL-CORE-009",
+    "VAL-CORE-010",
+    "VAL-CORE-011",
+    "VAL-CORE-012",
+    "VAL-CORE-013",
+    "VAL-CORE-014",
+    "VAL-CORE-015",
+    "VAL-CORE-016",
+    "VAL-CORE-017",
+    "VAL-CORE-018",
+    "VAL-CORE-019",
+    "VAL-CORE-020",
+    "VAL-CORE-021",
+    "VAL-CORE-022",
+    "VAL-CORE-023",
+    "VAL-CORE-024",
+    "VAL-CORE-025",
+    "VAL-CORE-026",
+    "VAL-CORE-027",
+    "VAL-CORE-028",
+    "VAL-CORE-029",
+    "VAL-CORE-030",
+    "VAL-CORE-031",
+    "VAL-CORE-032",
+    "VAL-CORE-033",
+    "VAL-CORE-034"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null,
+  "verificationDetail": {
+    "testSuites": {
+      "launa-core": { "passed": 27, "failed": 0, "tests": [
+        "test_temperature_confirm_fahrenheit",
+        "test_temperature_confirm_celsius_even_raw",
+        "test_temperature_confirm_celsius_odd_raw",
+        "test_temperature_confirm_celsius_boundary_odd",
+        "test_temperature_mismatch_triggers_retry_both_scales",
+        "test_stale_probe_not_configuration_request",
+        "test_stale_probe_uses_lightweight_command",
+        "test_stale_probe_interval_preserved",
+        "test_stale_threshold_unchanged_after_probe_fix",
+        "test_diagnostics_periodic"
+      ]},
+      "launa-esp-ota": { "passed": 34, "failed": 0, "tests": [
+        "test_unaligned_consecutive_writes_correct",
+        "test_single_byte_chunks_write_offset",
+        "test_aligned_chunks_no_padding_gap",
+        "test_bytes_written_excludes_padding",
+        "test_unaligned_write_across_sector_boundary",
+        "test_crc32",
+        "test_crc32_mpeg2_known_vector",
+        "test_crc32_incremental_matches_oneshot",
+        "test_verify_hash_mismatch",
+        "test_crc_resets_on_begin",
+        "test_both_otadata_slots_survive_sequential_writes",
+        "test_both_otadata_slots_survive_alternating_writes",
+        "test_detect_running_after_shared_sector_writes",
+        "test_full_ota_cycle",
+        "test_rollback"
+      ]},
+      "launa-hal": { "passed": 18, "failed": 0, "note": "MockTransport implements async Transport trait" },
+      "launa-sim": { "passed": 63, "failed": 0, "note": "SimTransport updated to async Transport" },
+      "launa-mqtt": { "passed": 61, "failed": 0, "tests": [
+        "test_status_to_json_with_firmware_version",
+        "test_status_to_json_all_fields",
+        "test_build_with_retain",
+        "test_discovery_generates_valid_json"
+      ]},
+      "launa-integration-tests": { "passed": 116, "failed": 0 }
+    },
+    "buildChecks": {
+      "cargo_check_workspace": "passed",
+      "cargo_esp_check_app": "passed",
+      "cargo_fmt_check": "passed"
+    }
+  }
+}
