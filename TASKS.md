@@ -70,9 +70,9 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 - [x] **`FrameDecoder` miscounts all parse failures as CRC errors** (`launa-protocol/src/frame.rs`): Renamed `crc_error_count` → `frame_error_count` (field, methods, tests, callers).
 - [x] **`ClientIdAssignment` defaults to 0 on missing byte** (`launa-protocol/src/dispatcher.rs`): Returns `IncomingMessage::Unknown` when ID byte is missing instead of silently assigning 0.
 - [x] **Panic on initial MQTT connect failure — no retry** (`app/src/main.rs`): Replaced panic with retry loop (up to 10 attempts, exponential backoff 5s-60s), falls back to `software_reset()` if all attempts fail.
-- [ ] **UnsafeCell socket buffer reuse — document safety argument** (`app/src/mqtt_client.rs`): Add formal SAFETY comment explaining single-task context, or use `MaybeUninit` pattern.
+- [x] **UnsafeCell socket buffer reuse — document safety argument** (`app/src/mqtt_client.rs`): Add formal SAFETY comment explaining single-task context, or use `MaybeUninit` pattern.
 - [x] **Discovery publishes ~20 JSON strings on heap — OOM burst risk** (`app/src/mqtt_client.rs`): Publish one at a time using DiscoveryBuilder, each payload dropped after publish.
-- [ ] **Sniffer mode allocates unbounded String per frame** (`app/src/main.rs`): Replace `format!("{:02X}")` collect with `write!()` into pre-allocated buffer.
+- [x] **Sniffer mode allocates unbounded String per frame** (`app/src/main.rs`): Replace `format!("{:02X}")` collect with `write!()` into pre-allocated buffer.
 - [ ] **No firmware size / Content-Length validation during OTA** (`app/src/ota.rs`): Parse `Content-Length` from HTTP headers, validate against partition size before `begin()`.
 - [x] **Light entity state boolean vs string mismatch** (`launa-mqtt`): Not a bug — HA compares `value_template` result as string against `payload_on`, so boolean `true` matches `"true"` at runtime. No code change needed.
 - [x] **`DiscoveryBuilder` uses crate version not firmware version** (`launa-mqtt`): Accept `sw_version` as builder parameter instead of `env!("CARGO_PKG_VERSION")`.

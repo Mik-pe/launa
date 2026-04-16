@@ -372,7 +372,70 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
+/// Maximum hex string length for a single frame payload.
+/// Max payload is 253 bytes → 506 hex chars. Round up to 512 (power of two).
+#[cfg(feature = "sniff")]
+const HEX_BUF_SIZE: usize = 512;
 
+/// Fixed-size stack buffer implementing `core::fmt::Write`.
+/// Used by `bytes_to_hex()` to format hex without heap allocation.
+#[cfg(feature = "sniff")]
+struct HexBuf {
+    data: [u8; HEX_BUF_SIZE],
+    len: usize,
+}
+
+#[cfg(feature = "sniff")]
+impl HexBuf {
+    const fn new() -> Self {
+        HexBuf { data: [0u8; HEX_BUF_SIZE], len: 0 }
+    }
+
+    fn as_str(&self) -> &str {
+        // SAFETY: Only ASCII hex characters (0-9, A-F) are written via
+        // core::fmt::UpperHex, which is guaranteed to produce valid UTF-8.
+        unsafe { core::str::from_utf8_unchecked(&self.data[..self.len]) }
+    }
+
+    fn remaining(&self) -> usize {
+        HEX_BUF_SIZE - self.len
+    }
+}
+
+#[cfg(feature = "sniff")]
+impl core::fmt::Write for HexBuf {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let bytes = s.as_bytes();
+        if bytes.len() > self.remaining() {
+            return Err(core::fmt::Error);
+        }
+        self.data[self.len..self.len + bytes.len()].copy_from_slice(bytes);
+        self.len += bytes.len();
+        Ok(())
+    }
+}
+
+/// Format a byte slice as uppercase hex using `write!()` into a pre-allocated
+/// fixed-size stack buffer.
+///
+/// Returns the hex string. If the payload exceeds `HEX_BUF_SIZE / 2` bytes,
+/// the output is silently truncated (no panic, no heap allocation).
+///
+/// This replaces per-byte `alloc::format!("{:02X}").collect()` which causes O(n)
+/// heap allocations on a 32 KiB ESP32 heap.
+#[cfg(feature = "sniff")]
+fn bytes_to_hex<'a>(bytes: &[u8], buf: &'a mut HexBuf) -> &'a str {
+    buf.len = 0; // Reset buffer
+    for &b in bytes {
+        if buf.remaining() < 2 {
+            break; // Truncate rather than overflow
+        }
+        // SAFETY: write!() into our fixed-size HexBuf. Each call appends
+        // exactly 2 hex characters. We checked remaining >= 2 above.
+        let _ = core::fmt::write(buf, format_args!("{:02X}", b));
+    }
+    buf.as_str()
+}
 
 /// Build a diagnostics JSON payload with all counters and publish via the
 /// diagnostics channel. Uses SpaApp's internal counters for frames/retries/drops
@@ -530,15 +593,14 @@ async fn main(spawner: Spawner) {
 
     let mut decoder = FrameDecoder::new();
     let mut buf = [0u8; 256];
+    let mut hex_buf = HexBuf::new();
 
     loop {
         match transport.read(&mut buf).await {
             Ok(n) if n > 0 => {
                 let frames = decoder.feed_slice(&buf[..n]);
                 for frame in &frames {
-                    let hex: alloc::string::String = frame.payload.iter()
-                        .map(|b| alloc::format!("{:02X}", b))
-                        .collect();
+                    let hex = bytes_to_hex(&frame.payload, &mut hex_buf);
                     let mt = alloc::format!("{:02X}{:02X}", frame.message_type[0], frame.message_type[1]);
 
                     // Re-parse to get CRC status

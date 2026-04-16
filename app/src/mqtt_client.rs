@@ -151,9 +151,13 @@ impl MqttClient {
         let socket_rx_buf = mk_static!(UnsafeCell<[u8; 1024]>, UnsafeCell::new([0u8; 1024]));
         let socket_tx_buf = mk_static!(UnsafeCell<[u8; 1024]>, UnsafeCell::new([0u8; 1024]));
 
-        // SAFETY: This is the first and only borrow of these buffers. The
-        // TcpSocket borrows them, and when it's dropped in reconnect(), we'll
-        // reborrow from the stored UnsafeCell fields via get_mut().
+        // SAFETY: This is the first and only borrow of these newly-allocated
+        // buffers. No other task or code path has access to them yet. The
+        // TcpSocket takes exclusive ownership of the &mut slices. When the
+        // socket is later dropped in reconnect(), the single-task ownership
+        // invariant allows us to reborrow from the UnsafeCell fields.
+        // This is sound because MqttClient is owned by a single embassy task
+        // (mqtt_task) — no concurrent access is possible.
         let rx: &'static mut [u8] = unsafe { &mut *socket_rx_buf.get() };
         let tx: &'static mut [u8] = unsafe { &mut *socket_tx_buf.get() };
         let mut socket = TcpSocket::new(*stack, rx, tx);
@@ -262,9 +266,11 @@ impl MqttClient {
         // its borrow on the shared socket buffers.
         self.transport.take();
 
-        // SAFETY: The old TcpSocket was dropped above. We are the only task
-        // accessing these buffers. Use UnsafeCell::get() to obtain a fresh
-        // mutable reference without raw-pointer aliasing UB.
+        // SAFETY: The old TcpSocket was dropped above via self.transport.take(),
+        // releasing its borrow on the shared socket buffers. We are the only task
+        // accessing these buffers: MqttClient is owned by a single embassy task
+        // (mqtt_task), so no concurrent access is possible. The UnsafeCell allows
+        // us to obtain a fresh mutable reference without raw-pointer aliasing UB.
         let rx: &'static mut [u8] = unsafe { &mut *self.socket_rx_buf.get() };
         let tx: &'static mut [u8] = unsafe { &mut *self.socket_tx_buf.get() };
         let mut socket = TcpSocket::new(*self.stack, rx, tx);
