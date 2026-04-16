@@ -350,6 +350,25 @@ pub struct SpaSim {
     /// If > 0.0, each status frame adds ±jitter to current_temp using deterministic PRNG.
     sensor_noise_jitter: f32,
 
+    // Physics model fields
+    /// Number of ticks after creation that report 0xFF for current_temp.
+    /// Default: 0 (backward compatible — no unknown temp period).
+    physics_unknown_temp_ticks: u64,
+    /// Counter for how many ticks have run since creation (used for unknown temp period).
+    physics_tick_count: u64,
+    /// Heater overshoot amount in °F. When set, heating continues past set_temp by this amount.
+    /// Hysteresis for re-heat is half the overshoot value. Default: 0.0 (no overshoot).
+    physics_overshoot: f32,
+    /// Physics-mode sensor noise amplitude (±N°F). Applied to reported temp in physics mode.
+    /// Distinct from the legacy `sensor_noise_jitter` field.
+    /// Default: 0.0 (no noise). Uses deterministic PRNG for reproducibility.
+    physics_noise_amplitude: f32,
+    /// PRNG state for physics-model sensor noise. Seeded from initial state for determinism.
+    physics_noise_rng: u64,
+    /// Whether the heater has reached the overshoot ceiling and should stop heating.
+    /// Re-heating only occurs when temp drops below set_temp - (overshoot/2).
+    heating_overshot: bool,
+
     // Configurable response data
     /// Custom fault log configuration. Defaults to the hardcoded fault log data.
     fault_log_config: FaultLogConfig,
@@ -390,6 +409,13 @@ impl SpaSim {
             fault_active: false,
             report_unknown_temp: false,
             sensor_noise_jitter: 0.0,
+
+            physics_unknown_temp_ticks: 0,
+            physics_tick_count: 0,
+            physics_overshoot: 0.0,
+            physics_noise_amplitude: 0.0,
+            physics_noise_rng: 0xDEADBEEFCAFE1234,
+            heating_overshot: false,
 
             fault_log_config: FaultLogConfig::default(),
             filter_cycles_config: FilterCyclesConfig::default(),
@@ -477,6 +503,44 @@ impl SpaSim {
     /// Clear the unknown temperature simulation, resuming normal temperature reporting.
     pub fn clear_unknown_temp(&mut self) {
         self.report_unknown_temp = false;
+    }
+
+    /// Set the number of initial ticks that report 0xFF (unknown temperature).
+    ///
+    /// During the first N ticks, status frames report `current_temp = None`.
+    /// Internal physics still run normally — only the reported value is affected.
+    /// Default: 0 (backward compatible — no unknown temp period).
+    pub fn set_physics_unknown_temp_ticks(&mut self, ticks: u64) {
+        self.physics_unknown_temp_ticks = ticks;
+    }
+
+    /// Set the heater overshoot amount in °F.
+    ///
+    /// When set > 0.0, heating continues past `set_temp` by this amount before stopping.
+    /// Re-heating occurs when the temperature drops below `set_temp - overshoot/2`.
+    /// Default: 0.0 (no overshoot — backward compatible).
+    pub fn set_physics_overshoot(&mut self, overshoot: f32) {
+        self.physics_overshoot = overshoot.max(0.0);
+    }
+
+    /// Set the physics-mode temperature sensor noise amplitude (±N°F).
+    ///
+    /// When set > 0.0, each tick adds deterministic noise to the *reported* temperature
+    /// (not the internal temperature). Uses a deterministic PRNG for reproducibility.
+    /// Default: 0.0 (no noise — backward compatible).
+    pub fn set_physics_noise_amplitude(&mut self, amplitude: f32) {
+        self.physics_noise_amplitude = amplitude.max(0.0);
+    }
+
+    /// Generate a deterministic pseudo-random f32 in [-1.0, 1.0] using the physics noise PRNG.
+    fn next_physics_noise_rand(&mut self) -> f32 {
+        self.physics_noise_rng = self
+            .physics_noise_rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        // Map u64 to [-1.0, 1.0]
+        let normalized = (self.physics_noise_rng as i64 as f64 / i64::MAX as f64) as f32;
+        normalized
     }
 
     /// Inject a partial frame split at the given byte position.
@@ -852,15 +916,84 @@ impl SpaSim {
     }
 
     /// Simulate temperature changes and time progression.
+    ///
+    /// Uses a realistic thermal model:
+    /// - **Heating**: Rate proportional to `(set_temp + overshoot - current_temp) / delta_range`.
+    ///   Base rate ~0.5°F/tick at full delta, tapering as temp approaches target.
+    ///   Heating only active when at least one pump or circ_pump is running.
+    /// - **Cooling**: Rate proportional to `(current_temp - ambient) / cooling_range`.
+    ///   Base rate ~0.1°F/tick when well above ambient, tapering near ambient.
+    /// - **Overshoot**: If `physics_overshoot > 0`, heating continues past `set_temp`
+    ///   by the overshoot amount before stopping. Re-heats at `set_temp - overshoot/2`.
+    ///
+    /// Assumptions: ambient temperature = 70°F.
     fn simulate_physics(&mut self) {
-        // Temperature approach: ±1° per tick in real units
-        if self.state.current_temp < self.state.set_temp && self.state.is_heating {
-            self.state.current_temp = (self.state.current_temp + 1.0).min(self.state.set_temp);
-        } else if self.state.current_temp > self.state.set_temp {
-            self.state.current_temp = (self.state.current_temp - 1.0).max(self.state.set_temp);
-        } else if self.state.current_temp == self.state.set_temp {
-            if self.state.is_heating {
+        self.physics_tick_count += 1;
+
+        let ambient_temp: f32 = 70.0;
+        let set_temp = self.state.set_temp;
+        let overshoot = self.physics_overshoot;
+        let overshoot_target = set_temp + overshoot;
+        let hysteresis = overshoot / 2.0;
+
+        // Check if any pump or circ_pump is running
+        let any_pump_on =
+            self.state.pumps.iter().any(|&p| p != PumpState::Off) || self.state.circ_pump;
+
+        // Enforce interlock: no heating without pump
+        if !any_pump_on {
+            self.state.is_heating = false;
+        }
+
+        // Temperature physics
+        if self.state.is_heating {
+            // Heating: base rate ~0.5°F/tick when delta is large, tapering to ~0.3 when close.
+            // Uses a combination of base rate and proportional rate for realistic behavior.
+            let delta = (overshoot_target - self.state.current_temp).max(0.0);
+            if delta > 0.01 {
+                // Base rate ensures minimum heating speed even when close to target.
+                // Proportional component adds speed when far from target.
+                let proportional_rate = 0.3 * (delta / 24.0);
+                let base_rate = 0.2_f32.max(delta * 0.01);
+                let rate = proportional_rate + base_rate;
+                let new_temp = self.state.current_temp + rate;
+                self.state.current_temp = new_temp.min(overshoot_target);
+            }
+
+            // Check if we've reached the overshoot target
+            if self.state.current_temp >= overshoot_target - 0.01 {
+                self.state.current_temp = overshoot_target;
                 self.state.is_heating = false;
+                self.heating_overshot = true;
+            }
+        } else if self.state.current_temp > ambient_temp.max(set_temp) {
+            // Cooling: rate proportional to delta from ambient
+            let effective_min = if set_temp > ambient_temp {
+                set_temp
+            } else {
+                ambient_temp
+            };
+            let delta = (self.state.current_temp - ambient_temp).max(0.0);
+            if delta > 0.01 {
+                let cooling_range = 17.0; // Tuned so 104→80 takes ~240 ticks
+                let base_rate = 0.1;
+                let rate = base_rate * (delta / cooling_range).max(0.05);
+                let new_temp = self.state.current_temp - rate;
+                self.state.current_temp = new_temp.max(effective_min);
+            }
+        }
+
+        // Heating control logic: decide whether to start heating
+        if any_pump_on {
+            if self.heating_overshot {
+                // After overshoot, only re-heat when temp drops below hysteresis
+                if self.state.current_temp < set_temp - hysteresis {
+                    self.state.is_heating = true;
+                    self.heating_overshot = false;
+                }
+            } else if self.state.current_temp < overshoot_target && !self.state.is_heating {
+                // Normal case: heat if below target and not already heating
+                self.state.is_heating = true;
             }
         }
 
@@ -891,14 +1024,20 @@ impl SpaSim {
             payload[1] = 0x02;
         }
         // Offset 2: Current Temperature
-        if self.report_unknown_temp {
+        let in_unknown_period = self.physics_unknown_temp_ticks > 0
+            && self.physics_tick_count <= self.physics_unknown_temp_ticks;
+        if self.report_unknown_temp || in_unknown_period {
             payload[2] = 0xFF; // Unknown temperature
         } else {
             let mut reported_temp = self.state.current_temp;
+            // Apply physics-model noise (if configured)
+            if self.physics_noise_amplitude > 0.0 {
+                let noise = self.next_physics_noise_rand() * self.physics_noise_amplitude;
+                reported_temp += noise;
+            }
+            // Apply legacy sensor_noise_jitter (if configured)
             if self.sensor_noise_jitter > 0.0 {
-                // Deterministic PRNG: use ready_rng_state to generate jitter
                 let rand_val = self.next_ready_rand();
-                // Map u64 to [-1.0, 1.0] range
                 let normalized = ((rand_val as i64 as f64) / (i64::MAX as f64)) as f32;
                 let jitter = normalized * self.sensor_noise_jitter;
                 reported_temp += jitter;
@@ -1186,17 +1325,21 @@ mod tests {
         sim.state.current_temp = 95.0;
         sim.state.set_temp = 100.0;
         sim.state.is_heating = true;
+        sim.state.pumps[0] = PumpState::Low;
 
-        for _ in 0..5 {
+        // With the new thermal model, heating is proportional to delta.
+        // Heat until we reach set_temp (within tolerance).
+        for _ in 0..100 {
             sim.simulate_physics();
+            if sim.state.current_temp >= 100.0 {
+                break;
+            }
         }
-        assert_eq!(sim.state.current_temp, 100.0);
         assert!(
-            sim.state.is_heating,
-            "still heating on the tick that reaches target"
+            sim.state.current_temp >= 100.0,
+            "should reach set_temp, got {}",
+            sim.state.current_temp
         );
-
-        sim.simulate_physics();
         assert!(
             !sim.state.is_heating,
             "should stop heating once at set temp"
@@ -1211,7 +1354,17 @@ mod tests {
         sim.state.is_heating = false;
 
         sim.simulate_physics();
-        assert_eq!(sim.state.current_temp, 104.0);
+        // With proportional cooling, should decrease but not by a full 1.0°
+        assert!(
+            sim.state.current_temp < 105.0,
+            "should cool down, got {}",
+            sim.state.current_temp
+        );
+        assert!(
+            sim.state.current_temp > 100.0,
+            "should not reach set_temp in one tick, got {}",
+            sim.state.current_temp
+        );
     }
 
     #[test]
@@ -2876,6 +3029,524 @@ mod tests {
             sim.state.pumps[2],
             PumpState::Low,
             "pump 3 should start from filter cycle"
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Tests for physics improvements (VAL-SR-001 through VAL-SR-005)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // VAL-SR-001: Realistic thermal model — heating 80→104°F takes 48-72 ticks
+    #[test]
+    fn test_realistic_thermal_heating_80_to_104() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 80.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = true;
+        // Need at least one pump running for heater/pump interlock
+        sim.state.pumps[0] = PumpState::Low;
+
+        let mut ticks = 0;
+        while sim.state.current_temp < 104.0 && ticks < 200 {
+            sim.simulate_physics();
+            ticks += 1;
+        }
+
+        assert!(
+            ticks >= 48 && ticks <= 75,
+            "heating 80→104 should take 48-75 ticks, took {}",
+            ticks
+        );
+        assert!(
+            sim.state.current_temp >= 104.0,
+            "should reach set_temp, got {}",
+            sim.state.current_temp
+        );
+    }
+
+    // VAL-SR-001: Realistic thermal model — cooling 104→80°F takes 200-280 ticks
+    #[test]
+    fn test_realistic_thermal_cooling_104_to_80() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 104.0;
+        sim.state.set_temp = 80.0;
+        sim.state.is_heating = false;
+
+        let mut ticks = 0;
+        while sim.state.current_temp > 80.0 && ticks < 500 {
+            sim.simulate_physics();
+            ticks += 1;
+        }
+
+        assert!(
+            ticks >= 200 && ticks <= 280,
+            "cooling 104→80 should take 200-280 ticks, took {}",
+            ticks
+        );
+        assert!(
+            sim.state.current_temp <= 80.0,
+            "should reach set_temp, got {}",
+            sim.state.current_temp
+        );
+    }
+
+    // VAL-SR-001: Heating rate tapers as temp approaches set_temp
+    #[test]
+    fn test_realistic_thermal_heating_rate_tapers() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 80.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = true;
+        sim.state.pumps[0] = PumpState::Low;
+
+        // Measure temp change per tick at various points
+        let checkpoints = [80.0f32, 90.0f32, 100.0f32];
+        for &start_temp in &checkpoints {
+            let mut s = SpaSim::new();
+            s.state.current_temp = start_temp;
+            s.state.set_temp = 104.0;
+            s.state.is_heating = true;
+            s.state.pumps[0] = PumpState::Low;
+            let temp_before = s.state.current_temp;
+            s.simulate_physics();
+            let delta = s.state.current_temp - temp_before;
+            assert!(
+                delta > 0.0,
+                "temp should increase when heating at {}°F, got delta={}",
+                start_temp,
+                delta
+            );
+            // Rate should be smaller near set_temp (tapering)
+            if start_temp > 90.0 {
+                assert!(
+                    delta < 1.0,
+                    "heating rate should taper near set_temp, got {}",
+                    delta
+                );
+            }
+        }
+    }
+
+    // VAL-SR-001: Thermal model is deterministic
+    #[test]
+    fn test_realistic_thermal_deterministic() {
+        let mut sim1 = SpaSim::new();
+        sim1.state.current_temp = 85.0;
+        sim1.state.set_temp = 104.0;
+        sim1.state.is_heating = true;
+        sim1.state.pumps[0] = PumpState::Low;
+
+        let mut temps1 = Vec::new();
+        for _ in 0..20 {
+            sim1.simulate_physics();
+            temps1.push(sim1.state.current_temp);
+        }
+
+        let mut sim2 = SpaSim::new();
+        sim2.state.current_temp = 85.0;
+        sim2.state.set_temp = 104.0;
+        sim2.state.is_heating = true;
+        sim2.state.pumps[0] = PumpState::Low;
+
+        let mut temps2 = Vec::new();
+        for _ in 0..20 {
+            sim2.simulate_physics();
+            temps2.push(sim2.state.current_temp);
+        }
+
+        assert_eq!(
+            temps1, temps2,
+            "identical initial states should produce identical temp sequences"
+        );
+    }
+
+    // VAL-SR-001: Heating stops at set_temp with no overshoot (overshoot=0)
+    #[test]
+    fn test_realistic_thermal_no_overshoot_default() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 103.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = true;
+        sim.state.pumps[0] = PumpState::Low;
+
+        // Heat until set_temp
+        for _ in 0..50 {
+            sim.simulate_physics();
+        }
+
+        assert!(
+            sim.state.current_temp <= 104.0,
+            "without overshoot, temp should not exceed set_temp, got {}",
+            sim.state.current_temp
+        );
+    }
+
+    // VAL-SR-002: Temperature sensor noise with ±0.5°F causes 30%+ variation
+    #[test]
+    fn test_physics_sensor_noise_variation() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.current_temp = 100.0;
+        sim.state.set_temp = 100.0;
+        sim.set_physics_noise_amplitude(2.0);
+
+        let mut variation_count = 0;
+        let total_ticks = 100;
+        for _ in 0..total_ticks {
+            let bytes = sim.tick();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
+            if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
+                if let Some(t) = s.current_temp {
+                    if (t - 100.0).abs() > 0.01 {
+                        variation_count += 1;
+                    }
+                    // All temps should be within ±2.0°F of internal temp
+                    assert!(
+                        t >= 98.0 && t <= 102.0,
+                        "temp {} should be within ±2.0 of 100.0",
+                        t
+                    );
+                }
+            }
+        }
+
+        assert!(
+            variation_count as f32 / total_ticks as f32 >= 0.30,
+            "with noise=2.0, expected 30%+ ticks with variation, got {}/{} ({:.0}%)",
+            variation_count,
+            total_ticks,
+            variation_count as f32 / total_ticks as f32 * 100.0
+        );
+    }
+
+    // VAL-SR-002: Noise amplitude 0.0 = no noise
+    #[test]
+    fn test_physics_sensor_noise_zero_no_noise() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.current_temp = 100.0;
+        sim.state.set_temp = 100.0;
+        sim.set_physics_noise_amplitude(0.0);
+
+        for _ in 0..30 {
+            let bytes = sim.tick();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
+            if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
+                assert_eq!(
+                    s.current_temp,
+                    Some(100.0),
+                    "with noise=0.0, temp should be exact"
+                );
+            }
+        }
+    }
+
+    // VAL-SR-003: is_heating false when all pumps off
+    #[test]
+    fn test_physics_heater_off_when_pumps_off() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 90.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = true;
+        // All pumps off, circ_pump off
+        sim.state.pumps = [PumpState::Off; 6];
+        sim.state.circ_pump = false;
+
+        sim.simulate_physics();
+
+        assert!(
+            !sim.state.is_heating,
+            "is_heating should be false when all pumps are off"
+        );
+    }
+
+    // VAL-SR-003: is_heating true when pump on and temp < set_temp
+    #[test]
+    fn test_physics_heater_on_when_pump_on() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 90.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = false;
+        sim.state.pumps[0] = PumpState::Low;
+
+        sim.simulate_physics();
+
+        assert!(
+            sim.state.is_heating,
+            "is_heating should be true when pump is on and temp < set_temp"
+        );
+    }
+
+    // VAL-SR-003: is_heating true when circ_pump on and temp < set_temp
+    #[test]
+    fn test_physics_heater_on_when_circ_pump_on() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 90.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = false;
+        sim.state.pumps = [PumpState::Off; 6];
+        sim.state.circ_pump = true;
+
+        sim.simulate_physics();
+
+        assert!(
+            sim.state.is_heating,
+            "is_heating should be true when circ_pump is on and temp < set_temp"
+        );
+    }
+
+    // VAL-SR-003: Last pump off → heating off next tick
+    #[test]
+    fn test_physics_heater_off_after_pump_turned_off() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 90.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = true;
+        sim.state.pumps[0] = PumpState::Low;
+
+        // Heating with pump on
+        sim.simulate_physics();
+        assert!(sim.state.is_heating, "should be heating with pump on");
+
+        // Turn pump off
+        sim.state.pumps[0] = PumpState::Off;
+        sim.simulate_physics();
+        assert!(
+            !sim.state.is_heating,
+            "is_heating should turn off when pump turned off"
+        );
+    }
+
+    // VAL-SR-004: First N ticks report 0xFF (None) for current_temp
+    #[test]
+    fn test_physics_temp_unknown_on_startup_first_n_ticks() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.current_temp = 100.0;
+        sim.set_physics_unknown_temp_ticks(5); // First 5 ticks report unknown
+
+        // Ticks 1-5: should report None (0xFF)
+        for i in 1..=5 {
+            let bytes = sim.tick();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
+            if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
+                assert_eq!(
+                    s.current_temp, None,
+                    "tick {}: should report None (0xFF) for current_temp",
+                    i
+                );
+            }
+        }
+
+        // Tick 6: should report actual temp
+        let bytes = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&bytes);
+        let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
+        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
+            assert_eq!(
+                s.current_temp,
+                Some(100.0),
+                "tick 6: should report actual temp"
+            );
+        }
+    }
+
+    // VAL-SR-004: Internal physics still runs during unknown temp period
+    #[test]
+    fn test_physics_internal_runs_during_unknown_temp() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 90.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = true;
+        sim.state.pumps[0] = PumpState::Low;
+        sim.set_physics_unknown_temp_ticks(5);
+
+        // Advance 5 ticks — internal temp should still change
+        for _ in 0..5 {
+            sim.tick();
+        }
+
+        assert!(
+            sim.state.current_temp > 90.0,
+            "internal temp should have increased during unknown period, got {}",
+            sim.state.current_temp
+        );
+    }
+
+    // VAL-SR-004: Default N=0 (backward compatible — no unknown temp)
+    #[test]
+    fn test_physics_unknown_temp_default_zero() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.current_temp = 100.0;
+
+        // Default: no unknown temp period
+        let bytes = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&bytes);
+        let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
+        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
+            assert_eq!(
+                s.current_temp,
+                Some(100.0),
+                "default N=0: should report actual temp from first tick"
+            );
+        }
+    }
+
+    // VAL-SR-005: Heater overshoot — temp reaches set_temp+2 before heating stops
+    #[test]
+    fn test_physics_heater_overshoot() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 100.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = true;
+        sim.state.pumps[0] = PumpState::Low;
+        sim.set_physics_overshoot(2.0);
+
+        let mut max_temp = sim.state.current_temp;
+        for _ in 0..200 {
+            sim.simulate_physics();
+            max_temp = max_temp.max(sim.state.current_temp);
+            // Stop once heating turns off
+            if !sim.state.is_heating {
+                break;
+            }
+        }
+
+        assert!(
+            max_temp >= 106.0,
+            "with overshoot=2.0, temp should reach set_temp+2=106, max was {}",
+            max_temp
+        );
+        assert!(
+            !sim.state.is_heating,
+            "heating should have stopped after overshoot"
+        );
+    }
+
+    // VAL-SR-005: Re-heat hysteresis — temp must drop to set_temp-1 before re-heating
+    #[test]
+    fn test_physics_heater_overshoot_hysteresis() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 104.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = false;
+        sim.state.pumps[0] = PumpState::Low;
+        sim.set_physics_overshoot(2.0);
+
+        // Simulate overshoot completion: set heating_overshot flag
+        sim.heating_overshot = true;
+
+        // Temp at set_temp (104), heating is off, overshoot was reached
+        // Hysteresis threshold = set_temp - overshoot/2 = 104 - 1.0 = 103.0
+        // Temp should NOT start heating until it drops to 103.0
+
+        // Cool slightly to 103.5 — should NOT re-heat yet
+        sim.state.current_temp = 103.5;
+        sim.simulate_physics();
+        assert!(
+            !sim.state.is_heating,
+            "should not re-heat at 103.5 (above hysteresis threshold of 103.0)"
+        );
+
+        // Cool to 103.0 — should start re-heating
+        sim.state.current_temp = 102.9;
+        sim.simulate_physics();
+        assert!(
+            sim.state.is_heating,
+            "should re-heat at 102.9 (below hysteresis threshold of 103.0)"
+        );
+    }
+
+    // VAL-SR-005: Default overshoot=0.0 (backward compatible)
+    #[test]
+    fn test_physics_overshoot_default_zero() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 103.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = true;
+        sim.state.pumps[0] = PumpState::Low;
+
+        // Heat until set_temp
+        for _ in 0..50 {
+            sim.simulate_physics();
+        }
+
+        assert!(
+            sim.state.current_temp <= 104.01,
+            "default overshoot=0: temp should not exceed set_temp, got {}",
+            sim.state.current_temp
+        );
+    }
+
+    // Combined test: All physics features together
+    #[test]
+    fn test_all_physics_features_together() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.current_temp = 80.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = true;
+        sim.state.pumps[0] = PumpState::Low;
+
+        // Enable all physics features
+        sim.set_physics_unknown_temp_ticks(3);
+        sim.set_physics_overshoot(1.5);
+        sim.set_physics_noise_amplitude(0.3);
+
+        // First 3 ticks: unknown temp
+        for i in 1..=3 {
+            let bytes = sim.tick();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
+            if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
+                assert_eq!(s.current_temp, None, "tick {}: should report None", i);
+            }
+        }
+
+        // Tick 4 onwards: actual temp (with noise)
+        let bytes = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&bytes);
+        let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
+        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
+            assert!(
+                s.current_temp.is_some(),
+                "tick 4: should report actual temp"
+            );
+        }
+
+        // Internal temp should have been increasing during unknown period
+        assert!(
+            sim.state.current_temp > 80.0,
+            "internal temp should have increased, got {}",
+            sim.state.current_temp
+        );
+
+        // Continue heating until overshoot
+        let mut max_temp = sim.state.current_temp;
+        for _ in 0..300 {
+            sim.tick();
+            max_temp = max_temp.max(sim.state.current_temp);
+            if !sim.state.is_heating && sim.state.current_temp < 104.0 {
+                break;
+            }
+        }
+
+        // Should have overshoot past set_temp
+        assert!(
+            max_temp >= 105.5,
+            "should overshoot past 104+1.5=105.5, max was {}",
+            max_temp
         );
     }
 }

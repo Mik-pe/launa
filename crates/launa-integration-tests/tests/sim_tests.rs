@@ -634,19 +634,28 @@ fn test_heating_simulation() {
     spa.state.current_temp = 90.0;
     spa.state.set_temp = 100.0;
     spa.state.is_heating = true;
+    spa.state.pumps[0] = PumpState::Low; // Enable pump for heater interlock
 
     complete_registration(&mut spa, &mut transport, &mut controller);
 
-    for _ in 0..12 {
+    // With the proportional thermal model, heating takes more ticks.
+    for _ in 0..80 {
         let events = run_tick(&mut spa, &mut transport, &mut controller);
         for event in &events {
             if let ControllerEvent::StatusUpdate(status) = event {
                 broker.publish_state(&status);
             }
         }
+        if spa.state.current_temp >= 100.0 {
+            break;
+        }
     }
 
-    assert_eq!(spa.state.current_temp, 100.0);
+    assert!(
+        spa.state.current_temp >= 100.0,
+        "should reach set_temp, got {}",
+        spa.state.current_temp
+    );
 
     let state = broker.last_state().unwrap();
     let parsed: serde_json::Value = serde_json::from_str(state).unwrap();
@@ -665,11 +674,19 @@ fn test_cooling_simulation() {
 
     complete_registration(&mut spa, &mut transport, &mut controller);
 
-    for _ in 0..4 {
+    // With the proportional thermal model, cooling takes many more ticks.
+    for _ in 0..400 {
         run_tick(&mut spa, &mut transport, &mut controller);
+        if spa.state.current_temp <= 100.0 {
+            break;
+        }
     }
 
-    assert_eq!(spa.state.current_temp, 100.0);
+    assert!(
+        spa.state.current_temp <= 100.0,
+        "should cool to set_temp, got {}",
+        spa.state.current_temp
+    );
 }
 
 #[test]

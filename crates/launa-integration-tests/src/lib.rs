@@ -834,17 +834,21 @@ mod tests {
         sim.state.current_temp = 95.0;
         sim.state.set_temp = 100.0;
         sim.state.is_heating = true;
+        sim.state.pumps[0] = PumpState::Low;
 
-        sim.tick();
-        assert_eq!(sim.state.current_temp, 96.0);
-
-        sim.tick();
-        assert_eq!(sim.state.current_temp, 97.0);
-
-        for _ in 0..10 {
+        // With the proportional thermal model, heating is no longer exactly +1°/tick.
+        // Verify that temp increases each tick and eventually reaches set_temp.
+        for _ in 0..50 {
             sim.tick();
+            if sim.state.current_temp >= 100.0 {
+                break;
+            }
         }
-        assert_eq!(sim.state.current_temp, 100.0);
+        assert!(
+            sim.state.current_temp >= 100.0,
+            "should reach set_temp after 50 ticks, got {}",
+            sim.state.current_temp
+        );
     }
 
     #[test]
@@ -855,7 +859,17 @@ mod tests {
         sim.state.is_heating = false;
 
         sim.tick();
-        assert_eq!(sim.state.current_temp, 99.0);
+        // With proportional cooling, temp should decrease but not necessarily by exactly 1.0
+        assert!(
+            sim.state.current_temp < 100.0,
+            "should cool down, got {}",
+            sim.state.current_temp
+        );
+        assert!(
+            sim.state.current_temp > 95.0,
+            "should not reach set_temp in one tick, got {}",
+            sim.state.current_temp
+        );
     }
 
     #[test]
@@ -2353,6 +2367,10 @@ mod tests {
         let mut diag_count: u32 = 0;
         let mut sim = SpaSim::new();
 
+        // Turn on a pump so the heater/pump interlock allows heating.
+        // SpaSim starts at 100°F, set point is 104°F.
+        sim.state.pumps[0] = PumpState::Low;
+
         // Phase 1: Warm-up and steady state — simulate 1000 seconds at 1-second
         // resolution. SpaSim starts at 100°F, set point is 104°F, so it takes
         // ~4 ticks to reach set point.
@@ -2406,9 +2424,9 @@ mod tests {
 
         // Verify: no panics (we got here!)
 
-        // Temperature should have reached set point (104°F) during Phase 1
-        // and stayed stable. SpaSim advances +1°F per tick, so after 4 ticks
-        // it's at 104, and stays there.
+        // Temperature should have reached set point (104°F) during Phase 1.
+        // With the proportional thermal model and pump on, it reaches 104°F
+        // within ~10 ticks (close to set point already).
         let status = app.last_status().expect("should have a status");
         assert!(
             status.current_temp >= Some(104.0),

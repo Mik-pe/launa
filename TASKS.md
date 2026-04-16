@@ -231,11 +231,11 @@ Add new error injection capabilities to SpaSim and integration tests that exerci
 
 #### Tier 4 — Physics Improvements
 
-- [ ] **Realistic thermal model**: Replace linear +/-1°/tick with rate proportional to temp delta (cooling) and heater output (heating). ~0.5°F/min heating, ~0.1°F/min cooling.
-- [ ] **Temperature sensor noise**: Small random jitter (+/-0.5°F) on current_temp each tick. Real sensors are noisy.
-- [ ] **Heater/pump interlock**: `is_heating` should only be true when circ pump or at least one pump is running. Spa won't heat without water circulation.
-- [ ] **Temperature unknown (0xFF) on startup**: First N ticks after sim creation should report current_temp as 0xFF (unknown) until sensor stabilizes.
-- [ ] **Heater overshoot**: Allow temp to overshoot set_temp by 1-2°F before thermostat cuts off. Matches real spa behavior.
+- [x] **Realistic thermal model**: Replace linear +/-1°/tick with rate proportional to temp delta (cooling) and heater output (heating). ~0.5°F/min heating, ~0.1°F/min cooling.
+- [x] **Temperature sensor noise**: Small random jitter (+/-0.5°F) on current_temp each tick. Real sensors are noisy.
+- [x] **Heater/pump interlock**: `is_heating` should only be true when circ pump or at least one pump is running. Spa won't heat without water circulation.
+- [x] **Temperature unknown (0xFF) on startup**: First N ticks after sim creation should report current_temp as 0xFF (unknown) until sensor stabilizes.
+- [x] **Heater overshoot**: Allow temp to overshoot set_temp by 1-2°F before thermostat cuts off. Matches real spa behavior.
 
 #### Tier 5 — Multi-Frame Protocol & Advanced
 
