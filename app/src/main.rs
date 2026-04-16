@@ -300,7 +300,7 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                     continue;
                 }
 
-                // Handle commands and pump timers
+                // Handle commands and pump timers (with rate limiting)
                 let (scale, range) = match last_scale_range {
                     Some((s, r)) => (Some(s), Some(r)),
                     None => (None, None),
@@ -308,8 +308,11 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 if let Some(action) = mqtt_client::parse_command(&cmd_base, &topic, &payload, scale, range) {
                     match action {
                         mqtt_client::MqttAction::Command(cmd) => {
-                            info!("MQTT command: {:?}", cmd);
-                            cmd_sender.send(cmd).await;
+                            if mqtt.check_rate_limit() {
+                                info!("MQTT command: {:?}", cmd);
+                                cmd_sender.send(cmd).await;
+                            }
+                            // Rate-limited commands are silently dropped (warn logged in check_rate_limit)
                         }
                         mqtt_client::MqttAction::StartPumpTimer { pump, minutes } => {
                             info!("MQTT pump timer: pump {} for {} min", pump, minutes);

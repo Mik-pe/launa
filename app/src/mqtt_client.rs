@@ -27,6 +27,52 @@ use crate::config::AppConfig;
 use crate::mk_static;
 use crate::net_util;
 
+// ── MQTT command rate limiting ─────────────────────────────────────────
+
+/// Maximum number of MQTT commands allowed per rate-limit window.
+/// Protects the spa RS-485 bus from command flooding.
+const RATE_LIMIT_MAX_COMMANDS: usize = 10;
+
+/// Duration of the rate-limit window in seconds.
+/// After this window elapses, the command counter resets.
+const RATE_LIMIT_WINDOW_SECS: u64 = 10;
+
+/// Tracks command count within a sliding time window.
+/// Commands exceeding `RATE_LIMIT_MAX_COMMANDS` per `RATE_LIMIT_WINDOW_SECS`
+/// are dropped to protect the spa RS-485 bus.
+struct RateLimiter {
+    /// Number of commands seen in the current window.
+    count: usize,
+    /// Start time of the current window.
+    window_start: Instant,
+}
+
+impl RateLimiter {
+    const fn new() -> Self {
+        RateLimiter {
+            count: 0,
+            window_start: Instant::MIN,
+        }
+    }
+
+    /// Check if a command is allowed under the rate limit.
+    /// Returns `true` if the command should be forwarded, `false` if it
+    /// should be dropped. Automatically resets the window when it expires.
+    fn check(&mut self) -> bool {
+        let now = Instant::now();
+        let window_duration = Duration::from_secs(RATE_LIMIT_WINDOW_SECS);
+
+        // Reset window if expired
+        if now.duration_since(self.window_start) >= window_duration {
+            self.count = 0;
+            self.window_start = now;
+        }
+
+        self.count += 1;
+        self.count <= RATE_LIMIT_MAX_COMMANDS
+    }
+}
+
 // ── MQTT action type (command vs timer) ────────────────────────────────
 
 #[derive(Debug)]
@@ -94,6 +140,7 @@ pub struct MqttClient {
     next_packet_id: u16,
     last_outgoing: Instant,
     rx_buffer: Vec<u8>,
+    rate_limiter: RateLimiter,
 }
 
 #[derive(Debug)]
@@ -190,6 +237,7 @@ impl MqttClient {
             next_packet_id: 1,
             last_outgoing: Instant::now(),
             rx_buffer: Vec::new(),
+            rate_limiter: RateLimiter::new(),
         };
 
         let client_id = format!("launa_{}", config.device_id);
@@ -653,6 +701,22 @@ impl MqttClient {
         topic == "homeassistant/status"
     }
 
+    /// Check if a command is allowed under the rate limit.
+    /// Returns `true` if the command should be forwarded.
+    /// Returns `false` if the command exceeds the rate limit and should be dropped.
+    /// Logs a warning when dropping.
+    pub fn check_rate_limit(&mut self) -> bool {
+        if self.rate_limiter.check() {
+            true
+        } else {
+            warn!(
+                "MQTT command rate limited: exceeded {} commands per {}s window",
+                RATE_LIMIT_MAX_COMMANDS, RATE_LIMIT_WINDOW_SECS
+            );
+            false
+        }
+    }
+
     /// Send MQTT DISCONNECT packet and flush the transport.
     /// Call this before OTA reboot to notify the broker cleanly.
     pub async fn disconnect(&mut self) {
@@ -679,7 +743,33 @@ impl MqttClient {
             let after_key = after_key.trim_start();
             let after_key = after_key.strip_prefix('"')?;
             if let Some(end) = after_key.find('"') {
-                return Some(String::from(&after_key[..end]));
+                let url = &after_key[..end];
+                // Validate URL scheme — only http:// is allowed for OTA.
+                // Reject file://, ftp://, https://, data:, etc.
+                if let Some(scheme_end) = url.find("://") {
+                    let scheme = &url[..scheme_end];
+                    if scheme != "http" {
+                        warn!(
+                            "OTA URL rejected: unsupported scheme '{}' (only http:// allowed)",
+                            scheme
+                        );
+                        return None;
+                    }
+                } else if url.find(':').map_or(false, |i| i < 8) {
+                    // Matches patterns like "data:..." without "://"
+                    let scheme_end = url.find(':').unwrap();
+                    let scheme = &url[..scheme_end];
+                    warn!(
+                        "OTA URL rejected: unsupported scheme '{}' (only http:// allowed)",
+                        scheme
+                    );
+                    return None;
+                } else {
+                    // No scheme at all — reject
+                    warn!("OTA URL rejected: no scheme (only http:// allowed)");
+                    return None;
+                }
+                return Some(String::from(url));
             }
             return None;
         }

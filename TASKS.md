@@ -93,8 +93,8 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 ### MEDIUM — Recommended
 
 - [ ] **Add panic-reboot handler** (`app/`): `esp-backtrace` panic handler loops forever. Add custom handler that logs backtrace, waits, then `software_reset()`.
-- [ ] **Add MQTT command rate limiting** (`app/src/mqtt_client.rs`): Max N commands per 10 seconds. Drop excess to protect spa bus.
-- [ ] **Validate OTA URL scheme** (`app/src/mqtt_client.rs`): Require `http://`, reject arbitrary schemes.
+- [x] **Add MQTT command rate limiting** (`app/src/mqtt_client.rs`): Max N commands per 10 seconds. Drop excess to protect spa bus.
+- [x] **Validate OTA URL scheme** (`app/src/mqtt_client.rs`): Require `http://`, reject arbitrary schemes.
 - [x] **Add firmware version to diagnostics JSON** (`app/src/main.rs`): Include `env!("CARGO_PKG_VERSION")` in periodic diagnostics payload.
 - [ ] **Mask sensitive fields in hw-test logging** (`app/src/main.rs`): Don't log WiFi SSID/MQTT host in production.
 - [x] **`SpaApp::device_id` stored but never read** (`launa-core`): Removed dead `device_id` field and `new()` parameter — callers pass it separately.
