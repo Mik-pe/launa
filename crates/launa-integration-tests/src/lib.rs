@@ -1855,7 +1855,7 @@ mod tests {
     /// The clock is leaked to satisfy the `'static` lifetime needed by SpaApp.
     fn make_spaapp() -> (&'static VirtualClock, SpaApp<'static>) {
         let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
-        let app = SpaApp::new("test_spa", clock);
+        let app = SpaApp::new(clock);
         (clock, app)
     }
 

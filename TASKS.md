@@ -74,8 +74,8 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 - [ ] **Discovery publishes ~20 JSON strings on heap — OOM burst risk** (`app/src/mqtt_client.rs`): Publish one at a time with heap checks between, or use pre-allocated buffers.
 - [ ] **Sniffer mode allocates unbounded String per frame** (`app/src/main.rs`): Replace `format!("{:02X}")` collect with `write!()` into pre-allocated buffer.
 - [ ] **No firmware size / Content-Length validation during OTA** (`app/src/ota.rs`): Parse `Content-Length` from HTTP headers, validate against partition size before `begin()`.
-- [ ] **Light entity state boolean vs string mismatch** (`launa-mqtt`): `value_template` extracts boolean `true`, but `payload_on` is string `"true"`. Inconsistent — standardize.
-- [ ] **`DiscoveryBuilder` uses crate version not firmware version** (`launa-mqtt`): Accept `sw_version` as builder parameter instead of `env!("CARGO_PKG_VERSION")`.
+- [x] **Light entity state boolean vs string mismatch** (`launa-mqtt`): Not a bug — HA compares `value_template` result as string against `payload_on`, so boolean `true` matches `"true"` at runtime. No code change needed.
+- [x] **`DiscoveryBuilder` uses crate version not firmware version** (`launa-mqtt`): Accept `sw_version` as builder parameter instead of `env!("CARGO_PKG_VERSION")`.
 - [x] **`finalize()` missing empty-image check** (`launa-esp-ota`): Added `bytes_written == 0` guard in `finalize()` — refuses to set boot to empty partition.
 - [ ] **Otadata both slots may share same 4 KiB sector** (`launa-esp-ota`): Verify slot 1 offset is in its own sector (0x11000, not 0x10020). Erasing one destroys the other on power loss.
 - [ ] **Write offset tracking on unaligned chunks** (`launa-esp-ota`): `write_offset` increments by raw chunk length, but flash writes are word-aligned. Padding bytes overlap with next write.
@@ -93,8 +93,8 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 - [ ] **Validate OTA URL scheme** (`app/src/mqtt_client.rs`): Require `http://`, reject arbitrary schemes.
 - [ ] **Add firmware version to diagnostics JSON** (`app/src/main.rs`): Include `env!("CARGO_PKG_VERSION")` in periodic diagnostics payload.
 - [ ] **Mask sensitive fields in hw-test logging** (`app/src/main.rs`): Don't log WiFi SSID/MQTT host in production.
-- [ ] **`SpaApp::device_id` stored but never read** (`launa-core`): Dead code wasting heap. Expose getter or remove.
-- [ ] **Missing entity_category "diagnostic" on alert/diagnostics sensors** (`launa-mqtt`): Should appear in HA diagnostics section, not alongside primary sensors.
+- [x] **`SpaApp::device_id` stored but never read** (`launa-core`): Removed dead `device_id` field and `new()` parameter — callers pass it separately.
+- [x] **Missing entity_category "diagnostic" on alert/diagnostics sensors** (`launa-mqtt`): Should appear in HA diagnostics section, not alongside primary sensors.
 - [ ] **Sim responses are static/hardcoded** (`launa-sim`): Fault log, filter cycles, information, config all return fixed data. Add configurability for testing edge cases.
 - [ ] **SpaController ignores config/fault/filter/info responses** (`launa-sim`): Only handles StatusUpdate, Ready, NewClientQuery. Other responses discarded in integration tests.
 - [ ] **Config validation gaps in xtask** (`xtask/src/config.rs`): No validation of `device.id` format/length, serial port existence, or MQTT port range.

@@ -15,7 +15,7 @@
 //! use launa_hal::Clock;
 //!
 //! let clock = Box::leak(Box::new(VirtualClock::new()));
-//! let mut app = SpaApp::new("test_spa", clock);
+//! let mut app = SpaApp::new(clock);
 //!
 //! // Process a tick, get actions back
 //! let actions = app.tick();
@@ -480,7 +480,6 @@ impl HeapMonitor {
 /// commands, and periodic ticks — it returns `Vec<AppAction>` side effects
 /// for the caller to execute.
 pub struct SpaApp<'a> {
-    device_id: String,
     clock: &'a dyn Clock,
 
     // Registration
@@ -512,10 +511,9 @@ pub struct SpaApp<'a> {
 }
 
 impl<'a> SpaApp<'a> {
-    pub fn new(device_id: &str, clock: &'a dyn Clock) -> Self {
+    pub fn new(clock: &'a dyn Clock) -> Self {
         let now = clock.now();
         SpaApp {
-            device_id: String::from(device_id),
             clock,
             registration: RegistrationStateMachine::new(),
             registration_started_at: None,
@@ -837,7 +835,7 @@ mod tests {
 
     fn make_app_with_clock() -> (&'static VirtualClock, SpaApp<'static>) {
         let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
-        let app = SpaApp::new("test_spa", clock);
+        let app = SpaApp::new(clock);
         (clock, app)
     }
 

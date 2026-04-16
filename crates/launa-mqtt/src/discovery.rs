@@ -27,7 +27,7 @@ impl DiscoveryBuilder {
             device_id: device_id.to_string(),
             device_name: "Launa Spa".to_string(),
             device_model: "BP6013G1".to_string(),
-            sw_version: env!("CARGO_PKG_VERSION").to_string(),
+            sw_version: "unknown".to_string(),
             manufacturer: "Launa".to_string(),
         }
     }
@@ -39,6 +39,11 @@ impl DiscoveryBuilder {
 
     pub fn device_model(mut self, model: &str) -> Self {
         self.device_model = model.to_string();
+        self
+    }
+
+    pub fn sw_version(mut self, version: &str) -> Self {
+        self.sw_version = version.to_string();
         self
     }
 
@@ -299,6 +304,7 @@ impl DiscoveryBuilder {
                 "unique_id": format!("{}_diagnostics", self.device_id),
                 "state_topic": topics.diagnostics_topic(),
                 "availability_topic": avail_topic,
+                "entity_category": "diagnostic",
             })
             .to_string(),
             retain: false,
@@ -314,6 +320,7 @@ impl DiscoveryBuilder {
                 "unique_id": format!("{}_alert", self.device_id),
                 "state_topic": topics.alert_topic(),
                 "availability_topic": avail_topic,
+                "entity_category": "diagnostic",
             })
             .to_string(),
             retain: false,

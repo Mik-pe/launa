@@ -800,7 +800,7 @@ async fn main(spawner: Spawner) {
     let ota_rx = OTA_CHANNEL.receiver();
 
     let clock = clock::EmbassyClock::new();
-    let mut app = SpaApp::new(&app_config.device_id, &clock);
+    let mut app = SpaApp::new(&clock);
     let device_id_str: &str = &app_config.device_id;
 
     loop {
