@@ -163,11 +163,11 @@ Comprehensive code audit across all crates plus online protocol reference compar
 
 ### CRITICAL — Bugs That Will Cause Incorrect Behavior
 
-- [ ] **Celsius set-temperature sends display value instead of wire value** (`app/src/mqtt_client.rs`, `launa-mqtt/command_parser.rs`): HA `set_temperature` number entity sends display values (e.g., "38" for 38°C). The state JSON publishes `set_temp = 38.0` (display value ÷ 2). But the command path passes the value straight through as `Command::SetTemperature(38)`, which the Balboa protocol interprets as wire value 38 = 19°C. Must multiply by 2 for Celsius before sending. Affects every Celsius-mode user — **all Celsius temperature commands send half the intended value**.
-- [ ] **MQTT v5 PUBLISH property length parsed as single byte** (`app/src/mqtt_client.rs` ~line 585): `let props_len = packet[idx] as usize;` reads only one byte, but MQTT v5 property length uses variable-byte integer encoding (same as remaining length). Properties ≥ 128 bytes cause misread property length → wrong payload offset → garbage data or protocol desync. Use `decode_remaining_length()` instead.
-- [ ] **MQTT SUBACK only reads 5 bytes — protocol desync risk** (`app/src/mqtt_client.rs` `subscribe()`): `read_exact(&mut buf, 5)` reads exactly 5 bytes. MQTT v5 SUBACK with properties may be longer. Extra bytes remain in TCP stream and corrupt subsequent packet parsing. Must read full SUBACK based on remaining length.
-- [ ] **Hold mode timer re-fires on every status if spa is slow to respond** (`launa-core/src/lib.rs` `HoldModeTimer::tick()`): Timer sends toggle-off command, but if next StatusUpdate still shows hold active (spa hasn't processed toggle yet), `entered_at` is `None` so the timer re-arms immediately and fires again next tick, spamming toggle commands every status frame.
-- [ ] **Stale command state survives bus reset** (`launa-core/src/lib.rs` `process_frame(NewClientQuery)`): On bus reset + re-registration, `command_queue` and `cmd_tracker.pending` are NOT cleared. Stale tracked commands from the pre-reset session may false-confirm or spurious-retry against the new client ID's status updates.
+- [x] **Celsius set-temperature sends display value instead of wire value** (`app/src/mqtt_client.rs`): Fixed in `parse_command()` — after validation, Celsius display values are multiplied by 2 to produce wire values (`saturating_mul(2)`). Fahrenheit passes through unchanged.
+- [x] **MQTT v5 PUBLISH property length parsed as single byte** (`app/src/mqtt_client.rs`): Fixed — replaced single-byte read with `decode_remaining_length()` for variable-byte property length decoding.
+- [ ] **MQTT SUBACK bypasses `rx_buffer` reassembly — protocol desync risk** (`app/src/mqtt_client.rs` `subscribe()`): `read_exact(&mut buf, 5)` reads minimum 5 bytes into a 64-byte stack buffer. MQTT v5 SUBACK with properties may be longer. Any extra bytes not captured in the 64-byte buffer remain in the TCP stream and corrupt subsequent packet parsing (SUBACK reading bypasses the `rx_buffer` reassembly used for normal packets). Must read full SUBACK based on remaining length.
+- [x] **Hold mode timer re-fires on every status if spa is slow to respond** (`launa-core/src/lib.rs`): Added `fired` flag to `HoldModeTimer` — after firing, returns `None` until hold mode is released. Prevents toggle-command spam.
+- [x] **Stale command state survives bus reset** (`launa-core/src/lib.rs`): On `NewClientQuery`, `command_queue.clear()` and `cmd_tracker.reset()` are now called. Added `reset()` method to `CommandTracker`.
 
 ### HIGH — Significant Issues
 
@@ -188,7 +188,6 @@ Comprehensive code audit across all crates plus online protocol reference compar
 - [ ] **OTA `header_buf` Vec allocates up to 4 KiB on 32 KiB heap** (`app/src/ota.rs`): Combined with other allocations during OTA (request string, HTTP response), could cause OOM. Should use fixed-size stack buffer.
 - [ ] **Pump timer auto-off when pump manually turned off — untested** (`launa-core/src/lib.rs` `PumpTimer::tick()`): `if !is_on { cancel }` path is never tested. If buggy, auto-off timer could re-start a pump the user intentionally turned off.
 - [ ] **Validated temperature integration untested end-to-end** (`launa-integration-tests`): `parse_set_temperature_validated()` is unit-tested but never called from integration tests. The full path (MQTT payload → validated parse → SpaApp queue → Ready → wire frame) is untested.
-- [ ] **Sniffer mode MQTT connect panics on failure** (`app/src/main.rs` `#[cfg(feature = "sniff")]`): Unlike the main firmware's retry loop, sniffer mode calls `panic!("MQTT connect failed")` on first failure.
 
 ### LOW — Minor Issues
 

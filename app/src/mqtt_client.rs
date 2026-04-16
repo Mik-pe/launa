@@ -157,7 +157,16 @@ pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8], scal
         ParseResult::Valid(Command::SetTemperature(temp)) => {
             if let (Some(s), Some(r)) = (scale, range) {
                 match validate_set_temperature(temp, s, r) {
-                    Ok(_) => Some(MqttAction::Command(Command::SetTemperature(temp))),
+                    Ok(_) => {
+                        // Convert display value to protocol wire value.
+                        // In Celsius mode, wire value = display * 2 (e.g. 38°C → 76).
+                        // Fahrenheit display values ARE wire values (no conversion).
+                        let wire_value = match s {
+                            TemperatureScale::Celsius => temp.saturating_mul(2),
+                            TemperatureScale::Fahrenheit => temp,
+                        };
+                        Some(MqttAction::Command(Command::SetTemperature(wire_value)))
+                    }
                     Err(e) => {
                         warn!("MQTT temperature {} rejected for {:?}/{:?}: {:?}", temp, s, r, e);
                         None
@@ -582,8 +591,11 @@ impl MqttClient {
                 }
 
                 if idx >= packet.len() { return None; }
-                let props_len = packet[idx] as usize;
-                idx += 1 + props_len;
+                let (props_len, props_header_size) = match decode_remaining_length(&packet[idx..]) {
+                    Some(v) => v,
+                    None => return None,
+                };
+                idx += props_header_size + props_len;
 
                 let payload = if idx < packet.len() {
                     Vec::from(&packet[idx..])

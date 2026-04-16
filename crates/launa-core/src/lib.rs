@@ -302,6 +302,11 @@ impl CommandTracker {
     pub fn record_dropped(&mut self) {
         self.dropped_count += 1;
     }
+
+    /// Reset all tracked state (e.g. on bus reset).
+    pub fn reset(&mut self) {
+        self.pending.clear();
+    }
 }
 
 // ── PumpTimer (clock-based) ────────────────────────────────────────────
@@ -406,6 +411,8 @@ impl PumpTimerManager {
 pub struct HoldModeTimer {
     entered_at: Option<Timestamp>,
     timeout_ms: u64,
+    /// True after timer fires; prevents re-arming until hold mode is released.
+    fired: bool,
 }
 
 impl HoldModeTimer {
@@ -413,6 +420,7 @@ impl HoldModeTimer {
         HoldModeTimer {
             entered_at: None,
             timeout_ms: DEFAULT_HOLD_MODE_TIMEOUT_MS,
+            fired: false,
         }
     }
 
@@ -420,19 +428,26 @@ impl HoldModeTimer {
         HoldModeTimer {
             entered_at: None,
             timeout_ms,
+            fired: false,
         }
     }
 
     pub fn tick(&mut self, now: Timestamp, is_hold: bool) -> Option<Command> {
         if is_hold {
+            if self.fired {
+                // Already fired — wait for hold mode to be released before re-arming.
+                return None;
+            }
             if self.entered_at.is_none() {
                 self.entered_at = Some(now);
             } else if now.elapsed_since(self.entered_at.unwrap()) >= self.timeout_ms {
                 self.entered_at = None;
+                self.fired = true;
                 return Some(Command::ToggleItem(ToggleItem::HoldMode));
             }
         } else {
             self.entered_at = None;
+            self.fired = false;
         }
         None
     }
@@ -701,6 +716,8 @@ impl<'a> SpaApp<'a> {
             IncomingMessage::NewClientQuery => {
                 self.registration.reset();
                 self.client_id = None;
+                self.command_queue.clear();
+                self.cmd_tracker.reset();
             }
             IncomingMessage::ClientIdAssignment { id } => {
                 self.client_id = Some(id);
@@ -1084,10 +1101,49 @@ mod tests {
         // Advance past hold timeout (60 min)
         clock.advance_ms(61 * 60 * 1000);
 
-        // Send another status with hold still active
+        // Send another status with hold still active → timer fires
         let actions = app.process_frame(&hold_frame);
         // The hold timer should have fired a toggle command
         assert!(actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))));
+
+        // Bug 1 fix: after firing, subsequent ticks with is_hold=true should NOT re-fire
+        clock.advance_ms(5_000);
+        let actions2 = app.process_frame(&hold_frame);
+        let has_send2 = actions2
+            .iter()
+            .any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(
+            !has_send2,
+            "hold timer should NOT re-fire while hold mode is still active after firing"
+        );
+
+        // Advance more time — still should not re-fire
+        clock.advance_ms(61 * 60 * 1000);
+        let actions3 = app.process_frame(&hold_frame);
+        let has_send3 = actions3
+            .iter()
+            .any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(
+            !has_send3,
+            "hold timer should NOT re-fire even after another full timeout period"
+        );
+
+        // Now release hold mode — timer should re-arm
+        let release_frame = status_frame(); // is_hold = false
+        app.process_frame(&release_frame);
+
+        // Re-enter hold mode
+        app.process_frame(&hold_frame);
+
+        // Advance past timeout again → should fire again
+        clock.advance_ms(61 * 60 * 1000);
+        let actions4 = app.process_frame(&hold_frame);
+        assert!(
+            actions4
+                .iter()
+                .any(|a| matches!(a, AppAction::SendFrame(_))),
+            "hold timer should fire again after hold mode was released and re-entered"
+        );
     }
 
     #[test]
