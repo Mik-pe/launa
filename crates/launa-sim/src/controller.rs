@@ -1,8 +1,17 @@
 //! Spa controller logic extracted from the ESP32 main loop.
 //!
-//! This is the core firmware logic with zero hardware dependencies. It can be
-//! tested end-to-end on desktop by feeding it simulated RS-485 bytes from a
-//! `SpaSim` and observing the emitted `ControllerEvent`s.
+//! **Deprecated**: This module contains `SpaController`, a simplified protocol
+//! handler that diverges from the real firmware logic. New code should use
+//! `SpaApp` from the `launa-core` crate instead, which is the actual extracted
+//! firmware logic used in production.
+//!
+//! Migration guide:
+//! - Replace `SpaController::new()` with `SpaApp::new(clock)`
+//! - Replace `process_bytes()` with `process_frame()` + `tick()`
+//! - Replace `ControllerEvent` handling with `AppAction` handling
+//! - See `launa-integration-tests` for examples of `SpaApp` usage
+//!
+//! This module is kept for backward compatibility with existing sim tests.
 
 use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::config::SpaConfig;
@@ -139,9 +148,17 @@ impl PumpTimerManager {
 
 /// The core spa controller logic.
 ///
+/// **Deprecated**: Use `launa_core::SpaApp` instead, which is the real extracted
+/// firmware logic. `SpaController` is a simplified version that diverges from
+/// production behavior. See the module-level documentation for migration guidance.
+///
 /// Feed it raw RS-485 bytes via `process_bytes()` and it will return a list of
 /// `ControllerEvent`s. The caller is responsible for acting on those events
 /// (writing to UART, publishing to MQTT, etc.).
+#[deprecated(
+    since = "0.2.0",
+    note = "Use `launa_core::SpaApp` instead. SpaController is a simplified version that diverges from production logic. See module docs for migration guide."
+)]
 pub struct SpaController {
     frame_decoder: FrameDecoder,
     registration: RegistrationStateMachine,
@@ -365,6 +382,7 @@ impl SpaController {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::{FaultLogConfig, FilterCycleConfig, FilterCyclesConfig, InformationConfig, SpaSim};

@@ -5,6 +5,11 @@
 //!
 //! Simulating real RS-485 byte traffic through the controller logic and
 //! verifying MQTT publications, just like the real firmware would behave.
+//!
+//! Note: SpaController is deprecated in favor of launa_core::SpaApp.
+//! These tests are preserved for backward compatibility.
+
+#![allow(deprecated)]
 
 use launa_hal::transport::Transport;
 use launa_mqtt::command_parser;

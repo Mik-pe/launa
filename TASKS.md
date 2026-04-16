@@ -239,12 +239,12 @@ Add new error injection capabilities to SpaSim and integration tests that exerci
 
 #### Tier 5 — Multi-Frame Protocol & Advanced
 
-- [ ] **Test: fault log walk (entries 1..N)**: SpaSim supports multiple fault entries. Test sequential request → response → request next → response cycle.
-- [ ] **Test: configuration request/response pairing**: Request config → verify SpaApp emits `ConfigurationResponse` event with correct pump/light/blower setup.
-- [ ] **Test: filter cycle edit commands**: Not just read — test setting filter cycle times if protocol supports it.
-- [ ] **Remove SpaController from launa-sim or mark deprecated**: Tests should use `SpaApp` from launa-core. `SpaController` is a simplified duplicate that diverges from production logic.
-- [ ] **Test: MQTT broker disconnect/reconnect during active session**: SimBroker.disconnect() → SpaApp publishes go silent → reconnect → verify state sync recovers.
-- [ ] **Test: rapid command flood exceeds queue cap**: Send 40 MQTT commands rapidly → verify SpaApp caps at 32 and increments dropped_count → verify remaining commands drain correctly.
+- [x] **Test: fault log walk (entries 1..N)**: SpaSim supports multiple fault entries. Test sequential request → response → request next → response cycle.
+- [x] **Test: configuration request/response pairing**: Request config → verify SpaApp emits `ConfigurationResponse` event with correct pump/light/blower setup.
+- [x] **Test: filter cycle edit commands**: Not just read — test setting filter cycle times if protocol supports it.
+- [x] **Remove SpaController from launa-sim or mark deprecated**: Tests should use `SpaApp` from launa-core. `SpaController` is a simplified duplicate that diverges from production logic.
+- [x] **Test: MQTT broker disconnect/reconnect during active session**: SimBroker.disconnect() → SpaApp publishes go silent → reconnect → verify state sync recovers.
+- [x] **Test: rapid command flood exceeds queue cap**: Send 40 MQTT commands rapidly → verify SpaApp caps at 32 and increments dropped_count → verify remaining commands drain correctly.
 
 ### LOW — Minor Issues
 

@@ -12,22 +12,24 @@
 //!   SimTransport (virtual RS-485 wire)
 //!       │ reads → controller, writes → spa
 //!       ▼
-//!   SpaController (simplified protocol logic for sim tests)
-//!       │ emits ControllerEvents
+//!   SpaApp (real firmware logic from launa-core)
+//!       │ emits AppActions
 //!       ▼
 //!   SimBroker (mock MQTT broker for verification)
 //! ```
 //!
 //! The real firmware logic lives in the `launa-core` crate (`SpaApp`).
-//! The `SpaController` here is a simplified version used by sim integration tests.
+//! `SpaController` is deprecated — use `SpaApp` for new code.
 
 pub mod clock;
+#[allow(deprecated)]
 pub mod controller;
 pub mod sim_broker;
 pub mod sim_transport;
 pub mod spa_sim;
 
 pub use clock::VirtualClock;
+#[allow(deprecated)]
 pub use controller::{ControllerEvent, SpaController};
 pub use sim_broker::SimBroker;
 pub use sim_transport::SimTransport;
