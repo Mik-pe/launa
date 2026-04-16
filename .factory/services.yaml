@@ -4,8 +4,13 @@ commands:
   build: cargo build --workspace
   test: cargo test --workspace
   lint: cargo fmt --check
+  espcheck: cd app && cargo +esp check
   test-protocol: cargo test -p launa-protocol
   test-ota: cargo test -p launa-ota
+  test-esp-ota: cargo test -p launa-esp-ota
   test-sim: cargo test -p launa-sim
   test-integration: cargo test -p launa-integration-tests
   test-core: cargo test -p launa-core
+  test-mqtt: cargo test -p launa-mqtt
+  test-hal: cargo test -p launa-hal
+  test-xtask: cargo test -p xtask
