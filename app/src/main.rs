@@ -715,6 +715,12 @@ async fn main(_spawner: Spawner) {
     // write to NVS on CONFIG_END. 30-second timeout.
     info!("Waiting for serial config (30s timeout)...");
 
+    /// Maximum line length for serial config receiver.
+    /// Config lines are short key=value pairs (well under 256 bytes).
+    /// This bound prevents OOM on the 32 KiB ESP32 heap if serial input
+    /// is continuous without a newline terminator.
+    const MAX_LINE_LEN: usize = 256;
+
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut line_buf: Vec<u8> = Vec::new();
     let mut read_buf = [0u8; 64];
@@ -758,7 +764,12 @@ async fn main(_spawner: Spawner) {
                             }
                         }
                     } else if byte != b'\r' {
-                        line_buf.push(byte);
+                        if line_buf.len() < MAX_LINE_LEN {
+                            line_buf.push(byte);
+                        }
+                        // Excess bytes beyond MAX_LINE_LEN are silently dropped.
+                        // A warning is not logged per-byte to avoid flooding
+                        // the serial output on sustained overflow.
                     }
                 }
             }
