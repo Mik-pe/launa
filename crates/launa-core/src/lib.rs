@@ -36,7 +36,7 @@ use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
 use launa_protocol::frame::{Frame, FrameEncoder};
 use launa_protocol::registration::{RegistrationAction, RegistrationStateMachine};
-use launa_protocol::status::{HeatingMode, PumpState, StatusUpdate, TempRange};
+use launa_protocol::status::{HeatingMode, PumpState, StatusUpdate, TempRange, TemperatureScale};
 
 // ── Time constants ─────────────────────────────────────────────────────
 
@@ -264,7 +264,15 @@ impl CommandTracker {
                     }
                 }
             }
-            ExpectedChange::TemperatureSet { temp } => (status.set_temp as u8) == *temp,
+            ExpectedChange::TemperatureSet { temp } => {
+                // set_temp is decoded (÷2 for Celsius, ÷1 for Fahrenheit).
+                // Multiply back to raw wire value for comparison.
+                let divisor: f32 = match status.temperature_scale {
+                    TemperatureScale::Celsius => 2.0,
+                    TemperatureScale::Fahrenheit => 1.0,
+                };
+                ((status.set_temp * divisor) as u8) == *temp
+            }
             ExpectedChange::LightToggled { item, pre_state } => {
                 if let Some(idx) = item.light_index() {
                     status.lights[idx] != *pre_state
@@ -842,6 +850,7 @@ mod tests {
     use alloc::boxed::Box;
     use alloc::vec;
     use launa_protocol::frame::Frame;
+    use launa_protocol::status::{TemperatureScale, TimeFormat};
     use launa_sim::VirtualClock;
 
     fn make_app_with_clock() -> (&'static VirtualClock, SpaApp<'static>) {
@@ -1261,5 +1270,112 @@ mod tests {
         app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump2));
         assert_eq!(app.queued_command_count(), MAX_COMMAND_QUEUE);
         assert_eq!(app.total_dropped(), 2); // no new drops
+    }
+
+    // ── Temperature confirmation tests (Celsius bug fix) ───────────
+
+    /// Helper: build a StatusUpdate with explicit scale and set_temp.
+    fn make_status(set_temp: f32, scale: TemperatureScale) -> StatusUpdate {
+        StatusUpdate {
+            current_temp: Some(38.0),
+            set_temp,
+            hour: 0,
+            minute: 0,
+            heating_mode: HeatingMode::Ready,
+            temperature_scale: scale,
+            time_format: TimeFormat::Hour24,
+            filter_mode: 0,
+            is_heating: false,
+            temp_range: TempRange::High,
+            pumps: [PumpState::Off; 6],
+            circ_pump: false,
+            blower: false,
+            mister: false,
+            lights: [false; 2],
+            is_priming: false,
+            is_hold: false,
+        }
+    }
+
+    /// Helper: build a Celsius StatusUpdate from a raw wire value.
+    /// Raw 76 → set_temp=38.0, raw 77 → set_temp=38.5, etc.
+    fn make_celsius_status(raw_set_temp: u8) -> StatusUpdate {
+        make_status(raw_set_temp as f32 / 2.0, TemperatureScale::Celsius)
+    }
+
+    /// Helper: build a Fahrenheit StatusUpdate from a raw wire value.
+    fn make_fahrenheit_status(raw_set_temp: u8) -> StatusUpdate {
+        make_status(raw_set_temp as f32, TemperatureScale::Fahrenheit)
+    }
+
+    /// Test is_confirmed directly for Fahrenheit.
+    #[test]
+    fn test_temperature_confirm_fahrenheit() {
+        let expected = ExpectedChange::TemperatureSet { temp: 104 };
+        let status = make_fahrenheit_status(104);
+        assert!(CommandTracker::is_confirmed(&expected, &status));
+    }
+
+    /// Celsius SetTemperature(76) confirmed when status.set_temp=38.0 (raw 76/2).
+    #[test]
+    fn test_temperature_confirm_celsius_even_raw() {
+        let expected = ExpectedChange::TemperatureSet { temp: 76 };
+        let status = make_celsius_status(76); // set_temp = 38.0
+        assert!(CommandTracker::is_confirmed(&expected, &status));
+    }
+
+    /// Celsius SetTemperature(77) confirmed when status.set_temp=38.5 (raw 77/2).
+    #[test]
+    fn test_temperature_confirm_celsius_odd_raw() {
+        let expected = ExpectedChange::TemperatureSet { temp: 77 };
+        let status = make_celsius_status(77); // set_temp = 38.5
+        assert!(CommandTracker::is_confirmed(&expected, &status));
+    }
+
+    /// Celsius boundary odd value: SetTemperature(83) → set_temp=41.5.
+    #[test]
+    fn test_temperature_confirm_celsius_boundary_odd() {
+        let expected = ExpectedChange::TemperatureSet { temp: 83 };
+        let status = make_celsius_status(83); // set_temp = 41.5
+        assert!(CommandTracker::is_confirmed(&expected, &status));
+    }
+
+    /// Temperature mismatch does NOT confirm; triggers retry in both scales.
+    #[test]
+    fn test_temperature_mismatch_triggers_retry_both_scales() {
+        use launa_hal::Clock;
+
+        let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
+        let mut tracker = CommandTracker::new();
+        let now = clock.now();
+
+        // Fahrenheit: SetTemperature(104), but spa reports set_temp=100
+        let pre_status_f = make_fahrenheit_status(100);
+        tracker.track(Command::SetTemperature(104), &pre_status_f, now);
+
+        // Advance past ACK timeout
+        clock.advance_ms(COMMAND_ACK_TIMEOUT_MS + 1);
+        let now_after = clock.now();
+
+        let status_f = make_fahrenheit_status(100);
+        let result = tracker.verify(&status_f, now_after);
+        assert_eq!(result.retries.len(), 1);
+        assert_eq!(result.dropped, 0);
+
+        // Celsius: SetTemperature(76), but spa reports set_temp=74/2=37.0
+        let mut tracker_c = CommandTracker::new();
+        clock.advance_ms(10_000); // ensure fresh timestamps
+        let now2 = clock.now();
+
+        let pre_status_c = make_celsius_status(74); // 37.0
+        tracker_c.track(Command::SetTemperature(76), &pre_status_c, now2);
+
+        clock.advance_ms(COMMAND_ACK_TIMEOUT_MS + 1);
+        let now2_after = clock.now();
+
+        let status_c = make_celsius_status(74); // 37.0 — mismatch
+        let result_c = tracker_c.verify(&status_c, now2_after);
+        assert_eq!(result_c.retries.len(), 1);
+        assert_eq!(result_c.dropped, 0);
     }
 }
