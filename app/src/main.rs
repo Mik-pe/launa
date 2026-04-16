@@ -67,6 +67,29 @@ mod wifi;
 
 use esp_backtrace as _;
 
+/// Custom panic handler: logs panic location, waits 500ms for log flush,
+/// then triggers a software reset. Replaces esp-backtrace's default infinite
+/// loop to allow automatic recovery from panics.
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    // Use esp-println directly since the log framework may not be usable
+    // during a panic (e.g., if the panic occurred in a log call).
+    esp_println::println!("PANIC: {}", info);
+
+    // Busy-wait ~500ms to allow UART TX to flush the panic message.
+    // esp-hal provides esp_hal::delay::Delay for blocking delays, but it
+    // requires Peripherals which aren't available in a panic handler.
+    // Instead, we use a volatile busy-loop to avoid optimization.
+    let mut counter: u32 = 0;
+    let iterations = 5_000_000; // ~500ms at 240 MHz with overhead
+    while counter < iterations {
+        counter += 1;
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
+
+    esp_hal::system::software_reset()
+}
+
 /// Firmware version embedded at compile time from Cargo.toml [package].version.
 /// Used in HA discovery (sw_version), MQTT state JSON, and diagnostics payload.
 const FIRMWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -764,9 +787,26 @@ async fn main(_spawner: Spawner) {
         }
     }
 
+    // Mask sensitive fields: SSID and MQTT host are secrets that should
+    // not appear in plain text in logs. Show first 2 chars + "***" to aid
+    // debugging without exposing full values.
+    let masked_ssid = if app_config.wifi_ssid.len() > 2 {
+        // SAFETY: index 0..2 is within bounds since len() > 2
+        let prefix = &app_config.wifi_ssid[..2];
+        alloc::format!("{}***", prefix)
+    } else {
+        alloc::string::String::from("***")
+    };
+    let masked_host = if app_config.mqtt_host.len() > 2 {
+        // SAFETY: index 0..2 is within bounds since len() > 2
+        let prefix = &app_config.mqtt_host[..2];
+        alloc::format!("{}***", prefix)
+    } else {
+        alloc::string::String::from("***")
+    };
     info!(
         "Parsed config: ssid={} mqtt={}:{} device={}",
-        app_config.wifi_ssid, app_config.mqtt_host, app_config.mqtt_port, app_config.device_id
+        masked_ssid, masked_host, app_config.mqtt_port, app_config.device_id
     );
 
     // Write to NVS
