@@ -16,7 +16,6 @@ extern crate alloc;
 
 use alloc::format;
 use alloc::string::String;
-use alloc::vec::Vec;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{IpAddress, IpEndpoint, Ipv4Address, Stack};
 use embassy_time::Duration;
@@ -135,7 +134,10 @@ pub async fn perform_ota_update(
 
     // Read response headers and validate HTTP status before erasing partition
     let mut buf = [0u8; 1024];
-    let mut header_buf = Vec::new();
+    // Fixed-size stack buffer for HTTP headers (up to MAX_HEADER_SIZE = 4096 bytes).
+    // Replaces Vec::new() to avoid a 4 KiB heap allocation on the 32 KiB ESP32 heap.
+    let mut header_buf = [0u8; MAX_HEADER_SIZE];
+    let mut header_len: usize = 0;
     let mut total_written: u32 = 0;
 
     // Phase 1: Read headers and validate HTTP status
@@ -153,19 +155,20 @@ pub async fn perform_ota_update(
         };
 
         // Cap header size to prevent OOM on the 32 KiB heap
-        if header_buf.len() + n > MAX_HEADER_SIZE {
+        if header_len + n > MAX_HEADER_SIZE {
             error!(
                 "OTA: headers exceed {} bytes, aborting",
                 MAX_HEADER_SIZE
             );
             return Err(());
         }
-        header_buf.extend_from_slice(&buf[..n]);
+        header_buf[header_len..header_len + n].copy_from_slice(&buf[..n]);
+        header_len += n;
 
-        if let Some(pos) = find_header_end(&header_buf) {
+        if let Some(pos) = find_header_end(&header_buf[..header_len]) {
             // Validate HTTP status line before proceeding
-            if !validate_http_status(&header_buf) {
-                let status_line = extract_status_line(&header_buf);
+            if !validate_http_status(&header_buf[..header_len]) {
+                let status_line = extract_status_line(&header_buf[..header_len]);
                 error!("OTA: HTTP status not 200: {}", status_line);
                 return Err(());
             }
@@ -178,7 +181,7 @@ pub async fn perform_ota_update(
             }
 
             // Validate Content-Length against partition size
-            if let Some(content_length) = parse_content_length(&header_buf) {
+            if let Some(content_length) = parse_content_length(&header_buf[..header_len]) {
                 let partition_size = 0x140000u32; // OTA partition size (matches partitions.csv)
                 if content_length > partition_size {
                     error!(
@@ -198,15 +201,14 @@ pub async fn perform_ota_update(
 
             // Write any body data that arrived with the headers
             let body_start = pos + 4;
-            if body_start < header_buf.len() {
-                if let Err(e) = ota.write(&header_buf[body_start..]) {
+            if body_start < header_len {
+                if let Err(e) = ota.write(&header_buf[body_start..header_len]) {
                     error!("OTA: write failed: {:?}", e);
                     ota_rollback(ota);
                     return Err(());
                 }
-                total_written += (header_buf.len() - body_start) as u32;
+                total_written += (header_len - body_start) as u32;
             }
-            header_buf.clear();
             break;
         }
     }

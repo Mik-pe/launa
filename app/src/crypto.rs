@@ -59,6 +59,18 @@ fn read_key() -> [u8; 16] {
         *b ^= [0xA5, 0x3C, 0x96, 0xF0][i % 4];
     }
 
+    // Warn if the raw eFuse words were all zeros (unprovisioned device).
+    // This means the derived key is predictable (just the XOR constants),
+    // providing no real security. Operators should run `cargo xtask provision`
+    // to burn a random key into BLOCK3.
+    let all_zero = word2 == [0u8; 4]
+        && word4 == [0u8; 4]
+        && word6 == [0u8; 4]
+        && word7 == [0u8; 4];
+    if all_zero {
+        warn!("eFuse BLOCK3 is all zeros — encryption key is predictable! Run 'cargo xtask provision' to burn a random key.");
+    }
+
     key
 }
 
@@ -83,9 +95,18 @@ fn to_hex(bytes: &[u8]) -> String {
     s
 }
 
+/// Maximum hex string length accepted by `from_hex()`.
+/// 1024 hex chars → 512 bytes decoded. More than enough for encrypted NVS
+/// values (typically ~100 chars). Prevents OOM from malformed/corrupt input
+/// on the 32 KiB ESP32 heap.
+const MAX_HEX_LEN: usize = 1024;
+
 /// Parse a hex string into a byte vector.
+///
+/// Returns `None` if the input has odd length, contains non-hex characters,
+/// or exceeds `MAX_HEX_LEN` (prevents unbounded heap allocation).
 fn from_hex(hex: &str) -> Option<Vec<u8>> {
-    if hex.len() % 2 != 0 {
+    if hex.len() % 2 != 0 || hex.len() > MAX_HEX_LEN {
         return None;
     }
     let mut bytes = Vec::with_capacity(hex.len() / 2);

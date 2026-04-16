@@ -252,37 +252,58 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
             }
         }
 
+        // Drain non-command channels with a bounding counter to prevent
+        // starving command processing. Without this limit, a continuous
+        // stream of diagnostics/alerts/state updates with `continue` could
+        // indefinitely delay `mqtt.recv()`, causing missed commands.
+        //
+        // The counter resets to 0 each loop iteration (each iteration gets
+        // its own budget), so increments in `continue` branches are never
+        // read across iterations — hence the unused_assignments allow on
+        // the increment lines below.
+        const MAX_NON_CMD_RECEIVES: u8 = 5;
+        let mut non_cmd_count: u8 = 0;
+
         // Check for diagnostics payloads to publish (non-blocking)
-        if let Ok(diag_payload) = diag_rx.try_receive() {
-            if let Err(e) = mqtt.publish(&diag_topic, &diag_payload, 0, false).await {
-                warn!("MQTT diagnostics publish failed: {:?}", e);
+        if non_cmd_count < MAX_NON_CMD_RECEIVES {
+            if let Ok(diag_payload) = diag_rx.try_receive() {
+                if let Err(e) = mqtt.publish(&diag_topic, &diag_payload, 0, false).await {
+                    warn!("MQTT diagnostics publish failed: {:?}", e);
+                }
+                non_cmd_count += 1;
+                continue;
             }
-            continue;
         }
 
         // Check for alert payloads to publish (non-blocking)
-        if let Ok(alert_payload) = alert_rx.try_receive() {
-            if let Err(e) = mqtt.publish(&alert_topic, &alert_payload, 1, false).await {
-                warn!("MQTT alert publish failed: {:?}", e);
+        if non_cmd_count < MAX_NON_CMD_RECEIVES {
+            if let Ok(alert_payload) = alert_rx.try_receive() {
+                if let Err(e) = mqtt.publish(&alert_topic, &alert_payload, 1, false).await {
+                    warn!("MQTT alert publish failed: {:?}", e);
+                }
+                non_cmd_count += 1;
+                continue;
             }
-            continue;
         }
 
         // Check for state updates to publish (non-blocking)
-        if let Ok((status, fault, is_stale)) = state_rx.try_receive() {
-            last_scale_range = Some((status.temperature_scale, status.temp_range));
-            if let Err(e) = mqtt.publish_state(&status, fault.as_str()).await {
-                warn!("MQTT state publish failed: {:?}", e);
-            }
-            if is_stale {
-                if let Err(e) = mqtt.publish_availability_stale().await {
-                    warn!("MQTT stale availability publish failed: {:?}", e);
+        if non_cmd_count < MAX_NON_CMD_RECEIVES {
+            if let Ok((status, fault, is_stale)) = state_rx.try_receive() {
+                last_scale_range = Some((status.temperature_scale, status.temp_range));
+                if let Err(e) = mqtt.publish_state(&status, fault.as_str()).await {
+                    warn!("MQTT state publish failed: {:?}", e);
                 }
-            } else {
-                // Status received after being stale — publish recovery
-                let _ = mqtt.publish_availability(true).await;
+                if is_stale {
+                    if let Err(e) = mqtt.publish_availability_stale().await {
+                        warn!("MQTT stale availability publish failed: {:?}", e);
+                    }
+                } else {
+                    // Status received after being stale — publish recovery
+                    let _ = mqtt.publish_availability(true).await;
+                }
+                non_cmd_count += 1;
+                continue;
             }
-            continue;
         }
 
         // Check for incoming MQTT messages
