@@ -771,9 +771,13 @@ impl<'a> SpaApp<'a> {
                 .map_or(true, |lp| now.elapsed_since(lp) >= STALE_PROBE_INTERVAL_MS);
 
             if elapsed >= STALE_PROBE_INTERVAL_MS && should_probe {
-                let encoded = FrameEncoder::encode([0x0A, 0xBF], &[0x04])
-                    .expect("probe payload should fit in frame");
-                actions.push(AppAction::SendFrame(encoded));
+                // Use lightweight NothingToSend instead of ConfigurationRequest
+                // to detect bus activity without triggering heavy full-config response
+                if let Some(cid) = self.client_id {
+                    let cmd = Command::NothingToSend { client_id: cid };
+                    let encoded = encode_command(&cmd);
+                    actions.push(AppAction::SendFrame(encoded));
+                }
                 self.last_probe_time = Some(now);
             }
 
@@ -1377,5 +1381,156 @@ mod tests {
         let result_c = tracker_c.verify(&status_c, now2_after);
         assert_eq!(result_c.retries.len(), 1);
         assert_eq!(result_c.dropped, 0);
+    }
+
+    // ── Stale probe lightweight command tests ───────────────────────
+
+    /// Helper: extract all SendFrame payloads from a list of actions.
+    fn collect_sent_frames(actions: &[AppAction]) -> Vec<&Vec<u8>> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                AppAction::SendFrame(data) => Some(data),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// VAL-CORE-006: Stale probe must NOT contain ConfigurationRequest bytes.
+    #[test]
+    fn test_stale_probe_not_configuration_request() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get initial status to establish last_status_time
+        app.process_frame(&status_frame());
+
+        // Advance past probe interval (5s)
+        clock.advance_ms(6_000);
+        let actions = app.tick();
+
+        let frames = collect_sent_frames(&actions);
+        // The ConfigurationRequest encodes as [0x0A, 0xBF, 0x04] in the raw frame.
+        // Check that no sent frame contains these bytes in sequence.
+        let config_req_pattern: &[u8] = &[0x0A, 0xBF, 0x04];
+        for frame in &frames {
+            // Scan for the 3-byte sequence (may be HDLC-stuffed, but the
+            // payload bytes before stuffing must not be [0x04] when msg_type
+            // is [0x0A, 0xBF]).
+            assert!(
+                !contains_sequence(frame, config_req_pattern),
+                "stale probe should NOT contain ConfigurationRequest bytes [0x0A, 0xBF, 0x04], got {:?}",
+                frame
+            );
+        }
+    }
+
+    /// VAL-CORE-007: Stale probe uses a lightweight command (NothingToSend).
+    #[test]
+    fn test_stale_probe_uses_lightweight_command() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get initial status
+        app.process_frame(&status_frame());
+
+        // Advance past probe interval
+        clock.advance_ms(6_000);
+        let actions = app.tick();
+
+        let frames = collect_sent_frames(&actions);
+        assert!(
+            !frames.is_empty(),
+            "stale probe should send at least one frame"
+        );
+
+        // The probe should be a NothingToSend: msg_type=[client_id, 0xBF], payload=[0x07]
+        let expected = {
+            let (mt, payload) = Command::NothingToSend { client_id: 0x03 }.encode();
+            FrameEncoder::encode(mt, &payload).expect("encode should succeed")
+        };
+        assert!(
+            frames.iter().any(|f| *f == &expected),
+            "stale probe should send NothingToSend, got frames: {:?}",
+            frames
+        );
+    }
+
+    /// VAL-CORE-008: Stale probes fire at 5-second intervals.
+    #[test]
+    fn test_stale_probe_interval_preserved() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        app.process_frame(&status_frame());
+
+        // Advance to 6s → first probe
+        clock.advance_ms(6_000);
+        let actions1 = app.tick();
+        assert!(
+            collect_sent_frames(&actions1).iter().any(|f| !f.is_empty()),
+            "first probe should fire after 5s+"
+        );
+
+        // Advance only 3s → no probe yet (interval is 5s)
+        clock.advance_ms(3_000);
+        let actions2 = app.tick();
+        let frames2 = collect_sent_frames(&actions2);
+        assert!(
+            frames2.is_empty(),
+            "no probe should fire at 3s after last probe"
+        );
+
+        // Advance to 5s total since last probe → second probe
+        clock.advance_ms(2_000);
+        let actions3 = app.tick();
+        assert!(
+            collect_sent_frames(&actions3).iter().any(|f| !f.is_empty()),
+            "second probe should fire at 5s after last probe"
+        );
+    }
+
+    /// VAL-CORE-009: 30-second stale threshold and alert unchanged.
+    #[test]
+    fn test_stale_threshold_unchanged_after_probe_fix() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        app.process_frame(&status_frame());
+
+        // Advance past stale threshold (30s)
+        clock.advance_ms(31_000);
+        let actions = app.tick();
+
+        // Should have stale alert
+        let has_alert = actions.iter().any(|a| {
+            matches!(
+                a,
+                AppAction::PublishAlert { message, .. } if message == "spa_communication_lost"
+            )
+        });
+        assert!(has_alert, "should publish stale alert at 30s");
+
+        // Should have stale availability
+        let has_stale_avail = actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishStaleAvailability));
+        assert!(has_stale_avail, "should publish stale availability at 30s");
+
+        assert!(app.is_stale());
+    }
+
+    /// Helper: check if a byte slice contains a subsequence.
+    fn contains_sequence(haystack: &[u8], needle: &[u8]) -> bool {
+        if needle.len() > haystack.len() {
+            return false;
+        }
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
     }
 }
