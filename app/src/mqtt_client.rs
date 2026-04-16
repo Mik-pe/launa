@@ -116,7 +116,8 @@ pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8], scal
                     }
                 }
             } else {
-                Some(MqttAction::Command(Command::SetTemperature(temp)))
+                warn!("MQTT temperature {} rejected: scale/range not yet known (no status received)", temp);
+                None
             }
         }
         ParseResult::Valid(cmd) => Some(MqttAction::Command(cmd)),
@@ -306,9 +307,10 @@ impl MqttClient {
         password: Option<&str>,
     ) -> Result<(), MqttError> {
         let mut connect_flags = 0x02u8
-            | (1 << 2)
-            | (1 << 3)
-            | (1 << 4);
+            | (1 << 2)   // Clean Start
+            | (1 << 3)   // Will Flag
+            | (1 << 4)   // Will QoS 1
+            | (1 << 5);  // Will Retain
 
         if username.is_some() { connect_flags |= 1 << 7; }
         if password.is_some() { connect_flags |= 1 << 6; }

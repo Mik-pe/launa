@@ -43,6 +43,7 @@ use launa_protocol::status::{HeatingMode, PumpState, StatusUpdate, TempRange};
 const COMMAND_ACK_TIMEOUT_MS: u64 = 5_000;
 const MAX_COMMAND_RETRIES: u8 = 2;
 const MAX_PENDING_COMMANDS: usize = 8;
+const MAX_COMMAND_QUEUE: usize = 32;
 
 const DEFAULT_PUMP_DURATION_MS: u64 = 20 * 60 * 1000;
 const DEFAULT_HOLD_MODE_TIMEOUT_MS: u64 = 60 * 60 * 1000;
@@ -287,6 +288,11 @@ impl CommandTracker {
 
     pub fn total_retries(&self) -> u32 {
         self.retry_count
+    }
+
+    /// Increment the dropped command counter (e.g. when the command queue is full).
+    pub fn record_dropped(&mut self) {
+        self.dropped_count += 1;
     }
 }
 
@@ -713,6 +719,11 @@ impl<'a> SpaApp<'a> {
 
     /// Handle an incoming MQTT command.
     pub fn on_mqtt_command(&mut self, cmd: Command) -> Vec<AppAction> {
+        if self.command_queue.len() >= MAX_COMMAND_QUEUE {
+            // Queue full — drop the command and increment the dropped counter
+            self.cmd_tracker.record_dropped();
+            return Vec::new();
+        }
         // Queue command for next Ready window
         self.command_queue.push(cmd);
         Vec::new()
@@ -1217,5 +1228,38 @@ mod tests {
         // Third Ready → send pump3
         app.process_frame(&ready_frame());
         assert_eq!(app.queued_command_count(), 0);
+    }
+
+    #[test]
+    fn test_command_queue_cap() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Fill the queue up to MAX_COMMAND_QUEUE
+        for _ in 0..MAX_COMMAND_QUEUE {
+            app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        }
+        assert_eq!(app.queued_command_count(), MAX_COMMAND_QUEUE);
+        assert_eq!(app.total_dropped(), 0);
+
+        // Next command should be dropped
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump2));
+        assert_eq!(app.queued_command_count(), MAX_COMMAND_QUEUE);
+        assert_eq!(app.total_dropped(), 1);
+
+        // Queue another — also dropped
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump3));
+        assert_eq!(app.queued_command_count(), MAX_COMMAND_QUEUE);
+        assert_eq!(app.total_dropped(), 2);
+
+        // Drain one via Ready, then queue should accept again
+        app.process_frame(&status_frame());
+        app.process_frame(&ready_frame());
+        assert_eq!(app.queued_command_count(), MAX_COMMAND_QUEUE - 1);
+
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump2));
+        assert_eq!(app.queued_command_count(), MAX_COMMAND_QUEUE);
+        assert_eq!(app.total_dropped(), 2); // no new drops
     }
 }

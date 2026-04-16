@@ -2438,9 +2438,9 @@ mod tests {
         assert!(!app.is_stale(), "should not be stale after 24h of frames");
     }
 
-    /// 14. Stress test: rapid commands. Queue 100 toggle commands,
-    ///     process each via Ready frames, verify no panics, no unbounded
-    ///     growth, and all commands tracked (confirmed, retried, or dropped).
+    /// 14. Stress test: rapid commands. Queue more commands than the queue cap
+    ///     (32), process each via Ready frames, verify no panics, no unbounded
+    ///     growth, excess commands dropped, and all tracked commands resolved.
     #[test]
     fn test_spaapp_stress_rapid_commands() {
         let (clock, app) = make_spaapp();
@@ -2450,19 +2450,24 @@ mod tests {
         // Get initial status (pump1 off)
         app.process_frame(&make_status_frame());
 
-        // Queue 100 toggle pump1 commands in quick succession
+        // Queue 100 toggle pump1 commands in quick succession.
+        // The queue caps at 32, so 68 should be silently dropped.
+        let queue_cap: usize = 32;
         for _ in 0..100 {
             app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
         }
-        assert_eq!(app.queued_command_count(), 100);
+        assert_eq!(
+            app.queued_command_count(),
+            queue_cap,
+            "queue should be capped at {}",
+            queue_cap
+        );
 
-        // Process each command via Ready frames.
-        // After each Ready, advance time slightly and feed a status frame
-        // reflecting the current pump state.
+        // Process each queued command via Ready frames.
         let mut send_frame_count: u32 = 0;
         let mut sim = SpaSim::new(); // Fresh sim with pump1 = Off
 
-        for _ in 0..100 {
+        for _ in 0..queue_cap {
             // Advance clock by 1 second between commands
             clock.advance_ms(1_000);
 
@@ -2476,45 +2481,35 @@ mod tests {
             // only the first 8 will be tracked. The rest are dequeued and
             // sent but not tracked (track() silently returns when full).
 
-            // Feed a status frame. SpaSim toggles pump1 on each tick
-            // via process_incoming_bytes, but we feed the status directly.
-            // We need to simulate the spa reacting: first toggle turns pump
-            // on, second turns off, etc.
-            //
-            // For simplicity, we just advance the sim and feed its status.
-            // The sim doesn't know about our commands, so pump stays off.
-            // This means commands won't be confirmed and will eventually
-            // retry/drop. That's fine — we're testing stress behavior.
+            // Feed a status frame. SpaSim doesn't know about our commands,
+            // so pump stays off. This means commands won't be confirmed and
+            // will eventually retry/drop.
             let status_bytes = sim.generate_status_frame();
             let status_frame = decode_first_frame(&status_bytes);
             app.process_frame(&status_frame);
         }
 
-        // After 100 Ready frames, all 100 commands should be dequeued.
+        // After draining all queued commands, queue should be empty.
         assert_eq!(
             app.queued_command_count(),
             0,
-            "all commands should be dequeued after 100 Ready frames"
+            "all queued commands should be dequeued"
         );
 
-        // We should have sent frames (100 commands + possible NothingToSend)
+        // We should have sent frames for each queued command.
         assert!(
-            send_frame_count >= 100,
-            "should have sent at least 100 frames, got {}",
+            send_frame_count >= queue_cap as u32,
+            "should have sent at least {} frames, got {}",
+            queue_cap,
             send_frame_count
         );
 
         // No unbounded growth: command queue is empty, pending tracker bounded.
-        // The command tracker caps at MAX_PENDING_COMMANDS = 8, so only 8 are
-        // tracked at a time. The rest are sent but untracked.
-        // Tracked commands that were never confirmed will have retried/dropped.
         let retries = app.total_retries();
         let drops = app.total_dropped();
 
         // Since spa never reflects pump1 ON (sim doesn't process our commands),
         // tracked commands will timeout and retry/drop.
-        // With MAX_PENDING_COMMANDS=8, we track at most 8 at a time.
-        // Each tracked command retries up to 2 times then drops.
         assert!(
             retries + drops > 0,
             "should have some retries or drops (spa never confirms): retries={}, drops={}",

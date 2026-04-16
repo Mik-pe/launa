@@ -241,16 +241,31 @@ where
 
         let slot_offset = OTADATA_OFFSET + (partition.index() as u32 * OTA_ENTRY_SIZE as u32);
 
+        // Both otadata slots share the same 4 KiB sector (slot 0 at 0x10000,
+        // slot 1 at 0x10020).  A naive erase-then-write would destroy the
+        // companion slot on power loss.  Use a read-modify-write cycle so the
+        // other slot's data is preserved across the erase.
+        let sector_base = slot_offset & !(SECTOR_SIZE - 1);
+        let mut sector_buf = [0xFFu8; SECTOR_SIZE as usize];
+        ReadNorFlash::read(&mut self.flash, sector_base, &mut sector_buf).map_err(|_| {
+            OtaError::FlashError {
+                address: sector_base,
+            }
+        })?;
+
+        let entry_offset = (slot_offset - sector_base) as usize;
+        sector_buf[entry_offset..entry_offset + OTA_ENTRY_SIZE].copy_from_slice(&entry);
+
         self.flash
-            .erase(slot_offset, slot_offset + SECTOR_SIZE)
+            .erase(sector_base, sector_base + SECTOR_SIZE)
             .map_err(|_| OtaError::FlashError {
-                address: slot_offset,
+                address: sector_base,
             })?;
 
         self.flash
-            .write(slot_offset, &entry)
+            .write(sector_base, &sector_buf)
             .map_err(|_| OtaError::FlashError {
-                address: slot_offset,
+                address: sector_base,
             })?;
 
         Ok(())
@@ -830,5 +845,119 @@ mod tests {
             ota.write(&[0xDE, 0xAD]),
             Err(OtaError::InvalidImageHeader)
         ));
+    }
+
+    // ── Shared-sector otadata tests ────────────────────────────────────
+
+    /// Helper: read the raw 32-byte otadata entry for a given slot index (0 or 1).
+    fn read_otadata_entry(flash: &MockFlash, slot: usize) -> [u8; OTA_ENTRY_SIZE] {
+        let offset = OTADATA_OFFSET as usize + slot * OTA_ENTRY_SIZE;
+        let mut buf = [0u8; OTA_ENTRY_SIZE];
+        buf.copy_from_slice(&flash.data[offset..offset + OTA_ENTRY_SIZE]);
+        buf
+    }
+
+    /// Helper: extract the sequence number from an otadata entry.
+    fn seq_from_entry(entry: &[u8; OTA_ENTRY_SIZE]) -> u32 {
+        let raw = u32_from_be(&entry[OTA_SEQ_OFFSET..OTA_SEQ_OFFSET + OTA_SEQ_SIZE]);
+        if raw == 0xFFFFFFFF {
+            0
+        } else {
+            raw
+        }
+    }
+
+    #[test]
+    fn test_both_otadata_slots_survive_sequential_writes() {
+        // Write slot 0 first, then slot 1, and verify slot 0 is still intact.
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+
+        // First: write to slot 0 via set_boot_partition(Ota0)
+        // We need direct access, so use rollback which targets the running partition
+        // EspOtaFlash running=Ota0 → set_boot_partition targets Ota0
+        ota.set_boot_partition(Partition::Ota0).unwrap();
+        let slot0_entry_after_first = read_otadata_entry(&ota.flash, 0);
+        let slot0_seq_after_first = seq_from_entry(&slot0_entry_after_first);
+        assert_eq!(
+            slot0_seq_after_first, 1,
+            "slot 0 seq should be 1 after first write"
+        );
+
+        // Now write to slot 1
+        ota.set_boot_partition(Partition::Ota1).unwrap();
+        let slot1_entry = read_otadata_entry(&ota.flash, 1);
+        let slot1_seq = seq_from_entry(&slot1_entry);
+        assert_eq!(slot1_seq, 1, "slot 1 seq should be 1");
+
+        // Verify slot 0 is STILL intact (not destroyed by slot 1 erase)
+        let slot0_entry_after_second = read_otadata_entry(&ota.flash, 0);
+        let slot0_seq_after_second = seq_from_entry(&slot0_entry_after_second);
+        assert_eq!(
+            slot0_seq_after_second, slot0_seq_after_first,
+            "slot 0 sequence must survive writing slot 1"
+        );
+        assert_eq!(
+            slot0_entry_after_second, slot0_entry_after_first,
+            "slot 0 full entry must be identical after writing slot 1"
+        );
+    }
+
+    #[test]
+    fn test_both_otadata_slots_survive_alternating_writes() {
+        // Write to slots in alternating order multiple times.
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+
+        // slot 0 → seq 1
+        ota.set_boot_partition(Partition::Ota0).unwrap();
+        assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 0)), 1);
+        assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 1)), 0);
+
+        // slot 1 → seq 1
+        ota.set_boot_partition(Partition::Ota1).unwrap();
+        assert_eq!(
+            seq_from_entry(&read_otadata_entry(&ota.flash, 0)),
+            1,
+            "slot 0 lost after slot 1 write"
+        );
+        assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 1)), 1);
+
+        // slot 0 → seq 2
+        ota.set_boot_partition(Partition::Ota0).unwrap();
+        assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 0)), 2);
+        assert_eq!(
+            seq_from_entry(&read_otadata_entry(&ota.flash, 1)),
+            1,
+            "slot 1 lost after slot 0 write"
+        );
+
+        // slot 1 → seq 2
+        ota.set_boot_partition(Partition::Ota1).unwrap();
+        assert_eq!(
+            seq_from_entry(&read_otadata_entry(&ota.flash, 0)),
+            2,
+            "slot 0 lost after slot 1 write"
+        );
+        assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 1)), 2);
+    }
+
+    #[test]
+    fn test_detect_running_after_shared_sector_writes() {
+        // Verify detect_running_partition works correctly after multiple
+        // set_boot_partition calls that go through read-modify-write.
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+
+        // Boot from ota_1 (slot 1 gets higher seq)
+        ota.set_boot_partition(Partition::Ota1).unwrap();
+        let detected = ota.detect_running_partition().unwrap();
+        assert_eq!(detected, Partition::Ota1);
+
+        // Switch back to ota_0 (slot 0 gets higher seq)
+        ota.set_boot_partition(Partition::Ota0).unwrap();
+        ota.set_boot_partition(Partition::Ota0).unwrap(); // seq increments again
+        let detected = ota.detect_running_partition().unwrap();
+        assert_eq!(detected, Partition::Ota0);
     }
 }
