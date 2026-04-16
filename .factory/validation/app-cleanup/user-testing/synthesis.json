@@ -1,0 +1,17 @@
+{
+  "milestone": "app-cleanup",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 0,
+    "passed": 0,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null,
+  "notes": "The app-cleanup milestone contains only housekeeping features (update-tasks-md-app) with no functional assertions (fulfills is empty). No user testing flows to validate. All functional assertions for app milestone features were validated in prior milestones (core, mqtt, app)."
+}
