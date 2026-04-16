@@ -197,13 +197,13 @@ The simulator has solid protocol-level fidelity and basic error injection, but t
 
 Wire SpaSim + SimTransport + SpaApp + SimBroker together for end-to-end tests. These are the highest-value improvements because they test the actual production logic path.
 
-- [ ] **Create integration test harness in `launa-integration-tests`**: Test pipeline `SpaSim.tick() → SimTransport → SpaApp.process_frame() → verify AppActions`. Replace direct `SpaController` usage with `SpaApp` so tests exercise production logic.
-- [ ] **Test: full registration handshake end-to-end**: SpaSim sends registration query → SpaApp responds → ID assignment → ID ack → `is_registered()`. Verify SpaApp sends correct frames at each step.
-- [ ] **Test: status updates flow through to MQTT publish actions**: SpaSim ticks → SpaApp processes status frames → `AppAction::PublishState` emitted → verify state JSON matches sim state.
-- [ ] **Test: MQTT command → SpaApp queue → Ready → wire frame**: SimBroker receives command → SpaApp.on_mqtt_command() → Ready frame → SpaApp sends toggle → SpaSim receives and applies → status confirms change.
-- [ ] **Test: pump timer auto-off end-to-end**: Start pump timer → SpaApp sends toggle on → SpaSim turns pump on → advance virtual clock past duration → SpaApp sends toggle off → verify SpaSim pump is off.
-- [ ] **Test: hold mode timer auto-release**: SpaSim enters hold → advance clock past 60 min → SpaApp sends hold-mode toggle → verify hold released.
-- [ ] **Test: stale detection and recovery**: SpaSim goes silent (bus silence) → advance clock past 30s → SpaApp publishes stale alert → SpaSim resumes → SpaApp publishes recovering-from-stale state.
+- [x] **Create integration test harness in `launa-integration-tests`**: Test pipeline `SpaSim.tick() → FrameDecoder → SpaApp.process_frame() → verify AppActions`. SpaAppTestHarness wires SpaSim → FrameDecoder → SpaApp → SimBroker with VirtualClock.
+- [x] **Test: full registration handshake end-to-end**: SpaSim sends registration query → SpaApp responds → ID assignment → ID ack → `is_registered()`. Verify SpaApp sends correct frames at each step.
+- [x] **Test: status updates flow through to MQTT publish actions**: SpaSim ticks → SpaApp processes status frames → `AppAction::PublishState` emitted → verify state JSON matches sim state.
+- [x] **Test: MQTT command → SpaApp queue → Ready → wire frame**: SimBroker receives command → SpaApp.on_mqtt_command() → Ready frame → SpaApp sends toggle → SpaSim receives and applies → status confirms change.
+- [x] **Test: pump timer auto-off end-to-end**: Start pump timer → SpaApp sends toggle on → SpaSim turns pump on → advance virtual clock past duration → SpaApp sends toggle off → verify SpaSim pump is off.
+- [x] **Test: hold mode timer auto-release**: SpaSim enters hold → advance clock past 60 min → SpaApp sends hold-mode toggle → verify hold released.
+- [x] **Test: stale detection and recovery**: SpaSim goes silent (bus silence) → advance clock past 30s → SpaApp publishes stale alert → SpaSim resumes → SpaApp publishes recovering-from-stale state.
 
 #### Tier 2 — Spa-Side Fault Scenarios
 
