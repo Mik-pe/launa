@@ -35,3 +35,17 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --check --all
+
+  esp-check:
+    name: ESP32 Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: esp-rs/xtensa-toolchain@v1.5
+        with:
+          default: true
+          buildtargets: esp32
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "app -> target"
+      - run: cargo check --manifest-path app/Cargo.toml

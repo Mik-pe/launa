@@ -96,7 +96,7 @@ impl WifiStack {
         let (stack, runner) = embassy_net::new(
             wifi_interface,
             net_config,
-            mk_static!(StackResources<3>, StackResources::<3>::new()),
+            mk_static!(StackResources<4>, StackResources::<4>::new()),
             seed,
         );
 

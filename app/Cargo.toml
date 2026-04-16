@@ -2,6 +2,7 @@
 name = "launa-app"
 version = "0.1.0"
 edition = "2021"
+build = "build.rs"
 
 [features]
 default = []
@@ -35,7 +36,7 @@ esp-println = { version = "0.16", default-features = false, features = ["esp32",
 
 embassy-executor = "0.9"
 embassy-time = "0.5"
-embassy-net = { version = "0.7", features = ["tcp", "dhcpv4", "medium-ethernet"] }
+embassy-net = { version = "0.7", features = ["tcp", "dhcpv4", "medium-ethernet", "dns"] }
 embassy-sync = "0.7"
 embassy-futures = "0.1"
 

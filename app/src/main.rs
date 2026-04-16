@@ -90,9 +90,10 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     esp_hal::system::software_reset()
 }
 
-/// Firmware version embedded at compile time from Cargo.toml [package].version.
+/// Firmware version embedded at compile time from Cargo.toml [package].version
+/// plus the Git short SHA from build.rs. Produces e.g. `"0.1.0 (abc1234)"`.
 /// Used in HA discovery (sw_version), MQTT state JSON, and diagnostics payload.
-const FIRMWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
+const FIRMWARE_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_SHORT_SHA"), ")");
 
 // ── Diagnostic counters (static, accessible from all tasks) ───────────
 

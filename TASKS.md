@@ -121,9 +121,9 @@ Code is feature-complete. Remaining items are deployment infrastructure and oper
 
 ### HIGH — Should Fix Before Production Deployment
 
-- [ ] **Add DNS resolution**: Both MQTT and OTA use `parse_ip()` which only accepts dotted-quad IPv4. `embassy-net` is configured without DNS (`features = ["tcp", "dhcpv4", "medium-ethernet"]`). If the MQTT broker is on a hostname (e.g. `homeassistant.local`), it won't resolve. Add `embassy-net` DNS feature + smoltcp DNS resolver.
-- [ ] **Add ESP32 cross-compilation to CI**: `.github/workflows/ci.yml` only runs `cargo check --workspace` and `cargo test --workspace` on host. Does not verify `app/` compiles for `xtensa-esp32-none-elf`. Firmware regressions in ESP32-specific code go undetected.
-- [ ] **Add firmware versioning strategy**: `FIRMWARE_VERSION` reads `env!("CARGO_PKG_VERSION")` = `"0.1.0"`. No build hash, Git SHA, or automated version bumping. The `ota-flash` xtask reads version from `app/Cargo.toml` for post-OTA verification, but there is no mechanism to increment it.
+- [x] **Add DNS resolution**: Added `dns` feature to embassy-net, `resolve_host()` in net_util.rs (tries IPv4 parse first, then DNS A-record query via `Stack::dns_query()`). MQTT connect/reconnect and OTA now support hostnames. `StackResources` increased to 4 for DNS socket.
+- [x] **Add ESP32 cross-compilation to CI**: Added `esp-check` job to `.github/workflows/ci.yml` using `esp-rs/xtensa-toolchain@v1.5` to verify `app/` compiles for `xtensa-esp32-none-elf`.
+- [x] **Add firmware versioning strategy**: Added `app/build.rs` that captures Git short SHA via `git rev-parse --short HEAD`. `FIRMWARE_VERSION` now includes it: `"0.1.0 (abc1234)"`. Falls back to `GITHUB_SHA` in CI or `"unknown"`.
 - [x] **Fix sniffer mode MQTT connect panic**: In `#[cfg(feature = "sniff")]` main, MQTT connect failure calls `panic!("MQTT connect failed")` unlike the main firmware's retry loop. Should use the same retry-with-backoff pattern.
 - [ ] **Pin exact versions for `esp-radio` and `esp-hal` unstable features**: Both use `unstable` feature flag, meaning API may change between versions without warning. Verify exact pins in `app/Cargo.lock`.
 
@@ -156,3 +156,45 @@ All software development is complete. The firmware compiles for xtensa-esp32-non
 - **Testing**: SpaSim with error injection (command failure, bus silence, corrupt frames), SimBroker with connection loss simulation, SpaApp architecture (all logic in launa-core, ESP32 is thin IO wiring), 24-hour simulation, stress tests
 - **xtask**: flash, monitor, flash-monitor, sniff-decode, spa-sim, ota-serve, ota-flash, self-test, config-flash, provision
 - **Features**: sniffer mode, hw-test mode, pump timers, light color cycling, Pump1-6 + Light1-2 support
+
+## Logic Flaws & Bugs (Deep Audit 2026-04-16)
+
+Comprehensive code audit across all crates plus online protocol reference comparison. Findings merged from three parallel worker audits and manual review.
+
+### CRITICAL — Bugs That Will Cause Incorrect Behavior
+
+- [ ] **Celsius set-temperature sends display value instead of wire value** (`app/src/mqtt_client.rs`, `launa-mqtt/command_parser.rs`): HA `set_temperature` number entity sends display values (e.g., "38" for 38°C). The state JSON publishes `set_temp = 38.0` (display value ÷ 2). But the command path passes the value straight through as `Command::SetTemperature(38)`, which the Balboa protocol interprets as wire value 38 = 19°C. Must multiply by 2 for Celsius before sending. Affects every Celsius-mode user — **all Celsius temperature commands send half the intended value**.
+- [ ] **MQTT v5 PUBLISH property length parsed as single byte** (`app/src/mqtt_client.rs` ~line 585): `let props_len = packet[idx] as usize;` reads only one byte, but MQTT v5 property length uses variable-byte integer encoding (same as remaining length). Properties ≥ 128 bytes cause misread property length → wrong payload offset → garbage data or protocol desync. Use `decode_remaining_length()` instead.
+- [ ] **MQTT SUBACK only reads 5 bytes — protocol desync risk** (`app/src/mqtt_client.rs` `subscribe()`): `read_exact(&mut buf, 5)` reads exactly 5 bytes. MQTT v5 SUBACK with properties may be longer. Extra bytes remain in TCP stream and corrupt subsequent packet parsing. Must read full SUBACK based on remaining length.
+- [ ] **Hold mode timer re-fires on every status if spa is slow to respond** (`launa-core/src/lib.rs` `HoldModeTimer::tick()`): Timer sends toggle-off command, but if next StatusUpdate still shows hold active (spa hasn't processed toggle yet), `entered_at` is `None` so the timer re-arms immediately and fires again next tick, spamming toggle commands every status frame.
+- [ ] **Stale command state survives bus reset** (`launa-core/src/lib.rs` `process_frame(NewClientQuery)`): On bus reset + re-registration, `command_queue` and `cmd_tracker.pending` are NOT cleared. Stale tracked commands from the pre-reset session may false-confirm or spurious-retry against the new client ID's status updates.
+
+### HIGH — Significant Issues
+
+- [ ] **Information response `software_id` uses hex format instead of standard `M<val>_<val> V<val>.<val>`** (`launa-protocol/src/information.rs`): Current format `"64DC_1100"` is unreadable. All other Balboa implementations (pybalboa, NorthernMan54) decode as `"M100_220 V17.0"`. Users and diagnostics tools expect the standard format.
+- [ ] **HA discovery set-temperature entity hardcoded to °F min/max** (`launa-mqtt/src/discovery.rs`): `"min":50,"max":104,"step":1,"unit_of_measurement":"°F"` is hardcoded. Does not adapt for Celsius mode (should be 10-40°C, step 0.5, unit °C). The HA number entity will show wrong range and unit for Celsius spas.
+- [ ] **`OTA_CHANNEL.try_send()` silently drops OTA URL** (`app/src/main.rs`): Channel capacity is 1. If an OTA URL is queued while one is already pending, the new URL is dropped. User sees MQTT acknowledgment but no OTA occurs. Should use `.send()` (blocking) or handle the error.
+- [ ] **NVS init failure causes unrecoverable boot loop** (`app/src/config.rs` `open_nvs()`): `panic!("NVS init failed")` on corrupted NVS. Device resets → panics again → infinite loop. Should fall back to default config with a warning.
+- [ ] **UART flush error silently ignored during RS-485 DE release** (`app/src/transport.rs`): `let _ = self.uart.flush();` — if flush fails, DE pin drops before all bytes are on the wire, corrupting the last byte(s) of the RS-485 frame (CRC mismatch on spa side).
+- [ ] **Unbounded `line_buf` in hw-test config mode** (`app/src/main.rs`): `Vec::push(byte)` without size limit on a 32 KiB heap. Continuous serial data without newlines causes OOM panic → device reset.
+
+### MEDIUM — Should Fix
+
+- [ ] **Missing 9 toggle item codes** (`launa-protocol/src/command.rs`): MISTER (0x0E), CIRCULATION_PUMP (0x3D), LIGHT_3 (0x13), LIGHT_4 (0x14), AUX_1 (0x16), AUX_2 (0x17), SOAK_MODE (0x1D), NORMAL_OPERATION (0x01), CLEAR_NOTIFICATION (0x03). Status parser already handles mister and circ_pump but can't toggle them.
+- [ ] **MQTT task diagnostics/alert `try_receive` + `continue` starves command processing** (`app/src/main.rs` mqtt_task): A burst of diagnostics/alert publishes prevents incoming MQTT commands from being processed. Should limit consecutive non-command receives.
+- [ ] **`from_hex()` in crypto.rs allocates without size limit** (`app/src/crypto.rs`): `Vec::with_capacity(hex.len() / 2)` — a malformed NVS value with a very long hex string causes OOM on 32 KiB heap during config loading.
+- [ ] **All-zeros eFuse key produces weak predictable encryption** (`app/src/crypto.rs` `read_key()`): On unprovisioned devices, BLOCK3 is all zeros. After XOR mixing, key = `[0xA5, 0x3C, 0x96, 0xF0]` repeated — identical across all unprovisioned devices. Should log warning.
+- [ ] **`RequestOta` action never tested through SpaApp** (`launa-integration-tests`): The OTA MQTT command → SpaApp → `AppAction::RequestOta` path has zero integration test coverage. If the URL propagation has a bug, it would only surface in production.
+- [ ] **OTA `header_buf` Vec allocates up to 4 KiB on 32 KiB heap** (`app/src/ota.rs`): Combined with other allocations during OTA (request string, HTTP response), could cause OOM. Should use fixed-size stack buffer.
+- [ ] **Pump timer auto-off when pump manually turned off — untested** (`launa-core/src/lib.rs` `PumpTimer::tick()`): `if !is_on { cancel }` path is never tested. If buggy, auto-off timer could re-start a pump the user intentionally turned off.
+- [ ] **Validated temperature integration untested end-to-end** (`launa-integration-tests`): `parse_set_temperature_validated()` is unit-tested but never called from integration tests. The full path (MQTT payload → validated parse → SpaApp queue → Ready → wire frame) is untested.
+- [ ] **Sniffer mode MQTT connect panics on failure** (`app/src/main.rs` `#[cfg(feature = "sniff")]`): Unlike the main firmware's retry loop, sniffer mode calls `panic!("MQTT connect failed")` on first failure.
+
+### LOW — Minor Issues
+
+- [ ] **`frame_error_count: u32` can wrap on noisy buses** (`launa-protocol/src/frame.rs`): Should use `saturating_add(1)`.
+- [ ] **Status message: missing panel_locked, notification_type, settings_lock, M8 cycle time fields** (`launa-protocol/src/status.rs`): Additional fields at offsets 9/18/19/21/24 that other implementations parse. Low priority — advanced/niche features.
+- [ ] **Missing message types: Preferences (0x26), Setup Parameters (0x25)** (`launa-protocol/src/dispatcher.rs`): Standard Balboa message types not handled. Non-essential but may appear on real spas.
+- [ ] **`protocol.md` says Pump 6 at bits 6-7 but code correctly uses bits 2-3** (`docs/protocol.md`): Documentation inconsistency inherited from NorthernMan54 header comment. Code is correct, docs are wrong.
+- [ ] **Temperature=0 accepted as valid set-temperature wire value** (`launa-mqtt/command_parser.rs`): "0" means "no temp set" per protocol. Should be rejected or documented.
+- [ ] **Pump timers for pumps 4-6 and simultaneous timer operation untested** (`launa-integration-tests`): Timer manager supports 6 pumps but only pump 1 is tested.

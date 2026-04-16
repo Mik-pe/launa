@@ -210,7 +210,7 @@ impl MqttClient {
         let mut socket = TcpSocket::new(*stack, rx, tx);
         socket.set_timeout(Some(Duration::from_secs(10)));
 
-        let addr = net_util::parse_ip(&config.mqtt_host).unwrap_or([192, 168, 1, 100]);
+        let addr = net_util::resolve_host(stack, &config.mqtt_host).await.unwrap_or([192, 168, 1, 100]);
         let endpoint = IpEndpoint {
             addr: IpAddress::Ipv4(Ipv4Address::from_octets(addr)),
             port: config.mqtt_port,
@@ -324,7 +324,7 @@ impl MqttClient {
         let mut socket = TcpSocket::new(*self.stack, rx, tx);
         socket.set_timeout(Some(Duration::from_secs(10)));
 
-        let addr = net_util::parse_ip(&self.config_host).unwrap_or([192, 168, 1, 100]);
+        let addr = net_util::resolve_host(self.stack, &self.config_host).await.unwrap_or([192, 168, 1, 100]);
         let endpoint = IpEndpoint {
             addr: IpAddress::Ipv4(Ipv4Address::from_octets(addr)),
             port: self.config_port,
