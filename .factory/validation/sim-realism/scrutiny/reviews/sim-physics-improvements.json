@@ -1,0 +1,39 @@
+{
+  "featureId": "sim-physics-improvements",
+  "reviewedAt": "2026-04-17T01:30:00Z",
+  "commitId": "6fe6e77",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Comprehensive, well-implemented physics model upgrade for SpaSim. All 5 requirements are implemented with good test coverage (18 new tests, 120 total). Code follows TDD methodology (RED→GREEN verified in transcript). Defaults are backward compatible. The thermal model, interlock, noise, unknown temp, and overshoot all work correctly individually and together.",
+    "issues": [
+      {
+        "file": "crates/launa-sim/src/spa_sim.rs",
+        "line": 920,
+        "severity": "non_blocking",
+        "description": "Hardcoded ambient temperature (70°F) in simulate_physics(). Not configurable. If future tests need different ambient conditions, this would need to be parameterized. Currently acceptable for a simulator, but worth noting."
+      },
+      {
+        "file": "crates/launa-sim/src/spa_sim.rs",
+        "line": 943,
+        "severity": "non_blocking",
+        "description": "Cooling model only activates when current_temp > max(ambient, set_temp). When set_temp > ambient and current_temp is between set_temp and set_temp+overshoot (during overshoot region), temp won't cool toward set_temp after overshoot stops — it relies on the heating control logic to re-start heating at the hysteresis point. This works correctly but is somewhat implicit; the cooling branch doesn't handle the overshoot cool-down region explicitly."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The feature adds two separate noise mechanisms: legacy `sensor_noise_jitter` (via `simulate_sensor_noise()`) and physics-model `physics_noise_amplitude` (via `set_physics_noise_amplitude()`). Both can be active simultaneously and stack additively in generate_status_frame(). The legacy field is not deprecated, which could confuse future users. AGENTS.md doesn't document this dual-noise pattern.",
+      "evidence": "crates/launa-sim/src/spa_sim.rs lines 1024-1040: both noise sources applied sequentially to reported_temp"
+    },
+    {
+      "area": "skills",
+      "observation": "Worker followed the rust-worker skill procedure correctly (TDD RED→GREEN). The transcript shows: read context → write failing tests → verify tests fail → implement → verify tests pass → update TASKS.md. skillFeedback.followedProcedure is true.",
+      "evidence": "Transcript shows cargo test failure for new tests, then successful implementation, then cargo test -p launa-sim passes with 120 tests"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The sim-physics-improvements feature is well-implemented with all 5 sub-requirements satisfied: (1) Realistic proportional thermal model with heating ~0.5°F/tick tapering and cooling ~0.1°F/tick. (2) Configurable temperature sensor noise with deterministic PRNG. (3) Heater/pump interlock — is_heating only true when pump or circ_pump running. (4) Temperature unknown on startup — first N ticks report 0xFF. (5) Heater overshoot with configurable overshoot amount and hysteresis re-heat. All 18 new tests pass, all 120 existing launa-sim tests pass, and the worker verified workspace-wide test passing with 0 regressions. Defaults are backward compatible (no noise, no overshoot, no unknown period). Code quality is good with clear doc comments and proper separation between internal physics state and reported values. Minor observations about hardcoded ambient temp and dual-noise mechanisms are non-blocking."
+}

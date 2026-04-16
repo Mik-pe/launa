@@ -1,0 +1,45 @@
+{
+  "featureId": "advanced-integration-tests",
+  "reviewedAt": "2026-04-17T00:15:00.000Z",
+  "commitId": "ada3f8f",
+  "transcriptSkeletonReviewed": false,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The implementation adds 6 Tier 5 advanced integration tests covering all 6 feature requirements: fault log walk (5 entries via full SpaApp→SpaSim pipeline), configuration request/response pairing, filter cycles request/response, MQTT broker disconnect/reconnect, rapid command flood (queue cap + drop counter), and multi-cycle flood accumulation. SpaController is properly deprecated with #[deprecated] attribute, migration docs, and #[allow(deprecated)] annotations on existing usage. All tests pass per the handoff verification (377+ workspace tests). The code is well-structured with clear documentation and appropriate assertions.",
+    "issues": [
+      {
+        "file": "crates/launa-integration-tests/tests/advanced_tests.rs",
+        "line": 39,
+        "severity": "non_blocking",
+        "description": "AdvancedTestHarness duplicates significant boilerplate from the existing SpaAppTestHarness in harness_tests.rs (noted in a comment 'copied from harness_tests.rs'). This creates a maintenance burden — any harness bugfixes or API changes need to be applied in both places. A shared harness module or trait would be cleaner. This is a style/maintainability concern, not a correctness issue."
+      },
+      {
+        "file": "crates/launa-integration-tests/tests/advanced_tests.rs",
+        "line": 376,
+        "severity": "non_blocking",
+        "description": "test_mqtt_broker_disconnect_reconnect checks that dropped_count >= 5 after 10 ticks, but the exact count depends on how many AppAction::PublishState/PublishAvailability actions the harness produces per tick. If the sim or SpaApp behavior changes (e.g., fewer publishes per tick), this assertion could become flaky. A relative check (dropped > 0 and no publications during disconnect) would be more robust, but the current assertion is reasonable given the test infrastructure."
+      },
+      {
+        "file": "crates/launa-integration-tests/tests/advanced_tests.rs",
+        "line": 199,
+        "severity": "non_blocking",
+        "description": "In test_fault_log_walk_entries_1_to_n, the SpaSim fault_log_config is reconfigured for each iteration (set_fault_log_config), but the test doesn't verify that the response's entry_number field matches the requested entry number via the parsed FaultLogResponse. The verification relies on last_fault() string matching against the FaultCode debug name, which works but is slightly indirect. A more precise check would parse the response and assert entry_number equality. This is a non-blocking improvement suggestion."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The integration test harness pattern (SpaAppTestHarness / AdvancedTestHarness) is duplicated across test files rather than being extracted into a shared module. AGENTS.md mentions 'Integration tests go in launa-integration-tests/tests/sim_tests.rs or src/lib.rs' but doesn't mention the harness extraction convention.",
+      "evidence": "advanced_tests.rs:39 — comment says 'Helpers (copied from harness_tests.rs — shared harness pattern)'. Two separate harness structs exist with ~100 lines of duplicated setup/tick logic."
+    },
+    {
+      "area": "skills",
+      "observation": "No skill-related issues. The worker followed the rust-worker skill procedure correctly per skillFeedback.followedProcedure=true.",
+      "evidence": "Handoff skillFeedback confirms followedProcedure=true with no deviations."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "All 6 Tier 5 requirements are implemented and tested: (1) fault log walk exercises 5 entries through the full SpaApp→SpaSim→decode pipeline with distinct fault codes verified, (2) configuration request/response verifies ControlConfiguration with pump/light/blower defaults, (3) filter cycles request/response verifies default filter1/filter2 values, (4) MQTT disconnect/reconnect verifies zero publications during disconnect and resumed publishing after reconnect, (5) command flood verifies the 32-cap queue with accurate drop counting across single and multiple cycles, (6) SpaController is properly deprecated with attribute, migration docs, and allow annotations on existing usage. Minor non-blocking observations: duplicated harness boilerplate across test files, slightly indirect fault log verification, and a potentially flaky dropped_count threshold. Overall: PASS."
+}

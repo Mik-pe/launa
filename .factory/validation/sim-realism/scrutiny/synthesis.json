@@ -1,15 +1,15 @@
 {
   "milestone": "sim-realism",
-  "round": 1,
+  "round": 2,
   "status": "pass",
   "validatorsRun": {
     "test": { "passed": true, "command": "cargo test --workspace", "exitCode": 0 },
     "typecheck": { "passed": true, "command": "cargo check --workspace", "exitCode": 0 },
-    "lint": { "passed": true, "command": "cargo fmt --check", "exitCode": 0 }
+    "lint": { "passed": true, "command": "cargo fmt --check --all", "exitCode": 0 }
   },
   "reviewsSummary": {
-    "total": 3,
-    "passed": 3,
+    "total": 2,
+    "passed": 2,
     "failed": 0,
     "failedFeatures": []
   },
@@ -17,16 +17,23 @@
   "appliedUpdates": [
     {
       "target": "library",
-      "description": "Updated architecture.md: corrected no_std invariant (launa-sim is std), documented SimBroker's functional mock capabilities (QoS 1, subscription matching, loss rate, disconnect/reconnect), and SpaSim realism features (frame jitter, command latency, ready interval variation, partial frame injection)",
-      "sourceFeature": "sim-jitter-and-latency, sim-broker-upgrade"
+      "description": "Updated architecture.md: documented SpaSim realistic physics model (thermal proportional to delta, sensor noise via PRNG, heater/pump interlock, unknown temp startup period, overshoot with hysteresis). Noted dual-noise mechanism: legacy simulate_sensor_noise() and physics-model set_physics_noise_amplitude() stack additively. Noted hardcoded ambient temp (70°F).",
+      "sourceFeature": "sim-physics-improvements"
     }
   ],
-  "suggestedGuidanceUpdates": [],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Add convention: integration test harness pattern (SpaAppTestHarness) should be extracted into a shared module in launa-integration-tests/src/lib.rs rather than duplicated across test files. Multiple test files now copy the same ~100 lines of harness setup.",
+      "evidence": "advanced-integration-tests copies harness boilerplate from harness_tests.rs with comment 'Helpers (copied from harness_tests.rs — shared harness pattern)'. Two separate harness structs exist with duplicated setup/tick logic.",
+      "isSystemic": false
+    }
+  ],
   "rejectedObservations": [
     {
-      "observation": "architecture.md should be updated to document SimBroker's new capabilities",
-      "reason": "already-applied — directly updated architecture.md with SimBroker features"
+      "observation": "Worker followed the rust-worker skill procedure correctly (TDD RED→GREEN).",
+      "reason": "already-documented — skill feedback is tracked in worker handoffs, not library"
     }
   ],
-  "previousRound": null
+  "previousRound": "round 1 (3 features: sim-jitter-and-latency, sim-broker-upgrade, sim-partial-frame-injection — all passed)"
 }
