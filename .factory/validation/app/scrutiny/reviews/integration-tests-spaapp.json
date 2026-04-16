@@ -1,0 +1,45 @@
+{
+  "featureId": "integration-tests-spaapp",
+  "reviewedAt": "2026-04-16T16:58:00.000Z",
+  "commitId": "b00765f",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "16 new integration tests added to launa-integration-tests/src/lib.rs exercising the SpaApp + SpaSim pipeline. Tests cover all 7 validation assertions (VAL-APP-026 through VAL-APP-032). Registration, stale detection, and command retry tests properly exercise SpaApp through SpaSim. OTA tests use MockOta and SimHttpServer patterns. All 102 integration tests pass. The OTA rollback tests (3 tests) exercise the MockOta trait directly rather than through SpaApp's OTA pipeline — this is a minor gap but acceptable since SpaApp doesn't have an OTA state machine in launa-core; OTA is handled at the app layer.",
+    "issues": [
+      {
+        "file": "crates/launa-integration-tests/src/lib.rs",
+        "line": 2903,
+        "severity": "non_blocking",
+        "description": "test_spaapp_registration_with_interleaved_frames has a contrived setup: it feeds all SpaSim frames to SpaApp (which processes them), then force_registers and resets to re-process the registration query to get the SendFrame output. This works but the test doesn't truly verify interleaved frame handling during registration — it verifies that registration can succeed after a reset. The test name is slightly misleading."
+      },
+      {
+        "file": "crates/launa-integration-tests/src/lib.rs",
+        "line": 3048,
+        "severity": "non_blocking",
+        "description": "OTA rollback tests (test_spaapp_ota_rollback_on_write_failure, test_spaapp_ota_rollback_on_finalize_failure, test_spaapp_ota_rollback_on_begin_failure) exercise MockOta directly rather than through SpaApp. SpaApp in launa-core doesn't own OTA state — OTA is handled in the app/ main loop. These are valid unit-level tests of the OTA failure/rollback contract but don't exercise SpaApp's role in the OTA pipeline."
+      },
+      {
+        "file": "crates/launa-integration-tests/src/lib.rs",
+        "line": 2817,
+        "severity": "non_blocking",
+        "description": "sim_tick_to_app helper creates a new FrameDecoder on each call, which means it cannot handle frames split across tick boundaries (partial frames). This is fine for the current tests but could be a limitation if cross-tick frame reassembly tests are added later."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "SimHttpServer pattern is documented only in the integration test code itself. This is a useful pattern for OTA-related tests that could benefit other test authors. The architecture.md mentions MockOta failure injection but not SimHttpServer.",
+      "evidence": "SimHttpServer struct at crates/launa-integration-tests/src/lib.rs:1247 — serves firmware in configurable chunks. Used by OTA tests but not mentioned in .factory/library/architecture.md"
+    },
+    {
+      "area": "knowledge",
+      "observation": "SpaApp's OTA pipeline is not exercised by integration tests because OTA state lives in the app/ main loop, not in SpaApp. The skill file and architecture.md don't clearly document this boundary — a future worker might expect to test OTA through SpaApp and be confused.",
+      "evidence": "OTA rollback tests (lines 3048-3140) exercise MockOta directly. Architecture.md says 'SpaApp: extracted app logic (registration, command tracking, pump/hold timers, stale detection, diagnostics, alerting)' — OTA is notably absent from this list"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS with minor observations. 16 new integration tests successfully exercise SpaApp through the SpaSim pipeline for registration, stale detection, command retry/drop, and full pipeline flows. Tests use VirtualClock for deterministic timing and properly verify all 7 validation assertions. Three OTA rollback tests exercise MockOta directly (not through SpaApp) since OTA state lives in the app layer — this is architecturally correct but the test names slightly overstate their scope. All 102 tests pass with zero workspace regressions. The worker followed TDD procedure and coding conventions correctly."
+}

@@ -1,0 +1,28 @@
+{
+  "featureId": "xtask-validation-and-version-check",
+  "reviewedAt": "2026-04-16T16:55:00.000Z",
+  "commitId": "3d8f997",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Three xtask fixes implemented correctly: (1) OTA firmware version verification after update — reads expected version from app/Cargo.toml, subscribes to state topic after OTA, extracts firmware_version field from JSON payload, compares, and reports mismatch as rollback with bail!. Missing version field produces a warning, not an error, which is appropriate. (2) Config validation enhancements — device.id format validated (alphanumeric+underscore, 1-64 chars), MQTT port range validated (1-65535 via u16), serial port existence checked via serialport::available_ports() with graceful fallback on enumeration failure (CI environments). (3) Argument parsing bounds checks added to all 10 subcommand modules — every flag that takes a value now has `if i >= args.len()` guard after `i += 1`. The provision.rs module already had these checks. 31 tests cover all three areas comprehensively.",
+    "issues": [
+      {
+        "file": "xtask/src/config.rs",
+        "line": 152,
+        "severity": "non_blocking",
+        "description": "Serial port name comparison uses exact string match (`port_names.contains(&self.device.serial_port.as_str())`). On Windows, serialport may return names like 'COM3' or '\\\\?\\COM3' depending on the driver/version. If the config uses a different form (e.g., 'COM3' vs '\\\\?\\COM3'), the check could produce a false negative. This is a minor usability concern, not a correctness bug — the error message does list available ports."
+      },
+      {
+        "file": "xtask/src/ota_flash.rs",
+        "line": 74,
+        "severity": "non_blocking",
+        "description": "read_firmware_version() failure is silently downgraded to None via `.ok()`. If app/Cargo.toml is malformed (rather than missing), the user only gets a println warning during OTA flash. This is acceptable behavior since it's non-blocking, but worth noting."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "Implementation fully covers all three feature requirements. OTA version verification correctly reads expected version from Cargo.toml, subscribes to state topic, compares reported vs expected version after device comes online, and handles missing fields gracefully as warnings. Config validation adds device.id format checks (alphanumeric+underscore, 1-64 chars), MQTT port range (1-65535), and serial port existence with CI-friendly fallback. Argument parsing bounds checks are consistently applied across all 10 subcommand modules using the same pattern. 31 new tests provide thorough coverage: 6 config validation tests, 6 OTA version tests (including edge cases like null, missing field, invalid JSON, empty string), and 19 argument parsing tests across all modules. All 508 workspace tests pass. Code follows existing patterns and conventions."
+}

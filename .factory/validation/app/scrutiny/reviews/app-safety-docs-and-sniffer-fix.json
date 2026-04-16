@@ -1,0 +1,15 @@
+{
+  "featureId": "app-safety-docs-and-sniffer-fix",
+  "reviewedAt": "2026-04-16T17:00:00.000Z",
+  "commitId": "edd8e13",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "All three sub-tasks are correctly implemented: (1) SAFETY comments enhanced on both UnsafeCell dereference sites in mqtt_client.rs explaining the single-task ownership invariant. (2) Sniffer hex formatting replaced per-byte format!(\"{:02X}\").collect() with a pre-allocated HexBuf using core::fmt::Write — no heap allocation, correct overflow protection, proper cfg gating. (3) Firmware version already present in diagnostics JSON via FIRMWARE_VERSION const. No bugs or edge cases found.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "Clean implementation of three small app/ fixes. SAFETY comments now explicitly document the single-task ownership invariant for UnsafeCell socket buffer dereferences. Sniffer mode no longer allocates per-byte heap strings — uses fixed 512-byte stack buffer with core::fmt::Write. Firmware version confirmed already in diagnostics JSON. Worker followed the rust-app-worker skill procedure correctly: investigated codebase, implemented changes, verified with cargo +esp check (both default and --features sniff), ran workspace tests, checked formatting, updated TASKS.md, and committed."
+}

@@ -1,0 +1,33 @@
+{
+  "featureId": "app-diagnostics-logging-and-panic-handler",
+  "reviewedAt": "2026-04-16T14:54:00.000Z",
+  "commitId": "cd98893",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The implementation covers all four requirements: (1) fw_version was already present in diagnostics JSON from a prior commit — worker correctly verified its existence rather than re-adding it. (2) WiFi SSID and MQTT host are masked in hw-test logging with first-2-chars + '***' pattern, while device_id and port remain visible for debugging. (3) Custom panic handler replaces esp-backtrace's infinite loop with esp_println! logging, ~500ms busy-wait, and software_reset(). (4) Diagnostics JSON validity confirmed by inspection of the format string. The code is clean, well-commented, and follows existing patterns.",
+    "issues": [
+      {
+        "file": "app/src/main.rs",
+        "line": 85,
+        "severity": "non_blocking",
+        "description": "The busy-wait loop uses compiler_fence(SeqCst) to prevent optimization, which works but is a heuristic approach. A black_box(counter) would be more idiomatic, but compiler_fence is a reasonable alternative on xtensa-esp32 where std hint::black_box may not be available. The ~500ms timing is also approximate and depends on compiler optimizations and instruction timing at 240 MHz — but this is acceptable for a panic handler's delay purpose (just UART flush)."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The esp-backtrace crate's 'panic-handler' feature provides a default infinite-loop panic handler. When you want a custom panic handler (e.g., one that resets), you must remove the 'panic-handler' feature but keep 'println' for esp-println access. This pattern should be documented in architecture.md's app/ crate section or in .factory/library/ since future workers may need to understand the relationship between esp-backtrace, esp-println, and custom panic handlers.",
+      "evidence": "app/Cargo.toml line 32: changed from features=[\"esp32\",\"panic-handler\",\"println\"] to features=[\"esp32\",\"println\"]. The custom #[panic_handler] in main.rs replaces the removed default handler."
+    },
+    {
+      "area": "conventions",
+      "observation": "Sensitive field masking pattern (first N chars + '**') is used in hw-test logging but not formalized as a project convention. If more sensitive fields are added in the future, this pattern should be extracted into a helper function.",
+      "evidence": "app/src/main.rs lines 793-804: inline masking logic for SSID and MQTT host using alloc::format! with '***' suffix."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The implementation correctly addresses all four requirements: fw_version already existed in diagnostics JSON (verified, not re-added), SSID and MQTT host are masked in hw-test logs while preserving debugging utility, custom panic handler replaces esp-backtrace's infinite loop with log+delay+reset, and the diagnostics JSON remains valid. One minor non-blocking observation about the busy-wait heuristic timing. Two shared state observations about esp-backtrace panic handler configuration knowledge and masking convention."
+}

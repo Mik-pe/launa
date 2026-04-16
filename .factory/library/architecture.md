@@ -11,7 +11,7 @@ How the launa system works at a high level.
 - **launa-esp-ota** — ESP32 OTA implementation using esp-storage directly. CRC-32/MPEG-2 (polynomial 0x04C11DB7, init 0xFFFFFFFF). Otadata read-modify-write for shared sectors. Write offset tracks word-aligned positions.
 - **launa-sim** — Spa simulator (SpaSim/SpaState), SimBroker (functional mock MQTT broker with QoS 1 tracking, subscription matching, loss rate, disconnect/reconnect), SimTransport (virtual RS-485), SpaController, VirtualClock. **Note: launa-sim is NOT `#![no_std]`** — it's a desktop-only crate using `std`. SpaSim supports configurable responses for fault/filter/info/config. SpaController handles all response types. **Note:** SpaSim's generate_config_response() always produces 0x2E (ControlConfiguration), never 0x94 (ConfigurationResponse), so the ConfigurationResponse path cannot be end-to-end tested with the sim.
 - **launa-core** — SpaApp: extracted app logic (registration, command tracking, pump/hold timers, stale detection, diagnostics, alerting). Pure synchronous, no IO. CommandTracker correctly handles both Fahrenheit and Celsius temperature confirmation by comparing raw wire values. Stale probe uses lightweight command (not ConfigurationRequest).
-- **launa-integration-tests** — Integration tests using SpaApp + SpaSim + VirtualClock. Tests exercise SpaApp through sim pipeline.
+- **launa-integration-tests** — Integration tests using SpaApp + SpaSim + VirtualClock. Tests exercise SpaApp through sim pipeline. Contains SimHttpServer helper for OTA tests (serves firmware in configurable chunks over TCP).
 - **xtask** — Cargo xtask tooling (flash, monitor, spa-sim, OTA, sniffer). Config validation includes device.id format, serial port existence, MQTT port range. Argument parsing has bounds checks.
 
 ## app/ Crate
@@ -21,8 +21,10 @@ How the launa system works at a high level.
 - MqttClient uses DiscoveryBuilder from launa-mqtt for HA auto-discovery (20 entities published sequentially with retain=true)
 - Firmware version (FIRMWARE_VERSION const from env!("CARGO_PKG_VERSION")) embedded in discovery, state, and diagnostics
 - Panic handler logs + waits 500ms + software_reset() instead of infinite loop
-- MQTT command rate limiting protects spa bus
+- MQTT command rate limiting protects spa bus (10 commands per 10-second window, pump timers exempted)
 - OTA URL validation requires http:// scheme
+- Custom panic handler: esp-backtrace must use `println` feature only (NOT `panic-handler`) to avoid conflicting with the custom `#[panic_handler]` in main.rs
+- OTA state is managed in the app/ main loop, NOT in SpaApp — SpaApp doesn't own OTA state. Integration tests exercise MockOta directly for OTA rollback scenarios.
 
 ## Key Data Flow
 

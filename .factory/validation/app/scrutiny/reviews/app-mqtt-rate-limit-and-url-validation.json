@@ -1,0 +1,39 @@
+{
+  "featureId": "app-mqtt-rate-limit-and-url-validation",
+  "reviewedAt": "2026-04-16T17:30:00.000Z",
+  "commitId": "f457dcd",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean implementation of both MQTT command rate limiting and OTA URL scheme validation. The RateLimiter struct uses a simple windowed counter (10 commands per 10-second window) with proper window reset logic. URL validation correctly requires http:// and rejects all other schemes with appropriate logging. Integration into the command dispatch in main.rs is correct — only Command variants are rate-limited, not pump timers, which is a reasonable design choice. Code follows existing patterns, is well-documented with comments, and compiles cleanly.",
+    "issues": [
+      {
+        "file": "app/src/mqtt_client.rs",
+        "line": 56,
+        "severity": "non_blocking",
+        "description": "RateLimiter uses a fixed-window approach (resets counter completely on window expiry) rather than a sliding-window. This means at the boundary of a window, you could get 20 commands in rapid succession (10 at end of window N, 10 at start of window N+1). This is acceptable for protecting the spa bus (the purpose is to prevent flooding, not guarantee strict rate), but worth noting as a design trade-off."
+      },
+      {
+        "file": "app/src/mqtt_client.rs",
+        "line": 762,
+        "severity": "non_blocking",
+        "description": "The URL scheme validation uses a heuristic `url.find(':').map_or(false, |i| i < 8)` to detect schemes like 'data:...' without '://'. The magic number 8 could be fragile if new short scheme names appear, but in practice this covers the known cases (data:, mailto:, tel:) well and the OTA URL context makes exotic schemes extremely unlikely."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "The rust-app-worker skill procedure says to write tests first (TDD RED step), but for app/-only changes with esp-hal dependencies it correctly notes that desktop tests aren't possible and cargo +esp check should be used instead. The worker followed this correctly — no tests were added because mqtt_client.rs depends on esp-hal. However, the skill could be more explicit about what to do when the feature is in app/ code that CAN be tested via extraction to a workspace crate.",
+      "evidence": "Handoff tests.added is empty, tests.coverage says 'App-only changes verified via cargo +esp check'. Skill step 3 says 'For app/-only changes that can't be tested on desktop: write the implementation and verify with cargo +esp check'."
+    },
+    {
+      "area": "knowledge",
+      "observation": "The rate limiting constants (RATE_LIMIT_MAX_COMMANDS=10, RATE_LIMIT_WINDOW_SECS=10) are hardcoded. If these need tuning based on spa bus timing characteristics, this should be documented. Currently no documentation exists for how these values were chosen.",
+      "evidence": "app/src/mqtt_client.rs lines 32-37 define the constants with comments about purpose but not rationale for the specific values."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Feature passes review. Both MQTT command rate limiting (10 commands per 10-second window) and OTA URL scheme validation (http:// only) are correctly implemented. Rate limiting uses a clean RateLimiter struct integrated into the command dispatch path in main.rs. URL validation properly rejects file://, ftp://, https://, data:, and schemeless URLs with warn! logging. Pump timers are correctly exempted from rate limiting. No unit tests were added, which is expected since the code lives in the esp-hal-dependent app/ crate. Two minor non-blocking observations: the fixed-window approach allows brief bursts at window boundaries, and the URL scheme detection uses a heuristic magic number (8). Both are acceptable for the use case."
+}
