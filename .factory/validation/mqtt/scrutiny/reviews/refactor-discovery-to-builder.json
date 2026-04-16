@@ -1,0 +1,44 @@
+{
+  "featureId": "refactor-discovery-to-builder",
+  "reviewedAt": "2026-04-16T15:25:00.000Z",
+  "commitId": "7569b82",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Successfully refactored MqttClient::publish_discovery() to use DiscoveryBuilder from launa-mqtt, eliminating duplicate hand-rolled JSON configs. All 20 entity configs now include origin, sw_version in device block, and entity_category on diagnostics/alert sensors. The discovery module was made no_std compatible by replacing serde_json::json! with alloc::format!-based JSON construction. All 82 launa-mqtt tests pass, and the ESP32 app compiles cleanly with no new warnings.",
+    "issues": [
+      {
+        "file": "app/src/mqtt_client.rs",
+        "line": 606,
+        "severity": "non_blocking",
+        "description": "Comment says 'Build and publish one entity at a time to avoid OOM on 32 KiB heap' but build_with_retain() actually creates ALL 20 DiscoveryMessage objects in a Vec simultaneously before iterating. The comment is misleading — it doesn't truly publish one-at-a-time. However, this is no worse than the old code (which also used alloc::vec![] to create all configs at once), and the Vec is dropped after the loop. For true one-at-a-time generation, DiscoveryBuilder would need an iterator-based API. This is a future improvement opportunity, not a regression."
+      },
+      {
+        "file": "crates/launa-mqtt/src/discovery.rs",
+        "line": 243,
+        "severity": "non_blocking",
+        "description": "The 'Last Fault' sensor does not have entity_category: 'diagnostic', though it is arguably a diagnostic-type entity. The validation contract (VAL-MQTT-004) only requires entity_category on 'Diagnostics and alert' sensors, so this is correct per spec. However, 'fault' is semantically a diagnostic sensor and could benefit from entity_category: 'diagnostic' in a future iteration."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "architecture.md line 21 still says 'MqttClient hand-rolls HA auto-discovery JSON configs in publish_discovery() (does NOT use launa-mqtt's DiscoveryBuilder — refactor planned as milestone-2 task)' but this refactor is now complete. The app now uses DiscoveryBuilder. The architecture doc needs updating.",
+      "evidence": ".factory/library/architecture.md line 21 contradicts the current app/src/mqtt_client.rs which imports and uses DiscoveryBuilder"
+    },
+    {
+      "area": "conventions",
+      "observation": "The discovery module in launa-mqtt was converted from serde_json::json! to manual alloc::format!-based JSON construction to achieve no_std compatibility. This is a significant pattern worth noting — when workspace crates need to produce JSON in no_std, the convention is manual format! strings with helper functions (json_device_block, json_origin), not a JSON serialization library.",
+      "evidence": "crates/launa-mqtt/src/discovery.rs — json_device_block() and json_origin() helper functions using alloc::format!()"
+    },
+    {
+      "area": "knowledge",
+      "observation": "The DiscoveryBuilder no longer requires the 'std' feature — it was unconditionally exported by removing the #[cfg(feature = \"std\")] gates from both the mod declaration and the pub use statement in lib.rs. The serde/serde_json dependency is only needed for tests.",
+      "evidence": "crates/launa-mqtt/src/lib.rs — discovery module and DiscoveryBuilder/DiscoveryMessage exports are now unconditional"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The refactor correctly replaces hand-rolled discovery configs with DiscoveryBuilder, fixing the missing origin, sw_version, and entity_category fields. All 11 asserted validations (VAL-MQTT-001 through VAL-MQTT-009, VAL-MQTT-016, VAL-MQTT-017, VAL-MQTT-018) are addressed. The discovery module is now no_std compatible. Two non-blocking issues noted: (1) the 'one at a time' comment is misleading since all 20 configs are built simultaneously in a Vec, and (2) architecture.md is stale and still describes the old hand-rolled approach. Both are improvements for future work, not regressions."
+}

@@ -1,0 +1,21 @@
+{
+  "featureId": "fix-try-extract-packet-heap",
+  "reviewedAt": "2026-04-16T15:20:00Z",
+  "commitId": "c5ab4ce",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean, well-executed refactoring that extracts try_extract_packet() and decode_remaining_length() from app/src/mqtt_client.rs into a new launa-mqtt::packet module, replacing double Vec::from() with Vec::drain(). The implementation is correct, well-documented, and thoroughly tested with 17 unit tests covering all 6 validation assertions (VAL-MQTT-010 through VAL-MQTT-015).",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The architecture.md says launa-mqtt handles 'MQTT topics, discovery builder, command parser, state JSON serializer' but now also contains packet extraction (packet module). Should be updated to include 'packet extraction (try_extract_packet, decode_remaining_length)' in the launa-mqtt description to reflect the new module.",
+      "evidence": "architecture.md launa-mqtt entry does not mention packet module; crates/launa-mqtt/src/packet.rs was added in commit c5ab4ce"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The fix correctly addresses the heap churn issue by replacing double Vec::from() with Vec::drain(), eliminating one allocation per MQTT packet extraction. The logic was cleanly extracted into a testable launa-mqtt::packet module. All 17 unit tests pass, covering: empty/single-byte buffers (VAL-MQTT-013), partial packets (VAL-MQTT-012), two concatenated packets in sequence (VAL-MQTT-011), multi-byte remaining length encoding (VAL-MQTT-014), drain preserving remainder (VAL-MQTT-015), and no double-allocation (VAL-MQTT-010). The app compiles with cargo +esp check and all 421 workspace tests pass. One minor observation: architecture.md should be updated to reflect the new packet module in launa-mqtt."
+}
