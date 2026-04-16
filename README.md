@@ -122,12 +122,15 @@ Bad updates auto-rollback — if the new firmware crashes before connecting to M
 | Crate | What it does |
 |-------|-------------|
 | `launa-protocol` | Balboa protocol parser, CRC-8, frame codec, status/command types |
-| `launa-hal` | Hardware abstraction traits with mock impls for desktop testing |
-| `launa-mqtt` | MQTT client, HA discovery, state serialization, command parsing |
-| `launa-ota` | OTA update trait |
-| `launa-integration-tests` | End-to-end tests with SpaSimulator |
-| `app/` | ESP32 firmware binary |
-| `xtask/` | Host-side tooling (reuses `launa-protocol` directly) |
+| `launa-hal` | Hardware abstraction traits (async Transport, Clock) with mock impls for desktop testing |
+| `launa-mqtt` | MQTT topics, HA discovery builder (20 entities), command parser, state serialization, packet extraction |
+| `launa-ota` | OTA update trait with mock for testing |
+| `launa-esp-ota` | ESP32 OTA using esp-storage with CRC-32 verification and dual-partition management |
+| `launa-core` | SpaApp: extracted app logic (registration, command tracking, stale detection, diagnostics) |
+| `launa-sim` | Spa simulator with configurable responses, error injection, SimBroker |
+| `launa-integration-tests` | 130+ tests exercising SpaApp through sim pipeline |
+| `app/` | ESP32 firmware binary (esp-hal + embassy) |
+| `xtask/` | Host-side tooling (flash, monitor, OTA, sniffer, sim, self-test) |
 
 ```
 Spa Controller ──RS-485──► ESP32 ──WiFi/MQTT──► Home Assistant
