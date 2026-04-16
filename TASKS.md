@@ -62,7 +62,7 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 - [x] **Fix circ_pump/mister HA entities** (`launa-mqtt`): Changed from writable switches (with command topics) to read-only sensors — protocol doesn't support toggling these.
 - [x] **Add firmware integrity verification to OTA** (`launa-esp-ota`, `app/src/ota.rs`): Validates ESP32 image header magic (0xE9) on first write. Accumulates CRC-32/MPEG-2 across all chunks. Supports expected hash via `?crc=HEX` URL parameter and Content-Length validation against partition size.
 - [x] **Fix JSON escaping in `status_to_json`** (`launa-mqtt/src/state.rs`): Added `escape_json_string()` helper escaping `\`, `"`, `\n`, `\r`, `\t`, and control chars U+0000-U+001F → `\uXXXX`.
-- [ ] **Set up CI pipeline** (`.github/workflows`): At minimum: `cargo test` + `cargo check` + `cargo fmt --check` on PRs to main.
+- [x] **Set up CI pipeline** (`.github/workflows`): At minimum: `cargo test` + `cargo check` + `cargo fmt --check` on PRs to main.
 
 ### HIGH — Should Fix Before Production
 
