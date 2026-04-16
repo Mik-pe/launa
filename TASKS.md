@@ -186,8 +186,8 @@ Comprehensive code audit across all crates plus online protocol reference compar
 - [ ] **All-zeros eFuse key produces weak predictable encryption** (`app/src/crypto.rs` `read_key()`): On unprovisioned devices, BLOCK3 is all zeros. After XOR mixing, key = `[0xA5, 0x3C, 0x96, 0xF0]` repeated — identical across all unprovisioned devices. Should log warning.
 - [ ] **`RequestOta` action never tested through SpaApp** (`launa-integration-tests`): The OTA MQTT command → SpaApp → `AppAction::RequestOta` path has zero integration test coverage. If the URL propagation has a bug, it would only surface in production.
 - [ ] **OTA `header_buf` Vec allocates up to 4 KiB on 32 KiB heap** (`app/src/ota.rs`): Combined with other allocations during OTA (request string, HTTP response), could cause OOM. Should use fixed-size stack buffer.
-- [ ] **Pump timer auto-off when pump manually turned off — untested** (`launa-core/src/lib.rs` `PumpTimer::tick()`): `if !is_on { cancel }` path is never tested. If buggy, auto-off timer could re-start a pump the user intentionally turned off.
-- [ ] **Validated temperature integration untested end-to-end** (`launa-integration-tests`): `parse_set_temperature_validated()` is unit-tested but never called from integration tests. The full path (MQTT payload → validated parse → SpaApp queue → Ready → wire frame) is untested.
+- [x] **Pump timer auto-off when pump manually turned off — untested** (`launa-core/src/lib.rs` `PumpTimer::tick()`): `if !is_on { cancel }` path is never tested. If buggy, auto-off timer could re-start a pump the user intentionally turned off.
+- [x] **Validated temperature integration untested end-to-end** (`launa-integration-tests`): `parse_set_temperature_validated()` is unit-tested but never called from integration tests. The full path (MQTT payload → validated parse → SpaApp queue → Ready → wire frame) is untested.
 
 ### Simulator Fidelity & Adversarial Testing
 

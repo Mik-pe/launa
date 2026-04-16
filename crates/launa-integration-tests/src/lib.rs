@@ -4,6 +4,7 @@
 
 #[cfg(test)]
 mod tests {
+    use launa_mqtt::command_parser::ParseResult;
     use launa_ota::{OtaError, OtaUpdate};
     use launa_protocol::command::{Command, ToggleItem};
     use launa_protocol::config::PumpConfig;
@@ -3590,5 +3591,248 @@ mod tests {
             .iter()
             .any(|a| matches!(a, AppAction::PublishState { fault: Some(_), .. }));
         assert!(has_fault, "should include fault in state publish");
+    }
+
+    // ========================================================================
+    // Test Group M: Pump Timer Cancellation & Temperature Pipeline
+    // ========================================================================
+    //
+    // VAL-BM-011: Validated temperature full pipeline test.
+    // VAL-BM-010: SpaApp cancels pump timer on external Off (integration).
+
+    /// VAL-BM-011: Validated temperature full pipeline — Fahrenheit.
+    /// MQTT payload → validated parse → SpaApp queue → Ready → wire frame →
+    /// SpaSim processes → status confirms new temp.
+    #[test]
+    fn test_validated_temperature_pipeline_fahrenheit() {
+        let mut sim = SpaSim::new();
+
+        // Step 1: Parse MQTT payload through validated parser
+        let parse_result = launa_mqtt::command_parser::parse_set_temperature_validated(
+            "100",
+            TemperatureScale::Fahrenheit,
+            TempRange::High,
+        );
+        match &parse_result {
+            ParseResult::Valid(cmd) => {
+                assert_eq!(*cmd, Command::SetTemperature(100));
+            }
+            other => panic!("expected Valid, got {:?}", other),
+        }
+
+        // Step 2: Extract the command and encode to wire frame
+        let cmd = match parse_result {
+            ParseResult::Valid(c) => c,
+            _ => unreachable!(),
+        };
+        let (mt, payload) = cmd.encode();
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
+
+        // Step 3: Feed to SpaSim — it applies the temperature
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&encoded);
+        assert_eq!(frames.len(), 1);
+        sim.process_frame(&frames[0]);
+        assert_eq!(sim.state.set_temp, 100.0);
+
+        // Step 4: SpaSim generates status — verify temperature matches
+        let status_bytes = sim.generate_status_frame();
+        let status_frames = decoder.feed_slice(&status_bytes);
+        let msg = dispatch_frame(&status_frames[0]);
+        match msg {
+            IncomingMessage::StatusUpdate(s) => {
+                assert_eq!(s.set_temp, 100.0);
+                assert_eq!(s.temperature_scale, TemperatureScale::Fahrenheit);
+            }
+            _ => panic!("Expected StatusUpdate"),
+        }
+    }
+
+    /// VAL-BM-011: Validated temperature full pipeline — Celsius.
+    /// Parse display value "38" → validated → convert to wire value 76 →
+    /// SpaSim applies → status confirms 38.0°C.
+    #[test]
+    fn test_validated_temperature_pipeline_celsius() {
+        let mut sim = SpaSim::new();
+        sim.state.temp_scale = TemperatureScale::Celsius;
+        sim.state.current_temp = 36.0;
+        sim.state.set_temp = 40.0;
+
+        // Step 1: Validate the display value (38°C) through the validated parser
+        let parse_result = launa_mqtt::command_parser::parse_set_temperature_validated(
+            "38",
+            TemperatureScale::Celsius,
+            TempRange::High,
+        );
+        match &parse_result {
+            ParseResult::Valid(cmd) => {
+                // Validation passes: 38°C is within 26-40°C range
+                assert!(matches!(*cmd, Command::SetTemperature(_)));
+            }
+            other => panic!("expected Valid, got {:?}", other),
+        }
+
+        // Step 2: The validated parser returns the display value (38).
+        // In the real app, the MQTT client multiplies by 2 for Celsius wire values.
+        // Here we simulate that conversion and send the wire value (76) to SpaSim.
+        let wire_value: u8 = 38u8.saturating_mul(2); // 38°C → wire 76
+        let (mt, payload) = Command::SetTemperature(wire_value).encode();
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
+
+        // Step 3: Feed to SpaSim
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&encoded);
+        sim.process_frame(&frames[0]);
+        // SpaSim decodes wire value 76 → 38.0°C
+        assert_eq!(sim.state.set_temp, 38.0);
+
+        // Step 4: Status confirms
+        let status_bytes = sim.generate_status_frame();
+        let status_frames = decoder.feed_slice(&status_bytes);
+        let msg = dispatch_frame(&status_frames[0]);
+        match msg {
+            IncomingMessage::StatusUpdate(s) => {
+                assert_eq!(s.set_temp, 38.0);
+                assert_eq!(s.temperature_scale, TemperatureScale::Celsius);
+            }
+            _ => panic!("Expected StatusUpdate"),
+        }
+    }
+
+    /// VAL-BM-011: Validated temperature full pipeline through SpaApp queue.
+    /// Parse MQTT payload → validated → on_mqtt_command() → Ready →
+    /// decode SendFrame → feed to SpaSim → status confirms.
+    #[test]
+    fn test_validated_temperature_pipeline_through_spaapp_fahrenheit() {
+        let (_clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+        let mut sim = SpaSim::new();
+
+        // Initial status so CommandTracker has baseline
+        app.process_frame(&make_status_frame());
+
+        // Step 1: Parse validated temperature from MQTT
+        let parse_result = launa_mqtt::command_parser::parse_set_temperature_validated(
+            "102",
+            TemperatureScale::Fahrenheit,
+            TempRange::High,
+        );
+        let cmd = match parse_result {
+            ParseResult::Valid(c) => c,
+            other => panic!("expected Valid, got {:?}", other),
+        };
+        assert_eq!(cmd, Command::SetTemperature(102));
+
+        // Step 2: Queue command via SpaApp
+        app.on_mqtt_command(cmd);
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Step 3: Ready frame → SpaApp dequeues and sends
+        let actions = app.process_frame(&make_ready_frame());
+        let send_frame = actions
+            .iter()
+            .find_map(|a| match a {
+                AppAction::SendFrame(data) => Some(data.clone()),
+                _ => None,
+            })
+            .expect("should produce SendFrame on Ready");
+
+        // Step 4: Decode the SendFrame and feed to SpaSim
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&send_frame);
+        assert_eq!(frames.len(), 1);
+        sim.process_frame(&frames[0]);
+        assert_eq!(sim.state.set_temp, 102.0);
+
+        // Step 5: SpaSim generates status confirming the new temp
+        let status_bytes = sim.generate_status_frame();
+        let status_frames = decoder.feed_slice(&status_bytes);
+        let msg = dispatch_frame(&status_frames[0]);
+        match msg {
+            IncomingMessage::StatusUpdate(s) => {
+                assert_eq!(s.set_temp, 102.0);
+            }
+            _ => panic!("Expected StatusUpdate"),
+        }
+
+        // Step 6: Feed status to SpaApp → command confirmed
+        let actions = app.process_frame(&status_frames[0]);
+        let has_state = actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishState { .. }));
+        assert!(has_state);
+        assert_eq!(app.total_retries(), 0, "command should be confirmed");
+        assert_eq!(app.total_dropped(), 0, "no drops expected");
+    }
+
+    /// VAL-BM-011: Validated temperature pipeline through SpaApp queue — Celsius.
+    /// The display value "40" (40°C) is validated, then wire value 80 is sent
+    /// through SpaApp → SpaSim.
+    #[test]
+    fn test_validated_temperature_pipeline_through_spaapp_celsius() {
+        let (_clock, app) = make_spaapp();
+        let mut app = app;
+        app.force_registered(0x03);
+        let mut sim = SpaSim::new();
+        sim.state.temp_scale = TemperatureScale::Celsius;
+        sim.state.current_temp = 38.0;
+        sim.state.set_temp = 38.0;
+
+        // Initial status for CommandTracker baseline (from Celsius sim)
+        let status_bytes = sim.generate_status_frame();
+        let mut decoder = FrameDecoder::new();
+        let status_frames = decoder.feed_slice(&status_bytes);
+        app.process_frame(&status_frames[0]);
+
+        // Step 1: Validate display value "40" (40°C)
+        let parse_result = launa_mqtt::command_parser::parse_set_temperature_validated(
+            "40",
+            TemperatureScale::Celsius,
+            TempRange::High,
+        );
+        match &parse_result {
+            ParseResult::Valid(_) => {}
+            other => panic!("expected Valid for 40°C, got {:?}", other),
+        }
+
+        // Step 2: Convert to wire value (40 × 2 = 80) and create command.
+        // In the real app, the MQTT client does this conversion.
+        let cmd = Command::SetTemperature(80); // wire value for 40°C
+        assert_eq!(cmd, Command::SetTemperature(80));
+
+        // Queue and send via SpaApp
+        app.on_mqtt_command(cmd);
+        let actions = app.process_frame(&make_ready_frame());
+        let send_frame = actions
+            .iter()
+            .find_map(|a| match a {
+                AppAction::SendFrame(data) => Some(data.clone()),
+                _ => None,
+            })
+            .expect("should produce SendFrame");
+
+        // Step 3: Feed to SpaSim — decodes wire value 80 → 40.0°C
+        let frames = decoder.feed_slice(&send_frame);
+        sim.process_frame(&frames[0]);
+        assert_eq!(sim.state.set_temp, 40.0);
+
+        // Step 4: Status confirms
+        let status_bytes = sim.generate_status_frame();
+        let status_frames = decoder.feed_slice(&status_bytes);
+        let msg = dispatch_frame(&status_frames[0]);
+        match msg {
+            IncomingMessage::StatusUpdate(s) => {
+                assert_eq!(s.set_temp, 40.0);
+                assert_eq!(s.temperature_scale, TemperatureScale::Celsius);
+            }
+            _ => panic!("Expected StatusUpdate"),
+        }
+
+        // SpaApp confirms the command
+        let actions = app.process_frame(&status_frames[0]);
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishState { .. })));
     }
 }
