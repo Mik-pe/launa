@@ -18,6 +18,7 @@ use launa_mqtt::topics::TopicBuilder;
 use launa_mqtt::command_parser::{self, ParseResult};
 use launa_mqtt::discovery::DiscoveryBuilder;
 use launa_mqtt::state::status_to_json;
+use launa_mqtt::packet::{decode_remaining_length, try_extract_packet};
 use launa_protocol::command::{Command, validate_set_temperature};
 use launa_protocol::status::{TemperatureScale, TempRange, StatusUpdate};
 use log::{info, warn, debug, error};
@@ -498,16 +499,7 @@ impl MqttClient {
     }
 
     fn try_extract_packet(&mut self) -> Option<Vec<u8>> {
-        if self.rx_buffer.len() < 2 { return None; }
-        let (remaining_len, header_size) = decode_remaining_length(&self.rx_buffer)?;
-        let total_size = header_size + remaining_len;
-        if self.rx_buffer.len() >= total_size {
-            let packet = Vec::from(&self.rx_buffer[..total_size]);
-            self.rx_buffer = Vec::from(&self.rx_buffer[total_size..]);
-            Some(packet)
-        } else {
-            None
-        }
+        try_extract_packet(&mut self.rx_buffer)
     }
 
     async fn process_packet(&mut self, packet: &[u8]) -> Option<(String, Vec<u8>)> {
@@ -707,20 +699,4 @@ fn encode_remaining_length(buf: &mut Vec<u8>, mut len: usize) {
     }
 }
 
-fn decode_remaining_length(buf: &[u8]) -> Option<(usize, usize)> {
-    if buf.is_empty() { return None; }
-    let mut multiplier = 1usize;
-    let mut value = 0usize;
-    let mut idx = 1;
-    loop {
-        if idx >= buf.len() { return None; }
-        let byte = buf[idx];
-        value += ((byte & 0x7F) as usize) * multiplier;
-        multiplier *= 128;
-        idx += 1;
-        if (byte & 0x80) == 0 { break; }
-        if multiplier > 128 * 128 * 128 * 128 { return None; }
-    }
-    Some((value, idx))
-}
 
