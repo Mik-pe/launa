@@ -20,8 +20,18 @@ All validation is via `cargo test` which is single-process. No concurrent execut
 
 ## Test Structure
 
-- `crates/launa-protocol/src/*.rs` — unit tests per module (159 tests: 71 unit + 27 fuzz + 17 property + misc)
-- `crates/launa-ota/src/lib.rs` — unit tests in mock module
-- `crates/launa-sim/src/*.rs` — unit tests per module (41 tests)
-- `crates/launa-integration-tests/src/lib.rs` — integration tests using SpaApp + SpaSim (73 tests)
-- `crates/launa-integration-tests/tests/sim_tests.rs` — sim-level tests using SimTransport + SpaController (30 tests)
+- `crates/launa-protocol/src/*.rs` — unit tests per module (133+ tests)
+- `crates/launa-ota/src/lib.rs` — unit tests in mock module (14 tests)
+- `crates/launa-esp-ota/src/lib.rs` — unit tests (34 tests)
+- `crates/launa-sim/src/*.rs` — unit tests per module (90+ tests)
+- `crates/launa-core/src/lib.rs` — SpaApp unit tests (29+ tests)
+- `crates/launa-integration-tests/src/lib.rs` — integration tests (108+ tests)
+- `crates/launa-integration-tests/tests/sim_tests.rs` — sim-level integration tests (29+ tests)
+
+## ESP32 Verification Note
+
+`app/` crate changes cannot be unit-tested on desktop. Verification is via:
+- `cargo +esp check` (default features)
+- `cargo +esp check --features sniff`
+- `cargo +esp check --features hw-test`
+Code inspection validates behavioral correctness for app/-only changes.
