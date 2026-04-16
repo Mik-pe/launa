@@ -73,7 +73,7 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 - [x] **UnsafeCell socket buffer reuse — document safety argument** (`app/src/mqtt_client.rs`): Add formal SAFETY comment explaining single-task context, or use `MaybeUninit` pattern.
 - [x] **Discovery publishes ~20 JSON strings on heap — OOM burst risk** (`app/src/mqtt_client.rs`): Publish one at a time using DiscoveryBuilder, each payload dropped after publish.
 - [x] **Sniffer mode allocates unbounded String per frame** (`app/src/main.rs`): Replace `format!("{:02X}")` collect with `write!()` into pre-allocated buffer.
-- [ ] **No firmware size / Content-Length validation during OTA** (`app/src/ota.rs`): Parse `Content-Length` from HTTP headers, validate against partition size before `begin()`.
+- [x] **No firmware size / Content-Length validation during OTA** (`app/src/ota.rs`): Parse `Content-Length` from HTTP headers, validate against partition size before `begin()`.
 - [x] **Light entity state boolean vs string mismatch** (`launa-mqtt`): Not a bug — HA compares `value_template` result as string against `payload_on`, so boolean `true` matches `"true"` at runtime. No code change needed.
 - [x] **`DiscoveryBuilder` uses crate version not firmware version** (`launa-mqtt`): Accept `sw_version` as builder parameter instead of `env!("CARGO_PKG_VERSION")`.
 - [x] **`finalize()` missing empty-image check** (`launa-esp-ota`): Added `bytes_written == 0` guard in `finalize()` — refuses to set boot to empty partition.
@@ -104,10 +104,10 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 - [x] **Config validation gaps in xtask** (`xtask/src/config.rs`): No validation of `device.id` format/length, serial port existence, or MQTT port range.
 - [x] **xtask argument parsing panics on missing flag values** (`xtask/src/*.rs`): `--feature` as last arg = index out of bounds. Add bounds checks.
 - [x] **No firmware versioning mechanism** (cross-cutting): No build hash or version embedded in binary or reported via MQTT.
-- [ ] **Cargo.lock gitignored at workspace root** (`.gitignore`): Workspace library builds not reproducible across machines.
+- [x] **Cargo.lock gitignored at workspace root** (`.gitignore`): Removed from .gitignore and committed for reproducible builds.
 - [x] **Stale probe sends ConfigurationRequest instead of lightweight probe** (`launa-core/src/lib.rs:755`): When the spa is stale, the 5-second probe sends `[0x0A, 0xBF, 0x04]` (ConfigurationRequest). This is heavier than necessary and triggers an unwanted full configuration response. Fix: use a no-op or status-specific request instead.
-- [ ] **MQTT `try_extract_packet()` heap-churns every inbound packet** (`app/src/mqtt_client.rs`): `self.rx_buffer = Vec::from(&self.rx_buffer[total_size..])` allocates a new `Vec` for every MQTT packet. On a 32 KiB heap with frequent traffic, this contributes to fragmentation. Fix: use `Vec::drain()` or a rotating-index buffer to avoid per-packet allocation.
-- [ ] **`EspOtaFlash::set_boot_partition()` erases 4 KiB sector for 32-byte otadata entry** (`launa-esp-ota`): Both otadata entries (32 bytes each) may share the same 4 KiB flash sector. Erasing slot 1 could destroy slot 0 on power loss. Fix: read-modify-write the sector (read full sector, modify the 32-byte entry, erase, rewrite), or verify slots are on independent sectors per the partition table.
+- [x] **MQTT `try_extract_packet()` heap-churns every inbound packet** (`app/src/mqtt_client.rs`): Replaced double `Vec::from()` with `Vec::drain()` in `launa-mqtt/src/packet.rs`. Single allocation per packet extraction, shifts tail in-place.
+- [x] **`EspOtaFlash::set_boot_partition()` erases 4 KiB sector for 32-byte otadata entry** (`launa-esp-ota`): Fixed with read-modify-write pattern — reads full sector, patches target entry, erases, writes back. Both slots survive sequential and alternating writes.
 
 ## Completed Work
 
