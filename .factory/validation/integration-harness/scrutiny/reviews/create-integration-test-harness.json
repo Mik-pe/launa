@@ -1,0 +1,45 @@
+{
+  "featureId": "create-integration-test-harness",
+  "reviewedAt": "2026-04-17T01:30:00Z",
+  "commitId": "0801345",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "SpaAppTestHarness correctly wires SpaSim → FrameDecoder → SpaApp → SimBroker with VirtualClock. All 7 Tier 1 integration tests are implemented, pass successfully, and fulfill their respective validation assertions (VAL-IT-001 through VAL-IT-007). The implementation is clean, well-documented with module-level and method-level doc comments, and follows project conventions (no_std workspace crates, proper error handling patterns).",
+    "issues": [
+      {
+        "file": "crates/launa-integration-tests/tests/harness_tests.rs",
+        "line": 69,
+        "severity": "non_blocking",
+        "description": "VirtualClock is leaked via Box::leak(Box::new(...)) in SpaAppTestHarness::new(). This is standard practice for test harnesses needing &'static references, but if many harness instances are created in a single test process, memory grows unboundedly. This is acceptable for tests but worth noting."
+      },
+      {
+        "file": "crates/launa-integration-tests/tests/harness_tests.rs",
+        "line": 238,
+        "severity": "non_blocking",
+        "description": "complete_registration() has a somewhat complex nested loop with duplicate is_registered() checks (lines 230 and 257). The logic works correctly but could be simplified by always feeding response frames inside the main loop rather than having a separate inner loop for SendFrame actions. Not a bug — just a readability concern."
+      },
+      {
+        "file": "crates/launa-integration-tests/tests/harness_tests.rs",
+        "line": 590,
+        "severity": "non_blocking",
+        "description": "test_stale_detection_and_recovery calls simulate_bus_silence(35) and then loops 35 times with advance_ms(1_000) + tick_app() + tick_spa(). This works because bus_silence_remaining decrements each tick, but the 35 iterations produce 35s of virtual time advancement. The test correctly observes stale at 31s+, recovery after silence ends. The timing is slightly generous (35s silence vs 30s threshold) but ensures determinism."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "Integration tests are placed in `launa-integration-tests/tests/harness_tests.rs` using Cargo's auto-discovery (no `[[test]]` entry in Cargo.toml needed). The mission AGENTS.md mentions `sim_tests.rs` or `src/lib.rs` as locations for integration tests but doesn't mention the `tests/` directory auto-discovery pattern. The architecture.md library doc does correctly document SpaAppTestHarness and its methods.",
+      "evidence": "Cargo.toml has only `[[test]] name = 'sim_tests'` but `harness_tests.rs` is auto-discovered. Mission AGENTS.md line: 'Integration tests go in launa-integration-tests/tests/sim_tests.rs or src/lib.rs'"
+    },
+    {
+      "area": "knowledge",
+      "observation": "The VirtualClock Box::leak pattern (Box::leak(Box::new(VirtualClock::new()))) to obtain &'static VirtualClock is a recurring pattern used in launa-core tests and the harness. This is the established idiom for satisfying SpaApp's &'a dyn Clock lifetime requirement in desktop tests. It's documented indirectly in launa-core's lib.rs doc example but could be useful to note explicitly in library docs.",
+      "evidence": "launa-core/src/lib.rs doc example shows this pattern; harness_tests.rs:69 uses it identically"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS — SpaAppTestHarness is a well-structured integration test harness that correctly wires SpaSim → FrameDecoder → SpaApp → SimBroker with VirtualClock. All 7 Tier 1 tests are implemented, passing, and fulfill validation assertions VAL-IT-001 through VAL-IT-007. The code is clean, well-documented, follows project conventions, and produces no regressions (367+ workspace tests pass). Minor observations about VirtualClock leak pattern and test readability are non-blocking."
+}

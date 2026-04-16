@@ -1,0 +1,33 @@
+{
+  "milestone": "integration-harness",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": { "passed": true, "command": "cargo test --workspace", "exitCode": 0 },
+    "typecheck": { "passed": true, "command": "cargo check --workspace", "exitCode": 0 },
+    "lint": { "passed": true, "command": "cargo fmt --check --all", "exitCode": 0 }
+  },
+  "reviewsSummary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Update the integration test location guidance to mention Cargo auto-discovery in tests/ directory. Current text says 'Integration tests go in launa-integration-tests/tests/sim_tests.rs or src/lib.rs' but doesn't mention that new test files like harness_tests.rs are auto-discovered without needing a [[test]] entry in Cargo.toml.",
+      "evidence": "harness_tests.rs was auto-discovered without a Cargo.toml entry. The harness tests run correctly alongside sim_tests.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "VirtualClock Box::leak pattern for &'static references should be documented in library/",
+      "reason": "already-documented — the pattern is already shown in launa-core's lib.rs doc example which is the primary reference for this idiom"
+    }
+  ],
+  "previousRound": null
+}
