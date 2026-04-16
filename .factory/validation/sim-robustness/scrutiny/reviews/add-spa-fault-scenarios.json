@@ -1,0 +1,45 @@
+{
+  "featureId": "add-spa-fault-scenarios",
+  "reviewedAt": "2026-04-17T01:15:00Z",
+  "commitId": "11264e7",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The implementation adds 5 new SpaSim fault injection methods (simulate_spa_reboot, simulate_fault_state, simulate_sensor_noise, simulate_unknown_temp, clear_unknown_temp) and 5 Tier 2 integration tests using SpaAppTestHarness. It also fixes a pre-existing bug in inject_corrupt_frame() where corrupting the end marker didn't actually cause CRC errors. 13 unit tests cover the SpaSim methods, and 5 integration tests cover the Tier 2 fault scenarios. All assertions VAL-IT-008 through VAL-IT-017 are fulfilled.",
+    "issues": [
+      {
+        "file": "crates/launa-sim/src/spa_sim.rs",
+        "line": 900,
+        "severity": "non_blocking",
+        "description": "The sensor noise PRNG maps a full u64 to [-1.0, 1.0] by casting to i64 and dividing by i64::MAX. When rand_val's MSB is 1 (i.e., the value is > i64::MAX), the cast `rand_val as i64` wraps to a negative value, which is correct. However, the resulting jitter is in continuous [-jitter, +jitter] range — since the temp is then encoded via encode_temp (which rounds to integer u8), sub-degree jitter values may be lost after rounding, reducing effective noise granularity for small jitter values. This is a minor precision concern, not a functional bug — the tests verify ±2.0 jitter works correctly."
+      },
+      {
+        "file": "crates/launa-sim/src/spa_sim.rs",
+        "line": 428,
+        "severity": "non_blocking",
+        "description": "The doc comment on inject_corrupt_frame() still says 'The payload's last byte is XOR'd with 0xFF, producing a bad CRC' but the actual implementation now corrupts frame[5] (a payload byte in the middle). The comment should be updated to match the new behavior."
+      },
+      {
+        "file": "crates/launa-integration-tests/tests/harness_tests.rs",
+        "line": 1004,
+        "severity": "non_blocking",
+        "description": "In test_spontaneous_filter_cycle_while_command_pending, the test manually sets harness.sim.state.pumps[1] = PumpState::Low to simulate the spa accepting the pump2 command. This bypasses the normal SpaSim command processing path. While this is acceptable for testing the command tracker's confirmation logic in isolation, it means the test doesn't verify the full end-to-end flow of: send toggle → sim processes → status reflects change → tracker confirms. However, the test's explicit purpose is to verify tracker behavior with spontaneous state changes, so this approach is reasonable."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "Integration tests for this feature are in `launa-integration-tests/tests/harness_tests.rs` rather than `src/lib.rs`. The mission AGENTS.md says 'Integration tests go in launa-integration-tests/tests/sim_tests.rs or src/lib.rs' but the actual convention used by the worker is `tests/harness_tests.rs`. The harness-based integration tests (Tier 1-3) consistently use the tests/ directory rather than src/, which is a pattern worth documenting.",
+      "evidence": "launa-integration-tests/tests/harness_tests.rs contains all Tier 1-3 tests; mission AGENTS.md mentions sim_tests.rs or src/lib.rs but not harness_tests.rs"
+    },
+    {
+      "area": "knowledge",
+      "observation": "The inject_corrupt_frame() method had a pre-existing bug: corrupting the end marker byte didn't cause CRC errors because the frame decoder finds a valid frame before the corrupted end marker. The worker fixed this by corrupting frame[5] (a payload byte) instead. This is a subtle protocol parser behavior that should be documented for future workers implementing similar error injection.",
+      "evidence": "git diff shows the fix in generate_status_frame() changing from 'let last = frame.len() - 1; frame[last] ^= 0xFF' to 'frame[5] ^= 0xFF', with comment explaining why end marker corruption doesn't work"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The implementation fully covers the feature description: all 5 SpaSim methods exist and work correctly (simulate_spa_reboot, simulate_fault_state, simulate_sensor_noise, simulate_unknown_temp, plus schedule_event verification). 13 unit tests verify the methods directly, and 5 Tier 2 integration tests cover the required scenarios (spa reboot mid-session, dropped commands, bus silence lifecycle, corrupt frame no-desync, spontaneous filter cycle while command pending). All 10 validation assertions (VAL-IT-008 through VAL-IT-017) are fulfilled. The worker also fixed a pre-existing bug in inject_corrupt_frame() that was corrupting the wrong byte. Only minor non-blocking issues found: a stale doc comment on inject_corrupt_frame(), and the noise PRNG's sub-degree precision loss after u8 rounding. Code quality is solid, tests are thorough, and the implementation respects no_std constraints."
+}

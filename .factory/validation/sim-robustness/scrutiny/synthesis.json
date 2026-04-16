@@ -1,0 +1,43 @@
+{
+  "milestone": "sim-robustness",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": { "passed": true, "command": "cargo test --workspace", "exitCode": 0 },
+    "typecheck": { "passed": true, "command": "cargo check --workspace", "exitCode": 0 },
+    "lint": { "passed": true, "command": "cargo fmt --check --all", "exitCode": 0 }
+  },
+  "reviewsSummary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Added FaultLogConfig documentation and inject_corrupt_frame() gotcha to architecture.md",
+      "sourceFeature": "add-spa-fault-scenarios, add-protocol-misbehavior-tests"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Update integration test file convention to include tests/harness_tests.rs. Currently mentions 'tests/sim_tests.rs or src/lib.rs' but the actual convention for SpaAppTestHarness-based tests (Tier 1-3) is tests/harness_tests.rs.",
+      "evidence": "Both features (add-spa-fault-scenarios and add-protocol-misbehavior-tests) placed all Tier 1-3 tests in launa-integration-tests/tests/harness_tests.rs, consistent with the create-integration-test-harness feature from the previous milestone.",
+      "isSystemic": true
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "Integration tests convention update for tests/harness_tests.rs",
+      "reason": "Already captured as AGENTS.md suggestion to orchestrator; not a library/services.yaml concern"
+    },
+    {
+      "observation": "SpaApp::force_reset_registration() lacks cfg(test) gate",
+      "reason": "Minor concern, clearly documented as test-only in doc comment; not a systemic issue worth recording"
+    }
+  ],
+  "previousRound": null
+}
