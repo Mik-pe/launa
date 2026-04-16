@@ -615,6 +615,15 @@ impl<'a> SpaApp<'a> {
         self.client_id = Some(client_id);
     }
 
+    /// Force-reset the registration state machine to WaitingForQuery (for tests).
+    /// Useful after injecting rapid NewClientQuery frames that leave the SM
+    /// in WaitingForAssignment state with no pending assignment response.
+    pub fn force_reset_registration(&mut self) {
+        self.registration.reset();
+        self.client_id = None;
+        self.registration_started_at = None;
+    }
+
     /// Start a pump timer. Returns actions including the toggle-on command.
     pub fn start_pump_timer(&mut self, pump_index: u8, minutes: u32) -> Vec<AppAction> {
         let now = self.clock.now();

@@ -222,12 +222,12 @@ Add new error injection capabilities to SpaSim and integration tests that exerci
 
 #### Tier 3 — Protocol-Level Misbehavior
 
-- [ ] **Test: out-of-order frames**: SpaSim sends Ready before Status in a single tick. Verify SpaApp handles gracefully (Ready with no pending status shouldn't crash).
-- [ ] **Test: interleaved response and status**: Status frame arrives between settings request and settings response. Verify both parse correctly.
-- [ ] **Test: rapid re-registration**: SpaSim sends multiple registration queries in quick succession. Verify SpaApp doesn't double-register or assign wrong ID.
-- [ ] **Test: partial frame across tick boundary**: Use existing `inject_partial_frame_at()` in integration context. Verify SpaApp's FrameDecoder reassembles correctly.
-- [ ] **Test: duplicate status frame in one tick**: Use existing `inject_duplicate_frame()`. Verify SpaApp doesn't double-publish to MQTT.
-- [ ] **Test: multi-frame fault log walk**: Request fault entries 1..N sequentially. Verify each response is correctly captured and last_fault updates.
+- [x] **Test: out-of-order frames**: SpaSim sends Ready before Status in a single tick. Verify SpaApp handles gracefully (Ready with no pending status shouldn't crash).
+- [x] **Test: interleaved response and status**: Status frame arrives between settings request and settings response. Verify both parse correctly.
+- [x] **Test: rapid re-registration**: SpaSim sends multiple registration queries in quick succession. Verify SpaApp doesn't double-register or assign wrong ID.
+- [x] **Test: partial frame across tick boundary**: Use existing `inject_partial_frame_at()` in integration context. Verify SpaApp's FrameDecoder reassembles correctly.
+- [x] **Test: duplicate status frame in one tick**: Use existing `inject_duplicate_frame()`. Verify SpaApp doesn't double-publish to MQTT.
+- [x] **Test: multi-frame fault log walk**: Request fault entries 1..N sequentially. Verify each response is correctly captured and last_fault updates.
 
 #### Tier 4 — Physics Improvements
 

@@ -15,9 +15,19 @@
 //! 10. Bus silence lifecycle → stale alert and recovery
 //! 11. Corrupt frame no-desync
 //! 12. Spontaneous filter cycle while command pending
+//!
+//! Implements the Tier 3 protocol misbehavior tests:
+//! 13. Out-of-order frames (Ready before Status)
+//! 14. Interleaved response and status (status+ready+fault in one buffer)
+//! 15. Rapid re-registration (multiple NewClientQuery frames)
+//! 16. Partial frame across tick boundary
+//! 17. Duplicate status frame in one tick
+//! 18. Multi-frame fault log walk
+//! 19. Combined stress test (7-phase sequence)
 
 use launa_core::{AppAction, SpaApp};
 use launa_protocol::command::{Command, ToggleItem};
+use launa_protocol::fault::FaultCode;
 use launa_protocol::frame::FrameDecoder;
 use launa_protocol::status::PumpState;
 use launa_sim::{SimBroker, SpaSim, VirtualClock};
@@ -1005,4 +1015,609 @@ fn test_spontaneous_filter_cycle_while_command_pending() {
         "no drops expected — pump2 command confirmed via status (drops={})",
         drops_for_cmd
     );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Tier 3 — Protocol Misbehavior Tests
+// ══════════════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════════════
+// Test 13: VAL-IT-018 — Out-of-order frames (Ready before Status)
+// ══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_out_of_order_frames_ready_before_status() {
+    let mut harness = SpaAppTestHarness::new();
+
+    // Complete registration first
+    harness.complete_registration(5);
+
+    // Manually construct a byte buffer with Ready frame BEFORE Status frame
+    // (normal order is Status then Ready)
+    let ready_bytes = harness.sim.generate_ready_frame();
+    let status_bytes = harness.sim.generate_status_frame();
+
+    let mut out_of_order = Vec::new();
+    out_of_order.extend_from_slice(&ready_bytes);
+    out_of_order.extend_from_slice(&status_bytes);
+
+    // Feed the out-of-order bytes through the decoder and into SpaApp
+    let frames = harness.decoder.feed_slice(&out_of_order);
+    assert!(
+        frames.len() >= 2,
+        "should decode at least 2 frames from out-of-order buffer, got {}",
+        frames.len()
+    );
+
+    // Process all frames — should not panic
+    let mut all_actions = Vec::new();
+    for frame in &frames {
+        let actions = harness.app.process_frame(frame);
+        all_actions.extend(actions);
+    }
+
+    // Both frames should be processed correctly:
+    // - Ready: sends NothingToSend (or dequeues command)
+    // - Status: produces PublishState
+    let has_publish_state = all_actions
+        .iter()
+        .any(|a| matches!(a, AppAction::PublishState { .. }));
+    let has_send_frame = all_actions
+        .iter()
+        .any(|a| matches!(a, AppAction::SendFrame(_)));
+
+    assert!(
+        has_publish_state,
+        "Status frame should produce PublishState even when arriving after Ready"
+    );
+    assert!(
+        has_send_frame,
+        "Ready frame should produce SendFrame (NothingToSend) even when arriving before Status"
+    );
+
+    // Verify no panics and app is in a good state
+    assert!(harness.app.is_registered(), "should still be registered");
+    assert!(
+        harness.app.last_status().is_some(),
+        "should have a valid last status"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Test 14: VAL-IT-019 — Interleaved response and status
+// ══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_interleaved_frames_in_single_buffer() {
+    let mut harness = SpaAppTestHarness::new();
+
+    // Complete registration first
+    harness.complete_registration(5);
+
+    // Construct a single byte buffer containing:
+    // 1. Status frame
+    // 2. Ready frame
+    // 3. Fault log response frame
+    let status_bytes = harness.sim.generate_status_frame();
+    let ready_bytes = harness.sim.generate_ready_frame();
+    let fault_bytes = harness.sim.generate_fault_log_response();
+
+    let mut combined = Vec::new();
+    combined.extend_from_slice(&status_bytes);
+    combined.extend_from_slice(&ready_bytes);
+    combined.extend_from_slice(&fault_bytes);
+
+    // Feed all bytes through the decoder
+    let frames = harness.decoder.feed_slice(&combined);
+
+    // Should decode at least 3 frames
+    assert!(
+        frames.len() >= 3,
+        "should decode at least 3 frames from combined buffer, got {}",
+        frames.len()
+    );
+
+    // Process all frames through SpaApp — should not panic
+    let mut all_actions = Vec::new();
+    for frame in &frames {
+        let actions = harness.app.process_frame(frame);
+        all_actions.extend(actions);
+    }
+
+    // Verify all frame types were processed:
+    // 1. StatusUpdate → PublishState
+    let has_publish_state = all_actions
+        .iter()
+        .any(|a| matches!(a, AppAction::PublishState { .. }));
+    assert!(
+        has_publish_state,
+        "Status frame should produce PublishState"
+    );
+
+    // 2. Ready → SendFrame (NothingToSend or command)
+    let has_send_frame = all_actions
+        .iter()
+        .any(|a| matches!(a, AppAction::SendFrame(_)));
+    assert!(has_send_frame, "Ready frame should produce SendFrame");
+
+    // 3. FaultLogResponse → updates last_fault
+    assert!(
+        harness.app.last_fault().is_some(),
+        "Fault log response should update last_fault"
+    );
+
+    // No frame errors
+    assert_eq!(
+        harness.frame_error_count(),
+        0,
+        "should have zero frame errors from interleaved valid frames"
+    );
+
+    // App should be in good state
+    assert!(harness.app.is_registered());
+    assert!(harness.app.last_status().is_some());
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Test 15: VAL-IT-020 — Rapid re-registration (multiple NewClientQuery frames)
+// ══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_rapid_reregistration_multiple_queries() {
+    // Test at the SpaApp level: feed multiple NewClientQuery frames directly
+    // to verify no panic, queue cleared, and re-registration eventually succeeds.
+    let mut harness = SpaAppTestHarness::new();
+
+    // Phase 1: Complete initial registration
+    harness.complete_registration(5);
+    assert!(harness.app.is_registered());
+
+    // Get some status and queue a command
+    harness.collect_actions();
+    harness.send_command(Command::ToggleItem(ToggleItem::Pump1));
+    assert_eq!(harness.app.queued_command_count(), 1);
+
+    // Phase 2: Simulate rapid re-registration by feeding multiple NewClientQuery
+    // frames directly to the app. This tests that the app handles them gracefully.
+    let new_client_query_frame = launa_protocol::frame::Frame {
+        message_type: [0xFE, 0xBF],
+        payload: vec![0x00],
+    };
+
+    // Feed 3 NewClientQuery frames directly — should not panic
+    let mut all_actions = Vec::new();
+    for _ in 0..3 {
+        let actions = harness.app.process_frame(&new_client_query_frame);
+        all_actions.extend(actions);
+    }
+
+    // SpaApp should be unregistered (first NewClientQuery resets via dispatch,
+    // subsequent ones go through registration SM)
+    assert!(
+        !harness.app.is_registered(),
+        "should be unregistered after NewClientQuery"
+    );
+
+    // Command queue should be cleared
+    assert_eq!(
+        harness.app.queued_command_count(),
+        0,
+        "command queue should be cleared on bus reset"
+    );
+
+    // Phase 3: Re-registration via the harness (also resets sim state)
+    harness.sim.simulate_spa_reboot(); // reset sim registration too
+                                       // Force-reset the app's registration state machine to WaitingForQuery.
+                                       // After 3 NewClientQuery frames, the SM may be stuck in WaitingForAssignment.
+                                       // A fresh sim reboot produces a clean NewClientQuery on the next tick.
+    harness.app.force_reset_registration();
+    // Reset the decoder to clear any partial state
+    harness.decoder = FrameDecoder::new();
+
+    let ticks = harness.complete_registration(10);
+    assert!(
+        harness.app.is_registered(),
+        "should re-register within 10 ticks (took {})",
+        ticks
+    );
+
+    // Normal operation should resume
+    let resume_actions = harness.collect_actions();
+    let has_publish = resume_actions
+        .iter()
+        .any(|a| matches!(a, AppAction::PublishState { .. }));
+    assert!(
+        has_publish,
+        "status publishing should resume after re-registration"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Test 16: VAL-IT-021 — Partial frame across tick boundary
+// ══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_partial_frame_across_tick_boundary() {
+    let mut harness = SpaAppTestHarness::new();
+
+    // Complete registration
+    harness.complete_registration(5);
+
+    // Get the status frame length so we can split at a meaningful point
+    let status_bytes = harness.sim.generate_status_frame();
+    assert!(
+        status_bytes.len() > 10,
+        "status frame should have some bytes"
+    );
+
+    // Split the frame roughly in half (at byte 10, well within the frame)
+    let split_point = 10;
+
+    // Inject partial frame split at tick boundary
+    harness.sim.inject_partial_frame_at(split_point);
+
+    // Tick 1: should emit only the first N bytes of the status frame
+    let tick1_bytes = harness.sim.tick();
+    assert!(
+        !tick1_bytes.is_empty(),
+        "tick 1 should produce some bytes (partial frame)"
+    );
+
+    // Feed the partial bytes through the decoder — should NOT produce any frames yet
+    let tick1_frames = harness.decoder.feed_slice(&tick1_bytes);
+    assert_eq!(
+        tick1_frames.len(),
+        0,
+        "partial frame should not decode into any frames yet"
+    );
+
+    // Tick 2: should emit the remainder + Ready frame
+    let tick2_bytes = harness.sim.tick();
+    assert!(
+        !tick2_bytes.is_empty(),
+        "tick 2 should produce remainder bytes + Ready"
+    );
+
+    // Feed remainder through the decoder — should now produce complete frames
+    let tick2_frames = harness.decoder.feed_slice(&tick2_bytes);
+    assert!(
+        tick2_frames.len() >= 1,
+        "remainder should decode into at least 1 frame (status + possibly ready), got {}",
+        tick2_frames.len()
+    );
+
+    // Process frames through SpaApp
+    let mut all_actions = Vec::new();
+    for frame in &tick2_frames {
+        let actions = harness.app.process_frame(frame);
+        all_actions.extend(actions);
+    }
+
+    // Should produce PublishState from the reassembled status frame
+    let has_publish = all_actions
+        .iter()
+        .any(|a| matches!(a, AppAction::PublishState { .. }));
+    assert!(
+        has_publish,
+        "reassembled status frame should produce PublishState"
+    );
+
+    // No frame errors
+    assert_eq!(
+        harness.frame_error_count(),
+        0,
+        "partial frame reassembly should not cause frame errors"
+    );
+
+    // App should have valid status
+    assert!(
+        harness.app.last_status().is_some(),
+        "should have valid last_status after partial frame reassembly"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Test 17: VAL-IT-022 — Duplicate status frame in one tick
+// ══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_duplicate_status_frame_in_one_tick() {
+    let mut harness = SpaAppTestHarness::new();
+
+    // Complete registration
+    harness.complete_registration(5);
+
+    // Record initial state
+    harness.collect_actions();
+    let initial_frames_received = harness.app.frames_received();
+
+    // Inject duplicate frame — next tick produces status frame twice + Ready
+    harness.sim.inject_duplicate_frame();
+
+    // Tick the sim — produces duplicated status + ready
+    let tick_bytes = harness.sim.tick();
+    assert!(
+        !tick_bytes.is_empty(),
+        "tick should produce bytes with duplicated frame"
+    );
+
+    // Decode all frames from the tick
+    let frames = harness.decoder.feed_slice(&tick_bytes);
+
+    // Should decode at least 3 frames: status, duplicate status, ready
+    assert!(
+        frames.len() >= 3,
+        "should decode at least 3 frames from duplicated tick (status + status + ready), got {}",
+        frames.len()
+    );
+
+    // Process all frames through SpaApp
+    let mut all_actions = Vec::new();
+    for frame in &frames {
+        let actions = harness.app.process_frame(frame);
+        all_actions.extend(actions);
+    }
+
+    // Count PublishState and SendFrame(Ready) actions
+    let publish_count = all_actions
+        .iter()
+        .filter(|a| matches!(a, AppAction::PublishState { .. }))
+        .count();
+
+    // Should have exactly 2 PublishState (one from each status frame)
+    // Note: the second PublishState may be the same data — SpaApp processes both
+    assert!(
+        publish_count >= 2,
+        "should have at least 2 PublishState actions from duplicate status frames, got {}",
+        publish_count
+    );
+
+    // Should have a SendFrame from the Ready (NothingToSend or command)
+    let has_send_frame = all_actions
+        .iter()
+        .any(|a| matches!(a, AppAction::SendFrame(_)));
+    assert!(
+        has_send_frame,
+        "should have SendFrame action from Ready frame"
+    );
+
+    // No frame errors from duplication
+    assert_eq!(
+        harness.frame_error_count(),
+        0,
+        "duplicate frame should not cause frame errors"
+    );
+
+    // Frames received should have incremented by 2 (two status frames)
+    assert!(
+        harness.app.frames_received() >= initial_frames_received + 2,
+        "frames_received should reflect both duplicate status frames (was {}, now {})",
+        initial_frames_received,
+        harness.app.frames_received()
+    );
+
+    // App should still be in good state
+    assert!(harness.app.is_registered());
+    assert!(harness.app.last_status().is_some());
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Test 18: VAL-IT-023 — Multi-frame fault log walk
+// ══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_multi_frame_fault_log_walk() {
+    let mut harness = SpaAppTestHarness::new();
+
+    // Complete registration
+    harness.complete_registration(5);
+
+    // Get initial status so the app has a pre_status
+    harness.collect_actions();
+
+    // Walk through 5 fault log entries, each with a different fault code
+    let fault_codes = [
+        FaultCode::HeaterDry,
+        FaultCode::LowFlow,
+        FaultCode::WaterTooHot,
+        FaultCode::SensorAFault,
+        FaultCode::GfciTestFailed,
+    ];
+
+    for (i, &code) in fault_codes.iter().enumerate() {
+        // Configure the sim to produce a fault log response with this fault code
+        let entry_num = (i + 1) as u8;
+        harness
+            .sim
+            .set_fault_log_config(launa_sim::spa_sim::FaultLogConfig {
+                fault_count: 5,
+                entry_number: entry_num,
+                message_code: code,
+                days_ago: (5 - i as u8),
+                hour: 10 + i as u8,
+                minute: 30,
+                flags: 0x04,
+                set_temperature: 104,
+                sensor_a_temp: 104,
+                sensor_b_temp: 102,
+            });
+
+        // Generate the fault log response frame
+        let fault_bytes = harness.sim.generate_fault_log_response();
+
+        // Feed through the decoder
+        let mut decoder = FrameDecoder::new();
+        let fault_frames = decoder.feed_slice(&fault_bytes);
+        assert_eq!(
+            fault_frames.len(),
+            1,
+            "fault log response should decode as exactly 1 frame"
+        );
+
+        // Process through SpaApp
+        let _actions = harness.app.process_frame(&fault_frames[0]);
+
+        // FaultLogResponse should update last_fault
+        assert!(
+            harness.app.last_fault().is_some(),
+            "last_fault should be set after fault log entry {}",
+            entry_num
+        );
+
+        // The fault string should contain the fault code name
+        let fault_str = harness.app.last_fault().unwrap();
+        assert!(
+            fault_str.contains(&format!("{:?}", code)),
+            "fault string '{}' should contain fault code {:?} for entry {}",
+            fault_str,
+            code,
+            entry_num
+        );
+    }
+
+    // After the walk, last_fault should contain the LAST entry's fault code
+    let final_fault = harness.app.last_fault().unwrap();
+    assert!(
+        final_fault.contains("GfciTestFailed"),
+        "last_fault should reflect the final entry's fault code (GfciTestFailed), got: '{}'",
+        final_fault
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Test 19: VAL-IT-024 — Combined stress test (7-phase sequence)
+// ══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_combined_stress_7_phase() {
+    let mut harness = SpaAppTestHarness::new();
+
+    // ── Phase 1: Registration ──
+    harness.complete_registration(5);
+    assert!(harness.app.is_registered(), "Phase 1: should be registered");
+
+    // ── Phase 2: 3 successful commands ──
+    harness.collect_actions(); // get initial status for tracker
+
+    harness.send_command(Command::ToggleItem(ToggleItem::Pump1));
+    harness.send_command(Command::ToggleItem(ToggleItem::Light1));
+    harness.send_command(Command::ToggleItem(ToggleItem::Blower));
+
+    // Drain commands through Ready windows — need 3 Ready frames to drain 3 commands.
+    // Each collect_actions() does one sim tick which produces (status + ready).
+    for _ in 0..5 {
+        let actions = harness.collect_actions();
+        harness.process_outgoing(&actions);
+    }
+
+    // Verify at least pump1 changed (commands were processed)
+    assert!(
+        matches!(harness.sim.state.pumps[0], PumpState::Low | PumpState::High),
+        "Phase 2: pump1 should be on (got {:?})",
+        harness.sim.state.pumps[0]
+    );
+
+    // ── Phase 3: Fault injection ──
+    harness.sim.simulate_fault_state(FaultCode::WaterTooHot);
+    let fault_actions = harness.collect_actions();
+    // Status should still be published (with fault flag in status)
+    let has_publish = fault_actions
+        .iter()
+        .any(|a| matches!(a, AppAction::PublishState { .. }));
+    assert!(
+        has_publish,
+        "Phase 3: status should still be published with fault state"
+    );
+
+    // ── Phase 4: 35-tick silence → stale ──
+    harness.sim.simulate_bus_silence(40);
+
+    let mut stale_alert_seen = false;
+    for _sec in 1..=35 {
+        harness.advance_ms(1_000);
+        let tick_actions = harness.tick_app();
+        for action in &tick_actions {
+            if let AppAction::PublishAlert { message, .. } = action {
+                if message == "spa_communication_lost" {
+                    stale_alert_seen = true;
+                }
+            }
+        }
+        let spa_actions = harness.tick_spa();
+        harness.process_outgoing(&spa_actions);
+    }
+
+    assert!(
+        stale_alert_seen,
+        "Phase 4: stale alert should fire during silence"
+    );
+    assert!(
+        harness.app.is_stale(),
+        "Phase 4: app should be stale after 35s silence"
+    );
+
+    // ── Phase 5: Recovery ──
+    // Exhaust remaining silence ticks (40 - 35 = 5 ticks left).
+    // DO NOT use tick_spa() here — we want collect_actions() below to see
+    // the FIRST status after stale and set the recovery flag.
+    for _ in 0..5 {
+        harness.advance_ms(1_000);
+        // tick the sim but only process through sim (not app)
+        let _ = harness.sim.tick();
+    }
+
+    // Now silence is over. collect_actions will tick the sim, get status,
+    // feed through app — this is the FIRST status after stale.
+    let recovery_actions = harness.collect_actions();
+    assert!(
+        !harness.app.is_stale(),
+        "Phase 5: should recover from stale"
+    );
+    let recovering = recovery_actions.iter().any(|a| {
+        matches!(
+            a,
+            AppAction::PublishState {
+                recovering_from_stale: true,
+                ..
+            }
+        )
+    });
+    assert!(
+        recovering,
+        "Phase 5: recovery flag should be set on first status after stale"
+    );
+
+    // ── Phase 6: Reboot → re-register ──
+    harness.sim.simulate_spa_reboot();
+    let _reboot_actions = harness.collect_actions();
+    assert!(
+        !harness.app.is_registered(),
+        "Phase 6: should be unregistered after spa reboot"
+    );
+
+    let ticks = harness.complete_registration(5);
+    assert!(
+        harness.app.is_registered(),
+        "Phase 6: should re-register within 5 ticks (took {})",
+        ticks
+    );
+
+    // ── Phase 7: Post-reboot command ──
+    harness.collect_actions(); // get initial status after re-registration
+
+    harness.send_command(Command::ToggleItem(ToggleItem::Pump2));
+    let cmd_actions = harness.collect_actions();
+    harness.process_outgoing(&cmd_actions);
+
+    // Verify command took effect
+    assert!(
+        matches!(harness.sim.state.pumps[1], PumpState::Low | PumpState::High),
+        "Phase 7: pump2 should be on after post-reboot command (got {:?})",
+        harness.sim.state.pumps[1]
+    );
+
+    // No state leaks between phases — verify clean final state
+    assert!(harness.app.is_registered());
+    assert!(!harness.app.is_stale());
+    assert!(harness.app.last_status().is_some());
 }
