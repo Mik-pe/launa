@@ -161,40 +161,42 @@ mod tests {
     // ========== parse_http_url tests ==========
 
     #[test]
-    fn test_parse_http_url_standard() {
-        let result = parse_http_url("http://example.com/firmware.bin");
-        assert!(result.is_some());
-        let (host, port, path) = result.unwrap();
+    fn test_parse_http_url_standard_cases() {
+        // Standard URL with default port
+        let (host, port, path) = parse_http_url("http://example.com/firmware.bin").unwrap();
         assert_eq!(host, "example.com");
         assert_eq!(port, 80);
         assert_eq!(path, "/firmware.bin");
-    }
 
-    #[test]
-    fn test_parse_http_url_with_port() {
-        let result = parse_http_url("http://example.com:8080/firmware.bin");
-        assert!(result.is_some());
-        let (host, port, path) = result.unwrap();
+        // URL with explicit port
+        let (host, port, path) = parse_http_url("http://example.com:8080/firmware.bin").unwrap();
         assert_eq!(host, "example.com");
         assert_eq!(port, 8080);
         assert_eq!(path, "/firmware.bin");
+
+        // IPv4 address with port
+        let (host, port, path) = parse_http_url("http://10.0.0.1:8080/firmware.bin").unwrap();
+        assert_eq!(host, "10.0.0.1");
+        assert_eq!(port, 8080);
+        assert_eq!(path, "/firmware.bin");
+
+        // Deep path
+        let (host, port, path) = parse_http_url("http://example.com/a/b/c/firmware.bin").unwrap();
+        assert_eq!(host, "example.com");
+        assert_eq!(port, 80);
+        assert_eq!(path, "/a/b/c/firmware.bin");
     }
 
     #[test]
     fn test_parse_http_url_no_path() {
-        let result = parse_http_url("http://example.com");
-        assert!(result.is_some());
-        let (host, port, path) = result.unwrap();
+        // No path — defaults to "/"
+        let (host, port, path) = parse_http_url("http://example.com").unwrap();
         assert_eq!(host, "example.com");
         assert_eq!(port, 80);
         assert_eq!(path, "/");
-    }
 
-    #[test]
-    fn test_parse_http_url_no_path_with_port() {
-        let result = parse_http_url("http://example.com:3000");
-        assert!(result.is_some());
-        let (host, port, path) = result.unwrap();
+        // No path with port
+        let (host, port, path) = parse_http_url("http://example.com:3000").unwrap();
         assert_eq!(host, "example.com");
         assert_eq!(port, 3000);
         assert_eq!(path, "/");
@@ -202,312 +204,139 @@ mod tests {
 
     #[test]
     fn test_parse_http_url_with_query_params() {
-        let result = parse_http_url("http://192.168.1.100/fw.bin?crc=DEADBEEF");
-        assert!(result.is_some());
-        let (host, port, path) = result.unwrap();
+        let (host, port, path) =
+            parse_http_url("http://192.168.1.100/fw.bin?crc=DEADBEEF").unwrap();
         assert_eq!(host, "192.168.1.100");
         assert_eq!(port, 80);
         assert_eq!(path, "/fw.bin?crc=DEADBEEF");
     }
 
     #[test]
-    fn test_parse_http_url_invalid_prefix() {
-        assert!(parse_http_url("ftp://example.com/fw.bin").is_none());
-    }
+    fn test_parse_http_url_edge_cases() {
+        // Port zero (valid u16)
+        let (_, port, _) = parse_http_url("http://example.com:0/fw.bin").unwrap();
+        assert_eq!(port, 0);
 
-    #[test]
-    fn test_parse_http_url_https_rejection() {
-        // HTTPS is not supported — only http:// prefix is accepted
-        assert!(parse_http_url("https://example.com/fw.bin").is_none());
-    }
+        // Port max (65535)
+        let (_, port, _) = parse_http_url("http://example.com:65535/fw.bin").unwrap();
+        assert_eq!(port, 65535);
 
-    #[test]
-    fn test_parse_http_url_empty_string() {
-        assert!(parse_http_url("").is_none());
-    }
-
-    #[test]
-    fn test_parse_http_url_just_scheme() {
-        // "http://" with nothing after — host_port is empty
-        let result = parse_http_url("http://");
-        assert!(result.is_some());
-        let (host, port, path) = result.unwrap();
+        // Just scheme — empty host
+        let (host, port, path) = parse_http_url("http://").unwrap();
         assert_eq!(host, "");
         assert_eq!(port, 80);
         assert_eq!(path, "/");
     }
 
     #[test]
-    fn test_parse_http_url_ipv4_address() {
-        let result = parse_http_url("http://10.0.0.1:8080/firmware.bin");
-        assert!(result.is_some());
-        let (host, port, path) = result.unwrap();
-        assert_eq!(host, "10.0.0.1");
-        assert_eq!(port, 8080);
-        assert_eq!(path, "/firmware.bin");
-    }
-
-    #[test]
-    fn test_parse_http_url_deep_path() {
-        let result = parse_http_url("http://example.com/a/b/c/firmware.bin");
-        assert!(result.is_some());
-        let (host, port, path) = result.unwrap();
-        assert_eq!(host, "example.com");
-        assert_eq!(port, 80);
-        assert_eq!(path, "/a/b/c/firmware.bin");
-    }
-
-    #[test]
-    fn test_parse_http_url_invalid_port() {
-        // Port is not a number
+    fn test_parse_http_url_rejections() {
+        assert!(parse_http_url("ftp://example.com/fw.bin").is_none());
+        assert!(parse_http_url("https://example.com/fw.bin").is_none());
+        assert!(parse_http_url("").is_none());
         assert!(parse_http_url("http://example.com:abc/fw.bin").is_none());
-    }
-
-    #[test]
-    fn test_parse_http_url_port_zero() {
-        let result = parse_http_url("http://example.com:0/fw.bin");
-        assert!(result.is_some());
-        let (_, port, _) = result.unwrap();
-        assert_eq!(port, 0);
-    }
-
-    #[test]
-    fn test_parse_http_url_port_max() {
-        let result = parse_http_url("http://example.com:65535/fw.bin");
-        assert!(result.is_some());
-        let (_, port, _) = result.unwrap();
-        assert_eq!(port, 65535);
-    }
-
-    #[test]
-    fn test_parse_http_url_port_overflow() {
-        // Port 65536 overflows u16
         assert!(parse_http_url("http://example.com:65536/fw.bin").is_none());
     }
 
     // ========== validate_http_status tests ==========
 
     #[test]
-    fn test_validate_http_status_200_ok() {
+    fn test_validate_http_status_success_cases() {
         assert!(validate_http_status(
             b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n"
         ));
-    }
-
-    #[test]
-    fn test_validate_http_status_200_http10() {
         assert!(validate_http_status(b"HTTP/1.0 200 OK\r\n\r\n"));
+        assert!(validate_http_status(b"HTTP/1.1 200")); // exactly 12 bytes
     }
 
     #[test]
-    fn test_validate_http_status_404() {
+    fn test_validate_http_status_failure_cases() {
+        // Non-200 status codes
         assert!(!validate_http_status(b"HTTP/1.1 404 Not Found\r\n\r\n"));
-    }
-
-    #[test]
-    fn test_validate_http_status_500() {
         assert!(!validate_http_status(
             b"HTTP/1.1 500 Internal Server Error\r\n\r\n"
         ));
-    }
-
-    #[test]
-    fn test_validate_http_status_301() {
         assert!(!validate_http_status(
             b"HTTP/1.1 301 Moved Permanently\r\n\r\n"
         ));
-    }
-
-    #[test]
-    fn test_validate_http_status_short_input() {
-        // Less than 12 bytes
-        assert!(!validate_http_status(b"HTTP/1.1"));
-    }
-
-    #[test]
-    fn test_validate_http_status_exactly_12_bytes() {
-        // "HTTP/1.1 200" is exactly 12 bytes
-        assert!(validate_http_status(b"HTTP/1.1 200"));
-    }
-
-    #[test]
-    fn test_validate_http_status_11_bytes() {
-        // 11 bytes, just under the threshold
-        assert!(!validate_http_status(b"HTTP/1.1 20"));
-    }
-
-    #[test]
-    fn test_validate_http_status_non_http_prefix() {
-        assert!(!validate_http_status(b"FOOBAR/1.1 200 OK\r\n\r\n"));
-    }
-
-    #[test]
-    fn test_validate_http_status_empty() {
-        assert!(!validate_http_status(b""));
-    }
-
-    #[test]
-    fn test_validate_http_status_201_created() {
-        // 201 is not 200
         assert!(!validate_http_status(b"HTTP/1.1 201 Created\r\n\r\n"));
-    }
-
-    #[test]
-    fn test_validate_http_status_204_no_content() {
         assert!(!validate_http_status(b"HTTP/1.1 204 No Content\r\n\r\n"));
+
+        // Edge cases
+        assert!(!validate_http_status(b"HTTP/1.1")); // too short (8 bytes)
+        assert!(!validate_http_status(b"HTTP/1.1 20")); // 11 bytes
+        assert!(!validate_http_status(b"FOOBAR/1.1 200 OK\r\n\r\n")); // wrong prefix
+        assert!(!validate_http_status(b""));
     }
 
     // ========== find_header_end tests ==========
 
     #[test]
-    fn test_find_header_end_with_headers() {
+    fn test_find_header_end_found() {
+        // Headers with body after
         let data = b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nbody";
-        // HTTP/1.1 200 OK\r\n = 18 bytes, Content-Length: 100\r\n = 20 bytes → \r\n\r\n at index 36
         let pos = find_header_end(data).unwrap();
         assert_eq!(&data[pos..pos + 4], b"\r\n\r\n");
-        // Body follows after
         assert_eq!(&data[pos + 4..], b"body");
-    }
 
-    #[test]
-    fn test_find_header_end_without_terminator() {
-        let data = b"HTTP/1.1 200 OK\r\nContent-Length: 100";
-        assert_eq!(find_header_end(data), None);
-    }
+        // At end of data
+        let data = b"HTTP/1.1 200 OK\r\n\r\n";
+        let pos = find_header_end(data).unwrap();
+        assert_eq!(&data[pos..pos + 4], b"\r\n\r\n");
 
-    #[test]
-    fn test_find_header_end_empty() {
-        assert_eq!(find_header_end(b""), None);
-    }
+        // Body after
+        let data = b"HTTP/1.1 200\r\n\r\nbody data here";
+        let pos = find_header_end(data).unwrap();
+        assert_eq!(&data[pos + 4..], b"body data here");
 
-    #[test]
-    fn test_find_header_end_partial() {
-        // Only \r\n but no \r\n\r\n
-        let data = b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n";
-        assert_eq!(find_header_end(data), None);
-    }
-
-    #[test]
-    fn test_find_header_end_only_terminator() {
         // Just the terminator
         assert_eq!(find_header_end(b"\r\n\r\n"), Some(0));
-    }
 
-    #[test]
-    fn test_find_header_end_short_data() {
-        // Less than 4 bytes, can't possibly contain \r\n\r\n
-        assert_eq!(find_header_end(b"\r\n"), None);
-        assert_eq!(find_header_end(b"\r\n\r"), None);
-        assert_eq!(find_header_end(b"abc"), None);
-    }
-
-    #[test]
-    fn test_find_header_end_exactly_3_bytes() {
-        assert_eq!(find_header_end(b"\r\n\r"), None);
-    }
-
-    #[test]
-    fn test_find_header_end_multiple_possible() {
-        // Should find the FIRST \r\n\r\n
-        // "HTTP/1. 200\r\n\r\n" → "HTTP/1. 200" is 11 bytes, then \r\n\r\n at 11
+        // Multiple terminators — find first
         let data = b"HTTP/1. 200\r\n\r\nExtra\r\n\r\n";
         assert_eq!(find_header_end(data), Some(11));
     }
 
     #[test]
-    fn test_find_header_end_at_end_of_data() {
-        // "HTTP/1.1 200 OK" = 15 bytes, then \r\n\r\n
-        let data = b"HTTP/1.1 200 OK\r\n\r\n";
-        let pos = find_header_end(data).unwrap();
-        assert_eq!(&data[pos..pos + 4], b"\r\n\r\n");
-    }
-
-    #[test]
-    fn test_find_header_end_body_after() {
-        let data = b"HTTP/1.1 200\r\n\r\nbody data here";
-        let pos = find_header_end(data).unwrap();
-        assert_eq!(&data[pos..pos + 4], b"\r\n\r\n");
-        // Body starts at pos + 4
-        assert_eq!(&data[pos + 4..], b"body data here");
+    fn test_find_header_end_not_found() {
+        assert_eq!(
+            find_header_end(b"HTTP/1.1 200 OK\r\nContent-Length: 100"),
+            None
+        );
+        assert_eq!(find_header_end(b""), None);
+        assert_eq!(
+            find_header_end(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n"),
+            None
+        );
+        assert_eq!(find_header_end(b"\r\n"), None);
+        assert_eq!(find_header_end(b"\r\n\r"), None);
+        assert_eq!(find_header_end(b"\r\n\r"), None);
+        assert_eq!(find_header_end(b"abc"), None);
     }
 
     // ========== parse_crc_from_url tests ==========
 
     #[test]
-    fn test_parse_crc_from_url_with_crc() {
+    fn test_parse_crc_from_url_valid() {
         assert_eq!(
             parse_crc_from_url("http://example.com/fw.bin?crc=DEADBEEF"),
             Some(0xDEADBEEF)
         );
-    }
-
-    #[test]
-    fn test_parse_crc_from_url_lowercase_hex() {
         assert_eq!(
             parse_crc_from_url("http://example.com/fw.bin?crc=deadbeef"),
             Some(0xDEADBEEF)
         );
-    }
-
-    #[test]
-    fn test_parse_crc_from_url_without_crc() {
-        assert_eq!(parse_crc_from_url("http://example.com/fw.bin"), None);
-    }
-
-    #[test]
-    fn test_parse_crc_from_url_invalid_hex() {
-        // "ZZZZ" is not valid hex
-        assert_eq!(
-            parse_crc_from_url("http://example.com/fw.bin?crc=ZZZZ"),
-            None
-        );
-    }
-
-    #[test]
-    fn test_parse_crc_from_url_with_other_params() {
-        // crc is not the first param
         assert_eq!(
             parse_crc_from_url("http://example.com/fw.bin?version=2&crc=CAFEBABE"),
             Some(0xCAFEBABE)
         );
-    }
-
-    #[test]
-    fn test_parse_crc_from_url_crc_before_other_params() {
         assert_eq!(
             parse_crc_from_url("http://example.com/fw.bin?crc=1234ABCD&version=2"),
             Some(0x1234ABCD)
         );
-    }
-
-    #[test]
-    fn test_parse_crc_from_url_no_query() {
-        // No ? in URL
-        assert_eq!(parse_crc_from_url("http://example.com/fw.bin"), None);
-    }
-
-    #[test]
-    fn test_parse_crc_from_url_empty_query() {
-        assert_eq!(parse_crc_from_url("http://example.com/fw.bin?"), None);
-    }
-
-    #[test]
-    fn test_parse_crc_from_url_empty_crc_value() {
-        // crc= with empty value — u32 parse of "" will fail
-        assert_eq!(parse_crc_from_url("http://example.com/fw.bin?crc="), None);
-    }
-
-    #[test]
-    fn test_parse_crc_from_url_zero_crc() {
         assert_eq!(
             parse_crc_from_url("http://example.com/fw.bin?crc=0"),
             Some(0)
         );
-    }
-
-    #[test]
-    fn test_parse_crc_from_url_truncated_crc() {
-        // Only 4 hex digits (valid u32)
         assert_eq!(
             parse_crc_from_url("http://example.com/fw.bin?crc=BEEF"),
             Some(0xBEEF)
@@ -515,8 +344,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_crc_from_url_overflow() {
-        // Value too large for u32
+    fn test_parse_crc_from_url_invalid() {
+        assert_eq!(parse_crc_from_url("http://example.com/fw.bin"), None);
+        assert_eq!(
+            parse_crc_from_url("http://example.com/fw.bin?crc=ZZZZ"),
+            None
+        );
+        assert_eq!(parse_crc_from_url("http://example.com/fw.bin?"), None);
+        assert_eq!(parse_crc_from_url("http://example.com/fw.bin?crc="), None);
         assert_eq!(
             parse_crc_from_url("http://example.com/fw.bin?crc=DEADBEEF00"),
             None
@@ -527,196 +362,148 @@ mod tests {
 
     #[test]
     fn test_parse_content_length_valid() {
-        let headers = b"HTTP/1.1 200 OK\r\nContent-Length: 12345\r\n\r\n";
-        assert_eq!(parse_content_length(headers), Some(12345));
-    }
-
-    #[test]
-    fn test_parse_content_length_lowercase() {
-        let headers = b"HTTP/1.1 200 OK\r\ncontent-length: 9999\r\n\r\n";
-        assert_eq!(parse_content_length(headers), Some(9999));
-    }
-
-    #[test]
-    fn test_parse_content_length_mixed_case() {
-        let headers = b"HTTP/1.1 200 OK\r\nContent-length: 42\r\n\r\n";
-        assert_eq!(parse_content_length(headers), Some(42));
-    }
-
-    #[test]
-    fn test_parse_content_length_missing() {
-        let headers = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n";
-        assert_eq!(parse_content_length(headers), None);
+        assert_eq!(
+            parse_content_length(b"HTTP/1.1 200 OK\r\nContent-Length: 12345\r\n\r\n"),
+            Some(12345)
+        );
+        assert_eq!(
+            parse_content_length(b"HTTP/1.1 200 OK\r\ncontent-length: 9999\r\n\r\n"),
+            Some(9999)
+        );
+        assert_eq!(
+            parse_content_length(b"HTTP/1.1 200 OK\r\nContent-length: 42\r\n\r\n"),
+            Some(42)
+        );
+        assert_eq!(
+            parse_content_length(b"HTTP/1.1 200 OK\r\nContent-Length: 4294967295\r\n\r\n"),
+            Some(4294967295)
+        );
+        assert_eq!(
+            parse_content_length(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"),
+            Some(0)
+        );
+        assert_eq!(
+            parse_content_length(b"HTTP/1.1 200 OK\r\nContent-Length:   512\r\n\r\n"),
+            Some(512)
+        );
+        assert_eq!(
+            parse_content_length(b"HTTP/1.1 200 OK\r\nContent-Length: 100"),
+            Some(100)
+        );
+        assert_eq!(
+            parse_content_length(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 2048\r\nServer: nginx\r\n\r\n"),
+            Some(2048)
+        );
     }
 
     #[test]
     fn test_parse_content_length_invalid() {
-        let headers = b"HTTP/1.1 200 OK\r\nContent-Length: abc\r\n\r\n";
-        assert_eq!(parse_content_length(headers), None);
-    }
-
-    #[test]
-    fn test_parse_content_length_large_value() {
-        let headers = b"HTTP/1.1 200 OK\r\nContent-Length: 4294967295\r\n\r\n";
-        assert_eq!(parse_content_length(headers), Some(4294967295));
-    }
-
-    #[test]
-    fn test_parse_content_length_zero() {
-        let headers = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
-        assert_eq!(parse_content_length(headers), Some(0));
-    }
-
-    #[test]
-    fn test_parse_content_length_with_extra_spaces() {
-        // Some HTTP servers add extra spaces after the colon
-        let headers = b"HTTP/1.1 200 OK\r\nContent-Length:   512\r\n\r\n";
-        assert_eq!(parse_content_length(headers), Some(512));
-    }
-
-    #[test]
-    fn test_parse_content_length_negative_rejected() {
-        // u32 can't be negative
-        let headers = b"HTTP/1.1 200 OK\r\nContent-Length: -1\r\n\r\n";
-        assert_eq!(parse_content_length(headers), None);
-    }
-
-    #[test]
-    fn test_parse_content_length_overflow() {
-        // u32::MAX + 1 overflows
-        let headers = b"HTTP/1.1 200 OK\r\nContent-Length: 4294967296\r\n\r\n";
-        assert_eq!(parse_content_length(headers), None);
-    }
-
-    #[test]
-    fn test_parse_content_length_empty_headers() {
+        assert_eq!(
+            parse_content_length(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n"),
+            None
+        );
+        assert_eq!(
+            parse_content_length(b"HTTP/1.1 200 OK\r\nContent-Length: abc\r\n\r\n"),
+            None
+        );
+        assert_eq!(
+            parse_content_length(b"HTTP/1.1 200 OK\r\nContent-Length: -1\r\n\r\n"),
+            None
+        );
+        assert_eq!(
+            parse_content_length(b"HTTP/1.1 200 OK\r\nContent-Length: 4294967296\r\n\r\n"),
+            None
+        );
         assert_eq!(parse_content_length(b""), None);
-    }
-
-    #[test]
-    fn test_parse_content_length_no_terminator() {
-        let headers = b"HTTP/1.1 200 OK\r\nContent-Length: 100";
-        assert_eq!(parse_content_length(headers), Some(100));
-    }
-
-    #[test]
-    fn test_parse_content_length_multiple_headers() {
-        let headers = b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 2048\r\nServer: nginx\r\n\r\n";
-        assert_eq!(parse_content_length(headers), Some(2048));
     }
 
     // ========== find_header_value_start tests ==========
 
     #[test]
-    fn test_find_header_value_start_basic() {
+    fn test_find_header_value_start_cases() {
+        // Basic
         let headers = b"Content-Length: 1234\r\n";
-        let result = find_header_value_start(headers, b"Content-Length: ");
-        assert_eq!(result, Some(16));
+        assert_eq!(
+            find_header_value_start(headers, b"Content-Length: "),
+            Some(16)
+        );
         assert_eq!(&headers[16..20], b"1234");
-    }
 
-    #[test]
-    fn test_find_header_value_start_not_found() {
-        let headers = b"Content-Type: text/html\r\n";
-        assert_eq!(find_header_value_start(headers, b"Content-Length: "), None);
-    }
+        // Not found
+        assert_eq!(
+            find_header_value_start(b"Content-Type: text/html\r\n", b"Content-Length: "),
+            None
+        );
 
-    #[test]
-    fn test_find_header_value_start_empty_headers() {
+        // Empty headers
         assert_eq!(find_header_value_start(b"", b"Content-Length: "), None);
-    }
 
-    #[test]
-    fn test_find_header_value_start_empty_name() {
-        // Empty name is edge case - should return start of headers (position 0)
-        let headers = b"value";
-        // Empty name search with windows(0) would panic, so we expect None
-        assert_eq!(find_header_value_start(headers, b""), None);
-    }
+        // Empty name
+        assert_eq!(find_header_value_start(b"value", b""), None);
 
-    #[test]
-    fn test_find_header_value_start_name_longer_than_headers() {
+        // Name longer than headers
         assert_eq!(
             find_header_value_start(b"short", b"Very-Long-Header-Name: "),
             None
         );
-    }
 
-    #[test]
-    fn test_find_header_value_start_skips_whitespace() {
+        // Skips whitespace
         let headers = b"Content-Length:   5678\r\n";
-        // "Content-Length: " is 16 bytes, then 2 extra spaces
-        let result = find_header_value_start(headers, b"Content-Length: ");
-        assert_eq!(result, Some(18));
+        assert_eq!(
+            find_header_value_start(headers, b"Content-Length: "),
+            Some(18)
+        );
         assert_eq!(&headers[18..22], b"5678");
-    }
 
-    #[test]
-    fn test_find_header_value_start_no_trailing_data() {
-        // Header at end of buffer, no CRLF after
-        let headers = b"X-Value:42";
-        assert_eq!(find_header_value_start(headers, b"X-Value:"), Some(8));
-        assert_eq!(&headers[8..], b"42");
+        // No trailing CRLF
+        assert_eq!(find_header_value_start(b"X-Value:42", b"X-Value:"), Some(8));
+        assert_eq!(&headers[18..22], b"5678");
     }
 
     // ========== extract_status_line tests ==========
 
     #[test]
-    fn test_extract_status_line_normal() {
-        let headers = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
-        assert_eq!(extract_status_line(headers), "HTTP/1.1 200 OK");
-    }
+    fn test_extract_status_line_cases() {
+        // Normal with CRLF
+        assert_eq!(
+            extract_status_line(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"),
+            "HTTP/1.1 200 OK"
+        );
 
-    #[test]
-    fn test_extract_status_line_with_lf() {
-        let headers = b"HTTP/1.1 404 Not Found\nContent-Length: 0\r\n\r\n";
-        assert_eq!(extract_status_line(headers), "HTTP/1.1 404 Not Found");
-    }
+        // With LF only
+        assert_eq!(
+            extract_status_line(b"HTTP/1.1 404 Not Found\nContent-Length: 0\r\n\r\n"),
+            "HTTP/1.1 404 Not Found"
+        );
 
-    #[test]
-    fn test_extract_status_line_no_line_ending_short() {
-        let headers = b"HTTP/1.1 200 OK";
-        assert_eq!(extract_status_line(headers), "HTTP/1.1 200 OK");
-    }
+        // No line ending, short
+        assert_eq!(extract_status_line(b"HTTP/1.1 200 OK"), "HTTP/1.1 200 OK");
 
-    #[test]
-    fn test_extract_status_line_no_line_ending_long() {
-        // Over 40 bytes with no line ending → truncated to 40 + "..."
+        // No line ending, long (>40 bytes) — truncated
         let mut headers = vec![b'X'; 50];
         headers[0..8].copy_from_slice(b"HTTP/1.1");
         let result = extract_status_line(&headers);
-        assert_eq!(result.len(), 43); // 40 + 3 ("...")
+        assert_eq!(result.len(), 43); // 40 + "..."
         assert!(result.ends_with("..."));
-    }
 
-    #[test]
-    fn test_extract_status_line_empty() {
+        // Empty
         assert_eq!(extract_status_line(b""), "");
-    }
 
-    #[test]
-    fn test_extract_status_line_exactly_40_bytes_no_ending() {
+        // Exactly 40 bytes — no truncation
         let headers = vec![b'A'; 40];
         let result = extract_status_line(&headers);
-        // 40 bytes is NOT > 40, so no truncation
         assert_eq!(result.len(), 40);
         assert!(!result.contains("..."));
-    }
 
-    #[test]
-    fn test_extract_status_line_41_bytes_no_ending() {
-        // 41 bytes with no line ending → truncated to 40 + "..."
+        // 41 bytes — truncated
         let headers = vec![b'A'; 41];
         let result = extract_status_line(&headers);
         assert_eq!(result.len(), 43);
         assert!(result.ends_with("..."));
-    }
 
-    #[test]
-    fn test_extract_status_line_500_error() {
-        let headers = b"HTTP/1.1 500 Internal Server Error\r\n\r\n";
+        // 500 error
         assert_eq!(
-            extract_status_line(headers),
+            extract_status_line(b"HTTP/1.1 500 Internal Server Error\r\n\r\n"),
             "HTTP/1.1 500 Internal Server Error"
         );
     }

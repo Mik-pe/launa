@@ -707,7 +707,6 @@ mod tests {
                 "missing 'unique_id' in {}",
                 topic
             );
-            // Optimistic switches don't have state_topic
             let is_optimistic = v
                 .get("optimistic")
                 .and_then(|v| v.as_bool())
@@ -727,7 +726,7 @@ mod tests {
         }
     }
 
-    // --- New toggle item discovery tests ---
+    // --- Toggle item discovery tests ---
 
     #[test]
     fn test_discovery_includes_mister_switch() {
@@ -862,7 +861,6 @@ mod tests {
     fn test_discovery_new_entities_have_valid_json() {
         let builder = DiscoveryBuilder::new("test_spa_001");
         let configs = builder.build();
-        // All configs should produce valid JSON
         for (topic, json_str) in &configs {
             let _: serde_json::Value = serde_json::from_str(json_str)
                 .unwrap_or_else(|e| panic!("Invalid JSON for topic {}: {}", topic, e));
@@ -873,12 +871,6 @@ mod tests {
     fn test_discovery_entity_count_increased() {
         let builder = DiscoveryBuilder::new("test_spa_001");
         let configs = builder.build();
-        // Original was 20 entities, now we have:
-        // - mister changed from sensor to switch (still 1 entity)
-        // - circ_pump changed from sensor to switch (still 1 entity)
-        // - light3, light4 added (2 new light entities)
-        // - aux1, aux2, soak_mode, normal_operation, clear_notification added (5 new switches)
-        // Total: 20 + 7 = 27
         assert!(
             configs.len() >= 27,
             "should have at least 27 entities after adding new toggle items, got {}",
@@ -886,10 +878,13 @@ mod tests {
         );
     }
 
-    // ── JSON escaping tests for discovery configs ─────────────────────
+    // --- JSON escaping tests for discovery configs ---
+    //
+    // Consolidated from 12 individual tests into 3 focused tests:
+    // 1. All payloads produce valid JSON with special characters
+    // 2. Device block fields round-trip correctly through JSON parsing
+    // 3. Normal (non-special) names still work correctly
 
-    /// Helper: build discovery configs with all special characters and verify
-    /// every payload parses as valid JSON via serde_json::from_str.
     fn builder_with_special_chars() -> DiscoveryBuilder {
         DiscoveryBuilder::new("test_spa")
             .device_name(r#"My "Spa" \Unit\"#)
@@ -900,7 +895,8 @@ mod tests {
 
     #[test]
     fn test_discovery_special_chars_all_payloads_valid_json() {
-        // VAL-PROTO-007: device_name with quotes/backslashes produces valid JSON
+        // Verify that special characters in device name, manufacturer, model,
+        // and sw_version produce valid JSON in ALL discovery payloads.
         let builder = builder_with_special_chars();
         let configs = builder.build();
         assert!(configs.len() >= 27, "expected at least 27 configs");
@@ -913,107 +909,9 @@ mod tests {
                 )
             });
         }
-    }
 
-    #[test]
-    fn test_discovery_special_chars_device_name_escaped_in_device_block() {
-        // VAL-PROTO-007: device_name with quotes/backslashes produces valid JSON
-        let builder = builder_with_special_chars();
-        let configs = builder.build();
-
-        for (topic, json_str) in &configs {
-            let v = parse_json(json_str);
-            let device = v
-                .get("device")
-                .unwrap_or_else(|| panic!("Missing 'device' in topic {}", topic));
-            // device_name contains quotes and backslashes — must be the original string
-            assert_eq!(
-                device["name"].as_str(),
-                Some(r#"My "Spa" \Unit\"#),
-                "device name mismatch in topic {}",
-                topic
-            );
-        }
-    }
-
-    #[test]
-    fn test_discovery_special_chars_manufacturer_escaped() {
-        // VAL-PROTO-008: manufacturer with special chars produces valid JSON
-        let builder = builder_with_special_chars();
-        let configs = builder.build();
-
-        for (topic, json_str) in &configs {
-            let v = parse_json(json_str);
-            let device = v.get("device").unwrap();
-            assert_eq!(
-                device["manufacturer"].as_str(),
-                Some("Mfr\nLine2\tTab"),
-                "manufacturer mismatch in topic {}",
-                topic
-            );
-        }
-    }
-
-    #[test]
-    fn test_discovery_special_chars_model_escaped() {
-        // VAL-PROTO-008: model with special chars produces valid JSON
-        let builder = builder_with_special_chars();
-        let configs = builder.build();
-
-        for (topic, json_str) in &configs {
-            let v = parse_json(json_str);
-            let device = v.get("device").unwrap();
-            assert_eq!(
-                device["model"].as_str(),
-                Some(r#"BP\6013"G1""#),
-                "model mismatch in topic {}",
-                topic
-            );
-        }
-    }
-
-    #[test]
-    fn test_discovery_special_chars_sw_version_escaped_in_device() {
-        // VAL-PROTO-007: sw_version with special chars in device block
-        let builder = builder_with_special_chars();
-        let configs = builder.build();
-
-        for (topic, json_str) in &configs {
-            let v = parse_json(json_str);
-            let device = v.get("device").unwrap();
-            assert_eq!(
-                device["sw_version"].as_str(),
-                Some("v1.0\r\nbeta\u{0007}"),
-                "device sw_version mismatch in topic {}",
-                topic
-            );
-        }
-    }
-
-    #[test]
-    fn test_discovery_special_chars_sw_version_escaped_in_origin() {
-        // VAL-PROTO-007: sw_version with special chars in origin block
-        let builder = builder_with_special_chars();
-        let configs = builder.build();
-
-        for (topic, json_str) in &configs {
-            let v = parse_json(json_str);
-            let origin = v.get("origin").unwrap();
-            assert_eq!(
-                origin["sw_version"].as_str(),
-                Some("v1.0\r\nbeta\u{0007}"),
-                "origin sw_version mismatch in topic {}",
-                topic
-            );
-        }
-    }
-
-    #[test]
-    fn test_discovery_special_chars_retain_payloads_valid_json() {
-        // Verify retain payloads also produce valid JSON with special chars
-        let builder = builder_with_special_chars();
+        // Also verify retain payloads produce valid JSON
         let messages = builder.build_with_retain();
-
         for msg in &messages {
             let _: serde_json::Value = serde_json::from_str(&msg.payload).unwrap_or_else(|e| {
                 panic!(
@@ -1025,73 +923,89 @@ mod tests {
     }
 
     #[test]
-    fn test_json_device_block_escapes_quotes() {
-        let block = json_device_block("id1", r#"Name "Quoted""#, "Mfr", "Model", "1.0");
-        let v = parse_json(&block);
-        assert_eq!(v["name"].as_str(), Some(r#"Name "Quoted""#));
-    }
+    fn test_discovery_special_chars_fields_round_trip() {
+        // Verify all special-character fields round-trip through JSON correctly.
+        // This consolidates the individual tests for device_name, manufacturer,
+        // model, sw_version in device block, and sw_version in origin block.
+        let builder = builder_with_special_chars();
+        let configs = builder.build();
 
-    #[test]
-    fn test_json_device_block_escapes_backslashes() {
-        let block = json_device_block("id1", r#"Path\To\Spa"#, "Mfr", "Model", "1.0");
-        let v = parse_json(&block);
-        assert_eq!(v["name"].as_str(), Some(r#"Path\To\Spa"#));
-    }
+        for (topic, json_str) in &configs {
+            let v = parse_json(json_str);
+            let device = v
+                .get("device")
+                .unwrap_or_else(|| panic!("Missing 'device' in topic {}", topic));
+            assert_eq!(
+                device["name"].as_str(),
+                Some(r#"My "Spa" \Unit\"#),
+                "device name mismatch in topic {}",
+                topic
+            );
+            assert_eq!(
+                device["manufacturer"].as_str(),
+                Some("Mfr\nLine2\tTab"),
+                "manufacturer mismatch in topic {}",
+                topic
+            );
+            assert_eq!(
+                device["model"].as_str(),
+                Some(r#"BP\6013"G1""#),
+                "model mismatch in topic {}",
+                topic
+            );
+            assert_eq!(
+                device["sw_version"].as_str(),
+                Some("v1.0\r\nbeta\u{0007}"),
+                "device sw_version mismatch in topic {}",
+                topic
+            );
 
-    #[test]
-    fn test_json_device_block_escapes_control_chars() {
-        let block = json_device_block("id1", "Before\x07After", "Mfr", "Model", "1.0");
-        let v = parse_json(&block);
-        assert_eq!(v["name"].as_str(), Some("Before\u{0007}After"));
-    }
-
-    #[test]
-    fn test_json_device_block_escapes_newlines_and_tabs() {
-        let block = json_device_block("id1", "Line1\nLine2\tTab", "Mfr", "Model", "1.0");
-        let v = parse_json(&block);
-        assert_eq!(v["name"].as_str(), Some("Line1\nLine2\tTab"));
+            let origin = v.get("origin").unwrap();
+            assert_eq!(
+                origin["sw_version"].as_str(),
+                Some("v1.0\r\nbeta\u{0007}"),
+                "origin sw_version mismatch in topic {}",
+                topic
+            );
+        }
     }
 
     #[test]
     fn test_json_device_block_escapes_all_fields() {
-        let block = json_device_block(
-            "id1",
-            r#"Name"Quote"#,
-            r#"Mfr\Backslash"#,
-            "Model\nNewline",
-            "v1.0\tTab",
-        );
-        let v = parse_json(&block);
-        assert_eq!(v["name"].as_str(), Some(r#"Name"Quote"#));
-        assert_eq!(v["manufacturer"].as_str(), Some(r#"Mfr\Backslash"#));
-        assert_eq!(v["model"].as_str(), Some("Model\nNewline"));
-        assert_eq!(v["sw_version"].as_str(), Some("v1.0\tTab"));
-    }
+        // Consolidated test for json_device_block and json_origin helpers:
+        // quotes, backslashes, control chars, newlines, tabs, null byte,
+        // and combined special chars.
+        let cases: &[(&str, &str, &str, &str)] = &[
+            // (name, manufacturer, model, sw_version)
+            (r#"Name "Quoted""#, "Mfr", "Model", "1.0"), // quotes
+            (r#"Path\To\Spa"#, "Mfr", "Model", "1.0"),   // backslashes
+            ("Before\x07After", "Mfr", "Model", "1.0"),  // control char
+            ("Line1\nLine2\tTab", "Mfr", "Model", "1.0"), // newline + tab
+            ("Before\x00After", "Mfr", "Model", "1.0"),  // null byte
+        ];
 
-    #[test]
-    fn test_json_origin_escapes_sw_version() {
-        let origin = json_origin("v1.0\nbeta\r\n\x07");
-        let v = parse_json(&origin);
-        assert_eq!(v["sw_version"].as_str(), Some("v1.0\nbeta\r\n\u{0007}"));
-    }
+        for &(name, mfr, model, ver) in cases {
+            let block = json_device_block("id1", name, mfr, model, ver);
+            let v = parse_json(&block);
+            assert_eq!(v["name"].as_str(), Some(name), "name round-trip failed");
+            assert_eq!(v["manufacturer"].as_str(), Some(mfr));
+            assert_eq!(v["model"].as_str(), Some(model));
+            assert_eq!(v["sw_version"].as_str(), Some(ver));
+        }
 
-    #[test]
-    fn test_json_device_block_null_byte() {
-        let block = json_device_block("id1", "Before\x00After", "Mfr", "Model", "1.0");
-        let v = parse_json(&block);
-        assert_eq!(v["name"].as_str(), Some("Before\u{0000}After"));
-    }
-
-    #[test]
-    fn test_json_device_block_combined_special_chars() {
-        // A single string with all types of special chars
-        let name = alloc::format!("A\\B\"C\nD\rE\tF\x01G");
-        let block = json_device_block("id1", &name, "Mfr", "Model", "1.0");
+        // Test combined special chars in a single string
+        let combined = alloc::format!("A\\B\"C\nD\rE\tF\x01G");
+        let block = json_device_block("id1", &combined, "Mfr", "Model", "1.0");
         let v = parse_json(&block);
         assert_eq!(
             v["name"].as_str(),
             Some(alloc::format!("A\\B\"C\nD\rE\tF\u{0001}G").as_str())
         );
+
+        // Test json_origin helper
+        let origin = json_origin("v1.0\nbeta\r\n\x07");
+        let v = parse_json(&origin);
+        assert_eq!(v["sw_version"].as_str(), Some("v1.0\nbeta\r\n\u{0007}"));
     }
 
     #[test]

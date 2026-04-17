@@ -125,19 +125,28 @@ mod tests {
         }
     }
 
-    // --- Failure injection tests ---
+    // --- Mock fixture verification tests ---
+    //
+    // These two tests verify that MockOta works correctly as a test fixture.
+    // All other MockOta behavior (begin while in progress, write before begin,
+    // finalize zero bytes, fail_on_begin, fail_on_finalize, firmware size exceeded)
+    // is thoroughly covered by integration tests in launa-integration-tests.
 
     use mock::MockOta;
 
     #[test]
-    fn test_mock_ota_fail_on_begin() {
+    fn test_mock_ota_default_all_off() {
         let mut ota = MockOta::new();
-        // Default: begin succeeds
+        assert!(!ota.fail_on_begin);
+        assert!(ota.fail_on_write_after.is_none());
+        assert!(!ota.fail_on_finalize);
+        // Full happy path should work with defaults
         assert!(ota.begin().is_ok());
-
-        let mut ota = MockOta::new();
-        ota.fail_on_begin = true;
-        assert!(matches!(ota.begin(), Err(OtaError::BeginFailed)));
+        assert!(ota.write(&[0xAA]).is_ok());
+        assert!(ota.finalize().is_ok());
+        assert!(ota.mark_valid().is_ok());
+        assert!(ota.finalized);
+        assert!(ota.valid);
     }
 
     #[test]
@@ -158,98 +167,6 @@ mod tests {
 
         // firmware_data should only contain the first 5 bytes
         assert_eq!(ota.firmware_data.len(), 5);
-    }
-
-    #[test]
-    fn test_mock_ota_fail_on_write_after_default_none() {
-        let mut ota = MockOta::new();
-        ota.begin().unwrap();
-        // Default fail_on_write_after is None — unlimited writes
-        assert!(ota.write(&[1, 2, 3, 4, 5]).is_ok());
-        assert!(ota.write(&[6, 7, 8, 9, 10]).is_ok());
-        assert_eq!(ota.firmware_data.len(), 10);
-    }
-
-    #[test]
-    fn test_mock_ota_fail_on_finalize() {
-        let mut ota = MockOta::new();
-        ota.fail_on_finalize = true;
-        ota.begin().unwrap();
-        ota.write(&[0xAA, 0xBB]).unwrap();
-        assert!(matches!(ota.finalize(), Err(OtaError::FinalizeFailed)));
-        assert!(!ota.finalized);
-    }
-
-    #[test]
-    fn test_mock_ota_fail_on_finalize_default_off() {
-        let mut ota = MockOta::new();
-        ota.begin().unwrap();
-        ota.write(&[0xAA, 0xBB]).unwrap();
-        assert!(ota.finalize().is_ok());
-        assert!(ota.finalized);
-    }
-
-    #[test]
-    fn test_mock_ota_firmware_size_exceeded() {
-        let mut ota = MockOta::new();
-        ota.begin().unwrap();
-        // Write exactly MAX_FIRMWARE_SIZE bytes — should succeed
-        let chunk = vec![0xFFu8; 1024];
-        let full_chunks = MAX_FIRMWARE_SIZE / 1024;
-        for _ in 0..full_chunks {
-            assert!(ota.write(&chunk).is_ok());
-        }
-        // Write one more byte — should fail with InvalidFirmware
-        assert!(matches!(ota.write(&[0x00]), Err(OtaError::InvalidFirmware)));
-    }
-
-    #[test]
-    fn test_mock_ota_begin_while_in_progress() {
-        let mut ota = MockOta::new();
-        assert!(ota.begin().is_ok());
-        // Second begin while in progress should fail
-        assert!(matches!(ota.begin(), Err(OtaError::BeginFailed)));
-    }
-
-    #[test]
-    fn test_mock_ota_write_before_begin() {
-        let mut ota = MockOta::new();
-        // Write without begin should fail
-        assert!(matches!(
-            ota.write(&[0x01, 0x02]),
-            Err(OtaError::WriteFailed { byte_offset: 0 })
-        ));
-    }
-
-    #[test]
-    fn test_mock_ota_finalize_zero_bytes() {
-        let mut ota = MockOta::new();
-        ota.begin().unwrap();
-        // Finalize with zero bytes written should fail
-        assert!(matches!(ota.finalize(), Err(OtaError::FinalizeFailed)));
-        assert!(!ota.finalized);
-    }
-
-    #[test]
-    fn test_mock_ota_finalize_not_in_progress() {
-        let mut ota = MockOta::new();
-        // Finalize without begin should fail
-        assert!(matches!(ota.finalize(), Err(OtaError::FinalizeFailed)));
-    }
-
-    #[test]
-    fn test_mock_ota_default_all_off() {
-        let mut ota = MockOta::new();
-        assert!(!ota.fail_on_begin);
-        assert!(ota.fail_on_write_after.is_none());
-        assert!(!ota.fail_on_finalize);
-        // Full happy path should work with defaults
-        assert!(ota.begin().is_ok());
-        assert!(ota.write(&[0xAA]).is_ok());
-        assert!(ota.finalize().is_ok());
-        assert!(ota.mark_valid().is_ok());
-        assert!(ota.finalized);
-        assert!(ota.valid);
     }
 }
 

@@ -62,24 +62,6 @@ impl TempPhysicsHarness {
             _ => None,
         }
     }
-
-    /// Extract set_temp from a PublishState action.
-    #[allow(dead_code)]
-    fn extract_set_temp(action: &AppAction) -> Option<f32> {
-        match action {
-            AppAction::PublishState { status, .. } => Some(status.set_temp),
-            _ => None,
-        }
-    }
-
-    /// Extract temperature_scale from a PublishState action.
-    #[allow(dead_code)]
-    fn extract_temp_scale(action: &AppAction) -> Option<TemperatureScale> {
-        match action {
-            AppAction::PublishState { status, .. } => Some(status.temperature_scale),
-            _ => None,
-        }
-    }
 }
 
 // Forward common harness methods via Deref-like pattern

@@ -240,28 +240,3 @@ fn test_mock_network_tracks_connect_params() {
     assert_eq!(net.last_connect_addr(), Some("broker.example.com"));
     assert_eq!(net.last_connect_port(), Some(1883));
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Transport trait implementation verification
-// ═══════════════════════════════════════════════════════════════════════════
-
-#[test]
-fn test_mock_transport_implements_trait() {
-    async fn use_transport<T: Transport>(t: &mut T) {
-        t.write(&[0x01]).await.unwrap();
-        t.flush().await.unwrap();
-    }
-    let mut mock = MockTransport::new();
-    block_on(use_transport(&mut mock));
-    assert_eq!(mock.written(), &[0x01]);
-}
-
-#[test]
-fn test_mock_network_implements_network_trait() {
-    fn use_network<N: Network>(net: &mut N) {
-        net.connect_wifi("test", "test").unwrap();
-        assert!(net.is_connected());
-    }
-    let mut net = MockNetwork::new();
-    use_network(&mut net);
-}

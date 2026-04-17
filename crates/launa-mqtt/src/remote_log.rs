@@ -50,37 +50,29 @@ mod tests {
     use super::*;
 
     #[cfg(feature = "std")]
-    use std::format;
-
-    // Helper to parse JSON and verify round-trip
-    #[cfg(feature = "std")]
     fn parse_json(json: &str) -> serde_json::Value {
         serde_json::from_str(json).expect("output should be valid JSON")
     }
 
     #[test]
-    fn test_log_entry_to_json_basic() {
-        let entry = RemoteLogEntry {
-            level: "warn",
-            message: String::from("Temperature high"),
-            timestamp_ms: 12345,
-        };
-        let json = log_entry_to_json(&entry);
-        assert!(json.contains("\"level\":\"warn\""));
-        assert!(json.contains("\"message\":\"Temperature high\""));
-        assert!(json.contains("\"ts\":12345"));
-    }
-
-    #[test]
-    fn test_log_entry_to_json_error_level() {
-        let entry = RemoteLogEntry {
-            level: "error",
-            message: String::from("Heap low"),
-            timestamp_ms: 99999,
-        };
-        let json = log_entry_to_json(&entry);
-        assert!(json.contains("\"level\":\"error\""));
-        assert!(json.contains("\"ts\":99999"));
+    fn test_log_entry_to_json_levels_and_timestamps() {
+        // Verify level field and timestamp formatting for various levels
+        for (level, ts) in [("warn", 12345u64), ("error", 99999u64), ("info", 0u64)] {
+            let entry = RemoteLogEntry {
+                level,
+                message: String::from("msg"),
+                timestamp_ms: ts,
+            };
+            let json = log_entry_to_json(&entry);
+            assert!(json.contains(&format!("\"level\":\"{}\"", level)));
+            assert!(json.contains(&format!("\"ts\":{}", ts)));
+            #[cfg(feature = "std")]
+            {
+                let parsed = parse_json(&json);
+                assert_eq!(parsed["level"], level);
+                assert_eq!(parsed["ts"], ts);
+            }
+        }
     }
 
     #[test]
@@ -95,122 +87,41 @@ mod tests {
     }
 
     #[test]
-    fn test_log_entry_to_json_escapes_quotes() {
-        let entry = RemoteLogEntry {
-            level: "error",
-            message: String::from("Heater \"dry\" fire"),
-            timestamp_ms: 100,
-        };
-        let json = log_entry_to_json(&entry);
-        #[cfg(feature = "std")]
-        {
-            let parsed = parse_json(&json);
-            assert_eq!(parsed["level"], "error");
-            assert_eq!(parsed["message"], "Heater \"dry\" fire");
-        }
-        // Basic check that the escaped quotes are present
-        assert!(json.contains("\\\""));
-    }
-
-    #[test]
-    fn test_log_entry_to_json_escapes_backslash() {
-        let entry = RemoteLogEntry {
-            level: "warn",
-            message: String::from("Path: \\dev\\null"),
-            timestamp_ms: 200,
-        };
-        let json = log_entry_to_json(&entry);
-        #[cfg(feature = "std")]
-        {
-            let parsed = parse_json(&json);
-            assert_eq!(parsed["message"], "Path: \\dev\\null");
-        }
-    }
-
-    #[test]
-    fn test_log_entry_to_json_escapes_newline() {
-        let entry = RemoteLogEntry {
-            level: "error",
-            message: String::from("Line1\nLine2"),
-            timestamp_ms: 300,
-        };
-        let json = log_entry_to_json(&entry);
-        assert!(json.contains("\\n"));
-        assert!(!json.contains("Line1\nLine2"));
-        #[cfg(feature = "std")]
-        {
-            let parsed = parse_json(&json);
-            assert_eq!(parsed["message"], "Line1\nLine2");
+    fn test_log_entry_to_json_escapes_each_special_char() {
+        // Verify each special character is properly escaped
+        let cases: &[(&str, &str)] = &[
+            ("Heater \"dry\" fire", "\\\""),
+            ("Path: \\dev\\null", "\\\\"),
+            ("Line1\nLine2", "\\n"),
+            ("Col1\tCol2", "\\t"),
+            ("Line1\rLine2", "\\r"),
+            ("Bad\x07char", "\\u0007"),
+            ("before\x00after", "\\u0000"),
+        ];
+        for (msg, expected_escape) in cases {
+            let entry = RemoteLogEntry {
+                level: "error",
+                message: String::from(*msg),
+                timestamp_ms: 100,
+            };
+            let json = log_entry_to_json(&entry);
+            assert!(
+                json.contains(expected_escape),
+                "expected {} escape in JSON for message {:?}",
+                expected_escape,
+                msg
+            );
+            #[cfg(feature = "std")]
+            {
+                let parsed = parse_json(&json);
+                assert_eq!(parsed["message"], *msg);
+            }
         }
     }
 
     #[test]
-    fn test_log_entry_to_json_escapes_tab() {
-        let entry = RemoteLogEntry {
-            level: "warn",
-            message: String::from("Col1\tCol2"),
-            timestamp_ms: 400,
-        };
-        let json = log_entry_to_json(&entry);
-        assert!(json.contains("\\t"));
-        #[cfg(feature = "std")]
-        {
-            let parsed = parse_json(&json);
-            assert_eq!(parsed["message"], "Col1\tCol2");
-        }
-    }
-
-    #[test]
-    fn test_log_entry_to_json_escapes_carriage_return() {
-        let entry = RemoteLogEntry {
-            level: "warn",
-            message: String::from("Line1\rLine2"),
-            timestamp_ms: 500,
-        };
-        let json = log_entry_to_json(&entry);
-        assert!(json.contains("\\r"));
-        #[cfg(feature = "std")]
-        {
-            let parsed = parse_json(&json);
-            assert_eq!(parsed["message"], "Line1\rLine2");
-        }
-    }
-
-    #[test]
-    fn test_log_entry_to_json_escapes_control_chars() {
-        let entry = RemoteLogEntry {
-            level: "error",
-            message: String::from("Bad\x07char"),
-            timestamp_ms: 600,
-        };
-        let json = log_entry_to_json(&entry);
-        assert!(json.contains("\\u0007"));
-        #[cfg(feature = "std")]
-        {
-            let parsed = parse_json(&json);
-            assert_eq!(parsed["message"], "Bad\u{0007}char");
-        }
-    }
-
-    #[test]
-    fn test_log_entry_to_json_escapes_null() {
-        let entry = RemoteLogEntry {
-            level: "error",
-            message: String::from("before\x00after"),
-            timestamp_ms: 700,
-        };
-        let json = log_entry_to_json(&entry);
-        assert!(json.contains("\\u0000"));
-        #[cfg(feature = "std")]
-        {
-            let parsed = parse_json(&json);
-            assert_eq!(parsed["message"], "before\u{0000}after");
-        }
-    }
-
-    #[test]
-    fn test_log_entry_to_json_escapes_all_control_range() {
-        // Test all control characters from 0x01 to 0x1F
+    fn test_log_entry_to_json_all_control_range() {
+        // Verify all control characters U+0001..=U+001F round-trip correctly
         for code in 1u32..=0x1F {
             let ch = char::from_u32(code).unwrap();
             let msg = format!("a{}b", ch);
@@ -233,7 +144,8 @@ mod tests {
     }
 
     #[test]
-    fn test_log_entry_to_json_all_special_combined() {
+    fn test_log_entry_to_json_combined_special_chars() {
+        // All special chars in one message — round-trip verification
         let msg = format!("a\\b\"c\nd\re\tf\x01g");
         let entry = RemoteLogEntry {
             level: "warn",
@@ -250,7 +162,6 @@ mod tests {
 
     #[test]
     fn test_log_entry_to_json_unicode_preserved() {
-        // Unicode characters should pass through unmodified
         let entry = RemoteLogEntry {
             level: "info",
             message: String::from("Temperature: 38°C — spa är varm 日本語"),
@@ -261,22 +172,6 @@ mod tests {
         {
             let parsed = parse_json(&json);
             assert_eq!(parsed["message"], "Temperature: 38°C — spa är varm 日本語");
-        }
-    }
-
-    #[test]
-    fn test_log_entry_to_json_zero_timestamp() {
-        let entry = RemoteLogEntry {
-            level: "debug",
-            message: String::from("boot"),
-            timestamp_ms: 0,
-        };
-        let json = log_entry_to_json(&entry);
-        assert!(json.contains("\"ts\":0"));
-        #[cfg(feature = "std")]
-        {
-            let parsed = parse_json(&json);
-            assert_eq!(parsed["ts"], 0);
         }
     }
 
@@ -292,25 +187,6 @@ mod tests {
         {
             let parsed = parse_json(&json);
             assert_eq!(parsed["ts"], u64::MAX);
-        }
-    }
-
-    #[test]
-    fn test_log_entry_to_json_multiple_escapes() {
-        // Multiple special characters in one message
-        let msg = String::from("Line1\nLine2\t\"quoted\"\\path\r\nEnd\x03");
-        let entry = RemoteLogEntry {
-            level: "error",
-            message: msg.clone(),
-            timestamp_ms: 12345,
-        };
-        let json = log_entry_to_json(&entry);
-        #[cfg(feature = "std")]
-        {
-            let parsed = parse_json(&json);
-            assert_eq!(parsed["message"], msg);
-            assert_eq!(parsed["level"], "error");
-            assert_eq!(parsed["ts"], 12345);
         }
     }
 }
