@@ -27,6 +27,18 @@ pub struct StatusUpdate {
     pub settings_lock: bool,
     /// M8 cycle time (aux/timer) from offset 21.
     pub m8_cycle_time: u8,
+    /// Sensor A temperature from offset 7.
+    /// `Some(f32)` when not in Hold mode, `None` when `is_hold == true`.
+    /// In Celsius mode, the raw value is divided by 2.
+    pub sensor_a_temp: Option<f32>,
+    /// Sensor B temperature from offset 8.
+    /// `Some(f32)` when A/B temps mode is active (`payload[0] == 0x14`), `None` otherwise.
+    /// In Celsius mode, the raw value is divided by 2.
+    pub sensor_b_temp: Option<f32>,
+    /// Hold timer remaining minutes from offset 7 when in Hold mode.
+    /// `Some(u8)` when `is_hold == true`, `None` otherwise.
+    /// Mutually exclusive with `sensor_a_temp` (same offset, dual interpretation).
+    pub hold_timer_minutes: Option<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,6 +172,25 @@ impl StatusUpdate {
         // Offset 21: M8 cycle time
         let m8_cycle_time = payload[21];
 
+        // Offset 7: dual-interpretation based on hold mode
+        // - Hold mode (payload[0] == 0x05): hold timer minutes
+        // - Normal mode: Sensor A temperature (÷2 if Celsius)
+        let is_hold = payload[0] == 0x05;
+        let is_ab_temps = payload[0] == 0x14;
+
+        let (sensor_a_temp, hold_timer_minutes) = if is_hold {
+            (None, Some(payload[7]))
+        } else {
+            (Some(payload[7] as f32 / temp_divisor), None)
+        };
+
+        // Offset 8: Sensor B temperature (only in A/B temps mode)
+        let sensor_b_temp = if is_ab_temps {
+            Some(payload[8] as f32 / temp_divisor)
+        } else {
+            None
+        };
+
         Ok(StatusUpdate {
             current_temp,
             set_temp,
@@ -184,11 +215,14 @@ impl StatusUpdate {
                 payload[14] & 0x0C != 0, // light2
             ],
             is_priming: payload[1] == 0x01,
-            is_hold: payload[0] == 0x05,
+            is_hold,
             notification_type,
             panel_locked,
             settings_lock,
             m8_cycle_time,
+            sensor_a_temp,
+            sensor_b_temp,
+            hold_timer_minutes,
         })
     }
 }
@@ -377,5 +411,210 @@ mod tests {
         assert!(status.panel_locked);
         assert!(status.settings_lock);
         assert_eq!(status.m8_cycle_time, 45);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Tests for sensor_a_temp, sensor_b_temp, hold_timer_minutes
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_sensor_a_temp_fahrenheit_normal_mode() {
+        // Normal mode (payload[0] == 0x00): offset 7 is sensor A temperature
+        let mut payload = [0u8; 24];
+        payload[0] = 0x00; // running mode
+        payload[2] = 100; // current temp
+        payload[7] = 98; // sensor A temp = 98°F
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.sensor_a_temp, Some(98.0));
+        assert_eq!(status.hold_timer_minutes, None); // not in hold mode
+    }
+
+    #[test]
+    fn test_sensor_a_temp_celsius() {
+        // Celsius mode: sensor A temp divided by 2
+        let mut payload = [0u8; 24];
+        payload[0] = 0x00; // running mode
+        payload[2] = 76; // current temp (38°C)
+        payload[7] = 74; // sensor A temp raw = 74 → 37.0°C
+        payload[9] = 0x01; // Celsius
+        payload[20] = 80;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.sensor_a_temp, Some(37.0));
+    }
+
+    #[test]
+    fn test_sensor_a_temp_none_when_hold_mode() {
+        // Hold mode: offset 7 is hold timer minutes, not sensor A temp
+        let mut payload = [0u8; 24];
+        payload[0] = 0x05; // hold mode
+        payload[2] = 100;
+        payload[7] = 45; // hold timer minutes, not sensor A temp
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert!(status.is_hold);
+        assert_eq!(status.sensor_a_temp, None);
+        assert_eq!(status.hold_timer_minutes, Some(45));
+    }
+
+    #[test]
+    fn test_sensor_b_temp_ab_temps_mode() {
+        // A/B temps mode (payload[0] == 0x14): sensor B temp at offset 8
+        let mut payload = [0u8; 24];
+        payload[0] = 0x14; // A/B temps mode
+        payload[2] = 100;
+        payload[7] = 98; // sensor A temp
+        payload[8] = 96; // sensor B temp = 96°F
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.sensor_b_temp, Some(96.0));
+        assert_eq!(status.sensor_a_temp, Some(98.0)); // sensor A still present
+    }
+
+    #[test]
+    fn test_sensor_b_temp_celsius_ab_mode() {
+        // A/B temps mode with Celsius: sensor B divided by 2
+        let mut payload = [0u8; 24];
+        payload[0] = 0x14; // A/B temps mode
+        payload[2] = 76;
+        payload[7] = 74; // sensor A raw = 74 → 37.0°C
+        payload[8] = 72; // sensor B raw = 72 → 36.0°C
+        payload[9] = 0x01; // Celsius
+        payload[20] = 80;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.sensor_b_temp, Some(36.0));
+        assert_eq!(status.sensor_a_temp, Some(37.0));
+    }
+
+    #[test]
+    fn test_sensor_b_temp_none_normal_mode() {
+        // Normal running mode: sensor B temp is None
+        let mut payload = [0u8; 24];
+        payload[0] = 0x00; // running mode
+        payload[2] = 100;
+        payload[8] = 96; // offset 8 exists but not in A/B mode
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.sensor_b_temp, None);
+    }
+
+    #[test]
+    fn test_hold_timer_minutes_none_normal_mode() {
+        // Normal mode: hold_timer_minutes should be None
+        let mut payload = [0u8; 24];
+        payload[0] = 0x00; // running mode
+        payload[2] = 100;
+        payload[7] = 98; // sensor A temp, not hold timer
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert!(!status.is_hold);
+        assert_eq!(status.hold_timer_minutes, None);
+    }
+
+    #[test]
+    fn test_hold_timer_minutes_hold_mode() {
+        // Hold mode: hold_timer_minutes from offset 7
+        let mut payload = [0u8; 24];
+        payload[0] = 0x05; // hold mode
+        payload[2] = 100;
+        payload[7] = 60; // 60 minutes remaining
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert!(status.is_hold);
+        assert_eq!(status.hold_timer_minutes, Some(60));
+    }
+
+    #[test]
+    fn test_hold_timer_zero_minutes() {
+        // Hold mode with 0 minutes remaining (about to expire)
+        let mut payload = [0u8; 24];
+        payload[0] = 0x05; // hold mode
+        payload[2] = 100;
+        payload[7] = 0; // 0 minutes
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.hold_timer_minutes, Some(0));
+        assert_eq!(status.sensor_a_temp, None);
+    }
+
+    #[test]
+    fn test_mutual_exclusivity_hold_mode() {
+        // VAL-PROTO-004: Hold mode → hold_timer_minutes = Some(N) + sensor_a_temp = None
+        let mut payload = [0u8; 24];
+        payload[0] = 0x05; // hold mode
+        payload[2] = 100;
+        payload[7] = 30;
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.hold_timer_minutes, Some(30));
+        assert_eq!(status.sensor_a_temp, None);
+    }
+
+    #[test]
+    fn test_mutual_exclusivity_normal_mode() {
+        // VAL-PROTO-004: Normal mode → sensor_a_temp = Some(T) + hold_timer_minutes = None
+        let mut payload = [0u8; 24];
+        payload[0] = 0x00; // running mode
+        payload[2] = 100;
+        payload[7] = 98;
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.sensor_a_temp, Some(98.0));
+        assert_eq!(status.hold_timer_minutes, None);
+    }
+
+    #[test]
+    fn test_sensor_a_temp_zero_value() {
+        // sensor_a_temp of 0 is still valid (Some(0.0))
+        let mut payload = [0u8; 24];
+        payload[0] = 0x00;
+        payload[2] = 0;
+        payload[7] = 0; // 0°F
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.sensor_a_temp, Some(0.0));
+    }
+
+    #[test]
+    fn test_sensor_b_temp_zero_ab_mode() {
+        // sensor_b_temp of 0 is still valid in A/B mode
+        let mut payload = [0u8; 24];
+        payload[0] = 0x14; // A/B temps
+        payload[2] = 100;
+        payload[7] = 98;
+        payload[8] = 0; // 0°F sensor B
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.sensor_b_temp, Some(0.0));
+    }
+
+    #[test]
+    fn test_hold_mode_ab_temps_combined() {
+        // Hold mode + A/B temps: payload[0] == 0x05 (hold takes precedence)
+        // offset 7 = hold timer, sensor_b_temp should be None
+        let mut payload = [0u8; 24];
+        payload[0] = 0x05; // hold mode (not A/B)
+        payload[2] = 100;
+        payload[7] = 45;
+        payload[8] = 96;
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.hold_timer_minutes, Some(45));
+        assert_eq!(status.sensor_a_temp, None);
+        assert_eq!(status.sensor_b_temp, None); // not in A/B mode (0x14)
     }
 }

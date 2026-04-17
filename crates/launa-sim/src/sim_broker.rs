@@ -280,6 +280,9 @@ mod tests {
             panel_locked: false,
             settings_lock: false,
             m8_cycle_time: 0,
+            sensor_a_temp: Some(98.0),
+            sensor_b_temp: None,
+            hold_timer_minutes: None,
         }
     }
 
