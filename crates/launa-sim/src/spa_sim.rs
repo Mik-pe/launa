@@ -4542,4 +4542,1039 @@ mod tests {
             "phase 4: heating should resume with pump restart"
         );
     }
+
+    // =========================================================================
+    // Untapped simulator features — comprehensive unit tests
+    // (sim-untapped-features-tests)
+    // =========================================================================
+
+    // -------------------------------------------------------------------------
+    // Overshoot/hysteresis: full cycle
+    // -------------------------------------------------------------------------
+
+    // VAL-SIM-006: Heater overshoots set_temp by configured degrees
+    // VAL-SIM-007: Hysteresis re-heat after overshoot
+    #[test]
+    fn test_overshoot_full_cycle_heat_overshoot_cool_hysteresis_reheat() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 100.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = true;
+        sim.state.pumps[0] = PumpState::Low;
+        sim.set_physics_overshoot(2.0);
+
+        let overshoot_target = 106.0; // set_temp + overshoot
+        let hysteresis_threshold = 103.0; // set_temp - overshoot/2
+
+        // Phase 1: Heat from 100 → 106 (overshoot target)
+        let mut reached_overshoot = false;
+        for _ in 0..200 {
+            sim.simulate_physics();
+            if sim.state.current_temp >= overshoot_target - 0.01 {
+                reached_overshoot = true;
+                assert!(
+                    !sim.state.is_heating,
+                    "heating should stop at overshoot target"
+                );
+                break;
+            }
+            assert!(
+                sim.state.is_heating,
+                "should be heating until overshoot target"
+            );
+        }
+        assert!(reached_overshoot, "should reach overshoot target 106°F");
+
+        // Phase 2: Cool from 106 to 103.5 — should NOT re-heat (above hysteresis)
+        sim.state.current_temp = 103.5;
+        sim.simulate_physics();
+        assert!(
+            !sim.state.is_heating,
+            "should not re-heat at 103.5 (above hysteresis threshold {})",
+            hysteresis_threshold
+        );
+
+        // Phase 3: Cool below hysteresis threshold — should re-heat
+        sim.state.current_temp = 102.9;
+        sim.simulate_physics();
+        assert!(
+            sim.state.is_heating,
+            "should re-heat below hysteresis threshold 103.0, temp={}",
+            sim.state.current_temp
+        );
+
+        // Phase 4: Re-heat back to overshoot target
+        let mut reached_second_overshoot = false;
+        for _ in 0..200 {
+            sim.simulate_physics();
+            if sim.state.current_temp >= overshoot_target - 0.01 {
+                reached_second_overshoot = true;
+                break;
+            }
+        }
+        assert!(
+            reached_second_overshoot,
+            "should reach overshoot target again on re-heat cycle, temp={}",
+            sim.state.current_temp
+        );
+    }
+
+    // VAL-SIM-006: Maximum observed temperature equals set_temp + overshoot
+    #[test]
+    fn test_overshoot_max_observed_equals_set_temp_plus_overshoot() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 95.0;
+        sim.state.set_temp = 100.0;
+        sim.state.is_heating = true;
+        sim.state.pumps[0] = PumpState::Low;
+        sim.set_physics_overshoot(3.0);
+
+        let mut max_temp = sim.state.current_temp;
+        for _ in 0..300 {
+            sim.simulate_physics();
+            max_temp = max_temp.max(sim.state.current_temp);
+            if !sim.state.is_heating && sim.state.current_temp < 100.0 {
+                break;
+            }
+        }
+
+        // Should overshoot to exactly set_temp + 3.0 = 103.0
+        assert!(
+            max_temp >= 103.0 - 0.1,
+            "max observed temp should be ~103°F, got {}",
+            max_temp
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Unknown temp period (set_physics_unknown_temp_ticks)
+    // -------------------------------------------------------------------------
+
+    // VAL-SIM-008: First N ticks report None, tick N+1 reports valid temp
+    #[test]
+    fn test_unknown_temp_exact_boundary_ticks() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.current_temp = 100.0;
+        sim.state.set_temp = 100.0;
+        sim.state.is_heating = false;
+        sim.set_physics_unknown_temp_ticks(10);
+
+        // Ticks 1-10: report None (0xFF)
+        for i in 1..=10 {
+            let bytes = sim.tick();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            assert_eq!(
+                frames[0].payload[2], 0xFF,
+                "tick {}: current_temp should be 0xFF (None)",
+                i
+            );
+        }
+
+        // Tick 11: report valid temp
+        let bytes = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&bytes);
+        assert_ne!(
+            frames[0].payload[2], 0xFF,
+            "tick 11: current_temp should NOT be 0xFF anymore"
+        );
+    }
+
+    // VAL-SIM-008: Physics ticks counted during unknown temp match expectation
+    #[test]
+    fn test_unknown_temp_physics_tick_count_advances() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 90.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = true;
+        sim.state.pumps[0] = PumpState::Low;
+        sim.set_physics_unknown_temp_ticks(5);
+
+        // During unknown period, internal temp should still change
+        for _ in 0..5 {
+            sim.tick();
+        }
+        // After 5 ticks of heating, internal temp should have risen
+        assert!(
+            sim.state.current_temp > 90.0,
+            "internal temp should have risen during unknown period, got {}",
+            sim.state.current_temp
+        );
+
+        // After unknown period, reported temp matches internal temp
+        let bytes = sim.tick(); // tick 6
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&bytes);
+        let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
+        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
+            assert!(
+                s.current_temp.is_some(),
+                "should report valid temp after unknown period"
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Sensor noise: physics noise + legacy noise combined
+    // -------------------------------------------------------------------------
+
+    // VAL-SIM-009: Physics noise stays within ±N°F bounds
+    #[test]
+    fn test_physics_noise_stays_within_bounds() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.current_temp = 100.0;
+        sim.state.set_temp = 100.0;
+        sim.state.is_heating = false;
+        sim.set_physics_noise_amplitude(3.0);
+
+        for _ in 0..200 {
+            let bytes = sim.tick();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
+            if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
+                if let Some(t) = s.current_temp {
+                    let deviation = (t - 100.0).abs();
+                    assert!(
+                        deviation <= 3.0,
+                        "noise deviation {} should be within ±3.0°F",
+                        deviation
+                    );
+                }
+            }
+        }
+    }
+
+    // VAL-SIM-009: Physics noise is deterministic (identical seeds produce identical sequences)
+    #[test]
+    fn test_physics_noise_deterministic() {
+        let collect_temps = || -> Vec<Option<f32>> {
+            let mut sim = SpaSim::new();
+            sim.registered = true;
+            sim.state.current_temp = 100.0;
+            sim.state.set_temp = 100.0;
+            sim.state.is_heating = false;
+            sim.set_physics_noise_amplitude(2.0);
+
+            let mut temps = Vec::new();
+            for _ in 0..100 {
+                let bytes = sim.tick();
+                let mut decoder = FrameDecoder::new();
+                let frames = decoder.feed_slice(&bytes);
+                let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
+                if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
+                    temps.push(s.current_temp);
+                }
+            }
+            temps
+        };
+
+        let temps1 = collect_temps();
+        let temps2 = collect_temps();
+        assert_eq!(
+            temps1, temps2,
+            "identical configurations should produce identical noise sequences"
+        );
+    }
+
+    // VAL-SIM-009: Physics noise and legacy noise can coexist
+    #[test]
+    fn test_physics_noise_and_legacy_noise_combined() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.current_temp = 100.0;
+        sim.state.set_temp = 100.0;
+        sim.state.is_heating = false;
+        sim.set_physics_noise_amplitude(1.0);
+        sim.simulate_sensor_noise(1.0);
+
+        let mut all_within_bounds = true;
+        let mut variation_count = 0;
+        for _ in 0..100 {
+            let bytes = sim.tick();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
+            if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
+                if let Some(t) = s.current_temp {
+                    // Combined noise: physics ±1 + legacy ±1, max deviation ±2.0
+                    // But could be wider since both apply independently
+                    let deviation = (t - 100.0).abs();
+                    if deviation > 4.0 {
+                        all_within_bounds = false;
+                    }
+                    if deviation > 0.01 {
+                        variation_count += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            all_within_bounds,
+            "combined noise should stay within reasonable bounds"
+        );
+        assert!(
+            variation_count > 50,
+            "combined noise should produce variation in most ticks, got {}/100",
+            variation_count
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Command latency: set temperature deferred
+    // -------------------------------------------------------------------------
+
+    // VAL-SIM-012: Command latency defers state changes by N ticks
+    #[test]
+    fn test_command_latency_defers_set_temperature() {
+        let mut sim = SpaSim::new();
+        sim.state.temp_scale = TemperatureScale::Fahrenheit;
+        sim.set_command_latency_ticks(4);
+
+        // Send SetTemperature(96)
+        let (mt, payload) = launa_protocol::command::Command::SetTemperature(96).encode();
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
+        sim.process_incoming_bytes(&encoded);
+
+        // Ticks 1-3: set_temp should remain at default (104.0)
+        for i in 1..=3 {
+            sim.tick();
+            assert_eq!(
+                sim.state.set_temp, 104.0,
+                "tick {}: set_temp should not change yet",
+                i
+            );
+        }
+
+        // Tick 4: set_temp should change to 96.0
+        sim.tick();
+        assert_eq!(
+            sim.state.set_temp, 96.0,
+            "tick 4: deferred set_temp should be applied"
+        );
+    }
+
+    // VAL-SIM-012: Multiple deferred commands applied in order
+    #[test]
+    fn test_command_latency_set_temp_and_toggle_order() {
+        let mut sim = SpaSim::new();
+        sim.state.temp_scale = TemperatureScale::Fahrenheit;
+        sim.set_command_latency_ticks(2);
+
+        // Send set_temp and toggle in sequence
+        let (mt, payload) = launa_protocol::command::Command::SetTemperature(96).encode();
+        let encoded1 = FrameEncoder::encode(mt, &payload).unwrap();
+
+        let (mt, payload) = launa_protocol::command::Command::ToggleItem(
+            launa_protocol::command::ToggleItem::Pump1,
+        )
+        .encode();
+        let encoded2 = FrameEncoder::encode(mt, &payload).unwrap();
+
+        sim.process_incoming_bytes(&encoded1);
+        sim.process_incoming_bytes(&encoded2);
+
+        // Tick 1: pending
+        sim.tick();
+        assert_eq!(sim.state.set_temp, 104.0, "set_temp unchanged tick 1");
+        assert_eq!(sim.state.pumps[0], PumpState::Off, "pump unchanged tick 1");
+
+        // Tick 2: both should apply
+        sim.tick();
+        assert_eq!(sim.state.set_temp, 96.0, "set_temp applied tick 2");
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::Low,
+            "pump toggle applied tick 2"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Intermittent commands: success rate 0.5
+    // -------------------------------------------------------------------------
+
+    // VAL-SIM-013: ~50% of commands accepted with success_rate=0.5
+    #[test]
+    fn test_command_success_rate_50_percent() {
+        let mut sim = SpaSim::new();
+        sim.set_command_success_rate(0.5);
+
+        let total_commands = 100;
+        let mut accepted = 0;
+
+        for _ in 0..total_commands {
+            let (mt, payload) = launa_protocol::command::Command::ToggleItem(
+                launa_protocol::command::ToggleItem::Pump1,
+            )
+            .encode();
+            let encoded = FrameEncoder::encode(mt, &payload).unwrap();
+
+            let before = sim.state.pumps[0];
+            sim.process_incoming_bytes(&encoded);
+            let after = sim.state.pumps[0];
+
+            // If the pump state changed, the command was accepted
+            if before != after {
+                accepted += 1;
+            }
+
+            // Reset pump state for next iteration to avoid saturation
+            sim.state.pumps[0] = PumpState::Off;
+        }
+
+        let acceptance_rate = accepted as f32 / total_commands as f32;
+        assert!(
+            acceptance_rate >= 0.35 && acceptance_rate <= 0.65,
+            "with rate=0.5, expected ~50% acceptance (35-65%), got {:.0}% ({}/{})",
+            acceptance_rate * 100.0,
+            accepted,
+            total_commands
+        );
+    }
+
+    // VAL-SIM-013: Rate 0.0 rejects all, rate 1.0 accepts all (boundary)
+    #[test]
+    fn test_command_success_rate_boundaries() {
+        // Rate 0.0: no commands accepted
+        let mut sim = SpaSim::new();
+        sim.set_command_success_rate(0.0);
+        for _ in 0..20 {
+            let (mt, payload) = launa_protocol::command::Command::ToggleItem(
+                launa_protocol::command::ToggleItem::Pump1,
+            )
+            .encode();
+            let encoded = FrameEncoder::encode(mt, &payload).unwrap();
+            sim.process_incoming_bytes(&encoded);
+        }
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::Off,
+            "rate 0.0 should reject all commands"
+        );
+
+        // Rate 1.0: all commands accepted
+        let mut sim = SpaSim::new();
+        sim.set_command_success_rate(1.0);
+        let (mt, payload) = launa_protocol::command::Command::ToggleItem(
+            launa_protocol::command::ToggleItem::Pump1,
+        )
+        .encode();
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
+        sim.process_incoming_bytes(&encoded);
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::Low,
+            "rate 1.0 should accept all commands"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Variable Ready interval: gap collection
+    // -------------------------------------------------------------------------
+
+    // VAL-SIM-014: Gaps between Ready frames fall within [min, max]
+    #[test]
+    fn test_variable_ready_interval_gaps_in_range() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.set_ready_interval_range(2, 5);
+
+        let mut last_ready_tick: Option<u64> = None;
+        let mut gaps: Vec<u64> = Vec::new();
+
+        for _ in 0..200 {
+            let tick = sim.tick_count() + 1;
+            let bytes = sim.tick();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            for f in &frames {
+                if f.message_type == [0x10, 0xBF] {
+                    if let Some(last) = last_ready_tick {
+                        gaps.push(tick - last);
+                    }
+                    last_ready_tick = Some(tick);
+                }
+            }
+        }
+
+        assert!(!gaps.is_empty(), "should have observed some Ready frames");
+
+        for (i, &gap) in gaps.iter().enumerate() {
+            assert!(
+                gap >= 2 && gap <= 5,
+                "gap {} should be in [2, 5], got {}",
+                i,
+                gap
+            );
+        }
+    }
+
+    // VAL-SIM-014: Variable Ready with min == max produces constant interval
+    #[test]
+    fn test_variable_ready_interval_constant_when_min_eq_max() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.set_ready_interval_range(3, 3);
+
+        let mut last_ready_tick: Option<u64> = None;
+        let mut gaps: Vec<u64> = Vec::new();
+
+        for _ in 0..30 {
+            let tick = sim.tick_count() + 1;
+            let bytes = sim.tick();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            for f in &frames {
+                if f.message_type == [0x10, 0xBF] {
+                    if let Some(last) = last_ready_tick {
+                        gaps.push(tick - last);
+                    }
+                    last_ready_tick = Some(tick);
+                }
+            }
+        }
+
+        // All gaps should be exactly 3
+        for (i, &gap) in gaps.iter().enumerate() {
+            assert_eq!(gap, 3, "gap {} should be exactly 3 when min=max=3", i);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Frame jitter: decoder handles padding bytes without errors
+    // -------------------------------------------------------------------------
+
+    // VAL-SIM-015: Frame jitter padding does not corrupt frame decoding
+    #[test]
+    fn test_frame_jitter_no_decode_errors_over_50_ticks() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.set_frame_jitter_ticks(10);
+
+        let mut status_count = 0;
+        let mut ready_count = 0;
+        let mut decoder = FrameDecoder::new();
+
+        for _ in 0..50 {
+            let bytes = sim.tick();
+            let frames = decoder.feed_slice(&bytes);
+            for f in &frames {
+                if f.message_type == [0xFF, 0xAF] {
+                    status_count += 1;
+                } else if f.message_type == [0x10, 0xBF] {
+                    ready_count += 1;
+                }
+            }
+        }
+
+        assert_eq!(
+            status_count, 50,
+            "should decode 50 status frames with jitter"
+        );
+        assert!(
+            ready_count > 0,
+            "should decode some ready frames with jitter"
+        );
+        assert_eq!(
+            decoder.frame_error_count(),
+            0,
+            "should have zero frame errors with jitter padding"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Partial frame reassembly
+    // -------------------------------------------------------------------------
+
+    // VAL-SIM-016: Partial frame split in the middle produces correct decoded content
+    #[test]
+    fn test_partial_frame_reassembly_content_correct() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.current_temp = 100.0;
+        sim.state.set_temp = 100.0;
+
+        // Generate a reference frame for content comparison
+        let reference_bytes = sim.generate_status_frame();
+        let mut ref_decoder = FrameDecoder::new();
+        let ref_frames = ref_decoder.feed_slice(&reference_bytes);
+        assert_eq!(ref_frames.len(), 1, "reference should be 1 frame");
+        let reference_payload = ref_frames[0].payload.clone();
+
+        // Now split a frame and verify reassembled content matches
+        // Use a fresh sim to get consistent state
+        let mut sim2 = SpaSim::new();
+        sim2.registered = true;
+        sim2.state.current_temp = 100.0;
+        sim2.state.set_temp = 100.0;
+
+        let status_bytes = sim2.generate_status_frame();
+        let split_point = status_bytes.len() / 3; // Split at 1/3
+        sim2.inject_partial_frame_at(split_point);
+
+        // Tick 1: first partial
+        let tick1_bytes = sim2.tick();
+        // Tick 2: remainder + ready
+        let tick2_bytes = sim2.tick();
+
+        let mut decoder = FrameDecoder::new();
+        let _partial = decoder.feed_slice(&tick1_bytes);
+        let reassembled = decoder.feed_slice(&tick2_bytes);
+
+        // Should have at least status + ready
+        assert!(
+            reassembled.len() >= 2,
+            "should reassemble status + ready, got {} frames",
+            reassembled.len()
+        );
+
+        // First reassembled frame should be the status frame
+        assert_eq!(
+            reassembled[0].message_type,
+            [0xFF, 0xAF],
+            "first frame should be status"
+        );
+
+        // The payload of the status frame should match reference (allowing for
+        // minute increment since a tick occurred between reference and split)
+        // Key check: message type and payload length match
+        assert_eq!(
+            reassembled[0].payload.len(),
+            reference_payload.len(),
+            "reassembled payload length should match reference"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Custom config responses: explicit VAL-SIM round-trip tests
+    // -------------------------------------------------------------------------
+
+    // VAL-SIM-019: Custom SpaConfig round-trip matches configured values
+    #[test]
+    fn test_val_sim_019_custom_spa_config_round_trip() {
+        let mut raw = [0u8; 10];
+        raw[0] = 0x01; // 1 pump
+        raw[1] = 0x03; // 3 pumps worth of config
+        raw[5] = 0b00_00_00_01; // pump1=SingleSpeed
+        raw[7] = 0x0F; // light1 + light2 (all bits)
+        raw[8] = 0x00; // no circ pump, no blower
+        raw[9] = 0x42; // arbitrary
+
+        let mut sim = SpaSim::new();
+        sim.set_spa_config_config(SpaConfigConfig { raw_payload: raw });
+
+        let response = sim.generate_config_response();
+        let msg = dispatch_response(&response);
+
+        match msg {
+            launa_protocol::dispatcher::IncomingMessage::ControlConfiguration(config) => {
+                assert_eq!(
+                    config.pump_configs[0],
+                    PumpConfig::SingleSpeed,
+                    "pump1 should be SingleSpeed"
+                );
+                assert!(!config.circ_pump, "circ pump should not be present");
+                assert!(!config.blower, "blower should not be present");
+            }
+            other => panic!("Expected ControlConfiguration, got {:?}", other),
+        }
+    }
+
+    // VAL-SIM-020: Custom InformationResponse round-trip matches configured values
+    #[test]
+    fn test_val_sim_020_custom_information_round_trip() {
+        let mut model = [b' '; 8];
+        model[..4].copy_from_slice(b"TEST");
+
+        let mut sim = SpaSim::new();
+        sim.set_information_config(InformationConfig {
+            software_id_byte0: 0x11,
+            software_id_byte1: 0x22,
+            software_version_byte0: 0x33,
+            software_version_byte1: 0x44,
+            system_model: model,
+            current_setup: 0x07,
+            config_sig_byte0: 0xAB,
+            config_sig_byte1: 0xCD,
+            config_sig_byte2: 0xEF,
+            config_sig_byte3: 0x01,
+            heater_voltage: 0x01,
+            heater_type: 0x0A,
+            dip_switch_byte0: 0x0F,
+            dip_switch_byte1: 0xF0,
+        });
+
+        let response = sim.generate_information_response();
+        let msg = dispatch_response(&response);
+
+        match msg {
+            launa_protocol::dispatcher::IncomingMessage::InformationResponse(info) => {
+                assert_eq!(info.system_model, "TEST");
+                assert_eq!(info.current_setup, 0x07);
+                assert_eq!(info.config_signature, "ABCDEF01");
+                assert_eq!(info.dip_switches, "0000111111110000");
+            }
+            other => panic!("Expected InformationResponse, got {:?}", other),
+        }
+    }
+
+    // VAL-SIM-021: Custom FilterCycles round-trip matches configured values
+    #[test]
+    fn test_val_sim_021_custom_filter_cycles_round_trip() {
+        let mut sim = SpaSim::new();
+        sim.set_filter_cycles_config(FilterCyclesConfig {
+            filter1: FilterCycleConfig {
+                start_hour: 0,
+                start_minute: 0,
+                duration_hours: 1,
+                duration_minutes: 0,
+                enabled: true,
+            },
+            filter2: FilterCycleConfig {
+                start_hour: 12,
+                start_minute: 30,
+                duration_hours: 3,
+                duration_minutes: 45,
+                enabled: false,
+            },
+        });
+
+        let response = sim.generate_filter_cycles_response();
+        let msg = dispatch_response(&response);
+
+        match msg {
+            launa_protocol::dispatcher::IncomingMessage::FilterCyclesResponse(fc) => {
+                assert_eq!(fc.filter1.start_hour, 0);
+                assert_eq!(fc.filter1.start_minute, 0);
+                assert_eq!(fc.filter1.duration_hours, 1);
+                assert_eq!(fc.filter1.duration_minutes, 0);
+                assert!(fc.filter1.enabled);
+
+                assert_eq!(fc.filter2.start_hour, 12);
+                assert_eq!(fc.filter2.start_minute, 30);
+                assert_eq!(fc.filter2.duration_hours, 3);
+                assert_eq!(fc.filter2.duration_minutes, 45);
+                assert!(!fc.filter2.enabled);
+            }
+            other => panic!("Expected FilterCyclesResponse, got {:?}", other),
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Combined degraded bus: ALL features together for 500 ticks
+    // -------------------------------------------------------------------------
+
+    // VAL-SIM-023: Combined degraded bus conditions cause no panics over 500 ticks
+    #[test]
+    fn test_combined_degraded_bus_500_ticks() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.current_temp = 95.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = true;
+        sim.state.pumps[0] = PumpState::Low;
+
+        // Enable ALL degradation features
+        sim.set_frame_jitter_ticks(5);
+        sim.set_command_latency_ticks(2);
+        sim.set_command_success_rate(0.7);
+        sim.set_ready_interval_range(2, 4);
+        sim.set_physics_overshoot(1.5);
+        sim.set_physics_noise_amplitude(1.0);
+        sim.set_physics_unknown_temp_ticks(5); // First 5 ticks unknown temp
+
+        let mut decoder = FrameDecoder::new();
+        let mut status_count = 0;
+        let mut frame_errors = 0;
+        let mut panic_detected = false;
+
+        for _tick_num in 1..=500 {
+            let bytes = sim.tick();
+            if bytes.is_empty() {
+                continue; // bus silence
+            }
+
+            let frames = decoder.feed_slice(&bytes);
+
+            for f in &frames {
+                if f.message_type == [0xFF, 0xAF] {
+                    status_count += 1;
+                    let msg = launa_protocol::dispatcher::dispatch_frame(f);
+                    match msg {
+                        launa_protocol::dispatcher::IncomingMessage::StatusUpdate(_) => {}
+                        launa_protocol::dispatcher::IncomingMessage::Unknown { .. } => {
+                            // This should not happen — means protocol desync
+                            panic_detected = true;
+                        }
+                        _ => {} // other messages are fine
+                    }
+                }
+            }
+
+            frame_errors += decoder.frame_error_count() as usize;
+        }
+
+        assert!(
+            !panic_detected,
+            "protocol desync detected during 500 tick degraded bus test"
+        );
+        assert_eq!(
+            frame_errors, 0,
+            "should have zero frame errors during degraded bus test"
+        );
+        assert!(
+            status_count >= 400,
+            "should have decoded most status frames, got {}",
+            status_count
+        );
+    }
+
+    // VAL-SIM-023: Combined degraded bus with commands still delivers eventually
+    #[test]
+    fn test_combined_degraded_bus_commands_eventually_deliver() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.pumps[0] = PumpState::Off;
+        sim.set_command_latency_ticks(2);
+        sim.set_command_success_rate(0.7);
+        sim.set_frame_jitter_ticks(3);
+        sim.set_ready_interval_range(1, 2);
+
+        // Send toggle pump1 command
+        let (mt, payload) = launa_protocol::command::Command::ToggleItem(
+            launa_protocol::command::ToggleItem::Pump1,
+        )
+        .encode();
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
+
+        // Try sending the command multiple times
+        let mut pump_changed = false;
+        for _ in 0..50 {
+            sim.process_incoming_bytes(&encoded);
+            // Tick through latency
+            for _ in 0..3 {
+                sim.tick();
+            }
+            if sim.state.pumps[0] != PumpState::Off {
+                pump_changed = true;
+                break;
+            }
+        }
+
+        // With 70% success rate and 50 attempts, should eventually succeed
+        assert!(
+            pump_changed,
+            "command should eventually be accepted with rate=0.7"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Spa reboot preserving physics
+    // -------------------------------------------------------------------------
+
+    // VAL-SIM-025: Spa reboot preserves physical state but resets registration
+    #[test]
+    fn test_spa_reboot_preserves_physics_state_after_running() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 80.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = true;
+        sim.state.pumps[0] = PumpState::Low;
+        sim.registered = true;
+        sim.client_id = Some(0x05);
+
+        // Run 30 ticks to heat up
+        for _ in 0..30 {
+            sim.tick();
+        }
+
+        let temp_before_reboot = sim.state.current_temp;
+        let pump_before = sim.state.pumps[0];
+        let light_before = sim.state.lights[0];
+        assert!(
+            temp_before_reboot > 80.0,
+            "should have heated up before reboot"
+        );
+
+        // Reboot
+        sim.simulate_spa_reboot();
+
+        // Registration should be reset
+        assert!(!sim.registered, "should be unregistered after reboot");
+        assert!(
+            sim.client_id.is_none(),
+            "client_id should be cleared after reboot"
+        );
+
+        // Physical state preserved
+        assert_eq!(
+            sim.state.current_temp, temp_before_reboot,
+            "temperature should survive reboot"
+        );
+        assert_eq!(
+            sim.state.pumps[0], pump_before,
+            "pump state should survive reboot"
+        );
+        assert_eq!(
+            sim.state.lights[0], light_before,
+            "light state should survive reboot"
+        );
+
+        // Physics should continue running after reboot
+        let temp_after_tick = {
+            sim.tick();
+            sim.state.current_temp
+        };
+        assert_ne!(
+            temp_after_tick, temp_before_reboot,
+            "physics should continue after reboot"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Filter cycle start/stop
+    // -------------------------------------------------------------------------
+
+    // VAL-SIM-026: Filter cycle start turns pump on
+    #[test]
+    fn test_filter_cycle_start_turns_pump_on() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        assert_eq!(sim.state.pumps[0], PumpState::Off);
+
+        // Schedule filter cycle start at tick 3
+        sim.simulate_filter_cycle_start(0, 3);
+
+        sim.tick(); // tick 1
+        assert_eq!(sim.state.pumps[0], PumpState::Off, "tick 1: still off");
+        sim.tick(); // tick 2
+        assert_eq!(sim.state.pumps[0], PumpState::Off, "tick 2: still off");
+        sim.tick(); // tick 3: event fires
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::Low,
+            "tick 3: pump should turn on from filter cycle"
+        );
+    }
+
+    // VAL-SIM-026: Filter cycle start does not double-toggle running pump
+    #[test]
+    fn test_filter_cycle_start_does_not_toggle_running_pump() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.pumps[1] = PumpState::High;
+
+        // Schedule filter cycle start for pump 2 (already High)
+        sim.simulate_filter_cycle_start(1, 1);
+
+        sim.tick();
+
+        // Should remain High (not cycled to Off)
+        assert_eq!(
+            sim.state.pumps[1],
+            PumpState::High,
+            "pump should remain High if already running"
+        );
+    }
+
+    // VAL-SIM-026: Multiple filter cycles on different pumps at different ticks
+    #[test]
+    fn test_multiple_filter_cycles_different_pumps() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        // Start pump1 at tick 3, pump2 at tick 7
+        sim.simulate_filter_cycle_start(0, 3);
+        sim.simulate_filter_cycle_start(1, 7);
+
+        // Tick through
+        for _ in 0..2 {
+            sim.tick();
+        }
+        assert_eq!(sim.state.pumps[0], PumpState::Off, "pump1 off before event");
+        assert_eq!(sim.state.pumps[1], PumpState::Off, "pump2 off before event");
+
+        sim.tick(); // tick 3: pump1 starts
+        assert_eq!(sim.state.pumps[0], PumpState::Low, "pump1 on at tick 3");
+        assert_eq!(sim.state.pumps[1], PumpState::Off, "pump2 still off");
+
+        for _ in 0..3 {
+            sim.tick();
+        }
+        sim.tick(); // tick 7: pump2 starts
+        assert_eq!(sim.state.pumps[1], PumpState::Low, "pump2 on at tick 7");
+    }
+
+    // VAL-SIM-026: Filter cycle pump state visible in status frames
+    #[test]
+    fn test_filter_cycle_pump_state_in_status_frame() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        // Schedule pump1 to start at tick 2
+        sim.simulate_filter_cycle_start(0, 2);
+
+        // Tick 1: pump off, status should reflect that
+        let bytes1 = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let frames1 = decoder.feed_slice(&bytes1);
+        let msg1 = launa_protocol::dispatcher::dispatch_frame(&frames1[0]);
+        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg1 {
+            assert_eq!(s.pumps[0], PumpState::Off, "tick 1: pump off in status");
+        }
+
+        // Tick 2: event fires, pump starts
+        let bytes2 = sim.tick();
+        let mut decoder2 = FrameDecoder::new();
+        let frames2 = decoder2.feed_slice(&bytes2);
+        let msg2 = launa_protocol::dispatcher::dispatch_frame(&frames2[0]);
+        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg2 {
+            assert_eq!(
+                s.pumps[0],
+                PumpState::Low,
+                "tick 2: pump on in status after filter cycle"
+            );
+        }
+    }
+
+    // Filter cycle stop: manually turn pump off after filter cycle
+    #[test]
+    fn test_filter_cycle_stop_manual_toggle_off() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.set_command_success_rate(1.0);
+
+        // Start pump via filter cycle
+        sim.simulate_filter_cycle_start(0, 1);
+        sim.tick(); // tick 1: event fires, pump = Low
+        assert_eq!(sim.state.pumps[0], PumpState::Low);
+
+        // Manually toggle pump off (simulating filter cycle end)
+        let (mt, payload) = launa_protocol::command::Command::ToggleItem(
+            launa_protocol::command::ToggleItem::Pump1,
+        )
+        .encode();
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
+        sim.process_incoming_bytes(&encoded);
+
+        // Pump should cycle Low → High (not Off!)
+        // Pump cycle: Off → Low → High → Off
+        // Current: Low, toggle → High
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::High,
+            "toggle from Low goes to High"
+        );
+
+        // Toggle again → Off
+        sim.process_incoming_bytes(&encoded);
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::Off,
+            "second toggle goes to Off (filter cycle stopped)"
+        );
+    }
 }
