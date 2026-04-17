@@ -15,12 +15,15 @@
 extern crate alloc;
 
 use alloc::format;
-use alloc::string::String;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{IpAddress, IpEndpoint, Ipv4Address, Stack};
 use embassy_time::Duration;
 use embedded_io_async::Write as _;
 use launa_esp_ota::{EspOtaFlash, Partition};
+use launa_ota::http::{
+    extract_status_line, find_header_end, parse_content_length, parse_crc_from_url,
+    parse_http_url, validate_http_status,
+};
 use launa_ota::OtaUpdate;
 use log::{error, info};
 
@@ -270,112 +273,4 @@ fn ota_rollback(ota: &mut EspOta) {
     error!("OTA: rolling back and rebooting");
     let _ = ota.rollback_and_reboot();
     esp_hal::system::software_reset()
-}
-
-/// Validate that the HTTP response status line indicates success (200).
-fn validate_http_status(headers: &[u8]) -> bool {
-    // Status line format: "HTTP/1.x 200 ..."
-    if headers.len() < 12 {
-        return false;
-    }
-    if !headers.starts_with(b"HTTP/1.") {
-        return false;
-    }
-    // Status code is at bytes 9-11 (e.g., "HTTP/1.1 200")
-    headers[9] == b'2' && headers[10] == b'0' && headers[11] == b'0'
-}
-
-/// Extract the status line from HTTP headers for error logging.
-fn extract_status_line(headers: &[u8]) -> alloc::string::String {
-    if let Some(pos) = headers.iter().position(|&b| b == b'\r' || b == b'\n') {
-        alloc::string::String::from_utf8_lossy(&headers[..pos]).into_owned()
-    } else if headers.len() > 40 {
-        alloc::string::String::from_utf8_lossy(&headers[..40]).into_owned() + "..."
-    } else {
-        alloc::string::String::from_utf8_lossy(headers).into_owned()
-    }
-}
-
-/// Find the end of HTTP headers (`\r\n\r\n`) in a byte buffer.
-/// Returns the index of the first `\r` of the terminating `\r\n\r\n`.
-fn find_header_end(data: &[u8]) -> Option<usize> {
-    for i in 0..data.len().saturating_sub(3) {
-        if data[i] == b'\r' && data[i + 1] == b'\n' && data[i + 2] == b'\r' && data[i + 3] == b'\n'
-        {
-            return Some(i);
-        }
-    }
-    None
-}
-
-/// Parse `crc` query parameter from URL (e.g. `?crc=DEADBEEF`).
-/// Returns `None` if not present or not a valid hex u32.
-fn parse_crc_from_url(url: &str) -> Option<u32> {
-    let query_start = url.find('?')?;
-    let query = &url[query_start + 1..];
-    for pair in query.split('&') {
-        if let Some(value) = pair.strip_prefix("crc=") {
-            return u32::from_str_radix(value, 16).ok();
-        }
-    }
-    None
-}
-
-/// Simple HTTP URL parser. Returns (host, port, path).
-fn parse_http_url(url: &str) -> Option<(String, u16, String)> {
-    let url = url.strip_prefix("http://")?;
-    let (host_port, path) = match url.find('/') {
-        Some(idx) => (&url[..idx], &url[idx..]),
-        None => (url, "/"),
-    };
-
-    let (host, port) = match host_port.find(':') {
-        Some(idx) => {
-            let port: u16 = host_port[idx + 1..].parse().ok()?;
-            (String::from(&host_port[..idx]), port)
-        }
-        None => (String::from(host_port), 80),
-    };
-
-    Some((host, port, String::from(path)))
-}
-
-/// Parse `Content-Length` header value from HTTP response headers.
-/// Returns `None` if the header is not found or the value is not a valid number.
-fn parse_content_length(headers: &[u8]) -> Option<u32> {
-    // Search case-insensitively for "Content-Length:"
-    let header_name = b"content-length:";
-    let headers_lower: alloc::vec::Vec<u8> = headers.iter().map(|&b| b.to_ascii_lowercase()).collect();
-
-    if let Some(pos) = find_header_value_start(&headers_lower, header_name) {
-        let value_start = pos;
-        let value_end = headers_lower[value_start..]
-            .iter()
-            .position(|&b| b == b'\r' || b == b'\n')
-            .map(|i| value_start + i)
-            .unwrap_or(headers_lower.len());
-        let value_str = core::str::from_utf8(&headers[value_start..value_end]).ok()?;
-        let trimmed = value_str.trim();
-        trimmed.parse::<u32>().ok()
-    } else {
-        None
-    }
-}
-
-/// Find the start of a header value after the header name.
-fn find_header_value_start(headers: &[u8], name: &[u8]) -> Option<usize> {
-    let search_from = 0;
-    while search_from < headers.len() {
-        if let Some(pos) = headers[search_from..].windows(name.len()).position(|w| w == name) {
-            let abs_pos = search_from + pos + name.len();
-            // Skip any leading whitespace
-            let mut start = abs_pos;
-            while start < headers.len() && headers[start] == b' ' {
-                start += 1;
-            }
-            return Some(start);
-        }
-        break;
-    }
-    None
 }

@@ -5,8 +5,9 @@
 
 #![no_std]
 
-#[cfg(any(test, feature = "mock"))]
 extern crate alloc;
+
+pub mod http;
 
 pub trait OtaUpdate {
     /// Begin an OTA update, erasing the target partition.
