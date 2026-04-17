@@ -1,0 +1,34 @@
+{
+  "featureId": "mqtt-json-escaping",
+  "reviewedAt": "2026-04-17T13:30:00Z",
+  "commitId": "1f52f5f",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The implementation correctly extracts escape_json_string() from state.rs into a shared escape.rs module, applies it to json_device_block() and json_origin() in discovery.rs, and adds comprehensive tests. The escaping covers all RFC 8259 required escapes (backslash, double-quote, newline, carriage return, tab, and other control chars U+0000-U+001F). All 32 escaping-related tests pass, including round-trip verification through serde_json::from_str.",
+    "issues": [
+      {
+        "file": "crates/launa-mqtt/src/discovery.rs",
+        "line": 135,
+        "severity": "non_blocking",
+        "description": "The `name` parameter in make_sensor(), make_binary_sensor(), make_switch(), and make_select() is interpolated into JSON without escaping. These names are hardcoded string literals (e.g., 'Set Temperature', 'Heating', 'Pump N') in build_messages(), so there is no actual bug. However, the function signatures accept `&str` which means a future caller could pass user-controlled input. This is a minor design concern, not a blocking issue."
+      },
+      {
+        "file": "crates/launa-mqtt/src/discovery.rs",
+        "line": 135,
+        "severity": "non_blocking",
+        "description": "The `device_id` is interpolated into JSON unique_id fields (e.g., `\"unique_id\":\"{}_{}\"`) without escaping. Since device_id is also escaped in json_device_block's identifiers array, there's a minor inconsistency. In practice, device IDs are simple alphanumeric strings, so this is not a real issue, but worth noting for consistency."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The project uses manual JSON construction via format!() in launa-mqtt rather than serde serialization (to maintain no_std compatibility). The escape_json_string() function in escape.rs is the canonical escaping utility. Any new code that builds JSON strings manually in this crate should use this function for all user-supplied string values. This pattern is not documented in .factory/library/.",
+      "evidence": "crates/launa-mqtt/src/escape.rs — shared escaping module used by both discovery.rs and state.rs for all user-facing string fields"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The implementation thoroughly addresses the feature requirements: escape_json_string() was correctly extracted to a shared escape.rs module with 10 dedicated unit tests, json_device_block() and json_origin() now escape all string fields, and 16 comprehensive discovery tests verify all 27+ configs produce valid JSON with special characters (quotes, backslashes, newlines, tabs, control chars, null bytes). All tests pass and there are no regressions. Two non-blocking notes: (1) the `name` parameters in make_sensor/make_switch/make_select helpers are not escaped but are always called with safe string literals, and (2) device_id in unique_id fields is not escaped but is always alphanumeric in practice."
+}

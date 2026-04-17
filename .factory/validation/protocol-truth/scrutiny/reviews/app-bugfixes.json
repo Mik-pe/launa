@@ -1,0 +1,33 @@
+{
+  "featureId": "app-bugfixes",
+  "reviewedAt": "2026-04-17T13:15:00.000Z",
+  "commitId": "bd0346c",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Three production bug fixes implemented in app/ crate: (1) WDT feeding via FnMut closure in OTA download loop, (2) MQTT recv() retry up to 3 times on TCP read errors, (3) STATE_CHANNEL capacity increase from 2 to 4 with warning log on overflow. All verified with cargo +esp check and workspace tests. Minor cosmetic issue found: warning message says 'capacity 2' but actual capacity is now 4.",
+    "issues": [
+      {
+        "file": "app/src/main.rs",
+        "line": 558,
+        "severity": "non_blocking",
+        "description": "Warning log message says 'STATE_CHANNEL full, dropping state update (capacity 2)' but the channel capacity was changed from 2 to 4 on line 139. The message is misleading for diagnostics — should say 'capacity 4' to match the actual channel capacity. This is cosmetic only and does not affect functionality."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "The rust-app-worker SKILL.md says to use TDD where possible and write tests first. For app/-only changes that can't be tested on desktop, the skill says to 'write the implementation and verify with cargo +esp check'. The worker correctly followed this pattern — no desktop-testable unit tests are possible for the ESP32-specific code in app/. The skill procedure is accurate for this case.",
+      "evidence": "Worker transcript shows: read context, investigated codebase, implemented changes, verified with cargo +esp check + cargo test --workspace + cargo fmt. Skill step 3 explicitly allows 'For app/-only changes that can't be tested on desktop (esp-hal dependencies): write the implementation and verify with cargo +esp check'."
+    },
+    {
+      "area": "knowledge",
+      "observation": "The esp-hal 1.0 WDT type is `esp_hal::timer::timg::Wdt<T>` where T is a `TimerGroupInstance` (which is `#[doc(hidden)] pub trait`). The worker initially tried to pass `&mut MwWdt` (wrong type name) and then tried a generic trait bound approach before settling on the FnMut closure pattern. This is a good pattern to document for future workers who need to pass WDT references across function boundaries.",
+      "evidence": "Transcript shows worker explored multiple approaches: (1) concrete type `MwWdt` (doesn't exist — the struct is `Wdt<TG>`), (2) generic `Wdt<TimerGroupInstance>` (doc-hidden trait, problematic to import), (3) FnMut closure (final working approach). The architecture.md could note that WDT should be passed as a closure, not as the concrete type."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "All three production bugs are properly fixed. The WDT feed closure is a clean design that avoids esp-hal type complexity. The MQTT retry logic correctly retries up to 3 times with a 100ms backoff before triggering reconnect. The STATE_CHANNEL capacity is increased and overflow is now logged. One minor cosmetic issue: the overflow warning message says 'capacity 2' but the actual capacity is 4. This is non-blocking."
+}

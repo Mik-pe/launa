@@ -1,0 +1,33 @@
+{
+  "featureId": "extract-ratelimiter",
+  "reviewedAt": "2026-04-17T13:20:00.000Z",
+  "commitId": "bb42990",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean extraction of RateLimiter from app/mqtt_client.rs to launa-core. The implementation uses u64 millisecond parameter injection instead of a direct &dyn Clock dependency, which is a pragmatic choice — more flexible and still fully testable. 10 comprehensive unit tests cover all required behaviors: under-limit, over-limit, window reset, burst max+1, boundary conditions, multiple cycles, and continuous rejection. App updated correctly to import from launa-core and pass embassy_time::Instant::now().as_millis() as u64. All workspace tests pass, app compiles for ESP32.",
+    "issues": [
+      {
+        "file": "crates/launa-core/src/lib.rs",
+        "line": 56,
+        "severity": "non_blocking",
+        "description": "Doc comment says 'Uses the [`Clock`] trait for time injection' but the check() method actually takes a raw u64 millisecond parameter, not a &dyn Clock reference. The Clock trait's now_ms() returns a u64 that can be passed in, but the struct itself has no Clock dependency. The doc should say something like 'Designed to receive timestamps from the Clock trait's now_ms() method' to be accurate."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The architecture.md lists RateLimiter as an extraction target with 'swap embassy_time::Instant for Clock trait'. The actual implementation uses raw u64 millisecond injection rather than the Clock trait directly. This is a valid approach (more flexible, still testable), but the architecture.md should be updated to reflect the actual extraction pattern: 'Clock-compatible u64 millisecond parameter injection' rather than 'Clock trait injection'.",
+      "evidence": "architecture.md says 'RateLimiter (from app/mqtt_client.rs, swap embassy_time::Instant for Clock trait)' but implementation uses check(now_ms: u64) without Clock trait dependency"
+    },
+    {
+      "area": "conventions",
+      "observation": "The extraction pattern used here (replacing platform-specific types with raw u64 parameters) is a reusable pattern for other extractions. The mission's AGENTS.md mentions similar extraction targets (RemoteLogBuffer) that could benefit from documenting this pattern as a convention.",
+      "evidence": "RateLimiter.check() takes now_ms: u64 instead of &dyn Clock, which is simpler than the Clock trait pattern used by SpaApp. RemoteLogBuffer is listed as another extraction target that would use similar Clock-compatible injection."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. RateLimiter successfully extracted from app/ to launa-core with comprehensive test coverage (10 tests covering all VAL-PROTO-013 requirements). The implementation uses u64 millisecond injection rather than direct Clock trait dependency, which is a reasonable design choice. One minor non-blocking issue: the struct's doc comment inaccurately claims to 'use the Clock trait' when it actually takes a raw u64 parameter. All workspace tests pass (700+), app compiles for ESP32, and the worker followed the skill procedure correctly."
+}

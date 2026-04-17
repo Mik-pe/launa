@@ -1,0 +1,105 @@
+{
+  "milestone": "protocol-truth",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": { "passed": true, "command": "cargo test --workspace", "exitCode": 0 },
+    "typecheck": { "passed": true, "command": "cargo check --workspace", "exitCode": 0 },
+    "lint": { "passed": true, "command": "cargo fmt --check", "exitCode": 0 }
+  },
+  "reviewsSummary": {
+    "total": 7,
+    "passed": 7,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "nonBlockingIssues": [
+    {
+      "featureId": "proto-ready-to-send",
+      "file": "crates/launa-core/src/lib.rs",
+      "line": 2291,
+      "severity": "non_blocking",
+      "description": "Comment says 'dequeues from the front of the queue' but Vec::pop() dequeues from the back (LIFO). Pre-existing, not introduced by this commit."
+    },
+    {
+      "featureId": "mqtt-json-escaping",
+      "file": "crates/launa-mqtt/src/discovery.rs",
+      "line": 135,
+      "severity": "non_blocking",
+      "description": "The `name` parameter in make_sensor/make_switch/make_select helpers is interpolated without escaping. Safe in practice because all callers use hardcoded string literals."
+    },
+    {
+      "featureId": "mqtt-json-escaping",
+      "file": "crates/launa-mqtt/src/discovery.rs",
+      "line": 135,
+      "severity": "non_blocking",
+      "description": "The `device_id` in unique_id fields is interpolated without escaping. Safe in practice because device IDs are always alphanumeric."
+    },
+    {
+      "featureId": "app-bugfixes",
+      "file": "app/src/main.rs",
+      "line": 558,
+      "severity": "non_blocking",
+      "description": "Warning log says 'capacity 2' but channel capacity was changed to 4. Cosmetic mismatch in diagnostic message."
+    },
+    {
+      "featureId": "extract-ratelimiter",
+      "file": "crates/launa-core/src/lib.rs",
+      "line": 56,
+      "severity": "non_blocking",
+      "description": "Doc comment says 'Uses the Clock trait' but check() takes a raw u64, not a &dyn Clock. Minor doc inaccuracy."
+    },
+    {
+      "featureId": "extract-http-parsers",
+      "file": "crates/launa-ota/src/http.rs",
+      "line": 133,
+      "severity": "non_blocking",
+      "description": "find_header_value_start() has a misleading while-loop where search_from is never mutated. Should be simplified to an if-let block."
+    },
+    {
+      "featureId": "extract-remote-log",
+      "file": "crates/launa-mqtt/src/remote_log.rs",
+      "line": 43,
+      "severity": "non_blocking",
+      "description": "The `level` field is interpolated into JSON without escaping. Safe because level values are always hardcoded string literals ('error', 'warn', etc.)."
+    },
+    {
+      "featureId": "extract-remote-log",
+      "file": "crates/launa-mqtt/src/remote_log.rs",
+      "line": 26,
+      "severity": "non_blocking",
+      "description": "RemoteLogEntry struct in launa-mqtt duplicates the shape of launa_core::LogEntry. Necessary because launa-mqtt doesn't depend on launa-core. Creates maintenance risk if fields diverge."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Updated architecture.md: launa-ota HTTP parsing extraction now complete (removed from extraction targets). launa-core extraction targets updated: RateLimiter done (uses u64 ms injection, not Clock trait), RemoteLogBuffer done (timestamp_ms: u64 parameter). Added launa-mqtt escape_json_string pattern note and dependency constraint (launa-mqtt only depends on launa-protocol, not launa-core).",
+      "sourceFeature": "scrutiny-validator-protocol-truth"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Update the 'Extraction targets' description for launa-core to remove completed items and note the actual pattern used: 'u64 millisecond parameter injection' rather than 'Clock trait injection'. This was observed across two extraction features (RateLimiter and RemoteLogBuffer) where the simpler u64 approach was chosen over Clock trait dependency.",
+      "evidence": "extract-ratelimiter and extract-remote-log both used plain u64 parameters instead of the Clock trait. AGENTS.md and architecture.md still reference 'Clock trait injection' for these completed extractions.",
+      "isSystemic": true
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "The rust-app-worker skill correctly handles app/-only changes that can't be tested on desktop.",
+      "reason": "already-documented — the skill procedure already reflects this pattern, no update needed"
+    },
+    {
+      "observation": "The esp-hal WDT type uses a doc-hidden TimerGroupInstance trait, so a FnMut closure is the best pattern.",
+      "reason": "ambiguous — this is a good pattern but too specific for AGENTS.md guidance; belongs in code comments (which the worker already added)"
+    },
+    {
+      "observation": "extern crate alloc in launa-ota is now unconditional but architecture.md says 'mock behind mock feature'.",
+      "reason": "already-documented — the library architecture.md already notes launa-ota as 'no_std, mock behind mock feature' which is accurate; the unconditional alloc is consistent with no_std usage"
+    }
+  ],
+  "previousRound": null
+}

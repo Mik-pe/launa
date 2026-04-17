@@ -1,0 +1,22 @@
+{
+  "featureId": "proto-ready-to-send",
+  "reviewedAt": "2026-04-17T13:20:00.000Z",
+  "commitId": "3617482",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The implementation correctly addresses both VAL-PROTO-005 (command queuing until Ready) and VAL-PROTO-006 (dispatcher mapping for registered client Ready frames). The dispatcher change from a specific [0x10, 0xBF] match to a wildcard [_, 0xBF] catch-all is correct: known prefixes 0x0A, 0xFE, 0xFF are matched earlier in the match arms, so any remaining XX BF combination is a valid ready-to-send indicator per the Balboa protocol. 12 new tests provide thorough coverage of both the dispatcher (5 tests) and SpaApp command queuing behavior (7 tests). All tests pass.",
+    "issues": [
+      {
+        "file": "crates/launa-core/src/lib.rs",
+        "line": 2291,
+        "severity": "non_blocking",
+        "description": "Comment says 'Each Ready frame dequeues exactly one command from the front of the queue' but Vec::pop() dequeues from the BACK (LIFO). The comment is misleading — the actual behavior is LIFO, not FIFO. This is pre-existing (not introduced by this commit), and the tests correctly verify queue length without asserting ordering, so functionally correct. But the doc comment should say 'from the queue' or 'from the back' rather than 'from the front'."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The dispatcher correctly generalized Ready frame handling from [0x10, 0xBF] to [_, 0xBF] with proper precedence for known message types (0x0A, 0xFE, 0xFF). 12 new tests cover both dispatcher mapping (registered/unregistered clients, various IDs, empty/non-06 payloads, reserved types exclusion) and SpaApp command queuing semantics (no send until Ready, one-per-Ready dequeue, registered client Ready, SetTemperature tracking, empty queue sends NothingToSend, pre-status command queuing). All tests verified passing. Minor non-blocking issue: misleading 'front of queue' comment when implementation uses Vec::pop() (LIFO)."
+}

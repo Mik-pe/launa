@@ -1,0 +1,33 @@
+{
+  "featureId": "extract-http-parsers",
+  "reviewedAt": "2026-04-17T13:22:00.000Z",
+  "commitId": "3e5dc3a",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "All 7 HTTP parsing functions successfully extracted from app/src/ota.rs to crates/launa-ota/src/http.rs as public functions with comprehensive test coverage (77 tests). App updated to import from launa_ota::http. The extraction is clean and faithful to the original implementations. The extern crate alloc was correctly made unconditional since the http module always requires alloc.",
+    "issues": [
+      {
+        "file": "crates/launa-ota/src/http.rs",
+        "line": 133,
+        "severity": "non_blocking",
+        "description": "find_header_value_start() uses a misleading `while search_from < headers.len()` loop where `search_from` is never mutated (always 0). The loop body either returns or breaks, making the while-loop equivalent to a simple if-let block. Not a bug — the function correctly finds only the first occurrence — but the code structure is unnecessarily confusing and suggests dead code from an abandoned multi-occurrence search design."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The `extern crate alloc` in launa-ota was changed from `#[cfg(any(test, feature = \"mock\"))]` to unconditional. This is documented in architecture.md as a crate with `no_std, mock behind mock feature` but the fact that alloc is now always required (due to the http module using String/Vec) is not reflected. If someone tries to use launa-ota in a no-alloc environment, this would break.",
+      "evidence": "crates/launa-ota/src/lib.rs line 8: `extern crate alloc;` (no cfg gate), .factory/library/architecture.md describes launa-ota as 'no_std, mock behind mock feature'"
+    },
+    {
+      "area": "conventions",
+      "observation": "The feature description lists `find_header_value_start()` as one of the functions to make public and test, but this function is only used internally by `parse_content_length()` — the app never imports it. Making it public is fine for testability, but the pattern of exposing internal helpers as public could benefit from guidance in AGENTS.md.",
+      "evidence": "app/src/ota.rs imports 6 functions but not find_header_value_start; crates/launa-ota/src/http.rs makes all 7 functions pub"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Clean extraction of 7 HTTP parsing functions from app/ to launa-ota with 77 comprehensive tests covering valid inputs, invalid inputs, boundary conditions, and edge cases. The implementation is faithful to the originals with one defensive improvement (empty name guard in find_header_value_start). All workspace tests pass, ESP32 app compiles, cargo fmt clean. One minor non-blocking code smell: misleading while-loop in find_header_value_start that should be simplified to an if-let."
+}

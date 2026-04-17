@@ -1,0 +1,44 @@
+{
+  "featureId": "extract-remote-log",
+  "reviewedAt": "2026-04-17T13:20:00.000Z",
+  "commitId": "a2f0ed9",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean extraction of RemoteLogBuffer to launa-core and log_entry_to_json to launa-mqtt with 26 comprehensive tests. The ring buffer logic uses &mut self for desktop testability while the app version retains atomics+UnsafeCell for the cooperative async context. Integration tests updated to use extracted types. App re-exports LogEntry, constants, and log_entry_to_json from workspace crates. UnsafeCell fix for Rust 2024 compatibility is well-documented with safety comments.",
+    "issues": [
+      {
+        "file": "crates/launa-mqtt/src/remote_log.rs",
+        "line": 43,
+        "severity": "non_blocking",
+        "description": "The `level` field is interpolated directly into JSON without escaping (`entry.level` in the format string). While level values are always hardcoded `&'static str` literals from the log::Level match (\"error\", \"warn\", etc.), this is a latent correctness concern. If `escape_json_string` were applied consistently, the function would be robust against any future changes to level values."
+      },
+      {
+        "file": "crates/launa-mqtt/src/remote_log.rs",
+        "line": 26,
+        "severity": "non_blocking",
+        "description": "A separate `RemoteLogEntry` struct is defined in launa-mqtt that duplicates the shape of `launa_core::LogEntry`. Since launa-mqtt does not depend on launa-core (its Cargo.toml only depends on launa-protocol), the duplication is necessary but creates a maintenance risk — if fields diverge, the two structs will silently become incompatible. A comment documenting this coupling would be helpful."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The feature description specified 'Clock trait injection (replace embassy_time::Instant)' for RemoteLogBuffer, but the worker correctly chose a simpler approach: accepting `timestamp_ms: u64` as a plain parameter in `push()`. This avoids adding a Clock trait dependency to launa-core for just the log buffer. The mission AGENTS.md extraction target description may need updating to reflect this design decision.",
+      "evidence": "Feature description says 'Clock trait injection'; implementation in launa-core/src/lib.rs RemoteLogBuffer::push() takes `(level, message, timestamp_ms)` — no Clock generic. The app version in app/remote_log.rs computes `embassy_time::Instant::now().as_millis()` before calling push()."
+    },
+    {
+      "area": "knowledge",
+      "observation": "launa-mqtt does NOT depend on launa-core — its only crate dependency is launa-protocol. This means types shared between launa-core and launa-mqtt (like LogEntry/RemoteLogEntry) require duplication or must be placed in a common crate. The architecture.md in .factory/library/ documents launa-mqtt's dependencies incompletely — it doesn't mention this constraint.",
+      "evidence": "launa-mqtt/Cargo.toml only has `launa-protocol = { path = \"../launa-protocol\" }` as a crate dependency. The worker created a separate `RemoteLogEntry` struct instead of reusing `launa_core::LogEntry`."
+    },
+    {
+      "area": "knowledge",
+      "observation": "The `remote-log` feature flag in app/ requires `UnsafeCell` for the global static buffer pattern — raw `&T to &mut T` casting is now denied by Rust 2024 edition. The architecture.md in .factory/library notes the remote-log feature but doesn't document this UnsafeCell pattern or the safety rationale (cooperative async scheduling).",
+      "evidence": "app/src/remote_log.rs uses `UnsafeCell<Vec<LogEntry>>` with a well-documented safety comment: 'embassy uses cooperative scheduling — no preemption between awaits'. This was a pre-existing bug that the worker fixed."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The extraction is well-executed with 26 comprehensive tests covering FIFO order, wrap-around, drain, enable/disable, truncation, all JSON escape types, control chars, unicode, and serde_json round-trip validation. The ring buffer logic is clean and correct. The app retains its ESP32-specific atomic+UnsafeCell implementation for cooperative async safety. Two non-blocking issues noted: the `level` field is not JSON-escaped (safe in practice due to hardcoded values), and a duplicated `RemoteLogEntry` struct exists due to launa-mqtt not depending on launa-core. The Clock trait injection from the description was wisely simplified to a plain `timestamp_ms: u64` parameter."
+}

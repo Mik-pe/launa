@@ -1,0 +1,28 @@
+{
+  "featureId": "proto-status-fields",
+  "reviewedAt": "2026-04-17T13:15:00.000Z",
+  "commitId": "f28a369",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The implementation correctly adds sensor_a_temp, sensor_b_temp, and hold_timer_minutes fields to StatusUpdate with proper dual-interpretation of offset 7. The parsing logic is clean: is_hold determines whether offset 7 yields hold_timer_minutes or sensor_a_temp, and is_ab_temps determines whether offset 8 yields sensor_b_temp. All four validation assertions (VAL-PROTO-001 through VAL-PROTO-004) are covered by 14 well-structured tests. Temperature scale divisor is correctly applied. All existing StatusUpdate struct literal constructions across the workspace (launa-core, launa-mqtt, launa-sim) were updated.",
+    "issues": [
+      {
+        "file": "crates/launa-protocol/src/status.rs",
+        "line": 178,
+        "severity": "non_blocking",
+        "description": "The hold mode check uses `payload[0] == 0x05` and A/B temps check uses `payload[0] == 0x14`, but does not account for Test Mode (0x17) or other possible spa states. In Test Mode, offset 7 interpretation is undefined. This is a minor concern because: (1) the existing `is_hold` field already used `payload[0] == 0x05` before this feature, (2) Test Mode is rare in production, and (3) the current behavior (treating Test Mode as normal mode for sensor_a_temp) is a reasonable default. No action needed."
+      },
+      {
+        "file": "crates/launa-protocol/src/status.rs",
+        "line": 178,
+        "severity": "non_blocking",
+        "description": "The feature description mentions 'offset 0 bit 2' for is_hold, but the implementation correctly uses `payload[0] == 0x05` (the full spa state byte). This matches the protocol documentation in docs/protocol.md where offset 0 is the Spa State field (ST) with value 0x05 indicating Hold Mode. The precondition in features.json was slightly misleading, but the implementation is correct."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The implementation fully covers all three new fields (sensor_a_temp, sensor_b_temp, hold_timer_minutes) with correct dual-interpretation of offset 7 based on is_hold state. Temperature scale handling is correct (÷2 for Celsius). 14 new tests cover all validation assertions including mutual exclusivity, zero values, scale conversion, and combined scenarios. All 578 workspace tests pass with zero regressions. The worker followed TDD (RED/GREEN) and the rust-worker skill procedure. No shared state gaps identified."
+}
