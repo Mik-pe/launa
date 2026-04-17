@@ -1,0 +1,34 @@
+{
+  "featureId": "integration-bus-degradation",
+  "reviewedAt": "2026-04-17T14:35:00.000Z",
+  "commitId": "cf89e59",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "10 integration tests added in a single new file (bus_degradation_tests.rs, 888 lines) covering all 10 required bus degradation scenarios. The tests use a clean BusDegradationHarness that follows the same patterns as existing harnesses (SpaAppTestHarness, TempPhysicsHarness). All tests pass, all workspace tests pass with zero regressions. The implementation thoroughly covers the validation contract requirements.",
+    "issues": [
+      {
+        "file": "crates/launa-integration-tests/tests/bus_degradation_tests.rs",
+        "line": 463,
+        "severity": "non_blocking",
+        "description": "test_intermittent_bus_stale_detection_recovery: The `has_stale_alert` variable is computed but then suppressed with `let _ = has_stale_alert;` at line 478. The variable only checks `harness.broker.publish_count() > 0`, which could be true from earlier non-stale publishes. A more precise assertion would check that a stale-specific alert was published (e.g., by checking last_state or a dedicated alert count). However, the stale detection itself is properly verified via `harness.app.is_stale()` both before and after recovery, which covers the key behavioral requirement."
+      },
+      {
+        "file": "crates/launa-integration-tests/tests/bus_degradation_tests.rs",
+        "line": 375,
+        "severity": "non_blocking",
+        "description": "test_intermittent_command_acceptance_retries_and_drops: This test is sensitive to PRNG determinism. It asserts `retries > 0` and `drops > 0` based on a 50% success rate over 10 commands. If the PRNG seed changes in launa-sim, these assertions could become flaky. The deterministic PRNG currently in use makes this reliable, but it's worth noting as a potential maintenance concern."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "Each integration test file defines its own harness struct with largely duplicated boilerplate (tick_spa, tick_app, advance_ms, complete_registration, process_outgoing, execute_actions_on_broker). There are now 3+ harnesses (SpaAppTestHarness, TempPhysicsHarness, BusDegradationHarness) with overlapping code. This is a minor DRY violation but is consistent with test file isolation conventions in this project.",
+      "evidence": "BusDegradationHarness at bus_degradation_tests.rs:22, TempPhysicsHarness at temperature_physics_tests.rs:24, SpaAppTestHarness at harness_tests.rs:44"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The implementation adds 10 well-structured integration tests covering all specified bus degradation scenarios: command latency (VAL-TEST-002), frame jitter (VAL-TEST-005), variable Ready intervals (VAL-TEST-006), stale detection with variable Ready (VAL-TEST-018), intermittent command acceptance (VAL-TEST-008), broker message loss (VAL-TEST-010), degraded bus endurance 100 ticks (VAL-TEST-015), long degraded bus 200 ticks with recovery (VAL-TEST-021), intermittent bus stale-recovery cycle (VAL-CROSS-005), and 500-tick long-run stability (VAL-CROSS-008). Two non-blocking issues noted: a weak stale alert assertion in test 9 (suppressed with `let _ =`), and PRNG-dependent assertions in test 5 that could be fragile if the seed changes. All tests pass, all workspace tests pass with zero regressions."
+}

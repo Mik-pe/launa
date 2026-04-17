@@ -1,0 +1,45 @@
+{
+  "featureId": "integration-config-validation",
+  "reviewedAt": "2026-04-17T14:45:00.000Z",
+  "commitId": "9ee8a52",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "20 integration tests added in config_validation_tests.rs covering all 5 feature areas: custom config round-trips (4 tests), temperature boundary validation (6 tests), temperature scale switching (4 tests), MQTT reconnect discovery (2 tests), and heap monitoring lifecycle (4 tests). All tests pass. The implementation is thorough, well-structured, and correctly validates the expected behaviors.",
+    "issues": [
+      {
+        "file": "crates/launa-integration-tests/tests/config_validation_tests.rs",
+        "line": 595,
+        "severity": "non_blocking",
+        "description": "test_scale_switch_f_to_c_wire_values_2x: The test verifies that decode produces 40.0°C from the wire value, but the comment at the end says 'Verify wire encoding: encode_temp(40.0, Celsius) = 80 — We can check the raw frame bytes contain 80 in the set_temp position' yet this raw byte verification is never actually performed. The test name says 'wire_values_2x' but only validates the decoded result, not the raw wire bytes. This is partially addressed by test_scale_switch_f_to_c_mqtt_state which validates the end-to-end MQTT JSON output, but the raw 2× wire value assertion is technically incomplete."
+      },
+      {
+        "file": "crates/launa-integration-tests/tests/config_validation_tests.rs",
+        "line": 827,
+        "severity": "non_blocking",
+        "description": "test_mqtt_reconnect_discovery_in_broker: publish_state() is called during disconnect, and the test asserts dropped_count() == 0 with the comment 'publish_state bypasses disconnect'. While this matches the SimBroker's internal behavior (publish_state uses broker.publish() not the QoS1 path), this test verifies a SimBroker implementation detail rather than real MQTT behavior. In production, state publishes during disconnect would fail. Non-blocking because this is an inherent SimBroker limitation, not a bug."
+      },
+      {
+        "file": "crates/launa-integration-tests/tests/config_validation_tests.rs",
+        "line": 867,
+        "severity": "non_blocking",
+        "description": "test_heap_lifecycle_integration_with_broker: Phase 2 comment says 'Critical' but the test structure jumps from Phase 1 (OK at 10 KiB) directly to critical (500 bytes), skipping the warning phase (3 KiB). This means the integration-with-broker test does not verify the warning-level-no-alert behavior through the broker (unlike test_heap_lifecycle_ok_warning_critical_recovery which does test all phases). The warning-no-alert path is covered separately in test_heap_warning_no_alert_action, just not through the broker integration path."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The skill SKILL.md says test structure should use 'SpaApp helpers: make_spaapp(), make_status_frame(), make_ready_frame() in integration tests' but this feature's worker created a completely custom ConfigValidationHarness instead of using or extending the existing SpaAppTestHarness or helper functions. The existing harness and helpers exist in launa-integration-tests. The custom harness duplicates some logic (tick_spa, process_outgoing, complete_registration, execute_actions_on_broker) rather than extending the shared one. AGENTS.md and the skill don't clearly specify when to extend vs. create new harnesses.",
+      "evidence": "config_validation_tests.rs defines its own ConfigValidationHarness struct (lines 32-199) rather than importing or extending the existing SpaAppTestHarness from launa-integration-tests/src/lib.rs"
+    },
+    {
+      "area": "skills",
+      "observation": "The rust-worker skill's procedure was followed (TDD, test first, verify workspace, cargo fmt). skillFeedback.followedProcedure is true. No skill gaps identified.",
+      "evidence": "Handoff confirms: followedProcedure=true, deviations=[], suggestedChanges=[]"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS — 20 well-structured integration tests covering all 5 feature areas (custom config round-trips, temperature boundary validation, scale switching, MQTT reconnect discovery, heap monitoring). All tests pass and correctly validate the expected behaviors against the validation contract (VAL-TEST-011, VAL-TEST-014, VAL-CROSS-007, VAL-CROSS-009, VAL-CROSS-010, VAL-CROSS-011). Three minor non-blocking issues noted: incomplete raw wire byte verification in scale-switch test, SimBroker implementation-detail testing in reconnect test, and skipped warning phase in broker-integrated heap test. The custom test harness duplicates some logic from the existing SpaAppTestHarness but this is a style concern, not a correctness issue."
+}

@@ -1,0 +1,51 @@
+{
+  "featureId": "integration-fault-timers",
+  "reviewedAt": "2026-04-17T14:35:00.000Z",
+  "commitId": "715e221",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "8 integration tests covering fault lifecycles, multiple fault types, power cycle mid-command, hold+pump timer interaction, multiple pump timers, timer cancellation on MQTT toggle-off, rapid toggle race, and rapid temperature race. Also includes 3 production bug fixes: Vec→VecDeque FIFO ordering for command queue, PumpTimerManager::cancel_all() method, and pump timer cleanup in NewClientQuery handler. All tests pass (verified independently).",
+    "issues": [
+      {
+        "file": "crates/launa-integration-tests/tests/fault_timer_tests.rs",
+        "line": 135,
+        "severity": "non_blocking",
+        "description": "test_fault_appears_and_clears_lifecycle has a fallback path (lines 135-147) that explicitly requests the fault log if the initial tick doesn't produce a fault publication. This means the test works in two different modes depending on sim timing — while not a bug, it makes the test slightly less deterministic. The fallback path is well-structured and defensive."
+      },
+      {
+        "file": "crates/launa-integration-tests/tests/fault_timer_tests.rs",
+        "line": 531,
+        "severity": "non_blocking",
+        "description": "test_pump_timer_cancels_on_mqtt_toggle_off uses a loop (lines 531-537) to toggle pump off through the 3-state cycle (Off→Low→High→Off). This is correct but the comment explaining the cycle behavior is valuable for maintainability. The test correctly verifies the timer was cancelled by advancing past the original expiry and asserting no auto-off fires."
+      },
+      {
+        "file": "crates/launa-integration-tests/tests/fault_timer_tests.rs",
+        "line": 571,
+        "severity": "non_blocking",
+        "description": "test_rapid_toggle_race_parity correctly notes that 3-state cycling (Off→Low→High→Off) with CommandTracker retries means the final state is deterministic but may not be what a simple count predicts. The test asserts pump != Off (not a specific state) which is the right invariant given retry behavior. The second-run determinism check (line 601) is a nice touch."
+      },
+      {
+        "file": "crates/launa-integration-tests/tests/fault_timer_tests.rs",
+        "line": 627,
+        "severity": "non_blocking",
+        "description": "test_rapid_temperature_race_last_wins correctly verifies FIFO ordering: SetTemperature(100) → SetTemperature(104) → SetTemperature(102) are dequeued in order, so final sim state is 102. This test's correctness depends on the Vec→VecDeque fix in the same commit — good integration coverage."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The FaultTimerHarness pattern (SpaSim + SpaApp + SimBroker + VirtualClock + FrameDecoder) is duplicated across integration test files. Each test file in launa-integration-tests/tests/ builds its own harness struct. This pattern could be documented in .factory/library/ or AGENTS.md as the standard integration test harness pattern.",
+      "evidence": "fault_timer_tests.rs builds FaultTimerHarness with the same structure as harnesses in other integration test files (SpaSim::new(), SpaApp::new(clock), SimBroker::new(), FrameDecoder::new())"
+    },
+    {
+      "area": "knowledge",
+      "observation": "The `simulate_fault_state()`, `clear_fault_state()`, `set_fault_log_config()`, and `simulate_spa_reboot()` methods on SpaSim are now established simulation APIs for fault lifecycle and power cycle testing. These should be discoverable by future workers via library documentation.",
+      "evidence": "fault_timer_tests.rs uses sim.simulate_fault_state(FaultCode::HeaterDry), sim.clear_fault_state(), sim.set_fault_log_config(FaultLogConfig{...}), sim.simulate_spa_reboot()"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "All 8 required integration tests implemented and verified passing. The implementation covers every scenario from the feature description: fault lifecycle (inject→capture MQTT→clear→verify), multiple fault types (HeaterDry + FlowFailed with distinct entries), power cycle mid-command (re-registration succeeds, queue cleared, no stale timer leaks), hold+pump timer independence, multiple concurrent pump timers with different durations, pump timer cancellation on MQTT toggle-off, rapid toggle race (4 toggles, queue drains, deterministic), and rapid temperature race (100→104→102, last wins). The commit also includes 3 production-quality bug fixes: command queue changed from Vec (LIFO) to VecDeque (FIFO), PumpTimerManager::cancel_all() added, and pump timer cleanup wired into bus reset handler. Code quality is high with clear comments, proper assertions, and defensive testing patterns. No blocking issues found."
+}
