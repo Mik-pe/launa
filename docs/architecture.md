@@ -135,3 +135,24 @@ Uses MQTT auto-discovery to automatically create entities in Home Assistant:
 3. Writes to alternate OTA partition
 4. Sets boot partition and reboots
 5. On boot, validates and marks new firmware as valid (or rolls back)
+
+## Security Considerations
+
+> **WARNING: This firmware does NOT use TLS for MQTT or OTA connections.**
+>
+> - MQTT credentials (username/password) are transmitted in plaintext over TCP.
+>   Any device on the same WiFi network can intercept them.
+> - OTA firmware is downloaded over plaintext HTTP. A network attacker (MITM)
+>   could inject malicious firmware.
+> - HMAC-SHA256 signature verification exists in `launa-esp-ota` but is not
+>   wired into the OTA flow and the signing key is hardcoded in source.
+>   Do NOT rely on it for production security.
+>
+> **This is acceptable only on isolated/trusted home networks.** Before deploying
+> in shared or untrusted network environments, add:
+>
+> 1. TLS for MQTT connections (port 8883) using `esp-tls` or `embedded-tls`
+> 2. HTTPS for OTA firmware downloads
+> 3. Per-device signing keys derived from eFuse BLOCK3 for firmware verification
+>
+> NVS passwords are encrypted at rest using AES-128-CTR with eFuse-derived keys.

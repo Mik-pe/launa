@@ -476,17 +476,22 @@ mod tests {
             );
 
             let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
-            assert!(
-                parsed["state_topic"].is_string(),
-                "state_topic should be a string"
-            );
+            // Optimistic switches don't have state_topic — skip state_topic checks for them
+            let is_optimistic = parsed.get("optimistic").and_then(|v| v.as_bool()).unwrap_or(false);
+            if !is_optimistic {
+                assert!(
+                    parsed["state_topic"].is_string(),
+                    "state_topic should be a string in {}",
+                    topic
+                );
+                let state_topic = parsed["state_topic"].as_str().unwrap();
+                assert!(state_topic.starts_with("launa/test_spa_001/"));
+            }
             assert!(
                 parsed["availability_topic"].is_string(),
-                "availability_topic should be a string"
+                "availability_topic should be a string in {}",
+                topic
             );
-
-            let state_topic = parsed["state_topic"].as_str().unwrap();
-            assert!(state_topic.starts_with("launa/test_spa_001/"));
         }
     }
 
@@ -1156,11 +1161,15 @@ mod tests {
                 "missing unique_id in {}",
                 topic
             );
-            assert!(
-                v.get("state_topic").is_some(),
-                "missing state_topic in {}",
-                topic
-            );
+            // Optimistic switches don't have state_topic
+            let is_optimistic = v.get("optimistic").and_then(|v| v.as_bool()).unwrap_or(false);
+            if !is_optimistic {
+                assert!(
+                    v.get("state_topic").is_some(),
+                    "missing state_topic in {}",
+                    topic
+                );
+            }
             assert!(
                 v.get("availability_topic").is_some(),
                 "missing availability_topic in {}",
@@ -1176,22 +1185,25 @@ mod tests {
             );
 
             // state_topic must be the device state topic (or a dedicated topic for diagnostics/alert)
-            let st = v["state_topic"].as_str().unwrap();
-            let uid = v["unique_id"].as_str().unwrap();
-            let is_dedicated_topic = uid.ends_with("_diagnostics") || uid.ends_with("_alert");
-            if !is_dedicated_topic {
-                assert_eq!(
-                    st, "launa/test_spa/state",
-                    "state_topic should match device state topic for {}",
-                    uid
-                );
-            } else {
-                // Dedicated topics should still be under the device namespace
-                assert!(
-                    st.starts_with("launa/test_spa/"),
-                    "dedicated state_topic should be under device namespace: {}",
-                    st
-                );
+            // Optimistic switches don't have state_topic — skip this check
+            if !is_optimistic {
+                let st = v["state_topic"].as_str().unwrap();
+                let uid = v["unique_id"].as_str().unwrap();
+                let is_dedicated_topic = uid.ends_with("_diagnostics") || uid.ends_with("_alert");
+                if !is_dedicated_topic {
+                    assert_eq!(
+                        st, "launa/test_spa/state",
+                        "state_topic should match device state topic for {}",
+                        uid
+                    );
+                } else {
+                    // Dedicated topics should still be under the device namespace
+                    assert!(
+                        st.starts_with("launa/test_spa/"),
+                        "dedicated state_topic should be under device namespace: {}",
+                        st
+                    );
+                }
             }
 
             // availability_topic must match

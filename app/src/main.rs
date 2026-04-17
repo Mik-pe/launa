@@ -201,6 +201,8 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
     let cmd_base = topics.command_topic();
     let alert_topic = topics.alert_topic();
     let mut last_scale_range: Option<(launa_protocol::status::TemperatureScale, launa_protocol::status::TempRange)> = None;
+    let mut last_published_status: Option<StatusUpdate> = None;
+    let mut last_published_fault: Option<FaultBuf> = None;
 
     info!("MQTT task started");
 
@@ -215,9 +217,22 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 wifi_attempt += 1;
                 match mqtt.reconnect().await {
                     Ok(()) => {
-                        let _ = mqtt.publish_availability(true).await;
-                        let _ = mqtt.publish_discovery().await;
-                        let _ = mqtt.subscribe_commands().await;
+                        let celsius = last_scale_range.map_or(false, |(s, _)| matches!(s, launa_protocol::status::TemperatureScale::Celsius));
+                        if let Err(e) = mqtt.publish_availability(true).await {
+                            warn!("WiFi-reconnect: publish availability failed: {:?}", e);
+                        }
+                        if let Err(e) = mqtt.publish_discovery(celsius).await {
+                            warn!("WiFi-reconnect: publish discovery failed: {:?}", e);
+                        }
+                        if let Err(e) = mqtt.subscribe_commands().await {
+                            warn!("WiFi-reconnect: subscribe commands failed: {:?}", e);
+                        }
+                        // Re-publish last known state
+                        if let (Some(ref status), ref fault) = (last_published_status, last_published_fault) {
+                            if let Err(e) = mqtt.publish_state(status, fault.as_str()).await {
+                                warn!("WiFi-reconnect: publish state failed: {:?}", e);
+                            }
+                        }
                         break;
                     }
                     Err(e) => {
@@ -293,8 +308,27 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
         if non_cmd_count < MAX_NON_CMD_RECEIVES {
             if let Ok((status, fault, is_stale)) = state_rx.try_receive() {
                 last_scale_range = Some((status.temperature_scale, status.temp_range));
-                if let Err(e) = mqtt.publish_state(&status, fault.as_str()).await {
-                    warn!("MQTT state publish failed: {:?}", e);
+                // Change detection: skip publish if state is identical to last
+                let changed = last_published_status.as_ref().map_or(true, |prev| {
+                    prev.current_temp != status.current_temp
+                        || prev.set_temp != status.set_temp
+                        || prev.is_heating != status.is_heating
+                        || prev.pumps != status.pumps
+                        || prev.lights != status.lights
+                        || prev.blower != status.blower
+                        || prev.circ_pump != status.circ_pump
+                        || prev.mister != status.mister
+                        || prev.is_hold != status.is_hold
+                        || prev.heating_mode != status.heating_mode
+                        || prev.temp_range != status.temp_range
+                        || prev.hold_timer_minutes != status.hold_timer_minutes
+                });
+                if is_stale || changed {
+                    last_published_status = Some(status.clone());
+                    last_published_fault = fault;
+                    if let Err(e) = mqtt.publish_state(&status, fault.as_str()).await {
+                        warn!("MQTT state publish failed: {:?}", e);
+                    }
                 }
                 if is_stale {
                     if let Err(e) = mqtt.publish_availability_stale().await {
@@ -342,8 +376,13 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                     let status = core::str::from_utf8(&payload).unwrap_or("");
                     if status == "online" {
                         info!("Home Assistant came online, re-publishing discovery");
-                        let _ = mqtt.publish_discovery().await;
-                        let _ = mqtt.publish_availability(true).await;
+                        let celsius = last_scale_range.map_or(false, |(s, _)| matches!(s, launa_protocol::status::TemperatureScale::Celsius));
+                        if let Err(e) = mqtt.publish_discovery(celsius).await {
+                            warn!("HA status: publish discovery failed: {:?}", e);
+                        }
+                        if let Err(e) = mqtt.publish_availability(true).await {
+                            warn!("HA status: publish availability failed: {:?}", e);
+                        }
                     }
                     continue;
                 }
@@ -380,9 +419,22 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                     match mqtt.reconnect().await {
                         Ok(()) => {
                             info!("MQTT reconnected, re-publishing...");
-                            let _ = mqtt.publish_availability(true).await;
-                            let _ = mqtt.publish_discovery().await;
-                            let _ = mqtt.subscribe_commands().await;
+                            let celsius = last_scale_range.map_or(false, |(s, _)| matches!(s, launa_protocol::status::TemperatureScale::Celsius));
+                            if let Err(e) = mqtt.publish_availability(true).await {
+                                warn!("MQTT reconnect: publish availability failed: {:?}", e);
+                            }
+                            if let Err(e) = mqtt.publish_discovery(celsius).await {
+                                warn!("MQTT reconnect: publish discovery failed: {:?}", e);
+                            }
+                            if let Err(e) = mqtt.subscribe_commands().await {
+                                warn!("MQTT reconnect: subscribe commands failed: {:?}", e);
+                            }
+                            // Re-publish last known state after reconnect
+                            if let (Some(ref status), ref fault) = (last_published_status, last_published_fault) {
+                                if let Err(e) = mqtt.publish_state(status, fault.as_str()).await {
+                                    warn!("MQTT reconnect: publish state failed: {:?}", e);
+                                }
+                            }
                             break;
                         }
                         Err(e) => {
@@ -498,6 +550,12 @@ fn publish_diagnostics(
     command_retries: u32,
     command_drops: u32,
 ) {
+    // Skip if heap is critically low to avoid OOM panic on format!
+    let heap_free = esp_alloc::HEAP.free();
+    if heap_free < 1024 {
+        return;
+    }
+
     let mqtt_reconnects = MQTT_RECONNECT_COUNT.load(Ordering::Relaxed);
     let mqtt_losses = MQTT_LOSS_COUNT.load(Ordering::Relaxed);
     let heap_free = esp_alloc::HEAP.free();
@@ -526,6 +584,11 @@ fn publish_diagnostics(
 /// Format and send an alert through the alert channel.
 /// Called from the main loop for conditions requiring operator attention.
 fn send_alert(level: &str, message: &str) {
+    // Skip if heap is critically low to avoid OOM panic on format!
+    if esp_alloc::HEAP.free() < 1024 {
+        return;
+    }
+
     let uptime_secs = uptime_secs();
 
     let json = alloc::format!(
@@ -986,7 +1049,7 @@ async fn main(spawner: Spawner) {
     };
 
     let _ = mqtt.publish_availability(true).await;
-    let _ = mqtt.publish_discovery().await;
+    let _ = mqtt.publish_discovery(false).await; // Fahrenheit default; mqtt_task will re-publish with correct scale after first status
     let _ = mqtt.subscribe_commands().await;
 
     // Mark firmware as valid (boot successful: WiFi + MQTT connected).

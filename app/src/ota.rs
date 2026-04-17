@@ -271,6 +271,8 @@ pub async fn perform_ota_update(
 /// to ensure the device doesn't continue running with a wiped partition.
 fn ota_rollback(ota: &mut EspOta) {
     error!("OTA: rolling back and rebooting");
-    let _ = ota.rollback_and_reboot();
+    if let Err(e) = ota.rollback_and_reboot() {
+        error!("OTA: rollback failed: {:?}", e);
+    }
     esp_hal::system::software_reset()
 }

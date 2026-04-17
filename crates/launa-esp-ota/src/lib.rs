@@ -259,7 +259,11 @@ pub struct EspOtaFlash<S> {
     /// Number of valid bytes in `pending_bytes` (0..=3).
     pending_len: usize,
     /// Accumulated firmware data for HMAC-SHA256 signature verification.
-    /// Written to on each `write()` call, used in `verify_signature()`.
+    /// NOTE: This accumulates the full firmware in RAM, which will OOM on
+    /// real hardware (1.25 MiB firmware vs 32 KiB heap). Signature verification
+    /// via `verify_signature()` is therefore not usable in production until
+    /// incremental HMAC is implemented. CRC-32 verification is always safe.
+    /// Retained for desktop testing only.
     firmware_data: alloc::vec::Vec<u8>,
 }
 
@@ -682,9 +686,15 @@ where
 {
     /// Default signing key for firmware verification.
     ///
-    /// In production, this should be replaced with a key derived from
-    /// ESP32 eFuse BLOCK3 or a compile-time injected secret.
-    /// This default key is for development/testing only.
+    /// **WARNING**: This is a placeholder key for development/testing only.
+    /// In production, this MUST be replaced with a key derived from ESP32
+    /// eFuse BLOCK3 (similar to NVS encryption in crypto.rs). Any attacker
+    /// with access to this source code can forge valid firmware signatures.
+    ///
+    /// Until a proper per-device provisioning flow is implemented, HMAC
+    /// signature verification should NOT be relied upon for production
+    /// OTA security. Use CRC-32 as a corruption check and rely on
+    /// network-level security (TLS) for OTA integrity.
     pub fn default_signing_key() -> [u8; 32] {
         [
             0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54,

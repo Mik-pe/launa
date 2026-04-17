@@ -10,6 +10,9 @@ extern crate alloc;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 
+/// Maximum allowed OTA URL length to prevent OOM on the 32 KiB ESP32 heap.
+const MAX_OTA_URL_LEN: usize = 256;
+
 /// Parse an OTA URL from a JSON-like MQTT payload.
 ///
 /// The payload is expected to contain a `"url"` key with a string value,
@@ -44,6 +47,10 @@ pub fn parse_ota_url(payload: &[u8]) -> Option<String> {
         let after_key = after_key.strip_prefix('"')?;
         if let Some(end) = after_key.find('"') {
             let url = &after_key[..end];
+            // Validate URL length to prevent OOM
+            if url.len() > MAX_OTA_URL_LEN {
+                return None;
+            }
             // Validate URL scheme — only http:// is allowed for OTA.
             if let Some(scheme_end) = url.find("://") {
                 let scheme = &url[..scheme_end];

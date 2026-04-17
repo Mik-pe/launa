@@ -498,12 +498,14 @@ impl HoldModeTimer {
                 // Already fired — wait for hold mode to be released before re-arming.
                 return None;
             }
-            if self.entered_at.is_none() {
+            if let Some(entered_at) = self.entered_at {
+                if now.elapsed_since(entered_at) >= self.timeout_ms {
+                    self.entered_at = None;
+                    self.fired = true;
+                    return Some(Command::ToggleItem(ToggleItem::HoldMode));
+                }
+            } else {
                 self.entered_at = Some(now);
-            } else if now.elapsed_since(self.entered_at.unwrap()) >= self.timeout_ms {
-                self.entered_at = None;
-                self.fired = true;
-                return Some(Command::ToggleItem(ToggleItem::HoldMode));
             }
         } else {
             self.entered_at = None;
@@ -709,17 +711,27 @@ impl<'a> SpaApp<'a> {
                 .process(frame.message_type, &frame.payload);
             match action {
                 RegistrationAction::SendIdRequest => {
-                    let encoded = FrameEncoder::encode([0xFE, 0xBF], &[0x01, 0x02, 0xF1, 0x73])
-                        .expect("registration payload should fit in frame");
-                    actions.push(AppAction::SendFrame(encoded));
-                    self.registration_started_at = Some(now);
+                    match FrameEncoder::encode([0xFE, 0xBF], &[0x01, 0x02, 0xF1, 0x73]) {
+                        Ok(encoded) => {
+                            actions.push(AppAction::SendFrame(encoded));
+                            self.registration_started_at = Some(now);
+                        }
+                        Err(e) => {
+                            log::error!("Failed to encode registration request: {:?}", e);
+                        }
+                    }
                 }
                 RegistrationAction::SendIdAck { client_id: id } => {
-                    let encoded = FrameEncoder::encode([id, 0xBF], &[0x03])
-                        .expect("ack payload should fit in frame");
-                    actions.push(AppAction::SendFrame(encoded));
-                    self.client_id = Some(id);
-                    self.registration_started_at = None;
+                    match FrameEncoder::encode([id, 0xBF], &[0x03]) {
+                        Ok(encoded) => {
+                            actions.push(AppAction::SendFrame(encoded));
+                            self.client_id = Some(id);
+                            self.registration_started_at = None;
+                        }
+                        Err(e) => {
+                            log::error!("Failed to encode ID ack: {:?}", e);
+                        }
+                    }
                 }
                 RegistrationAction::None => {}
             }
@@ -932,7 +944,13 @@ impl<'a> SpaApp<'a> {
 
 fn encode_command(cmd: &Command) -> Vec<u8> {
     let (msg_type, payload) = cmd.encode();
-    FrameEncoder::encode(msg_type, &payload).expect("command payload should fit in frame")
+    match FrameEncoder::encode(msg_type, &payload) {
+        Ok(encoded) => encoded,
+        Err(e) => {
+            log::error!("Frame encode failed for {:?}: {:?}", cmd, e);
+            Vec::new()
+        }
+    }
 }
 
 // ── Remote Log Buffer ──────────────────────────────────────────────────

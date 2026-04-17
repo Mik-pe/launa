@@ -179,7 +179,13 @@ impl MqttClient {
         let mut socket = TcpSocket::new(*stack, rx, tx);
         socket.set_timeout(Some(Duration::from_secs(10)));
 
-        let addr = net_util::resolve_host(stack, &config.mqtt_host).await.unwrap_or([192, 168, 1, 100]);
+        let addr = match net_util::resolve_host(stack, &config.mqtt_host).await {
+            Some(a) => a,
+            None => {
+                error!("MQTT: failed to resolve host '{}'", config.mqtt_host);
+                return Err(MqttError::ConnectionFailed);
+            }
+        };
         let endpoint = IpEndpoint {
             addr: IpAddress::Ipv4(Ipv4Address::from_octets(addr)),
             port: config.mqtt_port,
@@ -205,7 +211,7 @@ impl MqttClient {
             config_password: config.mqtt_password.clone(),
             next_packet_id: 1,
             last_outgoing: Instant::now(),
-            rx_buffer: Vec::new(),
+            rx_buffer: Vec::with_capacity(RX_BUFFER_MAX_SIZE),
             rate_limiter: RateLimiter::new(),
         };
 
@@ -293,7 +299,13 @@ impl MqttClient {
         let mut socket = TcpSocket::new(*self.stack, rx, tx);
         socket.set_timeout(Some(Duration::from_secs(10)));
 
-        let addr = net_util::resolve_host(self.stack, &self.config_host).await.unwrap_or([192, 168, 1, 100]);
+        let addr = match net_util::resolve_host(self.stack, &self.config_host).await {
+            Some(a) => a,
+            None => {
+                error!("MQTT: failed to resolve host '{}' during reconnect", self.config_host);
+                return Err(MqttError::ConnectionFailed);
+            }
+        };
         let endpoint = IpEndpoint {
             addr: IpAddress::Ipv4(Ipv4Address::from_octets(addr)),
             port: self.config_port,
@@ -558,16 +570,16 @@ impl MqttClient {
 
             // Successful read resets the retry counter
             read_retries = 0;
-            self.rx_buffer.extend_from_slice(&buf[..n]);
-
-            if self.rx_buffer.len() > RX_BUFFER_MAX_SIZE {
+            // Check before extending to prevent temporary overshoot
+            if self.rx_buffer.len() + n > RX_BUFFER_MAX_SIZE {
                 warn!(
-                    "MQTT rx_buffer exceeded {} bytes ({}), treating as protocol error",
-                    RX_BUFFER_MAX_SIZE, self.rx_buffer.len()
+                    "MQTT rx_buffer would exceed {} bytes ({} + {}), treating as protocol error",
+                    RX_BUFFER_MAX_SIZE, self.rx_buffer.len(), n
                 );
                 self.rx_buffer.clear();
                 return None;
             }
+            self.rx_buffer.extend_from_slice(&buf[..n]);
         }
     }
 
@@ -674,9 +686,10 @@ impl MqttClient {
         self.publish(&alert_topic, json.as_bytes(), 1, false).await
     }
 
-    pub async fn publish_discovery(&mut self) -> Result<(), MqttError> {
+    pub async fn publish_discovery(&mut self, celsius: bool) -> Result<(), MqttError> {
         let builder = DiscoveryBuilder::new(&self.device_id)
-            .sw_version(crate::FIRMWARE_VERSION);
+            .sw_version(crate::FIRMWARE_VERSION)
+            .celsius(celsius);
 
         // Build and publish one entity at a time to avoid OOM on 32 KiB heap.
         // Each call to build() creates all 20 configs in a Vec, but we iterate

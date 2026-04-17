@@ -954,10 +954,14 @@ fn test_mqtt_reconnect_discovery_in_broker() {
             parsed.get("unique_id").is_some(),
             "discovery config should have unique_id"
         );
-        assert!(
-            parsed.get("state_topic").is_some(),
-            "discovery config should have state_topic"
-        );
+        // Optimistic switches don't have state_topic
+        let is_optimistic = parsed.get("optimistic").and_then(|v| v.as_bool()).unwrap_or(false);
+        if !is_optimistic {
+            assert!(
+                parsed.get("state_topic").is_some(),
+                "discovery config should have state_topic"
+            );
+        }
     }
 }
 

@@ -254,73 +254,63 @@ impl DiscoveryBuilder {
             &format!("{}/hold_mode", cmd_topic),
         ));
 
-        // AUX 1 switch
-        configs.push(Self::make_switch(
+        // AUX 1 switch (optimistic — no state feedback in Balboa protocol)
+        configs.push(Self::make_switch_optimistic(
             &topics,
             &self.device_id,
             &device_info,
             &origin,
-            &state_topic,
             &avail_topic,
             "aux1",
             "AUX 1",
-            "{{ value_json.aux1 }}",
             &format!("{}/aux1", cmd_topic),
         ));
 
-        // AUX 2 switch
-        configs.push(Self::make_switch(
+        // AUX 2 switch (optimistic — no state feedback in Balboa protocol)
+        configs.push(Self::make_switch_optimistic(
             &topics,
             &self.device_id,
             &device_info,
             &origin,
-            &state_topic,
             &avail_topic,
             "aux2",
             "AUX 2",
-            "{{ value_json.aux2 }}",
             &format!("{}/aux2", cmd_topic),
         ));
 
-        // Soak Mode switch
-        configs.push(Self::make_switch(
+        // Soak Mode switch (optimistic — no state feedback in Balboa protocol)
+        configs.push(Self::make_switch_optimistic(
             &topics,
             &self.device_id,
             &device_info,
             &origin,
-            &state_topic,
             &avail_topic,
             "soak_mode",
             "Soak Mode",
-            "{{ value_json.soak_mode }}",
             &format!("{}/soak_mode", cmd_topic),
         ));
 
-        // Normal Operation switch
-        configs.push(Self::make_switch(
+        // Normal Operation switch (optimistic — no state feedback in Balboa protocol)
+        configs.push(Self::make_switch_optimistic(
             &topics,
             &self.device_id,
             &device_info,
             &origin,
-            &state_topic,
             &avail_topic,
             "normal_operation",
             "Normal Operation",
-            "{{ value_json.normal_operation }}",
             &format!("{}/normal_operation", cmd_topic),
         ));
 
-        // Clear Notification switch
-        configs.push(Self::make_switch(
+        // Clear Notification switch (optimistic — no state feedback in Balboa protocol)
+        configs.push(Self::make_switch_optimistic(
             &topics,
             &self.device_id,
             &device_info,
             &origin,
-            &state_topic,
             &avail_topic,
             "clear_notification",
             "Clear Notification",
-            "{{ value_json.clear_notification }}",
             &format!("{}/clear_notification", cmd_topic),
         ));
 
@@ -458,6 +448,28 @@ impl DiscoveryBuilder {
                 command_topic,
                 value_template,
                 avail_topic
+            ),
+            retain: false,
+        }
+    }
+
+    /// Build an optimistic switch entity for commands that have no state feedback.
+    /// HA will assume the state changed immediately after sending a command.
+    fn make_switch_optimistic(
+        topics: &TopicBuilder,
+        device_id: &str,
+        device_info: &str,
+        origin: &str,
+        avail_topic: &str,
+        object_id: &str,
+        name: &str,
+        command_topic: &str,
+    ) -> DiscoveryMessage {
+        DiscoveryMessage {
+            topic: topics.discovery_topic("switch", object_id),
+            payload: format!(
+                r#"{{"device":{},"origin":{},"name":"{}","unique_id":"{}_{}","command_topic":"{}","payload_on":"true","payload_off":"false","optimistic":true,"availability_topic":"{}"}}"#,
+                device_info, origin, name, device_id, object_id, command_topic, avail_topic
             ),
             retain: false,
         }
@@ -695,11 +707,15 @@ mod tests {
                 "missing 'unique_id' in {}",
                 topic
             );
-            assert!(
-                v.get("state_topic").is_some(),
-                "missing 'state_topic' in {}",
-                topic
-            );
+            // Optimistic switches don't have state_topic
+            let is_optimistic = v.get("optimistic").and_then(|v| v.as_bool()).unwrap_or(false);
+            if !is_optimistic {
+                assert!(
+                    v.get("state_topic").is_some(),
+                    "missing 'state_topic' in {}",
+                    topic
+                );
+            }
             assert!(
                 v.get("availability_topic").is_some(),
                 "missing 'availability_topic' in {}",
