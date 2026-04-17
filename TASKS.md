@@ -89,6 +89,7 @@ Full crate-by-crate review identified 7 critical, 19 high, 25 medium, 23 low iss
 - [x] **Duplicate divergent HA discovery implementations** (`app/src/mqtt_client.rs` vs `launa-mqtt/src/discovery.rs`): Refactored `publish_discovery()` to use `DiscoveryBuilder::build_with_retain()`. Discovery module now works in `no_std` (manual JSON, no serde_json). All 20 configs include `origin`, `sw_version`, and `entity_category: "diagnostic"` on diagnostics/alert sensors.
 - [x] **MQTT LWT Will Retain flag not set** (`app/src/mqtt_client.rs` `send_connect()`): Set bit 5 (`| (1 << 5)`) in `connect_flags` for Will Retain. LWT "offline" is now retained by the broker.
 - [x] **First temperature command accepted without scale/range validation** (`app/src/mqtt_client.rs`): Rejects temperature commands when `scale`/`range` is `None` (before first status received). Returns `None` with a `warn!` log.
+- [x] **Fix JSON escaping in discovery builder** (`launa-mqtt/src/discovery.rs`): `json_device_block()` and `json_origin()` now escape `device_name`, `manufacturer`, `model`, and `sw_version` via shared `escape_json_string()` from new `escape.rs` module. All 27 discovery configs produce valid JSON with special characters (quotes, backslashes, control chars). Added `manufacturer()` builder method.
 
 ### MEDIUM — Recommended
 

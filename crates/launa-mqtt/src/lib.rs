@@ -9,6 +9,7 @@ extern crate alloc;
 
 pub mod command_parser;
 pub mod discovery;
+pub mod escape;
 pub mod ota_url;
 pub mod packet;
 pub mod state;
