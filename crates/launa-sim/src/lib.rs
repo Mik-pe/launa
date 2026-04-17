@@ -10,7 +10,7 @@
 //!       │ writes bytes to SimTransport
 //!       ▼
 //!   SimTransport (virtual RS-485 wire)
-//!       │ reads → controller, writes → spa
+//!       │ reads → SpaApp, writes → spa
 //!       ▼
 //!   SpaApp (real firmware logic from launa-core)
 //!       │ emits AppActions
@@ -19,18 +19,13 @@
 //! ```
 //!
 //! The real firmware logic lives in the `launa-core` crate (`SpaApp`).
-//! `SpaController` is deprecated — use `SpaApp` for new code.
 
 pub mod clock;
-#[allow(deprecated)]
-pub mod controller;
 pub mod sim_broker;
 pub mod sim_transport;
 pub mod spa_sim;
 
 pub use clock::VirtualClock;
-#[allow(deprecated)]
-pub use controller::{ControllerEvent, SpaController};
 pub use sim_broker::SimBroker;
 pub use sim_transport::SimTransport;
 pub use spa_sim::{

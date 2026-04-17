@@ -1,7 +1,7 @@
 //! Simulated RS-485 transport.
 //!
 //! A bidirectional byte pipe connecting the `SpaSim` (acting as the real spa)
-//! to the `SpaController` (acting as our ESP32 firmware). Bytes written by the
+//! to `SpaApp` from `launa-core` (the real firmware logic). Bytes written by the
 //! spa appear as readable data for the controller, and vice versa.
 
 use launa_hal::transport::{Transport, TransportError};

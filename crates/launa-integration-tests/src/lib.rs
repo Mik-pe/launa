@@ -1858,8 +1858,8 @@ mod tests {
     // Test Group I: SpaApp Integration Tests (launa-core)
     // ========================================================================
     //
-    // These tests use `launa_core::SpaApp` — the REAL extracted firmware logic —
-    // instead of `launa_sim::SpaController`. Tests exercise the exact same code
+    // These tests use `launa_core::SpaApp` — the REAL extracted firmware logic.
+    // Tests exercise the exact same code
     // path as the ESP32 main loop: feed frames, advance virtual time, assert on
     // returned `Vec<AppAction>`.
 

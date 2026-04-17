@@ -11,7 +11,3 @@ launa-sim = { path = "../launa-sim" }
 launa-hal = { path = "../launa-hal", features = ["std"] }
 launa-core = { path = "../launa-core" }
 serde_json = { workspace = true }
-
-[[test]]
-name = "sim_tests"
-path = "tests/sim_tests.rs"

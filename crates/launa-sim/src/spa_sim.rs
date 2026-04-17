@@ -2,7 +2,7 @@
 //!
 //! Generates realistic RS-485 byte streams identical to what a real spa controller
 //! would send. Processes incoming commands and updates internal state accordingly.
-//! Designed to be connected to a `SpaController` via a `SimTransport`.
+//! Designed to be connected to `SpaApp` (launa-core) via a `SimTransport`.
 //!
 //! The sim uses Rust types natively (enums, f32 temps) and only converts to raw
 //! bytes at the frame generation boundary.
