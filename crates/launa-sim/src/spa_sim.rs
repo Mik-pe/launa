@@ -345,6 +345,8 @@ pub struct SpaSim {
     // Fault injection: fault state
     /// If set, the status frame reports init_mode=0x02 (fault active).
     fault_active: bool,
+    /// If > 0, the fault will auto-clear after this many ticks.
+    transient_fault_remaining_ticks: u64,
     /// If set, the status frame reports 0xFF for current_temp (unknown temperature).
     report_unknown_temp: bool,
     /// If > 0.0, each status frame adds ±jitter to current_temp using deterministic PRNG.
@@ -368,6 +370,17 @@ pub struct SpaSim {
     /// Whether the heater has reached the overshoot ceiling and should stop heating.
     /// Re-heating only occurs when temp drops below set_temp - (overshoot/2).
     heating_overshot: bool,
+
+    // Priming mode simulation
+    /// If > 0, the spa is in priming mode (init_mode=0x01). Auto-decrements each tick.
+    /// When it reaches 0, priming mode exits (init_mode returns to 0x00).
+    priming_remaining_ticks: u64,
+
+    // Multi-entry fault log
+    /// Ordered list of fault log entries. Each entry is a FaultLogConfig.
+    /// When walking entries, index 0 in this vec corresponds to entry_number 1.
+    /// Empty by default (backward compatible — uses single fault_log_config).
+    fault_log_entries: Vec<FaultLogConfig>,
 
     // Configurable response data
     /// Custom fault log configuration. Defaults to the hardcoded fault log data.
@@ -407,6 +420,7 @@ impl SpaSim {
             partial_frame_remainder: None,
 
             fault_active: false,
+            transient_fault_remaining_ticks: 0,
             report_unknown_temp: false,
             sensor_noise_jitter: 0.0,
 
@@ -416,6 +430,9 @@ impl SpaSim {
             physics_noise_amplitude: 0.0,
             physics_noise_rng: 0xDEADBEEFCAFE1234,
             heating_overshot: false,
+
+            priming_remaining_ticks: 0,
+            fault_log_entries: Vec::new(),
 
             fault_log_config: FaultLogConfig::default(),
             filter_cycles_config: FilterCyclesConfig::default(),
@@ -482,6 +499,48 @@ impl SpaSim {
     pub fn simulate_fault_state(&mut self, code: FaultCode) {
         self.fault_active = true;
         self.fault_log_config.message_code = code;
+        self.transient_fault_remaining_ticks = 0; // not transient
+    }
+
+    /// Clear the active fault state.
+    ///
+    /// Restores init_mode to 0x00 in subsequent status frames.
+    pub fn clear_fault_state(&mut self) {
+        self.fault_active = false;
+        self.transient_fault_remaining_ticks = 0;
+    }
+
+    /// Simulate a transient fault that auto-clears after `ticks` ticks.
+    ///
+    /// For the next `ticks` ticks, status frames report init_mode=0x02 (fault active).
+    /// After `ticks` ticks, the fault is automatically cleared and init_mode returns to 0x00.
+    /// If `ticks` is 0, no fault is set (immediately cleared).
+    pub fn simulate_transient_fault(&mut self, code: FaultCode, ticks: u64) {
+        if ticks == 0 {
+            self.fault_active = false;
+            self.transient_fault_remaining_ticks = 0;
+            return;
+        }
+        self.fault_active = true;
+        self.fault_log_config.message_code = code;
+        self.transient_fault_remaining_ticks = ticks;
+    }
+
+    /// Simulate priming mode.
+    ///
+    /// Sets init_mode=0x01 in status frames. The priming mode auto-exits after
+    /// `duration_ticks` ticks. Use `clear_priming_mode()` for manual exit.
+    /// If `duration_ticks` is 0, priming mode is not entered.
+    /// Default: off (0 ticks remaining).
+    pub fn simulate_priming_mode(&mut self, duration_ticks: u64) {
+        self.priming_remaining_ticks = duration_ticks;
+    }
+
+    /// Manually clear priming mode.
+    ///
+    /// Immediately exits priming mode regardless of remaining duration.
+    pub fn clear_priming_mode(&mut self) {
+        self.priming_remaining_ticks = 0;
     }
 
     /// Simulate temperature sensor noise.
@@ -590,6 +649,17 @@ impl SpaSim {
         self.fault_log_config = config;
     }
 
+    /// Set a multi-entry fault log.
+    ///
+    /// Each entry in the Vec corresponds to a fault log entry. When walking entries
+    /// via `generate_fault_log_response_for_entry()`, entry_number 1 maps to index 0,
+    /// entry_number 2 maps to index 1, etc.
+    ///
+    /// Entry 0 and entries past the end return a sentinel response (fault_count = 0).
+    pub fn set_fault_log_entries(&mut self, entries: Vec<FaultLogConfig>) {
+        self.fault_log_entries = entries;
+    }
+
     /// Set a custom filter cycles configuration.
     ///
     /// When set, `generate_filter_cycles_response()` will produce frames encoding
@@ -667,6 +737,23 @@ impl SpaSim {
         min + (rand_val % (max - min + 1))
     }
 
+    /// Decrement the transient fault countdown, clearing the fault when it reaches zero.
+    fn tick_transient_fault_countdown(&mut self) {
+        if self.transient_fault_remaining_ticks > 0 {
+            self.transient_fault_remaining_ticks -= 1;
+            if self.transient_fault_remaining_ticks == 0 {
+                self.fault_active = false;
+            }
+        }
+    }
+
+    /// Decrement the priming mode countdown.
+    fn tick_priming_countdown(&mut self) {
+        if self.priming_remaining_ticks > 0 {
+            self.priming_remaining_ticks -= 1;
+        }
+    }
+
     /// Process pending deferred commands, decrementing timers and applying expired ones.
     fn process_pending_commands(&mut self) {
         let mut i = 0;
@@ -702,6 +789,11 @@ impl SpaSim {
         // Bus silence: suppress all output
         if self.bus_silence_remaining > 0 {
             self.bus_silence_remaining -= 1;
+
+            // Still decrement transient fault and priming counters even during silence
+            self.tick_transient_fault_countdown();
+            self.tick_priming_countdown();
+
             return Vec::new();
         }
 
@@ -712,6 +804,10 @@ impl SpaSim {
             // Always include Ready frame on the remainder tick
             output.extend_from_slice(&self.generate_ready_frame());
             self.ready_countdown = self.next_ready_interval();
+
+            // Still decrement counters for transient fault and priming
+            self.tick_transient_fault_countdown();
+            self.tick_priming_countdown();
 
             return output;
         }
@@ -735,8 +831,12 @@ impl SpaSim {
             output.push(0x00);
         }
 
-        // Send status update
+        // Send status update (this reads fault_active and priming_remaining_ticks)
         let status_bytes = self.generate_status_frame();
+
+        // NOW decrement transient fault and priming counters AFTER status frame is generated
+        self.tick_transient_fault_countdown();
+        self.tick_priming_countdown();
 
         // Partial frame injection — first tick: split the status frame
         if let Some(split_point) = self.partial_frame_split.take() {
@@ -1017,7 +1117,7 @@ impl SpaSim {
             payload[0] = 0x05;
         }
         // Offset 1: Init Mode (0x00=Idle, 0x01=Priming, 0x02=Fault)
-        if self.state.priming {
+        if self.priming_remaining_ticks > 0 {
             payload[1] = 0x01;
         }
         if self.fault_active {
@@ -1176,6 +1276,43 @@ impl SpaSim {
 
     /// Generate a fault log response.
     pub fn generate_fault_log_response(&self) -> Vec<u8> {
+        self.generate_fault_log_response_for_entry(1)
+    }
+
+    /// Generate a fault log response for a specific entry number.
+    ///
+    /// Entry numbers are 1-based. Entry 0 or entries past the end of the
+    /// fault_log_entries list return a sentinel response with fault_count=0.
+    /// When no multi-entry fault log is configured, falls back to the single
+    /// fault_log_config for entry 1.
+    pub fn generate_fault_log_response_for_entry(&self, entry_number: u8) -> Vec<u8> {
+        if !self.fault_log_entries.is_empty() {
+            // Multi-entry mode
+            if entry_number == 0 || entry_number as usize > self.fault_log_entries.len() {
+                // Sentinel: fault_count = 0
+                let sentinel_data: [u8; 10] = [0; 10];
+                let mut full_payload = vec![0x28];
+                full_payload.extend_from_slice(&sentinel_data);
+                return FrameEncoder::encode([0x0A, 0xBF], &full_payload).unwrap();
+            }
+            let cfg = &self.fault_log_entries[entry_number as usize - 1];
+            let fault_data: [u8; 10] = [
+                cfg.fault_count,
+                cfg.entry_number,
+                cfg.message_code.code(),
+                cfg.days_ago,
+                cfg.hour,
+                cfg.minute,
+                cfg.flags,
+                cfg.set_temperature,
+                cfg.sensor_a_temp,
+                cfg.sensor_b_temp,
+            ];
+            let mut full_payload = vec![0x28];
+            full_payload.extend_from_slice(&fault_data);
+            return FrameEncoder::encode([0x0A, 0xBF], &full_payload).unwrap();
+        }
+        // Legacy single-entry mode
         let cfg = &self.fault_log_config;
         let fault_data: [u8; 10] = [
             cfg.fault_count,
@@ -3548,5 +3685,548 @@ mod tests {
             "should overshoot past 104+1.5=105.5, max was {}",
             max_temp
         );
+    }
+
+    // =========================================================================
+    // Fault lifecycle tests (sim-fault-lifecycle feature)
+    // =========================================================================
+
+    /// Helper: dispatch a status frame and return the parsed status.
+    fn dispatch_status(sim: &mut SpaSim) -> launa_protocol::status::StatusUpdate {
+        let bytes = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&bytes);
+        let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
+        match msg {
+            launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) => s,
+            other => panic!("Expected StatusUpdate, got {:?}", other),
+        }
+    }
+
+    // VAL-SIM-002: clear_fault_state restores init_mode to 0x00
+    #[test]
+    fn test_clear_fault_state_restores_init_mode() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        // Set fault
+        sim.simulate_fault_state(FaultCode::HeaterDry);
+        let fault_bytes = sim.generate_status_frame();
+        let mut decoder = FrameDecoder::new();
+        let fault_frames = decoder.feed_slice(&fault_bytes);
+        assert_eq!(
+            fault_frames[0].payload[1], 0x02,
+            "init_mode should be 0x02 during fault"
+        );
+
+        // Clear fault — this method may not exist yet (RED phase)
+        sim.clear_fault_state();
+
+        // After clearing, init_mode should be 0x00
+        let clear_bytes = sim.generate_status_frame();
+        let clear_frames = decoder.feed_slice(&clear_bytes);
+        assert_eq!(
+            clear_frames[0].payload[1], 0x00,
+            "init_mode should be 0x00 after clear_fault_state"
+        );
+    }
+
+    // VAL-SIM-002: Subsequent status frames show no fault after clear
+    #[test]
+    fn test_clear_fault_state_subsequent_status_no_fault() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        sim.simulate_fault_state(FaultCode::LowFlow);
+        sim.tick(); // tick during fault
+
+        sim.clear_fault_state();
+
+        // Multiple subsequent ticks should all show no fault
+        for _ in 0..5 {
+            let status = dispatch_status(&mut sim);
+            assert!(
+                !status.is_priming,
+                "status should not show fault after clearing"
+            );
+        }
+    }
+
+    // VAL-SIM-003: Transient fault auto-clears after N ticks
+    #[test]
+    fn test_transient_fault_auto_clears_after_n_ticks() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        // Inject transient fault that auto-clears after 3 ticks
+        sim.simulate_transient_fault(FaultCode::HeaterDry, 3);
+
+        // First 3 ticks should show fault (init_mode = 0x02)
+        for i in 1..=3 {
+            let bytes = sim.tick();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            assert_eq!(
+                frames[0].payload[1], 0x02,
+                "tick {}: init_mode should be 0x02 (fault active)",
+                i
+            );
+        }
+
+        // Tick 4 onwards should show no fault (init_mode = 0x00)
+        for i in 4..=6 {
+            let bytes = sim.tick();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            assert_eq!(
+                frames[0].payload[1], 0x00,
+                "tick {}: init_mode should be 0x00 (fault cleared)",
+                i
+            );
+        }
+    }
+
+    // VAL-SIM-003: Transient fault with 0 ticks clears immediately
+    #[test]
+    fn test_transient_fault_zero_ticks_clears_immediately() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        sim.simulate_transient_fault(FaultCode::FlowFailed, 0);
+
+        // Should be cleared already on first tick
+        let bytes = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&bytes);
+        assert_eq!(
+            frames[0].payload[1], 0x00,
+            "zero-tick transient should clear immediately"
+        );
+    }
+
+    // VAL-SIM-003: Transient fault with 1 tick clears after exactly 1 tick
+    #[test]
+    fn test_transient_fault_one_tick() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        sim.simulate_transient_fault(FaultCode::WaterTooHot, 1);
+
+        // Tick 1: fault active
+        let bytes = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&bytes);
+        assert_eq!(frames[0].payload[1], 0x02, "tick 1: fault should be active");
+
+        // Tick 2: cleared
+        let bytes = sim.tick();
+        let frames = decoder.feed_slice(&bytes);
+        assert_eq!(
+            frames[0].payload[1], 0x00,
+            "tick 2: fault should be cleared"
+        );
+    }
+
+    // VAL-SIM-004: Multi-entry fault log returns distinct entries
+    #[test]
+    fn test_multi_entry_fault_log_distinct_entries() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        // Configure a multi-entry fault log
+        sim.set_fault_log_entries(vec![
+            FaultLogConfig {
+                fault_count: 3,
+                entry_number: 1,
+                message_code: FaultCode::HeaterDry,
+                days_ago: 2,
+                hour: 14,
+                minute: 30,
+                flags: 0x04,
+                set_temperature: 104,
+                sensor_a_temp: 104,
+                sensor_b_temp: 102,
+            },
+            FaultLogConfig {
+                fault_count: 3,
+                entry_number: 2,
+                message_code: FaultCode::LowFlow,
+                days_ago: 5,
+                hour: 10,
+                minute: 15,
+                flags: 0x04,
+                set_temperature: 100,
+                sensor_a_temp: 100,
+                sensor_b_temp: 98,
+            },
+            FaultLogConfig {
+                fault_count: 3,
+                entry_number: 3,
+                message_code: FaultCode::WaterTooHot,
+                days_ago: 10,
+                hour: 8,
+                minute: 0,
+                flags: 0x04,
+                set_temperature: 106,
+                sensor_a_temp: 108,
+                sensor_b_temp: 107,
+            },
+        ]);
+
+        // Walk entries 1..3
+        let codes = [
+            FaultCode::HeaterDry,
+            FaultCode::LowFlow,
+            FaultCode::WaterTooHot,
+        ];
+        for (i, expected_code) in codes.iter().enumerate() {
+            let entry_num = (i + 1) as u8;
+            let response = sim.generate_fault_log_response_for_entry(entry_num);
+            let msg = dispatch_response(&response);
+
+            match msg {
+                launa_protocol::dispatcher::IncomingMessage::FaultLogResponse(entry) => {
+                    assert_eq!(
+                        entry.message_code, *expected_code,
+                        "entry {} should have code {:?}",
+                        entry_num, expected_code
+                    );
+                    assert_eq!(
+                        entry.entry_number, entry_num,
+                        "entry should report entry_number = {}",
+                        entry_num
+                    );
+                }
+                other => panic!(
+                    "Entry {}: Expected FaultLogResponse, got {:?}",
+                    entry_num, other
+                ),
+            }
+        }
+    }
+
+    // VAL-SIM-004: Entry 0 returns sentinel/empty
+    #[test]
+    fn test_fault_log_entry_zero_returns_sentinel() {
+        let mut sim = SpaSim::new();
+
+        sim.set_fault_log_entries(vec![FaultLogConfig {
+            fault_count: 1,
+            entry_number: 1,
+            message_code: FaultCode::HeaterDry,
+            days_ago: 1,
+            hour: 12,
+            minute: 0,
+            flags: 0x04,
+            set_temperature: 104,
+            sensor_a_temp: 104,
+            sensor_b_temp: 102,
+        }]);
+
+        let response = sim.generate_fault_log_response_for_entry(0);
+        // Entry 0 should produce an empty/sentinel response (fault_count = 0 or entry_number = 0)
+        let msg = dispatch_response(&response);
+        match msg {
+            launa_protocol::dispatcher::IncomingMessage::FaultLogResponse(entry) => {
+                assert_eq!(
+                    entry.fault_count, 0,
+                    "entry 0 should return sentinel with fault_count = 0"
+                );
+            }
+            other => panic!("Expected FaultLogResponse for entry 0, got {:?}", other),
+        }
+    }
+
+    // VAL-SIM-004: Past-end entry returns sentinel/empty
+    #[test]
+    fn test_fault_log_past_end_returns_sentinel() {
+        let mut sim = SpaSim::new();
+
+        sim.set_fault_log_entries(vec![FaultLogConfig {
+            fault_count: 1,
+            entry_number: 1,
+            message_code: FaultCode::HeaterDry,
+            days_ago: 1,
+            hour: 12,
+            minute: 0,
+            flags: 0x04,
+            set_temperature: 104,
+            sensor_a_temp: 104,
+            sensor_b_temp: 102,
+        }]);
+
+        // Only 1 entry, so entry 2 is past-end
+        let response = sim.generate_fault_log_response_for_entry(2);
+        let msg = dispatch_response(&response);
+        match msg {
+            launa_protocol::dispatcher::IncomingMessage::FaultLogResponse(entry) => {
+                assert_eq!(
+                    entry.fault_count, 0,
+                    "past-end entry should return sentinel with fault_count = 0"
+                );
+            }
+            other => panic!(
+                "Expected FaultLogResponse for past-end entry, got {:?}",
+                other
+            ),
+        }
+    }
+
+    // VAL-SIM-005: Fault mid-command preserves queued commands
+    #[test]
+    fn test_fault_preserves_queued_commands() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.pumps[0] = PumpState::Off;
+        sim.set_command_latency_ticks(3);
+
+        // Queue a toggle pump1 command
+        let toggle_cmd = FrameEncoder::encode([0x0A, 0xBF], &[0x11, 0x04]).unwrap();
+        sim.process_frame(&FrameDecoder::new().feed_slice(&toggle_cmd).remove(0));
+
+        // Command should be pending (3 ticks latency)
+        assert_eq!(sim.pending_commands.len(), 1, "command should be queued");
+
+        // Inject fault mid-command
+        sim.simulate_fault_state(FaultCode::HeaterDry);
+
+        // The queued command should NOT be lost
+        assert_eq!(
+            sim.pending_commands.len(),
+            1,
+            "fault should not discard queued commands"
+        );
+
+        // Process ticks: the pending command should still decrement and fire
+        sim.tick(); // latency 3→2
+        assert_eq!(sim.pending_commands.len(), 1);
+        sim.tick(); // latency 2→1
+        assert_eq!(sim.pending_commands.len(), 1);
+        sim.tick(); // latency 1→0, command fires
+
+        assert_eq!(
+            sim.pending_commands.len(),
+            0,
+            "command should have been applied"
+        );
+        // The command should have applied despite fault
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::Low,
+            "pump should be toggled on despite fault"
+        );
+    }
+
+    // VAL-SIM-005: Command queued before fault executes after fault clears
+    #[test]
+    fn test_command_before_fault_executes_after_clear() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.pumps[0] = PumpState::Off;
+        sim.set_command_latency_ticks(2);
+
+        // Queue a command
+        let toggle_cmd = FrameEncoder::encode([0x0A, 0xBF], &[0x11, 0x04]).unwrap();
+        sim.process_frame(&FrameDecoder::new().feed_slice(&toggle_cmd).remove(0));
+
+        // Inject fault
+        sim.simulate_fault_state(FaultCode::LowFlow);
+
+        sim.tick(); // latency 2→1
+        sim.tick(); // latency 1→0, command fires
+
+        // Command should have applied
+        assert_eq!(sim.state.pumps[0], PumpState::Low);
+
+        // Clear fault
+        sim.clear_fault_state();
+
+        // Status should now show no fault and pump running
+        let bytes = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&bytes);
+        assert_eq!(frames[0].payload[1], 0x00, "init_mode should be 0x00");
+    }
+
+    // VAL-SIM-017: Priming mode sets init_mode to 0x01
+    #[test]
+    fn test_simulate_priming_mode_sets_init_mode() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        sim.simulate_priming_mode(10);
+
+        let bytes = sim.generate_status_frame();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&bytes);
+        assert_eq!(
+            frames[0].payload[1], 0x01,
+            "init_mode should be 0x01 (priming) after simulate_priming_mode"
+        );
+    }
+
+    // VAL-SIM-018: Priming mode auto-exits after configured duration
+    #[test]
+    fn test_priming_mode_auto_exits_after_duration() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        sim.simulate_priming_mode(5);
+
+        // First 5 ticks should show priming
+        for i in 1..=5 {
+            let bytes = sim.tick();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            assert_eq!(
+                frames[0].payload[1], 0x01,
+                "tick {}: init_mode should be 0x01 (priming)",
+                i
+            );
+        }
+
+        // Tick 6 onwards should show normal
+        for i in 6..=8 {
+            let bytes = sim.tick();
+            let mut decoder = FrameDecoder::new();
+            let frames = decoder.feed_slice(&bytes);
+            assert_eq!(
+                frames[0].payload[1], 0x00,
+                "tick {}: init_mode should be 0x00 (priming exited)",
+                i
+            );
+        }
+    }
+
+    // Priming mode with 0 duration exits immediately
+    #[test]
+    fn test_priming_mode_zero_duration_exits_immediately() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        sim.simulate_priming_mode(0);
+
+        let bytes = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&bytes);
+        assert_eq!(
+            frames[0].payload[1], 0x00,
+            "zero-duration priming should exit immediately"
+        );
+    }
+
+    // clear_priming_mode manually exits priming mode
+    #[test]
+    fn test_clear_priming_mode_manual_exit() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        sim.simulate_priming_mode(100);
+
+        // Should show priming
+        let bytes = sim.generate_status_frame();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&bytes);
+        assert_eq!(frames[0].payload[1], 0x01, "should be in priming mode");
+
+        // Manually clear
+        sim.clear_priming_mode();
+
+        // Should show normal
+        let bytes = sim.generate_status_frame();
+        let frames = decoder.feed_slice(&bytes);
+        assert_eq!(
+            frames[0].payload[1], 0x00,
+            "priming should be cleared manually"
+        );
+    }
+
+    // Priming mode + fault interaction: fault takes priority (0x02 overrides 0x01)
+    #[test]
+    fn test_fault_overrides_priming_mode() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        sim.simulate_priming_mode(10);
+        let bytes = sim.generate_status_frame();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&bytes);
+        assert_eq!(frames[0].payload[1], 0x01, "should be priming first");
+
+        // Fault overrides priming
+        sim.simulate_fault_state(FaultCode::HeaterDry);
+        let bytes = sim.generate_status_frame();
+        let frames = decoder.feed_slice(&bytes);
+        assert_eq!(
+            frames[0].payload[1], 0x02,
+            "fault should override priming mode"
+        );
+
+        // After clearing fault, priming should resume
+        sim.clear_fault_state();
+        let bytes = sim.generate_status_frame();
+        let frames = decoder.feed_slice(&bytes);
+        assert_eq!(
+            frames[0].payload[1], 0x01,
+            "priming should resume after fault cleared"
+        );
+    }
+
+    // New features default to off (zero impact on existing behavior)
+    #[test]
+    fn test_fault_lifecycle_defaults_off() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+
+        // No fault, no priming by default
+        let bytes = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&bytes);
+        assert_eq!(
+            frames[0].payload[1], 0x00,
+            "init_mode should be 0x00 by default"
+        );
+
+        // Second tick also normal
+        let bytes = sim.tick();
+        let frames = decoder.feed_slice(&bytes);
+        assert_eq!(frames[0].payload[1], 0x00, "should remain 0x00");
+    }
+
+    // Transient fault with command latency: both interact correctly
+    #[test]
+    fn test_transient_fault_with_command_latency() {
+        let mut sim = SpaSim::new();
+        sim.registered = true;
+        sim.state.pumps[0] = PumpState::Off;
+        sim.set_command_latency_ticks(2);
+
+        // Queue command
+        let toggle_cmd = FrameEncoder::encode([0x0A, 0xBF], &[0x11, 0x04]).unwrap();
+        sim.process_frame(&FrameDecoder::new().feed_slice(&toggle_cmd).remove(0));
+
+        // Inject transient fault for 2 ticks
+        sim.simulate_transient_fault(FaultCode::HeaterDry, 2);
+
+        // Tick 1: fault active, command pending (latency 2→1)
+        let bytes = sim.tick();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&bytes);
+        assert_eq!(frames[0].payload[1], 0x02, "tick 1: fault active");
+
+        // Tick 2: fault active, command fires (latency 1→0)
+        let bytes = sim.tick();
+        let frames = decoder.feed_slice(&bytes);
+        assert_eq!(frames[0].payload[1], 0x02, "tick 2: fault still active");
+        assert_eq!(
+            sim.state.pumps[0],
+            PumpState::Low,
+            "command should have applied"
+        );
+
+        // Tick 3: fault cleared
+        let bytes = sim.tick();
+        let frames = decoder.feed_slice(&bytes);
+        assert_eq!(frames[0].payload[1], 0x00, "tick 3: fault cleared");
     }
 }
