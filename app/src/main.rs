@@ -65,6 +65,9 @@ mod ota;
 mod transport;
 mod wifi;
 
+#[cfg(feature = "remote-log")]
+mod remote_log;
+
 use esp_backtrace as _;
 
 /// Custom panic handler: logs panic location, waits 500ms for log flush,

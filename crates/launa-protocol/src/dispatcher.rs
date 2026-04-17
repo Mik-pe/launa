@@ -23,6 +23,16 @@ pub enum IncomingMessage {
     ClientIdAssignment {
         id: u8,
     },
+    /// Preferences response (0x0A 0xBF sub-type 0x26).
+    /// Payload contains panel preferences data.
+    PreferencesResponse {
+        payload: Vec<u8>,
+    },
+    /// Setup Parameters response (0x0A 0xBF sub-type 0x25).
+    /// Payload contains setup/tuning parameters.
+    SetupParametersResponse {
+        payload: Vec<u8>,
+    },
     Unknown {
         message_type: [u8; 2],
         payload: Vec<u8>,
@@ -257,6 +267,16 @@ pub fn dispatch_frame(frame: &Frame) -> IncomingMessage {
                         }
                     }
                 }
+
+                // 0x25 → Setup Parameters response
+                0x25 => IncomingMessage::SetupParametersResponse {
+                    payload: frame.payload[1..].to_vec(),
+                },
+
+                // 0x26 → Preferences response
+                0x26 => IncomingMessage::PreferencesResponse {
+                    payload: frame.payload[1..].to_vec(),
+                },
 
                 // 0x28 → Fault log response (direct)
                 0x28 => {
@@ -557,6 +577,76 @@ mod tests {
         match msg {
             IncomingMessage::Unknown { .. } => {}
             _ => panic!("Expected Unknown for empty 0A BF payload, got {:?}", msg),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_preferences_response() {
+        // 0x26 sub-type: Preferences response with arbitrary payload
+        let payload = vec![0x26, 0x01, 0x02, 0x03, 0x04];
+        let frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload,
+        };
+
+        let msg = dispatch_frame(&frame);
+        match msg {
+            IncomingMessage::PreferencesResponse { payload: data } => {
+                assert_eq!(data, vec![0x01, 0x02, 0x03, 0x04]);
+            }
+            _ => panic!("Expected PreferencesResponse, got {:?}", msg),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_setup_parameters_response() {
+        // 0x25 sub-type: Setup Parameters response with arbitrary payload
+        let payload = vec![0x25, 0xAA, 0xBB, 0xCC];
+        let frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload,
+        };
+
+        let msg = dispatch_frame(&frame);
+        match msg {
+            IncomingMessage::SetupParametersResponse { payload: data } => {
+                assert_eq!(data, vec![0xAA, 0xBB, 0xCC]);
+            }
+            _ => panic!("Expected SetupParametersResponse, got {:?}", msg),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_preferences_empty_payload() {
+        // 0x26 with just the sub-type byte
+        let frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: vec![0x26],
+        };
+
+        let msg = dispatch_frame(&frame);
+        match msg {
+            IncomingMessage::PreferencesResponse { payload: data } => {
+                assert!(data.is_empty());
+            }
+            _ => panic!("Expected PreferencesResponse, got {:?}", msg),
+        }
+    }
+
+    #[test]
+    fn test_dispatch_setup_parameters_empty_payload() {
+        // 0x25 with just the sub-type byte
+        let frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: vec![0x25],
+        };
+
+        let msg = dispatch_frame(&frame);
+        match msg {
+            IncomingMessage::SetupParametersResponse { payload: data } => {
+                assert!(data.is_empty());
+            }
+            _ => panic!("Expected SetupParametersResponse, got {:?}", msg),
         }
     }
 

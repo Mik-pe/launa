@@ -18,6 +18,15 @@ pub struct StatusUpdate {
     pub lights: [bool; 2],
     pub is_priming: bool,
     pub is_hold: bool,
+    /// Reminder/notification type from offset 6.
+    /// Common values: 0x00=None, 0x04=Clean Filter, etc.
+    pub notification_type: u8,
+    /// Panel lock status from offset 18 bit 0.
+    pub panel_locked: bool,
+    /// Settings lock status from offset 19 bit 0.
+    pub settings_lock: bool,
+    /// M8 cycle time (aux/timer) from offset 21.
+    pub m8_cycle_time: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,6 +148,18 @@ impl StatusUpdate {
             TempRange::Low
         };
 
+        // Offset 6: reminder/notification type
+        let notification_type = payload[6];
+
+        // Offset 18: panel lock (bit 0)
+        let panel_locked = payload[18] & 0x01 != 0;
+
+        // Offset 19: settings lock (bit 0)
+        let settings_lock = payload[19] & 0x01 != 0;
+
+        // Offset 21: M8 cycle time
+        let m8_cycle_time = payload[21];
+
         Ok(StatusUpdate {
             current_temp,
             set_temp,
@@ -164,6 +185,10 @@ impl StatusUpdate {
             ],
             is_priming: payload[1] == 0x01,
             is_hold: payload[0] == 0x05,
+            notification_type,
+            panel_locked,
+            settings_lock,
+            m8_cycle_time,
         })
     }
 }
@@ -275,5 +300,82 @@ mod tests {
         assert!(status.circ_pump);
         assert!(status.blower);
         assert!(status.mister);
+    }
+
+    #[test]
+    fn test_parse_status_new_fields_default() {
+        // Default payload (all zeros for new fields)
+        let mut payload = [0u8; 24];
+        payload[2] = 100;
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.notification_type, 0);
+        assert!(!status.panel_locked);
+        assert!(!status.settings_lock);
+        assert_eq!(status.m8_cycle_time, 0);
+    }
+
+    #[test]
+    fn test_parse_status_notification_type() {
+        let mut payload = [0u8; 24];
+        payload[2] = 100;
+        payload[6] = 0x04; // Clean filter reminder
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.notification_type, 0x04);
+    }
+
+    #[test]
+    fn test_parse_status_panel_locked() {
+        let mut payload = [0u8; 24];
+        payload[2] = 100;
+        payload[18] = 0x01; // panel locked (bit 0)
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert!(status.panel_locked);
+        assert!(!status.settings_lock); // should be separate
+    }
+
+    #[test]
+    fn test_parse_status_settings_lock() {
+        let mut payload = [0u8; 24];
+        payload[2] = 100;
+        payload[19] = 0x01; // settings lock (bit 0)
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert!(status.settings_lock);
+        assert!(!status.panel_locked); // should be separate
+    }
+
+    #[test]
+    fn test_parse_status_m8_cycle_time() {
+        let mut payload = [0u8; 24];
+        payload[2] = 100;
+        payload[21] = 30; // M8 cycle time = 30 minutes
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.m8_cycle_time, 30);
+    }
+
+    #[test]
+    fn test_parse_status_all_new_fields_together() {
+        let mut payload = [0u8; 24];
+        payload[2] = 100;
+        payload[6] = 0x04; // notification: clean filter
+        payload[18] = 0x01; // panel locked
+        payload[19] = 0x01; // settings lock
+        payload[21] = 45; // m8 cycle time
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.notification_type, 0x04);
+        assert!(status.panel_locked);
+        assert!(status.settings_lock);
+        assert_eq!(status.m8_cycle_time, 45);
     }
 }

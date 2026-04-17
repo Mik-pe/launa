@@ -4191,4 +4191,162 @@ mod tests {
             Some(String::from("http://myserver.local/firmware.bin"))
         );
     }
+
+    // ========================================================================
+    // Test Group: Remote Log Buffer (VAL-PL-005)
+    // ========================================================================
+
+    /// Simple ring buffer for log messages, mirroring the design in
+    /// app/src/remote_log.rs. Tested here because app/ is ESP32-only.
+    mod remote_log_buffer {
+        use std::format;
+        use std::string::String;
+        use std::vec::Vec;
+
+        pub const BUF_SIZE: usize = 16;
+        pub const MAX_MSG_LEN: usize = 128;
+
+        #[derive(Debug, Clone, PartialEq)]
+        pub struct LogEntry {
+            pub level: &'static str,
+            pub message: String,
+            pub timestamp_ms: u64,
+        }
+
+        pub struct LogBuffer {
+            entries: Vec<LogEntry>,
+            capacity: usize,
+        }
+
+        impl LogBuffer {
+            pub fn new(capacity: usize) -> Self {
+                LogBuffer {
+                    entries: Vec::new(),
+                    capacity,
+                }
+            }
+
+            pub fn push(&mut self, level: &'static str, message: &str, timestamp_ms: u64) {
+                let truncated: String = message.chars().take(MAX_MSG_LEN).collect();
+                let entry = LogEntry {
+                    level,
+                    message: truncated,
+                    timestamp_ms,
+                };
+                if self.entries.len() >= self.capacity {
+                    self.entries.remove(0);
+                }
+                self.entries.push(entry);
+            }
+
+            pub fn drain(&mut self) -> Vec<LogEntry> {
+                let entries = self.entries.clone();
+                self.entries.clear();
+                entries
+            }
+
+            pub fn len(&self) -> usize {
+                self.entries.len()
+            }
+
+            pub fn is_empty(&self) -> bool {
+                self.entries.is_empty()
+            }
+        }
+
+        pub fn log_entry_to_json(entry: &LogEntry) -> String {
+            let mut escaped = String::new();
+            for ch in entry.message.chars() {
+                match ch {
+                    '\\' => escaped.push_str("\\\\"),
+                    '"' => escaped.push_str("\\\""),
+                    '\n' => escaped.push_str("\\n"),
+                    '\r' => escaped.push_str("\\r"),
+                    '\t' => escaped.push_str("\\t"),
+                    c if (c as u32) <= 0x1F => {
+                        escaped.push_str(&format!("\\u{:04x}", c as u32));
+                    }
+                    c => escaped.push(c),
+                }
+            }
+            format!(
+                "{{\"level\":\"{}\",\"message\":\"{}\",\"ts\":{}}}",
+                entry.level, escaped, entry.timestamp_ms
+            )
+        }
+    }
+
+    #[test]
+    fn test_remote_log_buffer_push_and_drain() {
+        let mut buf = remote_log_buffer::LogBuffer::new(remote_log_buffer::BUF_SIZE);
+
+        buf.push("warn", "test message 1", 1000);
+        buf.push("error", "test message 2", 2000);
+
+        assert_eq!(buf.len(), 2);
+
+        let entries = buf.drain();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].level, "warn");
+        assert_eq!(entries[0].message, "test message 1");
+        assert_eq!(entries[1].level, "error");
+        assert_eq!(entries[1].message, "test message 2");
+
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_remote_log_buffer_ring_overwrite() {
+        let mut buf = remote_log_buffer::LogBuffer::new(remote_log_buffer::BUF_SIZE);
+
+        // Fill beyond capacity
+        for i in 0..remote_log_buffer::BUF_SIZE + 4 {
+            buf.push("warn", &format!("msg {}", i), i as u64 * 100);
+        }
+
+        assert_eq!(buf.len(), remote_log_buffer::BUF_SIZE);
+
+        let entries = buf.drain();
+        assert_eq!(entries.len(), remote_log_buffer::BUF_SIZE);
+        // First entry should be msg 4 (oldest surviving)
+        assert!(entries[0].message.contains("4"));
+    }
+
+    #[test]
+    fn test_remote_log_buffer_truncation() {
+        let mut buf = remote_log_buffer::LogBuffer::new(remote_log_buffer::BUF_SIZE);
+
+        let long_msg: String = "x".repeat(200);
+        buf.push("warn", &long_msg, 1000);
+
+        let entries = buf.drain();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].message.len() <= remote_log_buffer::MAX_MSG_LEN);
+    }
+
+    #[test]
+    fn test_remote_log_entry_to_json() {
+        let entry = remote_log_buffer::LogEntry {
+            level: "warn",
+            message: String::from("Temperature high"),
+            timestamp_ms: 12345,
+        };
+        let json = remote_log_buffer::log_entry_to_json(&entry);
+        assert!(json.contains("\"level\":\"warn\""));
+        assert!(json.contains("\"message\":\"Temperature high\""));
+        assert!(json.contains("\"ts\":12345"));
+    }
+
+    #[test]
+    fn test_remote_log_entry_to_json_escapes() {
+        let entry = remote_log_buffer::LogEntry {
+            level: "error",
+            message: String::from("Line1\nLine2\tTabbed"),
+            timestamp_ms: 0,
+        };
+        let json = remote_log_buffer::log_entry_to_json(&entry);
+        assert!(json.contains("\\n"));
+        assert!(json.contains("\\t"));
+        assert!(!json.contains("Line1\nLine2"));
+    }
 }

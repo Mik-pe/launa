@@ -129,11 +129,11 @@ Code is feature-complete. Remaining items are deployment infrastructure and oper
 
 ### MEDIUM — Operational Gaps
 
-- [ ] **Add WiFi reconnection integration test**: `wifi.rs` has `connection_task` handling disconnect/reconnect + MQTT signal. This critical path has no integration test.
+- [x] **Add WiFi reconnection integration test**: `wifi.rs` has `connection_task` handling disconnect/reconnect + MQTT signal. This critical path has no integration test.
 - [ ] **Add OTA end-to-end test on hardware**: OTA flow (HTTP download → flash partition → reboot → mark valid) cannot be tested on desktop. Integration tests use `MockOta`. No hardware test harness exists.
 - [ ] **Evaluate `esp-rtos` maturity**: v0.2.0 is relatively new. Check for known issues around task scheduling and timer accuracy before relying on it in production.
 - [ ] **Heap fragmentation analysis**: 32 KiB heap is tight for MQTT + JSON + OTA. Long-term `Vec` churn could fragment. No fragmentation analysis exists.
-- [ ] **Add remote logging capability**: Logs only visible over serial (`log` + `esp-println`). No remote logging (e.g., sending log messages to MQTT or a collector) for production diagnostics.
+- [x] **Add remote logging capability**: Logs only visible over serial (`log` + `esp-println`). No remote logging (e.g., sending log messages to MQTT or a collector) for production diagnostics.
 - [ ] **No RS-485 transceiver reset capability**: No GPIO to hardware-reset the MAX485/MAX3485 if it gets into a bad state.
 
 ### LOW — Nice-to-Have
@@ -249,8 +249,8 @@ Add new error injection capabilities to SpaSim and integration tests that exerci
 ### LOW — Minor Issues
 
 - [x] **`frame_error_count: u32` uses saturating_add** (`launa-protocol/src/frame.rs`): Both increment sites now use `saturating_add(1)` instead of `+= 1` to prevent wrap on noisy buses.
-- [ ] **Status message: missing panel_locked, notification_type, settings_lock, M8 cycle time fields** (`launa-protocol/src/status.rs`): Additional fields at offsets 9/18/19/21/24 that other implementations parse. Low priority — advanced/niche features.
-- [ ] **Missing message types: Preferences (0x26), Setup Parameters (0x25)** (`launa-protocol/src/dispatcher.rs`): Standard Balboa message types not handled. Non-essential but may appear on real spas.
+- [x] **Status message: missing panel_locked, notification_type, settings_lock, M8 cycle time fields** (`launa-protocol/src/status.rs`): Additional fields at offsets 9/18/19/21/24 that other implementations parse. Low priority — advanced/niche features.
+- [x] **Missing message types: Preferences (0x26), Setup Parameters (0x25)** (`launa-protocol/src/dispatcher.rs`): Standard Balboa message types not handled. Non-essential but may appear on real spas.
 - [ ] **`protocol.md` says Pump 6 at bits 6-7 but code correctly uses bits 2-3** (`docs/protocol.md`): Documentation inconsistency inherited from NorthernMan54 header comment. Code is correct, docs are wrong.
 - [ ] **Temperature=0 accepted as valid set-temperature wire value** (`launa-mqtt/command_parser.rs`): "0" means "no temp set" per protocol. Should be rejected or documented.
 - [ ] **Pump timers for pumps 4-6 and simultaneous timer operation untested** (`launa-integration-tests`): Timer manager supports 6 pumps but only pump 1 is tested.

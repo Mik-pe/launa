@@ -276,6 +276,10 @@ mod tests {
             lights: [false; 2],
             is_priming: false,
             is_hold: false,
+            notification_type: 0,
+            panel_locked: false,
+            settings_lock: false,
+            m8_cycle_time: 0,
         }
     }
 

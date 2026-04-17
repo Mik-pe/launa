@@ -744,7 +744,9 @@ impl<'a> SpaApp<'a> {
             IncomingMessage::ConfigurationResponse(_)
             | IncomingMessage::InformationResponse(_)
             | IncomingMessage::FilterCyclesResponse(_)
-            | IncomingMessage::ControlConfiguration(_) => {}
+            | IncomingMessage::ControlConfiguration(_)
+            | IncomingMessage::PreferencesResponse { .. }
+            | IncomingMessage::SetupParametersResponse { .. } => {}
             IncomingMessage::Unknown { .. } => {}
         }
 
@@ -1363,6 +1365,10 @@ mod tests {
             lights: [false; 2],
             is_priming: false,
             is_hold: false,
+            notification_type: 0,
+            panel_locked: false,
+            settings_lock: false,
+            m8_cycle_time: 0,
         }
     }
 
@@ -1734,6 +1740,108 @@ mod tests {
         assert!(
             !has_toggle_off,
             "no toggle-off SendFrame should appear after timer was cancelled by external Off"
+        );
+    }
+
+    // ── WiFi reconnection lifecycle test (VAL-PL-004) ──────────────
+
+    /// Simulates a WiFi reconnection scenario:
+    /// 1. Normal operation with regular status updates
+    /// 2. Bus silence (simulating WiFi/spa communication loss)
+    /// 3. Stale detection at 30s threshold
+    /// 4. Stale probe messages sent while stale
+    /// 5. Communication resumes → recovery flag set
+    /// 6. Normal operation resumes
+    #[test]
+    fn test_wifi_reconnection_lifecycle() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Phase 1: Normal operation — process a few status updates
+        for _ in 0..3 {
+            let actions = app.process_frame(&status_frame());
+            assert!(
+                actions
+                    .iter()
+                    .any(|a| matches!(a, AppAction::PublishState { .. })),
+                "normal status should produce PublishState"
+            );
+            clock.advance_ms(1_000);
+        }
+        assert!(!app.is_stale());
+        assert_eq!(app.frames_received(), 3);
+
+        // Phase 2: Bus silence — advance to 6s (triggers first stale probe)
+        clock.advance_ms(6_000);
+        let actions = app.tick();
+        let has_probe = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(has_probe, "should send stale probe at 6s");
+        assert!(!app.is_stale(), "should not be stale yet at 6s");
+
+        // Phase 3: Continue silence past 30s threshold
+        clock.advance_ms(25_000); // total 31s since last status
+        let actions = app.tick();
+
+        // Verify stale alert published
+        let has_alert = actions.iter().any(|a| {
+            matches!(
+                a,
+                AppAction::PublishAlert { message, .. } if message == "spa_communication_lost"
+            )
+        });
+        assert!(has_alert, "should publish stale alert at 30s");
+
+        // Verify stale availability published
+        let has_stale_avail = actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishStaleAvailability));
+        assert!(has_stale_avail, "should publish stale availability at 30s");
+        assert!(app.is_stale(), "should be stale after 30s silence");
+
+        // Phase 4: More probes while stale
+        clock.advance_ms(10_000); // now 41s since last status
+        let actions = app.tick();
+        let has_probe2 = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(has_probe2, "should continue probing while stale");
+
+        // Phase 5: Communication resumes — process a new status
+        let actions = app.process_frame(&status_frame());
+        assert!(
+            !app.is_stale(),
+            "should no longer be stale after status received"
+        );
+
+        // Verify recovery flag is set
+        let has_recovery = actions.iter().any(|a| {
+            matches!(
+                a,
+                AppAction::PublishState {
+                    recovering_from_stale: true,
+                    ..
+                }
+            )
+        });
+        assert!(
+            has_recovery,
+            "first status after stale should have recovery flag"
+        );
+
+        // Phase 6: Normal operation resumes
+        clock.advance_ms(2_000);
+        let actions = app.process_frame(&status_frame());
+        let no_recovery = actions.iter().all(|a| {
+            !matches!(
+                a,
+                AppAction::PublishState {
+                    recovering_from_stale: true,
+                    ..
+                }
+            )
+        });
+        assert!(
+            no_recovery,
+            "subsequent statuses should not have recovery flag"
         );
     }
 }

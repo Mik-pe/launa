@@ -97,7 +97,7 @@ pub fn status_to_json(
     let device_fields = [pump_fields.as_str(), light_fields.as_str()].join(",");
 
     format!(
-        "{{\"current_temp\":{},\"set_temp\":{},\"is_heating\":{},{},\"blower\":{},\"circ_pump\":{},\"mister\":{},\"hold_mode\":{},\"heating_mode\":\"{}\",\"temp_range\":\"{}\",\"temp_scale\":\"{}\",\"hour\":{},\"minute\":{},\"last_fault\":{},\"firmware_version\":{}}}",
+        "{{\"current_temp\":{},\"set_temp\":{},\"is_heating\":{},{},\"blower\":{},\"circ_pump\":{},\"mister\":{},\"hold_mode\":{},\"heating_mode\":\"{}\",\"temp_range\":\"{}\",\"temp_scale\":\"{}\",\"hour\":{},\"minute\":{},\"notification_type\":{},\"panel_locked\":{},\"settings_lock\":{},\"m8_cycle_time\":{},\"last_fault\":{},\"firmware_version\":{}}}",
         current_temp,
         status.set_temp,
         is_heating,
@@ -111,6 +111,10 @@ pub fn status_to_json(
         temp_scale,
         status.hour,
         status.minute,
+        status.notification_type,
+        status.panel_locked,
+        status.settings_lock,
+        status.m8_cycle_time,
         match last_fault {
             Some(f) => alloc::format!("\"{}\"", escape_json_string(f)),
             None => alloc::string::String::from("null"),
@@ -153,6 +157,10 @@ mod tests {
             lights: [true, false],
             is_priming: false,
             is_hold: false,
+            notification_type: 0,
+            panel_locked: false,
+            settings_lock: false,
+            m8_cycle_time: 0,
         }
     }
 
@@ -188,6 +196,26 @@ mod tests {
         assert_eq!(parsed["minute"], 30);
         assert!(parsed["last_fault"].is_null());
         assert!(parsed["firmware_version"].is_null());
+        // New fields
+        assert_eq!(parsed["notification_type"], 0);
+        assert_eq!(parsed["panel_locked"], false);
+        assert_eq!(parsed["settings_lock"], false);
+        assert_eq!(parsed["m8_cycle_time"], 0);
+    }
+
+    #[test]
+    fn test_status_to_json_new_fields_set() {
+        let mut status = sample_status();
+        status.notification_type = 4;
+        status.panel_locked = true;
+        status.settings_lock = true;
+        status.m8_cycle_time = 30;
+        let json_str = status_to_json(&status, None, None);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["notification_type"], 4);
+        assert_eq!(parsed["panel_locked"], true);
+        assert_eq!(parsed["settings_lock"], true);
+        assert_eq!(parsed["m8_cycle_time"], 30);
     }
 
     #[test]
