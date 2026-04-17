@@ -4,11 +4,21 @@ Testing surface, required testing skills/tools, and resource cost classification
 
 ## Validation Surface
 
-This mission modifies Rust library crates only. No user-facing UI, no web server, no CLI tool.
+This is a refactoring mission. No user-facing UI, no web server, no CLI tool.
 
 **Primary validation surface:** `cargo test --workspace` — automated test suite.
 
-**Tool:** `cargo test` — all assertions verified through unit and integration tests.
+**Additional validation commands:**
+- `cargo check --workspace` — compilation gate
+- `cd C:\dev\launa\app && cargo +esp check` — ESP32 cross-compilation gate
+- `cargo fmt --all -- --check` — formatting gate
+- `cargo doc --workspace` — documentation build gate
+
+**Manual review assertions:**
+- Directory structure verification (module splits)
+- Grep for decorative comments (cleanup verification)
+- Git diff review for behavioral changes
+- Documentation consistency check (entity counts = 27)
 
 No browser testing, no TUI testing, no manual interaction needed.
 
@@ -16,17 +26,7 @@ No browser testing, no TUI testing, no manual interaction needed.
 
 **Max concurrent validators:** 1
 
-All validation is via `cargo test` which is single-process. No concurrent execution benefit.
-
-## Test Structure
-
-- `crates/launa-protocol/src/*.rs` — unit tests per module (133+ tests)
-- `crates/launa-ota/src/lib.rs` — unit tests in mock module (14 tests)
-- `crates/launa-esp-ota/src/lib.rs` — unit tests (34 tests)
-- `crates/launa-sim/src/*.rs` — unit tests per module (90+ tests)
-- `crates/launa-core/src/lib.rs` — SpaApp unit tests (29+ tests)
-- `crates/launa-integration-tests/src/lib.rs` — integration tests (108+ tests)
-- `crates/launa-integration-tests/tests/sim_tests.rs` — sim-level integration tests (29+ tests)
+All validation is via cargo operations — single process, no concurrency benefit.
 
 ## ESP32 Verification Note
 
