@@ -1,0 +1,37 @@
+{
+  "milestone": "monolith-splits",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": { "passed": true, "command": "cargo test --workspace", "exitCode": 0 },
+    "typecheck": { "passed": true, "command": "cargo check --workspace", "exitCode": 0 },
+    "lint": { "passed": true, "command": "cargo fmt --check", "exitCode": 0 }
+  },
+  "reviewsSummary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Add convention note: when splitting a monolithic file into modules, internal items that need cross-module access within the crate should use `pub(crate)` visibility rather than `pub`. Only items that were previously in the public API should be re-exported via `pub use` from lib.rs.",
+      "evidence": "All three split features (split-launa-core, split-launa-esp-ota, split-launa-sim) followed this pattern correctly, but it could be codified as a convention for future splits.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "Update architecture.md to reflect new module structure in launa-sim and launa-esp-ota",
+      "reason": "already-documented — architecture.md already describes the module structures and internal organization of these crates"
+    },
+    {
+      "observation": "frame_gen/physics modules in launa-sim could use 'pub(crate) mod' instead of 'pub mod'",
+      "reason": "ambiguous — using 'pub mod' with 'pub(crate)' items is a valid and common Rust pattern. The external visibility of the module name is harmless since items within are not externally accessible. Not worth codifying a preference."
+    }
+  ],
+  "previousRound": null
+}

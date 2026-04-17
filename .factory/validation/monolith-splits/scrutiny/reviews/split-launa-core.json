@@ -1,0 +1,22 @@
+{
+  "featureId": "split-launa-core",
+  "reviewedAt": "2026-04-18T00:30:00.000Z",
+  "commitId": "706ed13",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean module split of launa-core from a monolithic lib.rs (2631 lines) into 8 focused modules plus a lean lib.rs (re-exports only). All 58 unit tests preserved inline. Public API is fully backward-compatible — downstream crates (launa-integration-tests, app/) import the same types with no changes needed. Workspace compiles, all 904 tests pass, formatting is clean.",
+    "issues": [
+      {
+        "file": "crates/launa-core/src/types.rs",
+        "line": 5,
+        "severity": "non_blocking",
+        "description": "Decorative banner comments (// ──) are present in types.rs (4 occurrences) and spa_app.rs (2 occurrences). The mission's cleanliness rules (in AGENTS.md rule 3) specify removing decorative banners. However, these are within the launa-core crate which is part of the current monolith-splits milestone, not the dedicated cleanliness milestone. The 'cleanup-comments-dead-code' feature (milestone: cleanliness) will handle these. Not blocking for this feature."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The split-launa-core feature successfully modularizes launa-core into 8 focused modules (rate_limiter.rs, command_tracker.rs, timers.rs, heap_monitor.rs, spa_app.rs, log_buffer.rs, actions.rs, types.rs) with full re-exports from lib.rs. All validation assertions are satisfied: (VAL-CORE-001) launa-core has 8+ module files with single responsibilities, (VAL-CORE-002) public API preserved with identical imports downstream, (VAL-COMP-001) workspace compiles without errors, (VAL-TEST-001) all 904 workspace tests pass (58 launa-core, 846 others), (VAL-XCUT-003) all public APIs backward compatible. The only downstream file changes in the commit are cargo fmt reformatting in launa-integration-tests and launa-mqtt (optimistic chain formatting), not import changes. Internal-only items (ExpectedChange, PendingCommand, types.rs constants) use pub(crate) visibility correctly. No duplication introduced. No behavioral changes. Decorative banners in types.rs and spa_app.rs are noted but will be cleaned up by the dedicated cleanliness milestone."
+}
