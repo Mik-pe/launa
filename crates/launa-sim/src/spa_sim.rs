@@ -353,6 +353,13 @@ pub struct SpaSim {
     sensor_noise_jitter: f32,
 
     // Physics model fields
+    /// Ambient temperature in °F used for cooling calculations.
+    /// Default: 70.0°F (backward compatible with original hardcoded value).
+    ambient_temp: f32,
+    /// Heat contribution per tick per running pump (in °F). Even when is_heating=false,
+    /// running pumps slowly raise water temp via waste heat.
+    /// Default: 0.0 (backward compatible — no pump heat contribution).
+    pump_heat_contribution: f32,
     /// Number of ticks after creation that report 0xFF for current_temp.
     /// Default: 0 (backward compatible — no unknown temp period).
     physics_unknown_temp_ticks: u64,
@@ -424,6 +431,8 @@ impl SpaSim {
             report_unknown_temp: false,
             sensor_noise_jitter: 0.0,
 
+            ambient_temp: 70.0,
+            pump_heat_contribution: 0.0,
             physics_unknown_temp_ticks: 0,
             physics_tick_count: 0,
             physics_overshoot: 0.0,
@@ -589,6 +598,30 @@ impl SpaSim {
     /// Default: 0.0 (no noise — backward compatible).
     pub fn set_physics_noise_amplitude(&mut self, amplitude: f32) {
         self.physics_noise_amplitude = amplitude.max(0.0);
+    }
+
+    /// Set the ambient temperature in °F used for cooling calculations.
+    ///
+    /// Cooling rate is proportional to `(current_temp - ambient_temp)`.
+    /// Higher ambient temperatures produce slower cooling.
+    /// Default: 70.0°F (backward compatible with original hardcoded value).
+    pub fn set_ambient_temp(&mut self, temp: f32) {
+        self.ambient_temp = temp;
+    }
+
+    /// Get the current ambient temperature in °F.
+    pub fn ambient_temp(&self) -> f32 {
+        self.ambient_temp
+    }
+
+    /// Set the pump waste heat contribution per tick per running pump (in °F).
+    ///
+    /// When set > 0.0, each running pump (non-Off) contributes this amount of waste
+    /// heat per physics tick, slowly raising the water temperature even without
+    /// active heating. The contribution is additive: 3 running pumps × 0.02 = 0.06°F/tick.
+    /// Default: 0.0 (no pump heat — backward compatible).
+    pub fn set_pump_heat_contribution(&mut self, contribution: f32) {
+        self.pump_heat_contribution = contribution.max(0.0);
     }
 
     /// Generate a deterministic pseudo-random f32 in [-1.0, 1.0] using the physics noise PRNG.
@@ -1021,16 +1054,21 @@ impl SpaSim {
     /// - **Heating**: Rate proportional to `(set_temp + overshoot - current_temp) / delta_range`.
     ///   Base rate ~0.5°F/tick at full delta, tapering as temp approaches target.
     ///   Heating only active when at least one pump or circ_pump is running.
-    /// - **Cooling**: Rate proportional to `(current_temp - ambient) / cooling_range`.
+    /// - **Cooling**: Rate proportional to `(current_temp - ambient_temp) / cooling_range`.
     ///   Base rate ~0.1°F/tick when well above ambient, tapering near ambient.
+    /// - **Pump heat**: Running pumps contribute waste heat (configurable via
+    ///   `set_pump_heat_contribution()`). Each running pump adds the configured amount
+    ///   per tick. Default: 0.0 (off).
     /// - **Overshoot**: If `physics_overshoot > 0`, heating continues past `set_temp`
     ///   by the overshoot amount before stopping. Re-heats at `set_temp - overshoot/2`.
+    /// - **Interlock**: `is_heating` is forced false whenever all pumps and circ_pump
+    ///   are off. Heating resumes automatically when a pump restarts (if temp < set_point).
     ///
-    /// Assumptions: ambient temperature = 70°F.
+    /// Assumptions: ambient temperature defaults to 70°F (configurable via `set_ambient_temp()`).
     fn simulate_physics(&mut self) {
         self.physics_tick_count += 1;
 
-        let ambient_temp: f32 = 70.0;
+        let ambient_temp = self.ambient_temp;
         let set_temp = self.state.set_temp;
         let overshoot = self.physics_overshoot;
         let overshoot_target = set_temp + overshoot;
@@ -1039,6 +1077,15 @@ impl SpaSim {
         // Check if any pump or circ_pump is running
         let any_pump_on =
             self.state.pumps.iter().any(|&p| p != PumpState::Off) || self.state.circ_pump;
+
+        // Count running pumps for heat contribution
+        let running_pump_count = self
+            .state
+            .pumps
+            .iter()
+            .filter(|&&p| p != PumpState::Off)
+            .count()
+            + if self.state.circ_pump { 1 } else { 0 };
 
         // Enforce interlock: no heating without pump
         if !any_pump_on {
@@ -1081,6 +1128,15 @@ impl SpaSim {
                 let new_temp = self.state.current_temp - rate;
                 self.state.current_temp = new_temp.max(effective_min);
             }
+        }
+
+        // Pump waste heat contribution (applies even when not actively heating)
+        if running_pump_count > 0 && self.pump_heat_contribution > 0.0 {
+            let heat_gain = self.pump_heat_contribution * running_pump_count as f32;
+            // Don't exceed a reasonable upper bound (set_temp + overshoot if heating,
+            // or current_temp if above set_temp already)
+            let upper_bound = overshoot_target.max(self.state.current_temp + heat_gain);
+            self.state.current_temp = (self.state.current_temp + heat_gain).min(upper_bound);
         }
 
         // Heating control logic: decide whether to start heating
@@ -4228,5 +4284,262 @@ mod tests {
         let bytes = sim.tick();
         let frames = decoder.feed_slice(&bytes);
         assert_eq!(frames[0].payload[1], 0x00, "tick 3: fault cleared");
+    }
+
+    // =========================================================================
+    // Temperature physics tests (sim-temperature-physics feature)
+    // =========================================================================
+
+    // VAL-SIM-010: Ambient temperature is configurable via set_ambient_temp()
+    #[test]
+    fn test_set_ambient_temp_method_exists() {
+        let mut sim = SpaSim::new();
+        // Method should exist and be callable
+        sim.set_ambient_temp(85.0);
+    }
+
+    // VAL-SIM-010: Higher ambient temp causes slower cooling
+    #[test]
+    fn test_higher_ambient_slower_cooling() {
+        // Compare cooling rate with ambient=70°F (default) vs ambient=85°F
+        let mut sim70 = SpaSim::new();
+        sim70.state.current_temp = 104.0;
+        sim70.state.set_temp = 80.0;
+        sim70.state.is_heating = false;
+        // Default ambient is 70°F
+
+        let mut sim85 = SpaSim::new();
+        sim85.state.current_temp = 104.0;
+        sim85.state.set_temp = 80.0;
+        sim85.state.is_heating = false;
+        sim85.set_ambient_temp(85.0);
+
+        // Run 10 physics ticks on each
+        for _ in 0..10 {
+            sim70.simulate_physics();
+            sim85.simulate_physics();
+        }
+
+        // Higher ambient → slower cooling → higher temp after same ticks
+        assert!(
+            sim85.state.current_temp > sim70.state.current_temp,
+            "ambient=85 should cool slower than ambient=70: got {} vs {}",
+            sim85.state.current_temp,
+            sim70.state.current_temp
+        );
+    }
+
+    // VAL-SIM-010: set_ambient_temp(70.0) matches default behavior
+    #[test]
+    fn test_set_ambient_temp_70_matches_default() {
+        let mut sim_default = SpaSim::new();
+        sim_default.state.current_temp = 104.0;
+        sim_default.state.set_temp = 80.0;
+        sim_default.state.is_heating = false;
+
+        let mut sim_explicit = SpaSim::new();
+        sim_explicit.state.current_temp = 104.0;
+        sim_explicit.state.set_temp = 80.0;
+        sim_explicit.state.is_heating = false;
+        sim_explicit.set_ambient_temp(70.0);
+
+        for _ in 0..20 {
+            sim_default.simulate_physics();
+            sim_explicit.simulate_physics();
+        }
+
+        assert_eq!(
+            sim_default.state.current_temp, sim_explicit.state.current_temp,
+            "ambient=70 should match default behavior exactly"
+        );
+    }
+
+    // VAL-SIM-010: Default ambient is 70°F (backward compatible)
+    #[test]
+    fn test_default_ambient_is_70() {
+        let sim = SpaSim::new();
+        // Default ambient should be 70.0 — verified by cooling behavior matching
+        // the original hardcoded 70.0 value
+        assert_eq!(sim.ambient_temp(), 70.0, "default ambient should be 70°F");
+    }
+
+    // VAL-SIM-011: Pump heat contribution raises water temp when pumps running
+    #[test]
+    fn test_pump_heat_contribution_raises_temp() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 95.0;
+        sim.state.set_temp = 100.0;
+        sim.state.is_heating = false;
+        sim.state.pumps[0] = PumpState::High;
+        // Enable pump heat contribution
+        sim.set_pump_heat_contribution(0.02); // 0.02°F per tick per running pump
+
+        let temp_before = sim.state.current_temp;
+        sim.simulate_physics();
+
+        // Temperature should increase slightly from pump waste heat
+        assert!(
+            sim.state.current_temp > temp_before,
+            "pump heat should raise temp: before={}, after={}",
+            temp_before,
+            sim.state.current_temp
+        );
+    }
+
+    // VAL-SIM-011: Pump heat default is off (no contribution)
+    #[test]
+    fn test_pump_heat_contribution_default_off() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 95.0;
+        sim.state.set_temp = 100.0;
+        sim.state.is_heating = false;
+        sim.state.pumps[0] = PumpState::High;
+        // Don't call set_pump_heat_contribution — should default to 0
+
+        let temp_before = sim.state.current_temp;
+
+        // With default (no pump heat), temp should not increase from pumps alone
+        // (only cooling towards ambient should occur)
+        sim.simulate_physics();
+
+        assert!(
+            sim.state.current_temp <= temp_before,
+            "default pump heat=0: temp should not increase from pumps alone, before={}, after={}",
+            temp_before,
+            sim.state.current_temp
+        );
+    }
+
+    // VAL-SIM-011: Pump heat with multiple pumps raises faster
+    #[test]
+    fn test_pump_heat_multiple_pumps_higher_contribution() {
+        let mut sim1 = SpaSim::new();
+        sim1.state.current_temp = 95.0;
+        sim1.state.set_temp = 100.0;
+        sim1.state.is_heating = false;
+        sim1.state.pumps[0] = PumpState::Low;
+        sim1.set_pump_heat_contribution(0.02);
+
+        let mut sim2 = SpaSim::new();
+        sim2.state.current_temp = 95.0;
+        sim2.state.set_temp = 100.0;
+        sim2.state.is_heating = false;
+        sim2.state.pumps[0] = PumpState::Low;
+        sim2.state.pumps[1] = PumpState::Low;
+        sim2.state.pumps[2] = PumpState::Low;
+        sim2.set_pump_heat_contribution(0.02);
+
+        for _ in 0..10 {
+            sim1.simulate_physics();
+            sim2.simulate_physics();
+        }
+
+        // More pumps running → more waste heat → higher temp
+        assert!(
+            sim2.state.current_temp > sim1.state.current_temp,
+            "3 pumps should produce more heat than 1: {} vs {}",
+            sim2.state.current_temp,
+            sim1.state.current_temp
+        );
+    }
+
+    // VAL-SIM-024: Heater interlock stops heating when all pumps turned off
+    #[test]
+    fn test_heater_interlock_stops_when_all_pumps_off() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 90.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = true;
+        sim.state.pumps[0] = PumpState::Low;
+
+        // Verify heating is active
+        sim.simulate_physics();
+        assert!(sim.state.is_heating, "should be heating with pump on");
+
+        // Turn off all pumps
+        sim.state.pumps[0] = PumpState::Off;
+        sim.simulate_physics();
+
+        // Heating should stop immediately
+        assert!(
+            !sim.state.is_heating,
+            "is_heating must be false when all pumps are off"
+        );
+    }
+
+    // VAL-SIM-024: Heating resumes when pump restarts and temp < set_point
+    #[test]
+    fn test_heater_interlock_resumes_on_pump_restart() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 90.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = false; // not heating initially
+
+        // All pumps off
+        sim.state.pumps = [PumpState::Off; 6];
+        sim.state.circ_pump = false;
+
+        sim.simulate_physics();
+        assert!(
+            !sim.state.is_heating,
+            "should not heat with no pumps running"
+        );
+
+        // Start a pump — should resume heating since temp < set_point
+        sim.state.pumps[0] = PumpState::Low;
+        sim.simulate_physics();
+        assert!(
+            sim.state.is_heating,
+            "is_heating should resume when pump starts and temp < set_point"
+        );
+    }
+
+    // VAL-SIM-024: Circ pump alone satisfies interlock
+    #[test]
+    fn test_heater_interlock_circ_pump_satisfies() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 90.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = false;
+        sim.state.pumps = [PumpState::Off; 6];
+        sim.state.circ_pump = true;
+
+        sim.simulate_physics();
+        assert!(
+            sim.state.is_heating,
+            "circ_pump alone should satisfy heater interlock"
+        );
+    }
+
+    // VAL-SIM-024: Full cycle — heat → pump off → heat stops → pump on → heat resumes
+    #[test]
+    fn test_heater_interlock_full_cycle() {
+        let mut sim = SpaSim::new();
+        sim.state.current_temp = 90.0;
+        sim.state.set_temp = 104.0;
+        sim.state.is_heating = true;
+        sim.state.pumps[0] = PumpState::Low;
+
+        // Phase 1: heating with pump
+        sim.simulate_physics();
+        assert!(sim.state.is_heating, "phase 1: heating with pump");
+        let temp_phase1 = sim.state.current_temp;
+        assert!(temp_phase1 > 90.0, "should be warming up");
+
+        // Phase 2: turn pump off — heating stops immediately
+        sim.state.pumps[0] = PumpState::Off;
+        sim.simulate_physics();
+        assert!(!sim.state.is_heating, "phase 2: heating stopped");
+
+        // Phase 3: temp should start cooling (or at least not heating)
+        let _temp_after_stop = sim.state.current_temp;
+
+        // Phase 4: restart pump — heating resumes
+        sim.state.pumps[0] = PumpState::Low;
+        sim.simulate_physics();
+        assert!(
+            sim.state.is_heating,
+            "phase 4: heating should resume with pump restart"
+        );
     }
 }
