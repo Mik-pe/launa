@@ -2618,8 +2618,8 @@ mod tests {
 
     /// Multi-command queue drain: queue 5 commands, send 5 Ready frames,
     /// verify all 5 sent via AppAction::SendFrame. The command_queue uses
-    /// Vec::pop() which drains in LIFO (stack) order — last queued is sent
-    /// first. This test verifies the drain order matches the implementation.
+    /// VecDeque with pop_front() which drains in FIFO order — first queued
+    /// is sent first. This test verifies the drain order matches FIFO.
     #[test]
     fn test_multi_command_fifo_drain() {
         let (_clock, app) = make_spaapp();
@@ -2643,11 +2643,10 @@ mod tests {
         }
         assert_eq!(app.queued_command_count(), 5);
 
-        // Encode the commands in reverse order for comparison.
-        // Vec::pop() drains LIFO: last queued (Light1) is sent first.
+        // Encode the commands in queue order for comparison.
+        // VecDeque::pop_front() drains FIFO: first queued (Pump1) is sent first.
         let expected_frames: Vec<Vec<u8>> = commands
             .iter()
-            .rev()
             .map(|cmd| {
                 let (mt, payload) = cmd.encode();
                 FrameEncoder::encode(mt, &payload).unwrap()
@@ -2668,13 +2667,13 @@ mod tests {
             actual_frames.push(frame_data);
         }
 
-        // Verify drain order: all 5 sent, matching the Vec::pop() order
+        // Verify drain order: all 5 sent, matching FIFO order
         assert_eq!(actual_frames.len(), 5, "should have sent exactly 5 frames");
         for (i, (actual, expected)) in actual_frames.iter().zip(expected_frames.iter()).enumerate()
         {
             assert_eq!(
                 actual, expected,
-                "command {} should match drain order (LIFO)",
+                "command {} should match drain order (FIFO)",
                 i
             );
         }

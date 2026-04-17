@@ -28,6 +28,7 @@
 
 extern crate alloc;
 
+use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -456,6 +457,13 @@ impl PumpTimerManager {
         }
         Some(self.timers[i].start_with_minutes(minutes, now))
     }
+
+    /// Cancel all running pump timers (e.g., on bus reset).
+    pub fn cancel_all(&mut self) {
+        for timer in &mut self.timers {
+            timer.cancel();
+        }
+    }
 }
 
 // ── HoldModeTimer (clock-based) ────────────────────────────────────────
@@ -570,7 +578,7 @@ pub struct SpaApp<'a> {
     // Command tracking
     cmd_tracker: CommandTracker,
     /// Queue of commands waiting for the next Ready window.
-    command_queue: Vec<Command>,
+    command_queue: VecDeque<Command>,
 
     // Timers
     pump_timers: PumpTimerManager,
@@ -599,7 +607,7 @@ impl<'a> SpaApp<'a> {
             registration: RegistrationStateMachine::new(),
             registration_started_at: None,
             cmd_tracker: CommandTracker::new(),
-            command_queue: Vec::new(),
+            command_queue: VecDeque::new(),
             pump_timers: PumpTimerManager::new(),
             hold_timer: HoldModeTimer::new(),
             heap_monitor: HeapMonitor::new(),
@@ -762,7 +770,7 @@ impl<'a> SpaApp<'a> {
             }
             IncomingMessage::Ready => {
                 // Dequeue one command or send NothingToSend
-                if let Some(cmd) = self.command_queue.pop() {
+                if let Some(cmd) = self.command_queue.pop_front() {
                     let encoded = encode_command(&cmd);
                     actions.push(AppAction::SendFrame(encoded));
                     if let Some(ref pre_status) = self.last_status {
@@ -779,6 +787,7 @@ impl<'a> SpaApp<'a> {
                 self.client_id = None;
                 self.command_queue.clear();
                 self.cmd_tracker.reset();
+                self.pump_timers.cancel_all();
             }
             IncomingMessage::ClientIdAssignment { id } => {
                 self.client_id = Some(id);
@@ -813,7 +822,7 @@ impl<'a> SpaApp<'a> {
             return Vec::new();
         }
         // Queue command for next Ready window
-        self.command_queue.push(cmd);
+        self.command_queue.push_back(cmd);
         Vec::new()
     }
 
