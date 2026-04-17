@@ -1,0 +1,34 @@
+{
+  "featureId": "deduplicate-test-harness",
+  "reviewedAt": "2026-04-18T00:30:00Z",
+  "commitId": "c55af9f",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The shared TestHarness in launa-integration-tests/src/harness.rs correctly consolidates the 6 near-identical harness structs into a single reusable struct. All required methods (new, tick_spa, tick_app, advance_ms, send_command, complete_registration, process_outgoing, execute_actions_on_broker) are present and well-implemented. Additional convenience methods (execute_actions_on_broker_simple, collect_actions, full_tick, tick_spa_with_outgoing, frame_error_count, count_action_type, has_toggle_for) provide useful abstractions. All 6 test files successfully import and use the shared harness. Domain-specific wrappers (TempPhysicsHarness with Deref/DerefMut, send_command_and_get_response free function in config_validation_tests.rs) are appropriate and minimal.",
+    "issues": [
+      {
+        "file": "crates/launa-integration-tests/src/harness.rs",
+        "line": 38,
+        "severity": "non_blocking",
+        "description": "VirtualClock is leaked via Box::leak in new() for the 'static lifetime. This is intentional for test code (avoids lifetime annotations) and consistent with the pre-existing pattern in the replaced harness structs, so this is acceptable but worth noting."
+      },
+      {
+        "file": "crates/launa-integration-tests/tests/harness_tests.rs",
+        "line": 192,
+        "severity": "non_blocking",
+        "description": "test_rapid_reregistration_multiple_queries directly accesses harness.decoder (pub field) and reassigns it (harness.decoder = FrameDecoder::new()). This works because the field is pub, but is somewhat fragile. Not a bug, just a style note."
+      },
+      {
+        "file": "crates/launa-integration-tests/tests/temperature_physics_tests.rs",
+        "line": 28,
+        "severity": "non_blocking",
+        "description": "TempPhysicsHarness uses Deref/DerefMut to forward to inner TestHarness. This is a known Rust anti-pattern (per the Rust API guidelines) but is pragmatic here for test code. The domain-specific helpers (full_tick, collect_publish_states, extract_current_temp, extract_is_heating) are clean and appropriate for temperature physics testing."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS — The shared TestHarness extraction is well-executed. All 6 test files now import from a single harness.rs, eliminating ~588 net lines of duplication (-947 deleted, +359 added). The harness provides all required methods plus useful convenience methods. All 196 integration tests pass. Domain-specific wrappers in temperature_physics_tests.rs (Deref pattern) and config_validation_tests.rs (free function) are minimal and appropriate. The implementation fully satisfies the feature description and all 4 validation assertions (VAL-HARNESS-001 through VAL-HARNESS-003, VAL-TEST-004). No blocking issues found."
+}

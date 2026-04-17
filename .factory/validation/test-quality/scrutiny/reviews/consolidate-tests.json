@@ -1,0 +1,39 @@
+{
+  "featureId": "consolidate-tests",
+  "reviewedAt": "2026-04-18T01:30:00.000Z",
+  "commitId": "c3d9173",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Thorough test consolidation across 7 files in 5 crates, reducing test count from ~904 to 838 (net -66 tests) while maintaining behavioral coverage. The worker correctly followed the skill procedure: identified low-value/duplicate tests, wrote consolidated parameterized versions first, then removed originals. All removed scenarios have equivalent coverage either in the same file (parameterized consolidation) or in dedicated unit test crates (launa-ota, launa-mqtt, launa-core).",
+    "issues": [
+      {
+        "file": "crates/launa-integration-tests/src/lib.rs",
+        "line": 1143,
+        "severity": "non_blocking",
+        "description": "Comment references 'simulate_ota_download' function which was removed. The comment says 'SimHttpServer and simulate_ota_download are used by SpaApp OTA pipeline tests later in this file' but simulate_ota_download no longer exists. This is a stale comment — the function was correctly removed as dead code, but the comment should have been updated to only mention SimHttpServer."
+      },
+      {
+        "file": "crates/launa-mqtt/src/remote_log.rs",
+        "line": 57,
+        "severity": "non_blocking",
+        "description": "The consolidated test_log_entry_to_json_levels_and_timestamps uses a for loop over 3 (level, timestamp) tuples but does not print the failing case on assertion failure. The assert! messages in test_log_entry_to_json_escapes_each_special_char include good diagnostic messages with format!, but the levels_and_timestamps test does not. Minor — test failure would still be identifiable from line numbers."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The worker used parameterized test patterns (for loops with assertion arrays) consistently across remote_log.rs, discovery.rs, and http.rs consolidation. This is a good pattern for reducing test count while maintaining coverage, but it's not documented as a project convention in AGENTS.md or the mission AGENTS.md. If future workers need to consolidate tests, they would benefit from this pattern being documented.",
+      "evidence": "remote_log.rs:78-119 (escapes_each_special_char), discovery.rs:1011-1058 (json_device_block_escapes_all_fields with cases array), http.rs:163-250 (multiple tests with inline assertions for different sub-cases)"
+    },
+    {
+      "area": "skills",
+      "observation": "The rust-refactor-worker skill was followed correctly. The worker read all relevant files before making changes, verified with cargo test/check/fmt at each step, and maintained behavioral coverage per the skill's test consolidation procedure. No skill gaps detected.",
+      "evidence": "Handoff shows skillFeedback.followedProcedure=true, deviations=[], and verification shows cargo test/check/fmt all passing."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The consolidate-tests feature successfully reduced the test suite from ~904 to 838 tests (-66) across 5 crates with -1448 net lines removed. All 6 sub-tasks were completed: (1) 9 MockOta tests removed from launa-ota, keeping 2 fixture verification tests. (2) 9 escape tests removed from remote_log.rs (17→7 consolidated), 14 removed from discovery.rs (12→3 consolidated). escape.rs's 10 tests were correctly left untouched since they test the escape_json_string function directly. (3) HTTP parsing tests consolidated from ~16 individual tests to 15 parameterized tests across 6 functions. (4) 2 trait-check tests removed from launa-hal. (5) 36+ duplicate tests removed from launa-integration-tests/src/lib.rs (OTA mock, discovery, parse_ota_url, remote_log buffer tests all confirmed covered by dedicated crate tests). (6) Dead code suppressions and unused helper methods removed from temperature_physics_tests.rs and lib.rs. All tests pass, no warnings, no #[allow(dead_code)] remaining in test code. One minor stale comment in lib.rs (non-blocking)."
+}
