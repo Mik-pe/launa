@@ -477,7 +477,10 @@ mod tests {
 
             let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
             // Optimistic switches don't have state_topic — skip state_topic checks for them
-            let is_optimistic = parsed.get("optimistic").and_then(|v| v.as_bool()).unwrap_or(false);
+            let is_optimistic = parsed
+                .get("optimistic")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             if !is_optimistic {
                 assert!(
                     parsed["state_topic"].is_string(),
@@ -1162,7 +1165,10 @@ mod tests {
                 topic
             );
             // Optimistic switches don't have state_topic
-            let is_optimistic = v.get("optimistic").and_then(|v| v.as_bool()).unwrap_or(false);
+            let is_optimistic = v
+                .get("optimistic")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             if !is_optimistic {
                 assert!(
                     v.get("state_topic").is_some(),
