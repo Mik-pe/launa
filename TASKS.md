@@ -139,7 +139,7 @@ Code is feature-complete. Remaining items are deployment infrastructure and oper
 ### LOW — Nice-to-Have
 
 - [x] **Add firmware binary signing for OTA**: OTA accepts any HTTP-served binary with correct ESP32 image header magic (`0xE9`). CRC is optional (only if `?crc=` in URL). An attacker on the LAN could serve malicious firmware.
-- [ ] **Add unit tests for `app/` modules**: `mqtt_client.rs` (800+ lines), `ota.rs` (400+ lines), `wifi.rs` have no unit tests — only tested through `launa-core` integration pipeline.
+- [x] **Add unit tests for `app/` modules**: `mqtt_client.rs` (800+ lines), `ota.rs` (400+ lines), `wifi.rs` have no unit tests — only tested through `launa-core` integration pipeline. Desktop-testable logic (parse_ota_url, command_parser, topic construction, status JSON, packet extraction) now has 30+ additional tests in `launa-mqtt`.
 - [x] **Add `xtask` dependency pin check to CI**: `xtask` depends on `serialport`, `keyring`, `rand`, `toml` but CI does not verify xtask builds.
 
 ## Completed Work
@@ -251,6 +251,6 @@ Add new error injection capabilities to SpaSim and integration tests that exerci
 - [x] **`frame_error_count: u32` uses saturating_add** (`launa-protocol/src/frame.rs`): Both increment sites now use `saturating_add(1)` instead of `+= 1` to prevent wrap on noisy buses.
 - [x] **Status message: missing panel_locked, notification_type, settings_lock, M8 cycle time fields** (`launa-protocol/src/status.rs`): Additional fields at offsets 9/18/19/21/24 that other implementations parse. Low priority — advanced/niche features.
 - [x] **Missing message types: Preferences (0x26), Setup Parameters (0x25)** (`launa-protocol/src/dispatcher.rs`): Standard Balboa message types not handled. Non-essential but may appear on real spas.
-- [ ] **`protocol.md` says Pump 6 at bits 6-7 but code correctly uses bits 2-3** (`docs/protocol.md`): Documentation inconsistency inherited from NorthernMan54 header comment. Code is correct, docs are wrong.
-- [ ] **Temperature=0 accepted as valid set-temperature wire value** (`launa-mqtt/command_parser.rs`): "0" means "no temp set" per protocol. Should be rejected or documented.
-- [ ] **Pump timers for pumps 4-6 and simultaneous timer operation untested** (`launa-integration-tests`): Timer manager supports 6 pumps but only pump 1 is tested.
+- [x] **`protocol.md` says Pump 6 at bits 6-7 but code correctly uses bits 2-3** (`docs/protocol.md`): Documentation inconsistency inherited from NorthernMan54 header comment. Code is correct, docs are wrong. Fixed: added explicit P1/P2 byte bit layout tables and corrected Configuration Response byte 6.
+- [x] **Temperature=0 accepted as valid set-temperature wire value** (`launa-mqtt/command_parser.rs`): "0" means "no temp set" per protocol. Now rejected with `TemperatureOutOfRange` error.
+- [x] **Pump timers for pumps 4-6 and simultaneous timer operation untested** (`launa-integration-tests`): Timer manager supports 6 pumps but only pump 1 is tested. Added 13 tests: individual pump 4/5/6 timers, expiry, cancel, restart, and 3-pump simultaneous operation.

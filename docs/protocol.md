@@ -75,7 +75,7 @@ Field: ST IM CT HH MM HM RT SA SB F9 FA P1 P2 CB LF MR -- -- -- -- ST -- -- --
 | 9 | F9 | Flags: bit 0=Temperature Scale (0=F, 1=C), bit 1=24h time, bits 2-3=Filter Mode |
 | 10 | FA | Flags: bit 2=Temp Range (0=Low, 1=High), bit 3=Needs Heat, bits 4-5=Heating State |
 | 11 | P1 | Pump status (pumps 1-4): bits 0-1=Pump1, bits 2-3=Pump2, bits 4-5=Pump3, bits 6-7=Pump4 |
-| 12 | P2 | Pump status (pumps 5-6): bits 0-1=Pump5, bits 2-3=Pump6 |
+| 12 | P2 | Pump status (pumps 5-6): bits 0-1=Pump5, bits 2-3=Pump6 (see P2 bit table below) |
 | 13 | CB | Circ pump (bit 1), Blower (bits 2-3) |
 | 14 | LF | Light: bits 0-1=Light 1, bits 2-3=Light 2 |
 | 15 | MR | Mister: 0=OFF, 1=ON |
@@ -84,6 +84,22 @@ Field: ST IM CT HH MM HM RT SA SB F9 FA P1 P2 CB LF MR -- -- -- -- ST -- -- --
 #### Pump Status Decoding
 
 Each pump occupies 2 bits. Valid values: 0=off, 1=low, 2=high.
+
+##### P1 Byte (offset 11) — Pumps 1-4
+
+```text
+Bit  7  6 | 5  4 | 3  2 | 1  0
+     Pump4  Pump3  Pump2  Pump1
+```
+
+##### P2 Byte (offset 12) — Pumps 5-6
+
+```text
+Bit  7  6 | 5  4 | 3  2 | 1  0
+     (unused)(unused) Pump6  Pump5
+```
+
+Extraction formula:
 
 ```text
 Pump 1 = (P1 >> 0) & 0x03
@@ -112,7 +128,7 @@ Configuration byte mapping (from `0A BF 2E`):
 | 5 | 4-5 | Pump 3 |
 | 5 | 6-7 | Pump 4 |
 | 6 | 0-1 | Pump 5 |
-| 6 | 6-7 | Pump 6 |
+| 6 | 2-3 | Pump 6 |
 | 7 | 0-1 | Light 1 |
 | 7 | 2-3 | Light 2 |
 | 8 | 0-1 | Blower |

@@ -368,4 +368,73 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["last_fault"], "before\u{0000}after");
     }
+
+    // ── Additional MQTT message format tests ────────────────────────
+
+    #[test]
+    fn test_status_to_json_all_pumps_on() {
+        let mut status = sample_status();
+        status.pumps = [
+            PumpState::Low,
+            PumpState::Low,
+            PumpState::High,
+            PumpState::High,
+            PumpState::Low,
+            PumpState::High,
+        ];
+        let json_str = status_to_json(&status, None, None);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["pump1_on"], true);
+        assert_eq!(parsed["pump2_on"], true);
+        assert_eq!(parsed["pump3_on"], true);
+        assert_eq!(parsed["pump4_on"], true);
+        assert_eq!(parsed["pump5_on"], true);
+        assert_eq!(parsed["pump6_on"], true);
+    }
+
+    #[test]
+    fn test_status_to_json_pump5_pump6_on() {
+        let mut status = sample_status();
+        status.pumps[0] = PumpState::Off; // Turn off pump1 (was Low in sample)
+        status.pumps[4] = PumpState::High;
+        status.pumps[5] = PumpState::Low;
+        let json_str = status_to_json(&status, None, None);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["pump5_on"], true);
+        assert_eq!(parsed["pump6_on"], true);
+        // First 4 pumps should be off
+        assert_eq!(parsed["pump1_on"], false);
+        assert_eq!(parsed["pump2_on"], false);
+        assert_eq!(parsed["pump3_on"], false);
+        assert_eq!(parsed["pump4_on"], false);
+    }
+
+    #[test]
+    fn test_status_to_json_hold_mode_active() {
+        let mut status = sample_status();
+        status.is_hold = true;
+        let json_str = status_to_json(&status, None, None);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["hold_mode"], true);
+    }
+
+    #[test]
+    fn test_status_to_json_all_pumps_off_with_heating() {
+        let mut status = sample_status();
+        status.pumps = [PumpState::Off; 6];
+        status.is_heating = true; // Heating flag can still be set
+        let json_str = status_to_json(&status, None, None);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["pump1_on"], false);
+        assert_eq!(parsed["is_heating"], true);
+    }
+
+    #[test]
+    fn test_status_to_json_mister_on() {
+        let mut status = sample_status();
+        status.mister = true;
+        let json_str = status_to_json(&status, None, None);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["mister"], true);
+    }
 }

@@ -995,4 +995,383 @@ mod tests {
             "config should be None — only control_config was received"
         );
     }
+
+    // ── Pump timer tests for pumps 4-6 and simultaneous operation (VAL-PL-011) ──
+
+    /// Verify that PumpTimerManager supports all 6 pumps by starting timers
+    /// for pumps 4, 5, and 6 individually.
+    #[test]
+    fn test_pump_timer_pump4_individual() {
+        let mut c = make_registered_controller();
+        let mut sim = make_registered_sim();
+
+        // Start pump 4 timer
+        c.start_pump_timer(ToggleItem::Pump4);
+        assert!(c.is_pump_timer_running(ToggleItem::Pump4));
+
+        // Turn pump 4 on in sim state
+        sim.state.pumps[3] = launa_protocol::status::PumpState::Low;
+
+        // Generate status frame and process
+        let tick_bytes = sim.tick();
+        c.process_bytes(&tick_bytes);
+
+        // Timer should still be running (not expired — default 20 min, only 1 tick)
+        assert!(
+            c.is_pump_timer_running(ToggleItem::Pump4),
+            "pump 4 timer should still be running after 1 tick"
+        );
+    }
+
+    #[test]
+    fn test_pump_timer_pump5_individual() {
+        let mut c = make_registered_controller();
+        let mut sim = make_registered_sim();
+
+        // Start pump 5 timer
+        c.start_pump_timer(ToggleItem::Pump5);
+        assert!(c.is_pump_timer_running(ToggleItem::Pump5));
+
+        // Turn pump 5 on in sim state
+        sim.state.pumps[4] = launa_protocol::status::PumpState::High;
+
+        let tick_bytes = sim.tick();
+        c.process_bytes(&tick_bytes);
+
+        assert!(
+            c.is_pump_timer_running(ToggleItem::Pump5),
+            "pump 5 timer should still be running after 1 tick"
+        );
+    }
+
+    #[test]
+    fn test_pump_timer_pump6_individual() {
+        let mut c = make_registered_controller();
+        let mut sim = make_registered_sim();
+
+        // Start pump 6 timer
+        c.start_pump_timer(ToggleItem::Pump6);
+        assert!(c.is_pump_timer_running(ToggleItem::Pump6));
+
+        // Turn pump 6 on in sim state
+        sim.state.pumps[5] = launa_protocol::status::PumpState::Low;
+
+        let tick_bytes = sim.tick();
+        c.process_bytes(&tick_bytes);
+
+        assert!(
+            c.is_pump_timer_running(ToggleItem::Pump6),
+            "pump 6 timer should still be running after 1 tick"
+        );
+    }
+
+    #[test]
+    fn test_pump_timer_cancel_pump4() {
+        let mut c = make_registered_controller();
+
+        // Start pump 4 timer
+        c.start_pump_timer(ToggleItem::Pump4);
+        assert!(c.is_pump_timer_running(ToggleItem::Pump4));
+
+        // Cancel the timer
+        c.cancel_pump_timer(ToggleItem::Pump4);
+        assert!(
+            !c.is_pump_timer_running(ToggleItem::Pump4),
+            "pump 4 timer should not be running after cancel"
+        );
+    }
+
+    #[test]
+    fn test_pump_timer_cancel_pump5() {
+        let mut c = make_registered_controller();
+
+        c.start_pump_timer(ToggleItem::Pump5);
+        assert!(c.is_pump_timer_running(ToggleItem::Pump5));
+
+        c.cancel_pump_timer(ToggleItem::Pump5);
+        assert!(!c.is_pump_timer_running(ToggleItem::Pump5));
+    }
+
+    #[test]
+    fn test_pump_timer_cancel_pump6() {
+        let mut c = make_registered_controller();
+
+        c.start_pump_timer(ToggleItem::Pump6);
+        assert!(c.is_pump_timer_running(ToggleItem::Pump6));
+
+        c.cancel_pump_timer(ToggleItem::Pump6);
+        assert!(!c.is_pump_timer_running(ToggleItem::Pump6));
+    }
+
+    /// Test 3 simultaneous pump timers (pumps 4, 5, 6) all running at once.
+    /// Each should track independently.
+    #[test]
+    fn test_pump_timer_simultaneous_pumps_4_5_6() {
+        let mut c = make_registered_controller();
+        let mut sim = make_registered_sim();
+
+        // Start timers for pumps 4, 5, and 6 simultaneously
+        c.start_pump_timer(ToggleItem::Pump4);
+        c.start_pump_timer(ToggleItem::Pump5);
+        c.start_pump_timer(ToggleItem::Pump6);
+
+        assert!(c.is_pump_timer_running(ToggleItem::Pump4));
+        assert!(c.is_pump_timer_running(ToggleItem::Pump5));
+        assert!(c.is_pump_timer_running(ToggleItem::Pump6));
+
+        // Turn all three pumps on in sim state
+        sim.state.pumps[3] = launa_protocol::status::PumpState::Low;
+        sim.state.pumps[4] = launa_protocol::status::PumpState::High;
+        sim.state.pumps[5] = launa_protocol::status::PumpState::Low;
+
+        // Process a status frame
+        let tick_bytes = sim.tick();
+        let events = c.process_bytes(&tick_bytes);
+
+        // After 1 tick, none should have expired (default 20 min)
+        assert!(c.is_pump_timer_running(ToggleItem::Pump4));
+        assert!(c.is_pump_timer_running(ToggleItem::Pump5));
+        assert!(c.is_pump_timer_running(ToggleItem::Pump6));
+
+        // No PumpExpired events
+        let expired_count = events
+            .iter()
+            .filter(|e| matches!(e, ControllerEvent::PumpExpired(_)))
+            .count();
+        assert_eq!(expired_count, 0, "no timers should expire after 1 tick");
+    }
+
+    /// Test that pump 4 timer expires after 20 "ticks" (default duration).
+    /// Each status frame ticks the pump timer by 1. Default duration is 1200 ticks (20 min).
+    #[test]
+    fn test_pump_timer_pump4_expires() {
+        let mut c = make_registered_controller();
+        let mut sim = make_registered_sim();
+
+        c.start_pump_timer(ToggleItem::Pump4);
+        sim.state.pumps[3] = launa_protocol::status::PumpState::Low;
+
+        // Tick 1199 times — timer should not expire yet (default 20 min = 1200 ticks)
+        for _ in 0..1199 {
+            let tick_bytes = sim.tick();
+            c.process_bytes(&tick_bytes);
+        }
+        assert!(
+            c.is_pump_timer_running(ToggleItem::Pump4),
+            "pump 4 timer should still be running after 1199 ticks"
+        );
+
+        // Tick once more — timer should expire
+        let tick_bytes = sim.tick();
+        let events = c.process_bytes(&tick_bytes);
+
+        let has_expired = events.iter().any(|e| {
+            matches!(
+                e,
+                ControllerEvent::PumpExpired(Command::ToggleItem(ToggleItem::Pump4))
+            )
+        });
+        assert!(has_expired, "pump 4 timer should expire at tick 1200");
+        assert!(!c.is_pump_timer_running(ToggleItem::Pump4));
+    }
+
+    /// Test that pump 5 timer expires after the expected duration.
+    #[test]
+    fn test_pump_timer_pump5_expires() {
+        let mut c = make_registered_controller();
+        let mut sim = make_registered_sim();
+
+        c.start_pump_timer(ToggleItem::Pump5);
+        sim.state.pumps[4] = launa_protocol::status::PumpState::Low;
+
+        // Tick 1199 times
+        for _ in 0..1199 {
+            let tick_bytes = sim.tick();
+            c.process_bytes(&tick_bytes);
+        }
+        assert!(c.is_pump_timer_running(ToggleItem::Pump5));
+
+        // Tick once more — should expire
+        let tick_bytes = sim.tick();
+        let events = c.process_bytes(&tick_bytes);
+
+        let has_expired = events.iter().any(|e| {
+            matches!(
+                e,
+                ControllerEvent::PumpExpired(Command::ToggleItem(ToggleItem::Pump5))
+            )
+        });
+        assert!(has_expired, "pump 5 timer should expire at tick 1200");
+        assert!(!c.is_pump_timer_running(ToggleItem::Pump5));
+    }
+
+    /// Test that pump 6 timer expires after the expected duration.
+    #[test]
+    fn test_pump_timer_pump6_expires() {
+        let mut c = make_registered_controller();
+        let mut sim = make_registered_sim();
+
+        c.start_pump_timer(ToggleItem::Pump6);
+        sim.state.pumps[5] = launa_protocol::status::PumpState::Low;
+
+        // Tick 1199 times
+        for _ in 0..1199 {
+            let tick_bytes = sim.tick();
+            c.process_bytes(&tick_bytes);
+        }
+        assert!(c.is_pump_timer_running(ToggleItem::Pump6));
+
+        // Tick once more — should expire
+        let tick_bytes = sim.tick();
+        let events = c.process_bytes(&tick_bytes);
+
+        let has_expired = events.iter().any(|e| {
+            matches!(
+                e,
+                ControllerEvent::PumpExpired(Command::ToggleItem(ToggleItem::Pump6))
+            )
+        });
+        assert!(has_expired, "pump 6 timer should expire at tick 1200");
+        assert!(!c.is_pump_timer_running(ToggleItem::Pump6));
+    }
+
+    /// Test pump timer auto-cancellation when pump is turned off externally.
+    /// After cancellation, advancing past the duration should NOT fire.
+    #[test]
+    fn test_pump_timer_cancel_on_external_off_pump5() {
+        let mut c = make_registered_controller();
+        let mut sim = make_registered_sim();
+
+        // Start pump 5 timer
+        c.start_pump_timer(ToggleItem::Pump5);
+        sim.state.pumps[4] = launa_protocol::status::PumpState::Low;
+
+        // 5 ticks — timer running normally
+        for _ in 0..5 {
+            let tick_bytes = sim.tick();
+            c.process_bytes(&tick_bytes);
+        }
+        assert!(c.is_pump_timer_running(ToggleItem::Pump5));
+
+        // Pump 5 turns off externally
+        sim.state.pumps[4] = launa_protocol::status::PumpState::Off;
+        let tick_bytes = sim.tick();
+        c.process_bytes(&tick_bytes);
+
+        // Timer should be cancelled
+        assert!(
+            !c.is_pump_timer_running(ToggleItem::Pump5),
+            "pump 5 timer should be cancelled when pump turns off externally"
+        );
+
+        // Advance well past the duration — should NOT re-fire
+        for _ in 0..1300 {
+            let tick_bytes = sim.tick();
+            let events = c.process_bytes(&tick_bytes);
+            let has_expired = events.iter().any(|e| {
+                matches!(
+                    e,
+                    ControllerEvent::PumpExpired(Command::ToggleItem(ToggleItem::Pump5))
+                )
+            });
+            assert!(!has_expired, "cancelled pump 5 timer should never fire");
+        }
+    }
+
+    /// Test restart: cancel a timer then restart it — should fire at new duration.
+    #[test]
+    fn test_pump_timer_restart_pump6() {
+        let mut c = make_registered_controller();
+        let mut sim = make_registered_sim();
+
+        // Start and cancel
+        c.start_pump_timer(ToggleItem::Pump6);
+        assert!(c.is_pump_timer_running(ToggleItem::Pump6));
+        c.cancel_pump_timer(ToggleItem::Pump6);
+        assert!(!c.is_pump_timer_running(ToggleItem::Pump6));
+
+        // Restart
+        c.start_pump_timer(ToggleItem::Pump6);
+        assert!(
+            c.is_pump_timer_running(ToggleItem::Pump6),
+            "pump 6 timer should be running after restart"
+        );
+
+        // Turn pump on
+        sim.state.pumps[5] = launa_protocol::status::PumpState::Low;
+
+        // Advance past duration (1200 ticks) — should fire at new start time
+        for _ in 0..1199 {
+            let tick_bytes = sim.tick();
+            c.process_bytes(&tick_bytes);
+        }
+        assert!(c.is_pump_timer_running(ToggleItem::Pump6));
+
+        let tick_bytes = sim.tick();
+        let events = c.process_bytes(&tick_bytes);
+        let has_expired = events.iter().any(|e| {
+            matches!(
+                e,
+                ControllerEvent::PumpExpired(Command::ToggleItem(ToggleItem::Pump6))
+            )
+        });
+        assert!(
+            has_expired,
+            "restarted pump 6 timer should fire at new duration"
+        );
+    }
+
+    /// Test that simultaneous timers for pumps 1, 4, and 6 all fire independently.
+    #[test]
+    fn test_pump_timer_simultaneous_independent_fire() {
+        let mut c = make_registered_controller();
+        let mut sim = make_registered_sim();
+
+        // Start timers for pumps 1, 4, and 6
+        c.start_pump_timer(ToggleItem::Pump1);
+        c.start_pump_timer(ToggleItem::Pump4);
+        c.start_pump_timer(ToggleItem::Pump6);
+
+        // Turn all three pumps on
+        sim.state.pumps[0] = launa_protocol::status::PumpState::Low;
+        sim.state.pumps[3] = launa_protocol::status::PumpState::Low;
+        sim.state.pumps[5] = launa_protocol::status::PumpState::Low;
+
+        // Tick 1199 times
+        for _ in 0..1199 {
+            let tick_bytes = sim.tick();
+            c.process_bytes(&tick_bytes);
+        }
+
+        // All should still be running
+        assert!(c.is_pump_timer_running(ToggleItem::Pump1));
+        assert!(c.is_pump_timer_running(ToggleItem::Pump4));
+        assert!(c.is_pump_timer_running(ToggleItem::Pump6));
+
+        // Tick once more — all should expire
+        let tick_bytes = sim.tick();
+        let events = c.process_bytes(&tick_bytes);
+
+        let expired_pumps: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                ControllerEvent::PumpExpired(Command::ToggleItem(item)) => Some(*item),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            expired_pumps.len(),
+            3,
+            "all 3 timers should fire simultaneously"
+        );
+        assert!(expired_pumps.contains(&ToggleItem::Pump1));
+        assert!(expired_pumps.contains(&ToggleItem::Pump4));
+        assert!(expired_pumps.contains(&ToggleItem::Pump6));
+
+        // None should be running after expiry
+        assert!(!c.is_pump_timer_running(ToggleItem::Pump1));
+        assert!(!c.is_pump_timer_running(ToggleItem::Pump4));
+        assert!(!c.is_pump_timer_running(ToggleItem::Pump6));
+    }
 }

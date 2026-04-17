@@ -186,4 +186,83 @@ mod tests {
         // URL key present but value is empty — no scheme → rejected
         assert_eq!(parse_ota_url(br#"{"url":""}"#), None);
     }
+
+    // ── Additional OTA validation tests ─────────────────────────────
+
+    #[test]
+    fn test_parse_ota_url_with_crc_query_param() {
+        let payload = br#"{"url":"http://192.168.1.100/firmware.bin?crc=DEADBEEF"}"#;
+        assert_eq!(
+            parse_ota_url(payload),
+            Some(String::from(
+                "http://192.168.1.100/firmware.bin?crc=DEADBEEF"
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_ota_url_with_version_query_param() {
+        let payload = br#"{"url":"http://10.0.0.1/fw.bin?version=1.2.3"}"#;
+        assert_eq!(
+            parse_ota_url(payload),
+            Some(String::from("http://10.0.0.1/fw.bin?version=1.2.3"))
+        );
+    }
+
+    #[test]
+    fn test_parse_ota_url_with_both_crc_and_version() {
+        let payload = br#"{"url":"http://example.com/fw.bin?crc=ABCD1234&version=2.0.0"}"#;
+        assert_eq!(
+            parse_ota_url(payload),
+            Some(String::from(
+                "http://example.com/fw.bin?crc=ABCD1234&version=2.0.0"
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_ota_url_javascript_scheme_rejected() {
+        assert_eq!(parse_ota_url(br#"{"url":"javascript:alert(1)"}"#), None);
+    }
+
+    #[test]
+    fn test_parse_ota_url_deep_nested_json() {
+        // URL nested inside other keys should still be found
+        let payload = br#"{"config":{"ota":{"url":"http://10.0.0.1/fw.bin"}}}"#;
+        // This won't match because the parser expects top-level "url" key
+        // Actually, the parser does a simple string search, so it will find "url" anywhere
+        assert_eq!(
+            parse_ota_url(payload),
+            Some(String::from("http://10.0.0.1/fw.bin"))
+        );
+    }
+
+    #[test]
+    fn test_parse_ota_url_with_path_segments() {
+        let payload = br#"{"url":"http://192.168.1.100/ota/firmware/v2/rc1/firmware.bin"}"#;
+        assert_eq!(
+            parse_ota_url(payload),
+            Some(String::from(
+                "http://192.168.1.100/ota/firmware/v2/rc1/firmware.bin"
+            ))
+        );
+    }
+
+    #[test]
+    fn test_parse_ota_url_http_scheme_case_sensitive() {
+        // "HTTP" (uppercase) should be rejected — only lowercase "http" is valid
+        assert_eq!(
+            parse_ota_url(br#"{"url":"HTTP://192.168.1.100/fw.bin"}"#),
+            None
+        );
+    }
+
+    #[test]
+    fn test_parse_ota_url_ip_with_auth() {
+        // URL with userinfo should still be accepted if http:// scheme
+        assert_eq!(
+            parse_ota_url(br#"{"url":"http://admin:pass@192.168.1.100/fw.bin"}"#),
+            Some(String::from("http://admin:pass@192.168.1.100/fw.bin"))
+        );
+    }
 }
