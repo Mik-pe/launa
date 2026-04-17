@@ -1,0 +1,53 @@
+{
+  "milestone": "sim-core",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": { "passed": true, "command": "cargo test --workspace", "exitCode": 0 },
+    "typecheck": { "passed": true, "command": "cargo check --workspace", "exitCode": 0 },
+    "lint": { "passed": true, "command": "cargo fmt --check", "exitCode": 0 }
+  },
+  "reviewsSummary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Added SpaSim design pattern documentation: SpaState (observable) vs SpaSim control fields (injection), and tick() ordering where status frames are generated before countdowns decrement.",
+      "sourceFeature": "sim-fault-lifecycle"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Remove the 'Deprecated Code' section (lines starting with 'SpaController in crates/launa-sim/src/controller.rs is deprecated — REMOVE it'). SpaController has been fully removed by feature sim-remove-deprecated-controller. Stale references mislead future workers.",
+      "evidence": "Feature sim-remove-deprecated-controller (commit 42dd720) deleted controller.rs and sim_tests.rs completely. Zero SpaController references remain in Rust source. The AGENTS.md section still says 'REMOVE it' which is already done.",
+      "isSystemic": false
+    },
+    {
+      "target": "skills/rust-worker/SKILL.md",
+      "suggestion": "Update the 'Key Conventions > Test structure' line from 'sim tests in tests/sim_tests.rs' to 'sim unit tests in spa_sim.rs #[cfg(test)] module'. sim_tests.rs was deleted by sim-remove-deprecated-controller and sim unit tests now live inline in spa_sim.rs.",
+      "evidence": "Feature sim-remove-deprecated-controller (commit 42dd720) deleted tests/sim_tests.rs. The rust-worker SKILL.md line ~62 still references the deleted file.",
+      "isSystemic": true
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "SpaState.priming (bool) is now dead code for init_mode generation since sim uses priming_remaining_ticks instead.",
+      "reason": "Non-blocking code quality observation from a single feature review. Not a shared state concern — it's a localized dead code issue that should be addressed by the feature's original worker if desired, not a systemic guidance gap."
+    },
+    {
+      "observation": "set_ambient_temp() lacks input validation unlike set_pump_heat_contribution().",
+      "reason": "Non-blocking API design inconsistency from a single feature review. Not a shared state concern — it's a localized improvement suggestion."
+    },
+    {
+      "observation": "Pump heat upper bound is effectively uncapped when temp exceeds overshoot target.",
+      "reason": "Non-blocking physics model observation already noted by the reviewer as mitigated by cooling. Not a shared state concern."
+    }
+  ],
+  "previousRound": null
+}

@@ -1,0 +1,26 @@
+{
+  "featureId": "sim-remove-deprecated-controller",
+  "reviewedAt": "2026-04-17T09:30:00.000Z",
+  "commitId": "42dd7202ece8283d962942ddaea4f72e4d547a31",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean removal of the deprecated SpaController from launa-sim. The worker deleted controller.rs (1377 lines), sim_tests.rs (1105 lines), removed the module declaration and #[allow(deprecated)] re-exports from lib.rs, removed the [[test]] Cargo.toml entry, and updated all comments and doc references. No SpaController or ControllerEvent references remain in any Rust source file. All 353 remaining workspace tests pass (down from 412 baseline — 59 SpaController-specific tests were removed, but all their scenarios were already covered by harness_tests.rs (19 tests) and advanced_tests.rs (6 tests) using SpaApp from launa-core).",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "The rust-worker SKILL.md still references `sim_tests.rs` in Key Conventions: 'Test structure: Integration tests in `launa-integration-tests/src/lib.rs` (test groups), sim tests in `tests/sim_tests.rs`'. This file was deleted by this feature. The skill should be updated to reflect the current test structure: harness_tests.rs and advanced_tests.rs.",
+      "evidence": ".factory/skills/rust-worker/SKILL.md line ~62: 'Test structure: Integration tests in `launa-integration-tests/src/lib.rs` (test groups), sim tests in `tests/sim_tests.rs`'"
+    },
+    {
+      "area": "conventions",
+      "observation": "The mission AGENTS.md 'Deprecated Code' section still lists SpaController removal as a pending action, but it is now complete. This is a minor stale reference but doesn't affect future workers since the code is already gone.",
+      "evidence": "Mission AGENTS.md 'Deprecated Code' section: 'SpaController in crates/launa-sim/src/controller.rs is deprecated — REMOVE it' and 'sim_tests.rs uses deprecated SpaController — tests that depend on it should be migrated or removed'"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS — Complete and correct removal of the deprecated SpaController. All files properly deleted (controller.rs, sim_tests.rs), all module declarations and re-exports removed from lib.rs, Cargo.toml [[test]] entry removed, doc comments updated. Zero SpaController/ControllerEvent references remain in Rust source. All 353 remaining tests pass with no regressions. The worker correctly identified that all 30 sim_tests.rs scenarios were already covered by the existing harness_tests.rs and advanced_tests.rs. Two minor shared-state observations noted: the rust-worker SKILL.md still references the deleted sim_tests.rs, and the mission AGENTS.md deprecated code section is now stale."
+}

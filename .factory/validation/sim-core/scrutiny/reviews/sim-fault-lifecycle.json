@@ -1,0 +1,33 @@
+{
+  "featureId": "sim-fault-lifecycle",
+  "reviewedAt": "2026-04-17T12:00:00.000Z",
+  "commitId": "f629b8c",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The implementation faithfully covers all requirements from the feature description. All 7 expected behaviors are implemented and tested with 17 dedicated unit tests. The code is well-structured, follows existing patterns (deterministic PRNG, backward-compatible defaults), and integrates cleanly with the existing SpaSim tick lifecycle.",
+    "issues": [
+      {
+        "file": "crates/launa-sim/src/spa_sim.rs",
+        "line": 224,
+        "severity": "non_blocking",
+        "description": "SpaState.priming (bool field) is now effectively dead code for init_mode generation — the status frame uses priming_remaining_ticks instead. The field is still public and defaults to false, so it doesn't cause incorrect behavior, but it could confuse future developers who might set state.priming expecting it to affect init_mode. Consider removing or documenting this field as deprecated in favor of simulate_priming_mode()."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The SpaSim uses separate fields on the struct itself (e.g., priming_remaining_ticks, fault_active) rather than on SpaState for simulation control. This is a good pattern that keeps SpaState as the 'observable' state and SpaSim as the 'simulator control', but it's not documented in AGENTS.md or the mission conventions. The pattern is: SpaState holds what a real spa reports; SpaSim fields hold simulator injection controls.",
+      "evidence": "SpaState has priming: bool (line 224) but SpaSim has priming_remaining_ticks: u64 (line 384). The status frame generation (line 1176) reads priming_remaining_ticks, not state.priming. Same pattern for fault_active (SpaSim) vs no corresponding SpaState field."
+    },
+    {
+      "area": "knowledge",
+      "observation": "The tick() method processes counters (transient fault countdown, priming countdown) AFTER generating the status frame, which means the status frame reflects the state BEFORE the countdown tick. This is the correct behavior (you see the state for that tick, then it decrements). This ordering subtlety is worth documenting for future feature workers.",
+      "evidence": "spa_sim.rs lines 867-872: status frame generated at line 867, then tick_transient_fault_countdown() and tick_priming_countdown() called at lines 871-872."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The sim-fault-lifecycle feature is well-implemented with all 7 expected behaviors covered by 17 focused unit tests. Implementation details:\n\n1. **clear_fault_state()**: Sets fault_active=false and clears transient countdown. Subsequent status frames show init_mode=0x00. ✓\n2. **simulate_transient_fault(code, ticks)**: Sets fault_active=true with a tick countdown that auto-clears. Edge cases of 0 ticks (immediate clear) and 1 tick handled correctly. ✓\n3. **Multi-entry fault log**: set_fault_log_entries() stores Vec<FaultLogConfig>, generate_fault_log_response_for_entry(n) returns distinct entries for 1..N, sentinel (fault_count=0) for entry 0 or past-end. generate_fault_log_response() delegates to entry 1 for backward compatibility. ✓\n4. **Fault preserves queued commands**: Commands in pending_commands are not cleared on fault injection. They continue decrementing and fire on schedule. ✓\n5. **simulate_priming_mode(duration)**: Sets priming_remaining_ticks which is checked in status frame generation for init_mode=0x01. Auto-decrements each tick. ✓\n6. **clear_priming_mode()**: Manual exit, resets countdown to 0. ✓\n7. **Defaults off**: All new fields default to 0/false/empty Vec. ✓\n\nOne non-blocking issue: SpaState.priming is now dead code for init_mode generation (the sim uses priming_remaining_ticks instead). Minor inconsistency that doesn't affect correctness."
+}

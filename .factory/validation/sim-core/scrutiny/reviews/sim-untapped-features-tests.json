@@ -1,0 +1,46 @@
+{
+  "featureId": "sim-untapped-features-tests",
+  "reviewedAt": "2026-04-17T09:55:00.000Z",
+  "commitId": "8c52449",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "26 unit tests added to launa-sim/src/spa_sim.rs covering all 14 untapped simulator features from the feature description. Tests are well-structured with clear VAL-SIM assertion traceability, proper use of existing test helpers (dispatch_response, FrameDecoder, FrameEncoder), and good edge case coverage. All 157 tests pass, zero regressions in workspace.",
+    "issues": [
+      {
+        "file": "crates/launa-sim/src/spa_sim.rs",
+        "line": 4760,
+        "severity": "non_blocking",
+        "description": "test_physics_noise_and_legacy_noise_combined: The combined noise bound assertion uses 4.0°F (physics ±1 + legacy ±1 + margin), but the test only verifies no deviation exceeds 4.0 — it does not verify the combined noise actually produces wider variation than either source alone. A more rigorous test would also assert that variation_count is higher than physics-only or legacy-only. However, the test does verify both noise sources coexist (>50/100 ticks with variation), which is adequate for the VAL-SIM-009 requirement."
+      },
+      {
+        "file": "crates/launa-sim/src/spa_sim.rs",
+        "line": 4878,
+        "severity": "non_blocking",
+        "description": "test_command_success_rate_50_percent: The test resets pump state to Off after each attempt to avoid saturation, which is correct. However, the acceptance rate assertion range (35-65%) is quite wide. For 100 trials at p=0.5, the expected standard deviation is ~5%, so the 15% margin is very generous. This is acceptable for a non-deterministic test that needs to avoid flakiness, but a tighter range (40-60%) would still be safe and more rigorous."
+      },
+      {
+        "file": "crates/launa-sim/src/spa_sim.rs",
+        "line": 5170,
+        "severity": "non_blocking",
+        "description": "test_combined_degraded_bus_500_ticks: The frame_error_count is accumulated using `+= decoder.frame_error_count() as usize` inside the loop, but `frame_error_count()` likely returns a cumulative counter on the decoder instance. This means errors are being double-counted across iterations. However, the final assertion is `== 0`, so this doesn't cause a false pass — if any error occurred, the sum would be > 0 regardless of double-counting."
+      },
+      {
+        "file": "crates/launa-sim/src/spa_sim.rs",
+        "line": 5290,
+        "severity": "non_blocking",
+        "description": "test_spa_reboot_preserves_physics_state_after_running: The test verifies physics continue after reboot by checking `temp_after_tick != temp_before_reboot`, but since the sim has ambient temp (70°F) and is heating (set_temp=104°F, pump running), the temp change direction depends on current temp vs set_temp. If temp was already at 104+ after 30 ticks of heating, physics might cool it (moving away from set_temp is possible with overshoot). The test would be more robust by checking absolute difference > some threshold rather than just inequality. However, in practice 30 ticks of heating from 80°F won't reach 104°F, so the temp will still be rising and the assertion is safe."
+      },
+      {
+        "file": "crates/launa-sim/src/spa_sim.rs",
+        "line": 5470,
+        "severity": "non_blocking",
+        "description": "test_filter_cycle_stop_manual_toggle_off: The test correctly documents the pump toggle cycle (Off→Low→High→Off) and verifies that toggling a filter-cycle-activated pump from Low goes to High (not Off), then a second toggle goes to Off. This is behaviorally correct but the test name 'stop' is slightly misleading — it's really testing that manual toggle overrides filter cycle state by cycling through. This is fine as-is but worth noting the semantic gap."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS — 26 well-structured unit tests covering all 14 untapped simulator features. Each test maps to specific VAL-SIM assertions (006-026). Tests use proper TDD approach (worker wrote tests, verified compilation, ran full suite). No blocking issues found. Five non-blocking observations noted: generous noise/probabilistic bounds, minor frame_error_count accumulation pattern, and naming clarity. All tests pass, zero regressions. The worker followed the rust-worker skill procedure correctly with no deviations."
+}
