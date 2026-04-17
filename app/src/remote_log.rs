@@ -26,36 +26,37 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-/// Maximum number of log entries in the ring buffer.
-/// Keep small to avoid heap pressure on 32 KiB ESP32.
-pub const REMOTE_LOG_BUF_SIZE: usize = 16;
-
-/// Maximum length of a single log message (bytes). Longer messages are truncated.
-pub const MAX_LOG_MESSAGE_LEN: usize = 128;
+// Re-export extracted types from workspace crates
+pub use launa_core::{LogEntry, MAX_LOG_MESSAGE_LEN, REMOTE_LOG_BUF_SIZE};
+pub use launa_mqtt::log_entry_to_json;
 
 /// Ring buffer state for captured log messages.
+///
+/// This is the ESP32-specific implementation that uses atomics and `UnsafeCell`
+/// for safe access in cooperative async context. The core ring buffer logic is
+/// tested via `launa_core::RemoteLogBuffer` on desktop.
 pub struct RemoteLogBuffer {
-    entries: Vec<LogEntry>,
+    entries: UnsafeCell<Vec<LogEntry>>,
     head: AtomicUsize,
     len: AtomicUsize,
     enabled: AtomicBool,
 }
 
-/// A single captured log entry.
-#[derive(Debug, Clone)]
-pub struct LogEntry {
-    pub level: &'static str,
-    pub message: String,
-    pub timestamp_ms: u64,
-}
+// Safety: RemoteLogBuffer is only accessed from the cooperative async
+// executor context (single-task). The UnsafeCell is safe because:
+// 1. embassy uses cooperative scheduling — no preemption between awaits
+// 2. push/drain are only called from the log macro context
+// 3. init() is called once at startup before any push/drain
+unsafe impl Sync for RemoteLogBuffer {}
 
 impl RemoteLogBuffer {
     /// Create a new empty log buffer.
     pub fn new() -> Self {
         RemoteLogBuffer {
-            entries: Vec::new(),
+            entries: UnsafeCell::new(Vec::new()),
             head: AtomicUsize::new(0),
             len: AtomicUsize::new(0),
             enabled: AtomicBool::new(false),
@@ -64,9 +65,8 @@ impl RemoteLogBuffer {
 
     /// Initialize the buffer with capacity. Must be called once before use.
     pub fn init(&mut self) {
-        if self.entries.is_empty() {
-            self.entries
-                .reserve_exact(REMOTE_LOG_BUF_SIZE);
+        if unsafe { &mut *self.entries.get() }.is_empty() {
+            unsafe { &mut *self.entries.get() }.reserve_exact(REMOTE_LOG_BUF_SIZE);
         }
     }
 
@@ -89,9 +89,6 @@ impl RemoteLogBuffer {
 
         let truncated: String = message.chars().take(MAX_LOG_MESSAGE_LEN).collect();
 
-        // This is safe in single-task context (embassy cooperative scheduling).
-        // The buffer is only written from the log macro context which is
-        // cooperative and non-preemptive.
         let head = self.head.load(Ordering::Relaxed);
         let len = self.len.load(Ordering::Relaxed);
 
@@ -102,26 +99,27 @@ impl RemoteLogBuffer {
         };
 
         // Safety: We're in single-task context (cooperative async).
-        // This is a pattern used in embedded no_std environments.
         // The buffer was initialized in init() and is only accessed
         // from the log context.
-        let entries = unsafe { &mut *(&self.entries as *const Vec<LogEntry> as *mut Vec<LogEntry>) };
+        let entries = unsafe { &mut *self.entries.get() };
 
         if len < REMOTE_LOG_BUF_SIZE {
             entries.push(entry);
             self.len.store(entries.len(), Ordering::Relaxed);
-            self.head.store(entries.len() % REMOTE_LOG_BUF_SIZE, Ordering::Relaxed);
+            self.head
+                .store(entries.len() % REMOTE_LOG_BUF_SIZE, Ordering::Relaxed);
         } else {
             if head < entries.len() {
                 entries[head] = entry;
             }
-            self.head.store((head + 1) % REMOTE_LOG_BUF_SIZE, Ordering::Relaxed);
+            self.head
+                .store((head + 1) % REMOTE_LOG_BUF_SIZE, Ordering::Relaxed);
         }
     }
 
     /// Drain all captured log entries, returning them as a Vec and clearing the buffer.
     pub fn drain(&self) -> Vec<LogEntry> {
-        let entries = unsafe { &mut *(&self.entries as *const Vec<LogEntry> as *mut Vec<LogEntry>) };
+        let entries = unsafe { &mut *self.entries.get() };
         let head = self.head.load(Ordering::Relaxed);
         let len = self.len.load(Ordering::Relaxed);
 
@@ -155,31 +153,6 @@ impl RemoteLogBuffer {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-}
-
-/// Format a log entry as a JSON string suitable for MQTT publishing.
-/// Manual JSON construction (no serde) for no_std compatibility.
-pub fn log_entry_to_json(entry: &LogEntry) -> String {
-    // Escape the message for JSON
-    let mut escaped = String::new();
-    for ch in entry.message.chars() {
-        match ch {
-            '\\' => escaped.push_str("\\\\"),
-            '"' => escaped.push_str("\\\""),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            c if (c as u32) <= 0x1F => {
-                escaped.push_str(&alloc::format!("\\u{:04x}", c as u32));
-            }
-            c => escaped.push(c),
-        }
-    }
-
-    alloc::format!(
-        "{{\"level\":\"{}\",\"message\":\"{}\",\"ts\":{}}}",
-        entry.level, escaped, entry.timestamp_ms
-    )
 }
 
 /// Global remote log buffer instance.
