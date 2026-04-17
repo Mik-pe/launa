@@ -19,6 +19,7 @@ use launa_mqtt::command_parser::{self, ParseResult};
 use launa_mqtt::discovery::DiscoveryBuilder;
 use launa_mqtt::state::status_to_json;
 use launa_mqtt::packet::{decode_remaining_length, try_extract_packet};
+use launa_core::{RateLimiter, RATE_LIMIT_MAX_COMMANDS, RATE_LIMIT_WINDOW_MS};
 use launa_protocol::command::{Command, validate_set_temperature};
 use launa_protocol::status::{TemperatureScale, TempRange, StatusUpdate};
 use log::{info, warn, debug, error};
@@ -28,50 +29,9 @@ use crate::mk_static;
 use crate::net_util;
 
 // ── MQTT command rate limiting ─────────────────────────────────────────
-
-/// Maximum number of MQTT commands allowed per rate-limit window.
-/// Protects the spa RS-485 bus from command flooding.
-const RATE_LIMIT_MAX_COMMANDS: usize = 10;
-
-/// Duration of the rate-limit window in seconds.
-/// After this window elapses, the command counter resets.
-const RATE_LIMIT_WINDOW_SECS: u64 = 10;
-
-/// Tracks command count within a sliding time window.
-/// Commands exceeding `RATE_LIMIT_MAX_COMMANDS` per `RATE_LIMIT_WINDOW_SECS`
-/// are dropped to protect the spa RS-485 bus.
-struct RateLimiter {
-    /// Number of commands seen in the current window.
-    count: usize,
-    /// Start time of the current window.
-    window_start: Instant,
-}
-
-impl RateLimiter {
-    const fn new() -> Self {
-        RateLimiter {
-            count: 0,
-            window_start: Instant::MIN,
-        }
-    }
-
-    /// Check if a command is allowed under the rate limit.
-    /// Returns `true` if the command should be forwarded, `false` if it
-    /// should be dropped. Automatically resets the window when it expires.
-    fn check(&mut self) -> bool {
-        let now = Instant::now();
-        let window_duration = Duration::from_secs(RATE_LIMIT_WINDOW_SECS);
-
-        // Reset window if expired
-        if now.duration_since(self.window_start) >= window_duration {
-            self.count = 0;
-            self.window_start = now;
-        }
-
-        self.count += 1;
-        self.count <= RATE_LIMIT_MAX_COMMANDS
-    }
-}
+// RateLimiter is defined in launa-core with Clock trait injection.
+// Constants RATE_LIMIT_MAX_COMMANDS (10) and RATE_LIMIT_WINDOW_MS (10_000)
+// are re-exported from launa-core.
 
 // ── MQTT action type (command vs timer) ────────────────────────────────
 
@@ -768,12 +728,13 @@ impl MqttClient {
     /// Returns `false` if the command exceeds the rate limit and should be dropped.
     /// Logs a warning when dropping.
     pub fn check_rate_limit(&mut self) -> bool {
-        if self.rate_limiter.check() {
+        let now_ms = Instant::now().as_millis() as u64;
+        if self.rate_limiter.check(now_ms) {
             true
         } else {
             warn!(
                 "MQTT command rate limited: exceeded {} commands per {}s window",
-                RATE_LIMIT_MAX_COMMANDS, RATE_LIMIT_WINDOW_SECS
+                RATE_LIMIT_MAX_COMMANDS, RATE_LIMIT_WINDOW_MS / 1000
             );
             false
         }
