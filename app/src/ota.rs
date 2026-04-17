@@ -68,11 +68,15 @@ impl OtaBuffers {
 ///
 /// The `buffers` are reused across calls to avoid leaking static memory
 /// when OTA fails and the device doesn't reboot.
+///
+/// The `wdt_feed` closure is called after each chunk write to feed the
+/// hardware watchdog, preventing WDT reset during long firmware downloads.
 pub async fn perform_ota_update(
     stack: &'static Stack<'static>,
     ota: &mut EspOta,
     firmware_url: &str,
     buffers: &mut OtaBuffers,
+    mut wdt_feed: impl FnMut(),
 ) -> Result<(), ()> {
     let (host, port, path) = match parse_http_url(firmware_url) {
         Some(v) => v,
@@ -208,6 +212,7 @@ pub async fn perform_ota_update(
                     return Err(());
                 }
                 total_written += (header_len - body_start) as u32;
+                wdt_feed();
             }
             break;
         }
@@ -231,6 +236,7 @@ pub async fn perform_ota_update(
             return Err(());
         }
         total_written += n as u32;
+        wdt_feed();
     }
 
     // Verify firmware integrity before finalizing (if expected CRC was provided)

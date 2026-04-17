@@ -547,6 +547,15 @@ impl MqttClient {
     }
 
     pub async fn recv(&mut self) -> Option<(String, Vec<u8>)> {
+        /// Maximum number of consecutive TCP read errors before giving up
+        /// and triggering a reconnect. This prevents transient network
+        /// glitches (brief packet loss, TCP retransmission timeout) from
+        /// causing unnecessary MQTT reconnect cycles.
+        const MAX_READ_RETRIES: u8 = 3;
+
+        #[allow(unused_assignments)]
+        let mut read_retries: u8 = 0;
+
         loop {
             if let Err(e) = self.maybe_ping().await {
                 error!("MQTT keepalive ping failed: {:?}", e);
@@ -554,6 +563,7 @@ impl MqttClient {
             }
 
             if let Some(packet) = self.try_extract_packet() {
+                read_retries = 0;
                 return self.process_packet(&packet).await;
             }
 
@@ -568,9 +578,26 @@ impl MqttClient {
                     continue;
                 }
                 Ok(n) => n,
-                Err(_) => return None,
+                Err(_) => {
+                    read_retries += 1;
+                    if read_retries <= MAX_READ_RETRIES {
+                        warn!(
+                            "MQTT TCP read error (attempt {}/{})",
+                            read_retries, MAX_READ_RETRIES
+                        );
+                        Timer::after(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                    error!(
+                        "MQTT TCP read failed after {} retries, triggering reconnect",
+                        MAX_READ_RETRIES
+                    );
+                    return None;
+                }
             };
 
+            // Successful read resets the retry counter
+            read_retries = 0;
             self.rx_buffer.extend_from_slice(&buf[..n]);
 
             if self.rx_buffer.len() > RX_BUFFER_MAX_SIZE {

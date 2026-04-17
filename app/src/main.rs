@@ -136,7 +136,7 @@ fn init_heap() {
 static FRAME_CHANNEL: Channel<CriticalSectionRawMutex, Frame, 4> = Channel::new();
 static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
 static UART_TX_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
-static STATE_CHANNEL: Channel<CriticalSectionRawMutex, (StatusUpdate, FaultBuf, bool), 2> = Channel::new();
+static STATE_CHANNEL: Channel<CriticalSectionRawMutex, (StatusUpdate, FaultBuf, bool), 4> = Channel::new();
 static PUMP_TIMER_CHANNEL: Channel<CriticalSectionRawMutex, (u8, u32), 4> = Channel::new();
 static DIAGNOSTICS_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 2> = Channel::new();
 static OTA_CHANNEL: Channel<CriticalSectionRawMutex, alloc::string::String, 1> = Channel::new();
@@ -554,7 +554,9 @@ async fn execute_actions(actions: &[AppAction], device_id: &str) {
                 recovering_from_stale,
             } => {
                 let fb = fault.as_ref().map_or(FaultBuf::EMPTY, |s| FaultBuf::from_str(s));
-                let _ = STATE_CHANNEL.try_send((status.clone(), fb, *recovering_from_stale));
+                if STATE_CHANNEL.try_send((status.clone(), fb, *recovering_from_stale)).is_err() {
+                    warn!("STATE_CHANNEL full, dropping state update (capacity 2)");
+                }
             }
             AppAction::PublishStaleAvailability => {
                 // Stale availability is handled by the MQTT task when it sees
@@ -1065,7 +1067,7 @@ async fn main(spawner: Spawner) {
             match (ota.as_mut(), ota_buffers.as_mut()) {
                 (Some(o), Some(b)) => {
                     info!("OTA: starting firmware download from main loop");
-                    if let Err(()) = ota::perform_ota_update(wifi_stack.stack, o, &firmware_url, b).await {
+                    if let Err(()) = ota::perform_ota_update(wifi_stack.stack, o, &firmware_url, b, || wdt.feed()).await {
                         error!("OTA update failed");
                         send_alert("error", "ota_update_failed");
                     }
