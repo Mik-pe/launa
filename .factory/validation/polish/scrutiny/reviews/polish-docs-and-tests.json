@@ -1,0 +1,45 @@
+{
+  "featureId": "polish-docs-and-tests",
+  "reviewedAt": "2026-04-17T08:30:00Z",
+  "commitId": "e546169",
+  "transcriptSkeletonReviewed": false,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "All four validation assertions (VAL-PL-008 through VAL-PL-011) are fully satisfied. The commit adds 43 new tests across 4 files, fixes protocol documentation, and adds a temperature=0 rejection in the command parser. Code quality is good with thorough test coverage including edge cases.",
+    "issues": [
+      {
+        "file": "crates/launa-mqtt/src/ota_url.rs",
+        "line": null,
+        "severity": "non_blocking",
+        "description": "The test_parse_ota_url_ip_with_auth test contains what appears to be a redacted URL with asterisks in the diff output. This is likely git diff masking credentials, which is appropriate, but worth noting the actual test payload uses a real userinfo URL pattern. The test itself is valid."
+      },
+      {
+        "file": "crates/launa-mqtt/src/ota_url.rs",
+        "line": null,
+        "severity": "non_blocking",
+        "description": "The test_parse_ota_url_deep_nested_json test has a comment noting the parser 'does a simple string search, so it will find url anywhere'. This is an existing behavior of the OTA URL parser, not introduced by this PR, but it's a potential security concern that deeply nested JSON could trick the parser into extracting URLs from unintended fields."
+      },
+      {
+        "file": "crates/launa-mqtt/src/ota_url.rs",
+        "line": null,
+        "severity": "non_blocking",
+        "description": "test_parse_ota_url_http_scheme_case_sensitive test verifies that uppercase 'HTTP' is rejected. This is the correct security behavior, but the test name could be slightly misleading — it's testing case sensitivity of the scheme, not general HTTP case sensitivity."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The pump timer system uses a tick-based approach where each status frame from the spa counts as one tick. The default duration is 1200 ticks (20 minutes at 1 tick/second). This is relevant for any worker implementing or modifying pump timer functionality.",
+      "evidence": "crates/launa-sim/src/controller.rs test_pump_timer_pump4_expires: loops 1199 ticks then verifies expiry at tick 1200"
+    },
+    {
+      "area": "conventions",
+      "observation": "Test naming convention in the codebase follows the pattern test_<module>_<scenario> with descriptive suffixes like _rejected, _accepted, _expires, _individual. New tests added by this worker follow this convention consistently.",
+      "evidence": "command_parser.rs: test_parse_pump_timer_rejects_zero_minutes, test_parse_set_temperature_boundary_1, etc."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS — All four validation assertions are fully satisfied with high-quality implementations:\n\n1. VAL-PL-008: Protocol documentation fixed correctly. Added P1/P2 bit layout tables showing Pump 5 at bits 0-1 and Pump 6 at bits 2-3 of the P2 byte. Configuration Response byte 6 Pump 6 bits corrected from 6-7 to 2-3, matching the actual code in launa-protocol/src/config.rs (line 46: `(payload[6] >> 2) & 0x03`).\n\n2. VAL-PL-009: Temperature=0 properly rejected in parse_set_temperature() with TemperatureOutOfRange { raw_value: 0, error: BelowMin }. The zero check is placed immediately after parsing, before the absolute max check, which is the correct order. The previous test expecting acceptance was updated to expect rejection.\n\n3. VAL-PL-010: 30+ app module unit tests added across 3 files: command_parser.rs (17 tests covering pump timers, toggle commands, topic edge cases, temperature boundaries), ota_url.rs (8 tests covering query params, scheme validation, nested JSON, auth URLs), and state.rs (5 tests covering pump status JSON, hold mode, heating state, mister). All tests are desktop-testable without ESP32 hardware.\n\n4. VAL-PL-011: 13 pump timer tests added in launa-sim controller.rs covering pumps 4-6 individually (start, cancel, expire at 1200 ticks), simultaneous operation (3 pumps running independently, all firing at expiry), external-off cancellation, and restart-after-cancel scenarios.\n\nAll 417 workspace tests pass (cargo test --workspace, exit code 0). No blocking issues found."
+}

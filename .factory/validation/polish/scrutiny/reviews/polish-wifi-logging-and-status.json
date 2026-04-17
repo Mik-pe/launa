@@ -1,0 +1,56 @@
+{
+  "featureId": "polish-wifi-logging-and-status",
+  "reviewedAt": "2026-04-17T12:30:00.000Z",
+  "commitId": "0fd8868",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Feature adds 4 missing status fields (notification_type, panel_locked, settings_lock, m8_cycle_time) to StatusUpdate, 2 new dispatcher message types (PreferencesResponse 0x26, SetupParametersResponse 0x25), a WiFi reconnection lifecycle test in launa-core, and an optional remote-log feature for the ESP32 app. All 22 new tests pass, existing tests show no regressions. Implementation is clean and well-documented with minor non-blocking observations noted below.",
+    "issues": [
+      {
+        "file": "app/src/remote_log.rs",
+        "line": 127,
+        "severity": "non_blocking",
+        "description": "RemoteLogBuffer uses interior mutability via unsafe pointer cast (&self -> &mut entries) because push/drain take &self. While the safety comment claims single-task cooperative scheduling, this is fragile — any future multi-task or interrupt context usage would be UB. The integration tests use a different (safe, &mut self) LogBuffer implementation, so the unsafe code path is not tested. Recommend using a critical-section or RefCell pattern instead."
+      },
+      {
+        "file": "app/src/remote_log.rs",
+        "line": 148,
+        "severity": "non_blocking",
+        "description": "RemoteLogBuffer::init() uses reserve_exact() which only reserves capacity but doesn't fill the Vec. The ring buffer logic in push() then relies on entries.len() which starts at 0 and grows via push(). This works correctly but the head/len arithmetic with Atomics could be simplified by using a pre-filled Vec or a fixed-size array, eliminating the growing-phase logic branch."
+      },
+      {
+        "file": "crates/launa-integration-tests/src/lib.rs",
+        "line": 4200,
+        "severity": "non_blocking",
+        "description": "The integration test's LogBuffer uses Vec::remove(0) for ring overwrite (O(n) shift) while the app's RemoteLogBuffer uses actual ring-buffer indexing. The behavioral models differ enough that bugs in the app's drain ordering would not be caught by these tests. The tests verify the concept but not the exact implementation."
+      },
+      {
+        "file": "app/src/remote_log.rs",
+        "line": 195,
+        "severity": "non_blocking",
+        "description": "The global static mut REMOTE_LOG_BUFFER pattern is a common embedded idiom but is technically UB if accessed from multiple contexts. In the current embassy cooperative scheduling model this is safe, but could benefit from using an embassy-sync OnceLock or a critical section wrapper for future-proofing."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The remote-log feature flag pattern (optional feature in app/Cargo.toml with #[cfg(feature = \"remote-log\")] mod remote_log) is a clean way to conditionally compile ESP32-only modules. This pattern isn't documented in AGENTS.md but could be useful for future optional ESP32 modules.",
+      "evidence": "app/Cargo.toml:11 adds `remote-log = []`, app/src/main.rs:68 uses `#[cfg(feature = \"remote-log\")] mod remote_log`"
+    },
+    {
+      "area": "skills",
+      "observation": "Worker followed the rust-worker skill procedure correctly with no deviations. The only gap was inability to run `cargo +esp check --features remote-log` due to missing xtensa toolchain, which was acknowledged in the handoff.",
+      "evidence": "handoff.skillFeedback.followedProcedure = true, handoff.whatWasLeftUndone mentions the esp check limitation"
+    },
+    {
+      "area": "knowledge",
+      "observation": "StatusUpdate::parse() requires a minimum 24-byte payload (checked at offset 0 of parse()). All new fields at offsets 6, 18, 19, 21 are within this boundary, so no additional length check was needed. This is worth noting for future field additions — the 24-byte minimum ensures safe access up to offset 23.",
+      "evidence": "crates/launa-protocol/src/status.rs:86 — `if payload.len() < 24` guard before all field parsing"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. All four validation assertions are satisfied: VAL-PL-004 (WiFi reconnection test covers full lifecycle: normal→silence→stale alert at 30s→probes→recovery→normal resumes), VAL-PL-005 (remote-log feature with ring buffer and JSON formatting, tested via integration tests mirroring the design), VAL-PL-006 (4 new status fields with 7 unit tests + MQTT JSON serialization test), VAL-PL-007 (2 new dispatcher message types with 4 unit tests). Code quality is good with minor non-blocking concerns around unsafe patterns in remote_log.rs (interior mutability via pointer cast, global static mut) and the behavioral divergence between the app's ring buffer and the test's simplified implementation. All 22 new tests pass with zero regressions."
+}

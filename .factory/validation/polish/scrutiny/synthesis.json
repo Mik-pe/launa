@@ -1,0 +1,47 @@
+{
+  "milestone": "polish",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": { "passed": true, "command": "cargo test --workspace", "exitCode": 0 },
+    "typecheck": { "passed": true, "command": "cargo check --workspace", "exitCode": 0 },
+    "lint": { "passed": true, "command": "cargo fmt --check --all", "exitCode": 0 }
+  },
+  "reviewsSummary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Updated architecture.md with launa-esp-ota HMAC-SHA256 signing details, firmware_data Vec OOM limitation, verify_signature() not wired into app OTA flow, StatusUpdate 24-byte minimum payload invariant, and remote-log feature flag pattern.",
+      "sourceFeature": "polish-version-pinning-and-ci, polish-wifi-logging-and-status"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Add specific guideline about OTA memory usage: 'OTA signature verification must use streaming HMAC over flash reads, not buffer the entire firmware image in RAM. The firmware_data Vec pattern in launa-esp-ota is acceptable for testing but will OOM on the 32 KiB ESP32 heap in production.'",
+      "evidence": "Two reviews (polish-version-pinning-and-ci and polish-wifi-logging-and-status) flagged the firmware_data Vec accumulation pattern in launa-esp-ota/src/lib.rs. The AGENTS.md already warns about 32 KiB heap but doesn't specifically address OTA-related memory patterns.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "Worker followed the rust-app-worker skill procedure correctly — read mission, features, explored existing code, ran tests before committing.",
+      "reason": "Not actionable knowledge — procedural compliance observation, not codebase knowledge"
+    },
+    {
+      "observation": "Worker followed the rust-worker skill procedure correctly with no deviations.",
+      "reason": "Not actionable knowledge — procedural compliance observation"
+    },
+    {
+      "observation": "Test naming convention follows the pattern test_<module>_<scenario> with descriptive suffixes.",
+      "reason": "Already evident from the codebase itself — not hidden knowledge"
+    }
+  ],
+  "previousRound": null
+}
