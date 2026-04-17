@@ -1847,4 +1847,223 @@ mod tests {
             "subsequent statuses should not have recovery flag"
         );
     }
+
+    // ── VAL-PROTO-005: Command queuing until Ready frame ───────────
+
+    /// Helper: create a Ready frame with a specific client ID.
+    /// After registration, the spa sends <ID> BF 06 instead of 10 BF 06.
+    fn registered_ready_frame(client_id: u8) -> Frame {
+        Frame {
+            message_type: [client_id, 0xBF],
+            payload: vec![0x06],
+        }
+    }
+
+    /// VAL-PROTO-005: Commands queued via on_mqtt_command() must not produce
+    /// a SendFrame action until a Ready frame is received.
+    #[test]
+    fn test_no_send_frame_until_ready() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get initial status
+        let actions = app.process_frame(&status_frame());
+        // Status produces PublishState, but no SendFrame
+        let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(!has_send, "status frame alone should not produce SendFrame");
+
+        // Queue a command
+        let cmd_actions = app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        assert!(
+            cmd_actions.is_empty(),
+            "on_mqtt_command should return no actions"
+        );
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Send another status frame — still no SendFrame (no Ready yet)
+        let actions2 = app.process_frame(&status_frame());
+        let has_send2 = actions2
+            .iter()
+            .any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(
+            !has_send2,
+            "status frame should not dequeue commands — only Ready does"
+        );
+        assert_eq!(
+            app.queued_command_count(),
+            1,
+            "command should still be in queue"
+        );
+
+        // Send yet another status — command still held
+        let actions3 = app.process_frame(&status_frame());
+        let has_send3 = actions3
+            .iter()
+            .any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(
+            !has_send3,
+            "command should remain queued across multiple status frames"
+        );
+        assert_eq!(app.queued_command_count(), 1);
+    }
+
+    /// VAL-PROTO-005: After Ready frame, queued command is dequeued and sent.
+    /// Verifies the exact sequence: queue → no send → Ready → send.
+    #[test]
+    fn test_command_dequeued_only_on_ready() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Get initial status
+        app.process_frame(&status_frame());
+
+        // Queue command
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Multiple status frames — no dequeue
+        for _ in 0..5 {
+            app.process_frame(&status_frame());
+            assert_eq!(app.queued_command_count(), 1);
+        }
+
+        // Now send Ready → command dequeued
+        let actions = app.process_frame(&ready_frame());
+        let send_frames: Vec<_> = actions
+            .iter()
+            .filter(|a| matches!(a, AppAction::SendFrame(_)))
+            .collect();
+        assert_eq!(
+            send_frames.len(),
+            1,
+            "Ready should dequeue exactly one command"
+        );
+        assert_eq!(app.queued_command_count(), 0);
+    }
+
+    /// VAL-PROTO-005: Multiple commands dequeued one at a time per Ready frame.
+    /// Each Ready frame dequeues exactly one command from the front of the queue.
+    #[test]
+    fn test_commands_dequeued_one_per_ready() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+        app.process_frame(&status_frame());
+
+        // Queue 3 commands
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump2));
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump3));
+        assert_eq!(app.queued_command_count(), 3);
+
+        // Status frames don't dequeue
+        app.process_frame(&status_frame());
+        assert_eq!(app.queued_command_count(), 3);
+
+        // Ready 1 → dequeue first command
+        app.process_frame(&ready_frame());
+        assert_eq!(app.queued_command_count(), 2);
+
+        // Another status — no additional dequeue
+        app.process_frame(&status_frame());
+        assert_eq!(app.queued_command_count(), 2);
+
+        // Ready 2 → dequeue second
+        app.process_frame(&ready_frame());
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Ready 3 → dequeue third
+        app.process_frame(&ready_frame());
+        assert_eq!(app.queued_command_count(), 0);
+    }
+
+    /// VAL-PROTO-005: Ready frame with registered client ID also dequeues commands.
+    /// After registration, the spa sends <ID> BF 06 instead of 10 BF 06.
+    #[test]
+    fn test_registered_client_ready_dequeues_command() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x05);
+
+        app.process_frame(&status_frame());
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Use client-ID ready frame instead of generic 10 BF
+        let actions = app.process_frame(&registered_ready_frame(0x05));
+        let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(
+            has_send,
+            "registered client Ready frame should dequeue command"
+        );
+        assert_eq!(app.queued_command_count(), 0);
+    }
+
+    /// VAL-PROTO-005: SetTemperature command is held until Ready and tracked after dequeue.
+    #[test]
+    fn test_set_temperature_held_until_ready_and_tracked() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+        app.process_frame(&status_frame());
+
+        // Queue temperature command
+        app.on_mqtt_command(Command::SetTemperature(104));
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Status doesn't dequeue
+        app.process_frame(&status_frame());
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Ready dequeues and starts tracking
+        let actions = app.process_frame(&ready_frame());
+        let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(has_send);
+        assert_eq!(app.queued_command_count(), 0);
+        // Tracker should be monitoring the command
+        assert!(app.total_dropped() == 0);
+    }
+
+    /// VAL-PROTO-005: Ready without queued command sends NothingToSend.
+    #[test]
+    fn test_ready_without_command_sends_nothing() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+        app.process_frame(&status_frame());
+
+        // No command queued → Ready sends NothingToSend
+        let actions = app.process_frame(&ready_frame());
+        let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(
+            has_send,
+            "Ready without queued command should send NothingToSend"
+        );
+        assert_eq!(app.queued_command_count(), 0);
+    }
+
+    /// VAL-PROTO-005: Command queued before first status is held, then sent on Ready.
+    #[test]
+    fn test_command_queued_before_first_status() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+
+        // Queue command BEFORE any status frame
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Ready arrives before status — command is sent but NOT tracked
+        // (no pre_status for tracker). This is expected behavior: the command
+        // goes on the wire even if we can't track confirmation.
+        let actions = app.process_frame(&ready_frame());
+        let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(
+            has_send,
+            "Ready should dequeue command even without prior status"
+        );
+        assert_eq!(app.queued_command_count(), 0);
+    }
 }

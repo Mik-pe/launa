@@ -59,9 +59,6 @@ pub fn dispatch_frame(frame: &Frame) -> IncomingMessage {
             }
         },
 
-        // Ready indicator: 10 BF
-        [0x10, 0xBF] => IncomingMessage::Ready,
-
         // Registration messages: FE BF
         [0xFE, 0xBF] => {
             if frame.payload.is_empty() {
@@ -340,6 +337,13 @@ pub fn dispatch_frame(frame: &Frame) -> IncomingMessage {
             }
         }
 
+        // Ready indicator: any XX BF where XX is not a known message type.
+        // Protocol: "10 BF 06" for unregistered clients, "<ID> BF 06" for registered.
+        // The second byte 0xBF identifies these as client-addressed ready-to-send messages.
+        // Known prefixes (0x0A, 0xFE, 0xFF) are already matched above; any remaining
+        // XX BF combination is a ready-to-send indicator.
+        [_, 0xBF] => IncomingMessage::Ready,
+
         // Any other message type
         _ => IncomingMessage::Unknown {
             message_type: frame.message_type,
@@ -383,6 +387,105 @@ mod tests {
 
         let msg = dispatch_frame(&frame);
         assert_eq!(msg, IncomingMessage::Ready);
+    }
+
+    /// VAL-PROTO-006: Registered client Ready frame (<ID> BF 06) dispatches as Ready.
+    /// After registration, the spa sends ready-to-send as <ID> BF 06 where <ID>
+    /// is the assigned client ID (not 0x10).
+    #[test]
+    fn test_dispatch_ready_registered_client_id_0x02() {
+        let frame = Frame {
+            message_type: [0x02, 0xBF],
+            payload: vec![0x06],
+        };
+
+        let msg = dispatch_frame(&frame);
+        assert_eq!(msg, IncomingMessage::Ready);
+    }
+
+    /// VAL-PROTO-006: Various registered client IDs all dispatch as Ready.
+    /// Client IDs in the Balboa protocol are typically 0x01-0x09. IDs 0x0A (config),
+    /// 0xFE (registration), and 0xFF (status) are reserved message types.
+    #[test]
+    fn test_dispatch_ready_registered_client_various_ids() {
+        for id in [0x01, 0x02, 0x03, 0x05, 0x09, 0x10, 0x20, 0x7F] {
+            let frame = Frame {
+                message_type: [id, 0xBF],
+                payload: vec![0x06],
+            };
+
+            let msg = dispatch_frame(&frame);
+            assert_eq!(
+                msg,
+                IncomingMessage::Ready,
+                "client ID 0x{:02X} should dispatch as Ready",
+                id
+            );
+        }
+    }
+
+    /// VAL-PROTO-006: <ID> BF with empty payload dispatches as Ready.
+    /// Some implementations may send Ready without a payload byte.
+    #[test]
+    fn test_dispatch_ready_registered_empty_payload() {
+        let frame = Frame {
+            message_type: [0x02, 0xBF],
+            payload: vec![],
+        };
+
+        let msg = dispatch_frame(&frame);
+        assert_eq!(msg, IncomingMessage::Ready);
+    }
+
+    /// VAL-PROTO-006: <ID> BF with non-0x06 payload still dispatches as Ready.
+    /// The dispatcher should not gate on the payload byte value for ready-to-send.
+    #[test]
+    fn test_dispatch_ready_registered_non_06_payload() {
+        let frame = Frame {
+            message_type: [0x02, 0xBF],
+            payload: vec![0x01],
+        };
+
+        let msg = dispatch_frame(&frame);
+        assert_eq!(msg, IncomingMessage::Ready);
+    }
+
+    /// VAL-PROTO-006: Reserved message types 0x0A, 0xFE, 0xFF with 0xBF second byte
+    /// are NOT dispatched as Ready — they are handled by their specific match arms.
+    #[test]
+    fn test_dispatch_reserved_types_not_ready() {
+        // 0x0A BF with unknown sub-type → Unknown, not Ready
+        let frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: vec![0xFF], // unknown sub-type
+        };
+        match dispatch_frame(&frame) {
+            IncomingMessage::Unknown { .. } => {}
+            other => panic!(
+                "Expected Unknown for 0x0A BF with unknown sub-type, got {:?}",
+                other
+            ),
+        }
+
+        // 0xFE BF with 0x00 → NewClientQuery, not Ready
+        let frame = Frame {
+            message_type: [0xFE, 0xBF],
+            payload: vec![0x00],
+        };
+        assert_eq!(dispatch_frame(&frame), IncomingMessage::NewClientQuery);
+
+        // 0xFF AF → StatusUpdate (not BF, but verify it's not confused)
+        let mut payload = vec![0u8; 24];
+        payload[2] = 100;
+        payload[20] = 104;
+        let frame = Frame {
+            message_type: [0xFF, 0xAF],
+            payload,
+        };
+        match dispatch_frame(&frame) {
+            IncomingMessage::StatusUpdate(_) => {}
+            other => panic!("Expected StatusUpdate, got {:?}", other),
+        }
     }
 
     #[test]
