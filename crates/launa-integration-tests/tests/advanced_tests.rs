@@ -8,156 +8,12 @@
 //! 5. Rapid command flood exceeds queue cap (verify total_dropped counter)
 
 use launa_core::{AppAction, SpaApp};
+use launa_integration_tests::harness::TestHarness;
 use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::dispatcher::IncomingMessage;
 use launa_protocol::fault::FaultCode;
-use launa_protocol::frame::FrameDecoder;
 use launa_sim::spa_sim::FaultLogConfig;
-use launa_sim::{SimBroker, SpaSim, VirtualClock};
-use std::boxed::Box;
-
-// ══════════════════════════════════════════════════════════════════════════
-// Helpers (copied from harness_tests.rs — shared harness pattern)
-// ══════════════════════════════════════════════════════════════════════════
-
-struct AdvancedTestHarness {
-    sim: SpaSim,
-    app: SpaApp<'static>,
-    broker: SimBroker,
-    #[allow(dead_code)]
-    clock: &'static VirtualClock,
-    decoder: FrameDecoder,
-}
-
-impl AdvancedTestHarness {
-    fn new() -> Self {
-        let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
-        let sim = SpaSim::new();
-        let app = SpaApp::new(clock);
-        let broker = SimBroker::new("test_spa");
-        AdvancedTestHarness {
-            sim,
-            app,
-            broker,
-            clock,
-            decoder: FrameDecoder::new(),
-        }
-    }
-
-    fn tick_spa(&mut self) -> Vec<AppAction> {
-        let spa_bytes = self.sim.tick();
-        let frames = self.decoder.feed_slice(&spa_bytes);
-        let mut all_actions = Vec::new();
-        for frame in &frames {
-            let actions = self.app.process_frame(frame);
-            all_actions.extend(actions);
-        }
-        all_actions
-    }
-
-    #[allow(dead_code)]
-    fn tick_app(&mut self) -> Vec<AppAction> {
-        self.app.tick()
-    }
-
-    #[allow(dead_code)]
-    fn advance_ms(&mut self, ms: u64) {
-        self.clock.advance_ms(ms);
-    }
-
-    fn send_command(&mut self, cmd: Command) -> Vec<AppAction> {
-        self.app.on_mqtt_command(cmd)
-    }
-
-    fn complete_registration(&mut self, max_ticks: usize) -> usize {
-        for i in 0..max_ticks {
-            let actions = self.tick_spa();
-            self.process_outgoing(&actions);
-
-            if self.app.is_registered() {
-                return i + 1;
-            }
-
-            for action in &actions {
-                if let AppAction::SendFrame(bytes) = action {
-                    let responses = self.sim.process_incoming_bytes(bytes);
-                    if !responses.is_empty() {
-                        let resp_frames = self.decoder.feed_slice(&responses);
-                        for frame in &resp_frames {
-                            let resp_actions = self.app.process_frame(frame);
-                            for ra in &resp_actions {
-                                if let AppAction::SendFrame(rbytes) = ra {
-                                    self.sim.process_incoming_bytes(rbytes);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if self.app.is_registered() {
-                return i + 1;
-            }
-        }
-        panic!("Registration did not complete within {} ticks", max_ticks);
-    }
-
-    fn process_outgoing(&mut self, actions: &[AppAction]) {
-        for action in actions {
-            if let AppAction::SendFrame(bytes) = action {
-                self.sim.process_incoming_bytes(bytes);
-            }
-        }
-    }
-
-    fn execute_actions_on_broker(&mut self, actions: &[AppAction]) {
-        for action in actions {
-            match action {
-                AppAction::PublishState { status, .. } => {
-                    // Use the raw publish() which respects disconnect/loss
-                    let json = launa_mqtt::state::status_to_json(status, None, None);
-                    let topic = launa_mqtt::topics::TopicBuilder::new("test_spa").state_topic();
-                    self.broker.publish(&topic, &json);
-                }
-                AppAction::PublishAvailability { online } => {
-                    let payload = if *online { "online" } else { "offline" };
-                    let topic =
-                        launa_mqtt::topics::TopicBuilder::new("test_spa").availability_topic();
-                    self.broker.publish(&topic, payload);
-                }
-                AppAction::PublishStaleAvailability => {
-                    let topic =
-                        launa_mqtt::topics::TopicBuilder::new("test_spa").availability_topic();
-                    self.broker.publish(&topic, "offline");
-                }
-                AppAction::PublishAlert { level, message } => {
-                    self.broker
-                        .publish(&format!("launa/test_spa/alert/{}", level), message);
-                }
-                AppAction::PublishDiagnostics { .. } => {
-                    self.broker.publish("launa/test_spa/diagnostics", "diag");
-                }
-                _ => {}
-            }
-        }
-    }
-
-    fn collect_actions(&mut self) -> Vec<AppAction> {
-        let actions = self.tick_spa();
-        self.process_outgoing(&actions);
-        self.execute_actions_on_broker(&actions);
-        actions
-    }
-
-    #[allow(dead_code)]
-    fn full_tick(&mut self) -> Vec<AppAction> {
-        let mut all_actions = self.tick_spa();
-        self.process_outgoing(&all_actions);
-        all_actions.extend(self.tick_app());
-        self.execute_actions_on_broker(&all_actions);
-        all_actions
-    }
-}
+use launa_sim::VirtualClock;
 
 // ══════════════════════════════════════════════════════════════════════════
 // Test 1: VAL-SR-006 — Fault log walk entries 1..N
@@ -171,7 +27,7 @@ impl AdvancedTestHarness {
 
 #[test]
 fn test_fault_log_walk_entries_1_to_n() {
-    let mut harness = AdvancedTestHarness::new();
+    let mut harness = TestHarness::new();
     harness.complete_registration(5);
     harness.collect_actions(); // get initial status for tracker
 
@@ -302,7 +158,7 @@ fn test_fault_log_walk_entries_1_to_n() {
 
 #[test]
 fn test_configuration_request_response_pairing() {
-    let mut harness = AdvancedTestHarness::new();
+    let mut harness = TestHarness::new();
     harness.complete_registration(5);
     harness.collect_actions(); // get initial status
 
@@ -374,7 +230,7 @@ fn test_configuration_request_response_pairing() {
 
 #[test]
 fn test_filter_cycles_request_response() {
-    let mut harness = AdvancedTestHarness::new();
+    let mut harness = TestHarness::new();
     harness.complete_registration(5);
     harness.collect_actions(); // get initial status
 
@@ -443,7 +299,7 @@ fn test_filter_cycles_request_response() {
 
 #[test]
 fn test_mqtt_broker_disconnect_reconnect() {
-    let mut harness = AdvancedTestHarness::new();
+    let mut harness = TestHarness::new();
     harness.complete_registration(5);
 
     // Establish baseline: tick once and process through broker (no subscription = accept all)

@@ -1,113 +1,40 @@
 //! Temperature Physics Integration Tests
 //!
-//! Tests for temperature physics features using SpaAppTestHarness:
+//! Tests for temperature physics features using TestHarness:
 //! 1. Overshoot cycle: heat → overshoot → stop → cool → hysteresis → reheat (VAL-TEST-003, VAL-CROSS-003)
 //! 2. Celsius overshoot wire values correct (VAL-TEST-017)
 //! 3. Unknown temp on startup: first N frames report None (VAL-TEST-004)
 //! 4. Sensor noise with command tracking: ±2°F noise, toggle pump, confirmed with zero retries (VAL-TEST-001, VAL-CROSS-004)
 //! 5. Sensor noise with stale detection: stale at 30s silence, no false stale during noise (VAL-TEST-016)
 
-use launa_core::{AppAction, SpaApp};
+use launa_core::AppAction;
+use launa_integration_tests::harness::TestHarness;
 use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::dispatcher::IncomingMessage;
 use launa_protocol::frame::FrameDecoder;
 use launa_protocol::status::{PumpState, TemperatureScale};
-use launa_sim::{SpaSim, VirtualClock};
-use std::boxed::Box;
 
 // ══════════════════════════════════════════════════════════════════════════
-// Temperature Physics Test Harness
+// Temperature Physics Helpers
 // ══════════════════════════════════════════════════════════════════════════
 
+/// Domain-specific helpers for temperature physics tests.
 struct TempPhysicsHarness {
-    sim: SpaSim,
-    app: SpaApp<'static>,
-    clock: &'static VirtualClock,
-    decoder: FrameDecoder,
+    inner: TestHarness,
 }
 
 impl TempPhysicsHarness {
     fn new() -> Self {
-        let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
-        let sim = SpaSim::new();
-        let app = SpaApp::new(clock);
         TempPhysicsHarness {
-            sim,
-            app,
-            clock,
-            decoder: FrameDecoder::new(),
+            inner: TestHarness::new(),
         }
     }
 
-    fn tick_spa(&mut self) -> Vec<AppAction> {
-        let spa_bytes = self.sim.tick();
-        let frames = self.decoder.feed_slice(&spa_bytes);
-        let mut all_actions = Vec::new();
-        for frame in &frames {
-            let actions = self.app.process_frame(frame);
-            all_actions.extend(actions);
-        }
-        all_actions
-    }
-
-    fn tick_app(&mut self) -> Vec<AppAction> {
-        self.app.tick()
-    }
-
-    fn advance_ms(&mut self, ms: u64) {
-        self.clock.advance_ms(ms);
-    }
-
-    fn send_command(&mut self, cmd: Command) -> Vec<AppAction> {
-        self.app.on_mqtt_command(cmd)
-    }
-
-    fn complete_registration(&mut self, max_ticks: usize) -> usize {
-        for i in 0..max_ticks {
-            let actions = self.tick_spa();
-            self.process_outgoing(&actions);
-
-            if self.app.is_registered() {
-                return i + 1;
-            }
-
-            for action in &actions {
-                if let AppAction::SendFrame(bytes) = action {
-                    let responses = self.sim.process_incoming_bytes(bytes);
-                    if !responses.is_empty() {
-                        let resp_frames = self.decoder.feed_slice(&responses);
-                        for frame in &resp_frames {
-                            let resp_actions = self.app.process_frame(frame);
-                            for ra in &resp_actions {
-                                if let AppAction::SendFrame(rbytes) = ra {
-                                    self.sim.process_incoming_bytes(rbytes);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if self.app.is_registered() {
-                return i + 1;
-            }
-        }
-        panic!("Registration did not complete within {} ticks", max_ticks);
-    }
-
-    fn process_outgoing(&mut self, actions: &[AppAction]) {
-        for action in actions {
-            if let AppAction::SendFrame(bytes) = action {
-                self.sim.process_incoming_bytes(bytes);
-            }
-        }
-    }
-
-    /// Execute one full tick cycle: tick spa, process outgoing, run app tick, execute on broker.
+    /// Execute one full tick cycle: tick spa, process outgoing, run app tick.
     fn full_tick(&mut self) -> Vec<AppAction> {
-        let mut all_actions = self.tick_spa();
-        self.process_outgoing(&all_actions);
-        all_actions.extend(self.tick_app());
+        let mut all_actions = self.inner.tick_spa();
+        self.inner.process_outgoing(&all_actions);
+        all_actions.extend(self.inner.tick_app());
         all_actions
     }
 
@@ -152,6 +79,20 @@ impl TempPhysicsHarness {
             AppAction::PublishState { status, .. } => Some(status.temperature_scale),
             _ => None,
         }
+    }
+}
+
+// Forward common harness methods via Deref-like pattern
+impl std::ops::Deref for TempPhysicsHarness {
+    type Target = TestHarness;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl std::ops::DerefMut for TempPhysicsHarness {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
     }
 }
 

@@ -1,4 +1,4 @@
-//! SpaAppTestHarness — Integration test harness wiring SpaSim → FrameDecoder → SpaApp → SimBroker.
+//! Core integration tests for the Launa spa controller.
 //!
 //! Implements the Tier 1 core integration tests for the Launa spa controller:
 //! 1. Harness initial state
@@ -25,238 +25,12 @@
 //! 18. Multi-frame fault log walk
 //! 19. Combined stress test (7-phase sequence)
 
-use launa_core::{AppAction, SpaApp};
+use launa_core::AppAction;
+use launa_integration_tests::harness::TestHarness;
 use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::fault::FaultCode;
 use launa_protocol::frame::FrameDecoder;
 use launa_protocol::status::PumpState;
-use launa_sim::{SimBroker, SpaSim, VirtualClock};
-use std::boxed::Box;
-
-// ══════════════════════════════════════════════════════════════════════════
-// SpaAppTestHarness
-// ══════════════════════════════════════════════════════════════════════════
-
-/// Integration test harness wiring SpaSim → FrameDecoder → SpaApp → SimBroker.
-///
-/// The harness provides a clean pipeline:
-/// - `tick_spa()`: SpaSim generates bytes → FrameDecoder decodes frames → SpaApp processes them
-/// - `tick_app()`: SpaApp periodic tick for time-based checks (stale detection, etc.)
-/// - `send_command()`: Queue MQTT command into SpaApp
-/// - `complete_registration()`: Drive registration to completion
-/// - `advance_ms()`: Advance VirtualClock by N milliseconds
-/// - `collect_actions()`: Gather all actions from a tick cycle
-pub struct SpaAppTestHarness {
-    pub sim: SpaSim,
-    pub app: SpaApp<'static>,
-    pub broker: SimBroker,
-    pub clock: &'static VirtualClock,
-    decoder: FrameDecoder,
-}
-
-/// Collected actions from a single tick cycle.
-pub struct TickResult {
-    pub actions: Vec<AppAction>,
-}
-
-impl SpaAppTestHarness {
-    /// Create a new harness with clean state: unregistered, no status, no publications.
-    pub fn new() -> Self {
-        let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
-        let sim = SpaSim::new();
-        let app = SpaApp::new(clock);
-        let broker = SimBroker::new("test_spa");
-
-        SpaAppTestHarness {
-            sim,
-            app,
-            broker,
-            clock,
-            decoder: FrameDecoder::new(),
-        }
-    }
-
-    /// Run one SpaSim tick: generate spa bytes, decode frames, process through SpaApp.
-    /// Returns all AppActions produced.
-    pub fn tick_spa(&mut self) -> Vec<AppAction> {
-        let spa_bytes = self.sim.tick();
-        let frames = self.decoder.feed_slice(&spa_bytes);
-        let mut all_actions = Vec::new();
-        for frame in &frames {
-            let actions = self.app.process_frame(frame);
-            all_actions.extend(actions);
-        }
-        all_actions
-    }
-
-    /// Run SpaApp periodic tick (time-based checks: stale, diagnostics, etc.).
-    pub fn tick_app(&mut self) -> Vec<AppAction> {
-        self.app.tick()
-    }
-
-    /// Advance virtual clock by N milliseconds (without generating spa data).
-    pub fn advance_ms(&mut self, ms: u64) {
-        self.clock.advance_ms(ms);
-    }
-
-    /// Send an MQTT command into the SpaApp command queue.
-    pub fn send_command(&mut self, cmd: Command) -> Vec<AppAction> {
-        self.app.on_mqtt_command(cmd)
-    }
-
-    /// Drive registration to completion by ticking the spa until registered.
-    /// Returns the number of ticks needed.
-    /// Panics if registration doesn't complete within `max_ticks`.
-    pub fn complete_registration(&mut self, max_ticks: usize) -> usize {
-        for i in 0..max_ticks {
-            // Tick the spa to generate bytes
-            let actions = self.tick_spa();
-            // Process outgoing frames from SpaApp back through SpaSim
-            self.process_outgoing(&actions);
-
-            if self.app.is_registered() {
-                return i + 1;
-            }
-
-            // After sending outgoing frames, SpaSim may have generated responses
-            // (e.g., ClientIdAssignment). We need to feed those back through.
-            // The SpaSim queues its response when process_incoming_bytes is called,
-            // but the response bytes aren't emitted until the next tick() or we
-            // explicitly call process_incoming_bytes again.
-            //
-            // Actually, process_incoming_bytes returns response frames immediately.
-            // We need to feed those responses through the decoder and app.
-            let all_actions = actions;
-            for action in &all_actions {
-                if let AppAction::SendFrame(bytes) = action {
-                    let responses = self.sim.process_incoming_bytes(bytes);
-                    if !responses.is_empty() {
-                        let resp_frames = self.decoder.feed_slice(&responses);
-                        for frame in &resp_frames {
-                            let resp_actions = self.app.process_frame(frame);
-                            // Process any outgoing from responses (e.g., ID ack)
-                            for ra in &resp_actions {
-                                if let AppAction::SendFrame(rbytes) = ra {
-                                    self.sim.process_incoming_bytes(rbytes);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if self.app.is_registered() {
-                return i + 1;
-            }
-        }
-        panic!("Registration did not complete within {} ticks", max_ticks);
-    }
-
-    /// Process outgoing SendFrame actions from SpaApp through the SpaSim.
-    /// This sends controller frames back to the simulator (e.g., registration responses,
-    /// commands) so the simulator can update its state.
-    pub fn process_outgoing(&mut self, actions: &[AppAction]) {
-        for action in actions {
-            if let AppAction::SendFrame(bytes) = action {
-                let _responses = self.sim.process_incoming_bytes(bytes);
-                // Responses from the sim (e.g., registration assignment) will be
-                // picked up on the next tick_spa() call
-            }
-        }
-    }
-
-    /// Execute all AppActions against the broker (record PublishState, PublishAlert, etc.).
-    pub fn execute_actions_on_broker(&mut self, actions: &[AppAction]) {
-        for action in actions {
-            match action {
-                AppAction::PublishState {
-                    status,
-                    fault,
-                    recovering_from_stale: _,
-                } => {
-                    self.broker.publish_state(status);
-                    if let Some(f) = fault {
-                        // Could record fault, but broker doesn't have a direct method
-                        let _ = f;
-                    }
-                }
-                AppAction::PublishAvailability { online } => {
-                    self.broker.publish_availability(*online);
-                }
-                AppAction::PublishStaleAvailability => {
-                    self.broker.publish_availability(false);
-                }
-                AppAction::PublishAlert { level, message } => {
-                    self.broker
-                        .publish(&format!("launa/test_spa/alert/{}", level), message);
-                }
-                AppAction::PublishDiagnostics {
-                    uptime_secs,
-                    frames_received,
-                    command_retries,
-                    command_drops,
-                } => {
-                    let payload = format!(
-                        "{{\"uptime\":{},\"frames\":{},\"retries\":{},\"drops\":{}}}",
-                        uptime_secs, frames_received, command_retries, command_drops
-                    );
-                    self.broker.publish("launa/test_spa/diagnostics", &payload);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    /// Collect and execute all actions from a single spa tick cycle.
-    /// Returns all actions produced.
-    pub fn collect_actions(&mut self) -> Vec<AppAction> {
-        let actions = self.tick_spa();
-        // Process outgoing frames through sim
-        self.process_outgoing(&actions);
-        // Execute publish actions on broker
-        self.execute_actions_on_broker(&actions);
-        actions
-    }
-
-    /// Run a full tick cycle: spa tick + app tick, process outgoing, execute on broker.
-    /// Returns all actions from both tick sources.
-    pub fn full_tick(&mut self) -> Vec<AppAction> {
-        let mut all_actions = self.tick_spa();
-        self.process_outgoing(&all_actions);
-        all_actions.extend(self.tick_app());
-        self.execute_actions_on_broker(&all_actions);
-        all_actions
-    }
-
-    /// Helper: count how many actions of a specific type are in the list.
-    pub fn count_action_type(actions: &[AppAction], matcher: impl Fn(&AppAction) -> bool) -> usize {
-        let mut count = 0;
-        for a in actions {
-            if matcher(a) {
-                count += 1;
-            }
-        }
-        count
-    }
-
-    /// Helper: check if any SendFrame action contains an encoded toggle for the given item.
-    pub fn has_toggle_for(actions: &[AppAction], item: ToggleItem) -> bool {
-        let (mt, payload) = Command::ToggleItem(item).encode();
-        let expected = launa_protocol::frame::FrameEncoder::encode(mt, &payload).unwrap();
-        actions.iter().any(|a| {
-            if let AppAction::SendFrame(bytes) = a {
-                bytes == &expected
-            } else {
-                false
-            }
-        })
-    }
-
-    /// Get the frame error count from the internal decoder.
-    pub fn frame_error_count(&self) -> u32 {
-        self.decoder.frame_error_count()
-    }
-}
 
 // ══════════════════════════════════════════════════════════════════════════
 // Test 1: VAL-IT-001 — Harness initial state
@@ -264,7 +38,7 @@ impl SpaAppTestHarness {
 
 #[test]
 fn test_harness_initial_state() {
-    let harness = SpaAppTestHarness::new();
+    let harness = TestHarness::new();
 
     // Unregistered
     assert!(
@@ -309,7 +83,7 @@ fn test_harness_initial_state() {
 
 #[test]
 fn test_registration_e2e() {
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // Registration should complete within ≤5 ticks
     let ticks = harness.complete_registration(5);
@@ -336,7 +110,7 @@ fn test_registration_e2e() {
 
 #[test]
 fn test_status_to_mqtt_publish() {
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // Complete registration first
     harness.complete_registration(5);
@@ -348,7 +122,7 @@ fn test_status_to_mqtt_publish() {
     let mut total_publish_state = 0;
     for _ in 0..5 {
         let actions = harness.collect_actions();
-        total_publish_state += SpaAppTestHarness::count_action_type(&actions, |a| {
+        total_publish_state += TestHarness::count_action_type(&actions, |a| {
             matches!(a, AppAction::PublishState { .. })
         });
     }
@@ -380,7 +154,7 @@ fn test_status_to_mqtt_publish() {
 
 #[test]
 fn test_command_to_wire_frame() {
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // Complete registration
     harness.complete_registration(5);
@@ -438,7 +212,7 @@ fn test_command_to_wire_frame() {
 
 #[test]
 fn test_pump_timer_auto_off() {
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // Complete registration
     harness.complete_registration(5);
@@ -471,7 +245,7 @@ fn test_pump_timer_auto_off() {
     let auto_off_actions = harness.collect_actions();
 
     // Should contain a SendFrame for the auto-off toggle
-    let has_auto_off = SpaAppTestHarness::has_toggle_for(&auto_off_actions, ToggleItem::Pump1);
+    let has_auto_off = TestHarness::has_toggle_for(&auto_off_actions, ToggleItem::Pump1);
     assert!(
         has_auto_off,
         "auto-off toggle should appear at timeout boundary"
@@ -484,7 +258,7 @@ fn test_pump_timer_auto_off() {
 
 #[test]
 fn test_hold_mode_auto_release() {
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // Complete registration
     harness.complete_registration(5);
@@ -513,7 +287,7 @@ fn test_hold_mode_auto_release() {
 
     // Next status with hold still active → timer should fire auto-release toggle
     let fire_actions = harness.collect_actions();
-    let fired = SpaAppTestHarness::has_toggle_for(&fire_actions, ToggleItem::HoldMode);
+    let fired = TestHarness::has_toggle_for(&fire_actions, ToggleItem::HoldMode);
     assert!(
         fired,
         "hold timer should fire auto-release toggle at 60min boundary"
@@ -522,7 +296,7 @@ fn test_hold_mode_auto_release() {
     // Advance more time — should NOT re-fire while hold is still active (fired flag)
     harness.advance_ms(5_000);
     let no_refire_actions = harness.collect_actions();
-    let refired = SpaAppTestHarness::has_toggle_for(&no_refire_actions, ToggleItem::HoldMode);
+    let refired = TestHarness::has_toggle_for(&no_refire_actions, ToggleItem::HoldMode);
     assert!(
         !refired,
         "hold timer should NOT re-fire while hold mode is still active after firing"
@@ -531,7 +305,7 @@ fn test_hold_mode_auto_release() {
     // Advance another full timeout — still should not re-fire
     harness.advance_ms(61 * 60 * 1000);
     let no_refire2_actions = harness.collect_actions();
-    let refired2 = SpaAppTestHarness::has_toggle_for(&no_refire2_actions, ToggleItem::HoldMode);
+    let refired2 = TestHarness::has_toggle_for(&no_refire2_actions, ToggleItem::HoldMode);
     assert!(
         !refired2,
         "hold timer should NOT re-fire even after another full timeout period"
@@ -548,7 +322,7 @@ fn test_hold_mode_auto_release() {
     // Advance past timeout again → should fire again
     harness.advance_ms(61 * 60 * 1000);
     let re_fire_actions = harness.collect_actions();
-    let re_fired = SpaAppTestHarness::has_toggle_for(&re_fire_actions, ToggleItem::HoldMode);
+    let re_fired = TestHarness::has_toggle_for(&re_fire_actions, ToggleItem::HoldMode);
     assert!(
         re_fired,
         "hold timer should fire again after hold mode was released and re-entered"
@@ -561,7 +335,7 @@ fn test_hold_mode_auto_release() {
 
 #[test]
 fn test_stale_detection_and_recovery() {
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // Complete registration
     harness.complete_registration(5);
@@ -658,7 +432,7 @@ fn test_stale_detection_and_recovery() {
 
 #[test]
 fn test_spa_reboot_mid_session() {
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // Phase 1: Establish a stable session
     harness.complete_registration(5);
@@ -730,7 +504,7 @@ fn test_spa_reboot_mid_session() {
 
 #[test]
 fn test_dropped_commands_retry_and_drop() {
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // Complete registration
     harness.complete_registration(5);
@@ -795,7 +569,7 @@ fn test_dropped_commands_retry_and_drop() {
 
 #[test]
 fn test_bus_silence_lifecycle() {
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // Phase 1: Normal operation
     harness.complete_registration(5);
@@ -875,7 +649,7 @@ fn test_bus_silence_lifecycle() {
 
 #[test]
 fn test_corrupt_frame_no_desync() {
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // Complete registration
     harness.complete_registration(5);
@@ -936,7 +710,7 @@ fn test_corrupt_frame_no_desync() {
 
 #[test]
 fn test_spontaneous_filter_cycle_while_command_pending() {
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // Complete registration
     harness.complete_registration(5);
@@ -1027,7 +801,7 @@ fn test_spontaneous_filter_cycle_while_command_pending() {
 
 #[test]
 fn test_out_of_order_frames_ready_before_status() {
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // Complete registration first
     harness.complete_registration(5);
@@ -1089,7 +863,7 @@ fn test_out_of_order_frames_ready_before_status() {
 
 #[test]
 fn test_interleaved_frames_in_single_buffer() {
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // Complete registration first
     harness.complete_registration(5);
@@ -1166,7 +940,7 @@ fn test_interleaved_frames_in_single_buffer() {
 fn test_rapid_reregistration_multiple_queries() {
     // Test at the SpaApp level: feed multiple NewClientQuery frames directly
     // to verify no panic, queue cleared, and re-registration eventually succeeds.
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // Phase 1: Complete initial registration
     harness.complete_registration(5);
@@ -1238,7 +1012,7 @@ fn test_rapid_reregistration_multiple_queries() {
 
 #[test]
 fn test_partial_frame_across_tick_boundary() {
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // Complete registration
     harness.complete_registration(5);
@@ -1322,7 +1096,7 @@ fn test_partial_frame_across_tick_boundary() {
 
 #[test]
 fn test_duplicate_status_frame_in_one_tick() {
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // Complete registration
     harness.complete_registration(5);
@@ -1407,7 +1181,7 @@ fn test_duplicate_status_frame_in_one_tick() {
 
 #[test]
 fn test_multi_frame_fault_log_walk() {
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // Complete registration
     harness.complete_registration(5);
@@ -1490,7 +1264,7 @@ fn test_multi_frame_fault_log_walk() {
 
 #[test]
 fn test_combined_stress_7_phase() {
-    let mut harness = SpaAppTestHarness::new();
+    let mut harness = TestHarness::new();
 
     // ── Phase 1: Registration ──
     harness.complete_registration(5);

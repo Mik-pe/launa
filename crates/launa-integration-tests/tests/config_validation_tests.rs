@@ -13,6 +13,7 @@
 //!    (VAL-CROSS-011)
 
 use launa_core::{AppAction, SpaApp};
+use launa_integration_tests::harness::TestHarness;
 use launa_protocol::command::{validate_set_temperature, Command, TempError};
 use launa_protocol::dispatcher::IncomingMessage;
 use launa_protocol::frame::{Frame, FrameDecoder};
@@ -21,172 +22,31 @@ use launa_sim::spa_sim::{
     FilterCycleConfig, FilterCyclesConfig, InformationConfig, SpaConfigConfig,
 };
 use launa_sim::{SimBroker, SpaSim, VirtualClock};
-use std::boxed::Box;
 
-// ══════════════════════════════════════════════════════════════════════════
-// Config Validation Test Harness
-// ══════════════════════════════════════════════════════════════════════════
+/// Send a command through the full pipeline: queue → Ready → SpaSim → decode → SpaApp.
+/// Returns the SpaSim response decoded as IncomingMessage(s).
+fn send_command_and_get_response(harness: &mut TestHarness, cmd: Command) -> Vec<IncomingMessage> {
+    harness.send_command(cmd);
+    let ready_frame = Frame {
+        message_type: [0x10, 0xBF],
+        payload: vec![0x06],
+    };
+    let actions = harness.app.process_frame(&ready_frame);
 
-struct ConfigValidationHarness {
-    sim: SpaSim,
-    app: SpaApp<'static>,
-    broker: SimBroker,
-    clock: &'static VirtualClock,
-    decoder: FrameDecoder,
-}
-
-impl ConfigValidationHarness {
-    fn new() -> Self {
-        let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
-        let sim = SpaSim::new();
-        let app = SpaApp::new(clock);
-        let broker = SimBroker::new("test_spa");
-        ConfigValidationHarness {
-            sim,
-            app,
-            broker,
-            clock,
-            decoder: FrameDecoder::new(),
-        }
-    }
-
-    fn tick_spa(&mut self) -> Vec<AppAction> {
-        let spa_bytes = self.sim.tick();
-        let frames = self.decoder.feed_slice(&spa_bytes);
-        let mut all_actions = Vec::new();
-        for frame in &frames {
-            let actions = self.app.process_frame(frame);
-            all_actions.extend(actions);
-        }
-        all_actions
-    }
-
-    fn tick_app(&mut self) -> Vec<AppAction> {
-        self.app.tick()
-    }
-
-    fn advance_ms(&mut self, ms: u64) {
-        self.clock.advance_ms(ms);
-    }
-
-    fn send_command(&mut self, cmd: Command) -> Vec<AppAction> {
-        self.app.on_mqtt_command(cmd)
-    }
-
-    fn complete_registration(&mut self, max_ticks: usize) -> usize {
-        for i in 0..max_ticks {
-            let actions = self.tick_spa();
-            self.process_outgoing(&actions);
-
-            if self.app.is_registered() {
-                return i + 1;
-            }
-
-            for action in &actions {
-                if let AppAction::SendFrame(bytes) = action {
-                    let responses = self.sim.process_incoming_bytes(bytes);
-                    if !responses.is_empty() {
-                        let resp_frames = self.decoder.feed_slice(&responses);
-                        for frame in &resp_frames {
-                            let resp_actions = self.app.process_frame(frame);
-                            for ra in &resp_actions {
-                                if let AppAction::SendFrame(rbytes) = ra {
-                                    self.sim.process_incoming_bytes(rbytes);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if self.app.is_registered() {
-                return i + 1;
-            }
-        }
-        panic!("Registration did not complete within {} ticks", max_ticks);
-    }
-
-    fn process_outgoing(&mut self, actions: &[AppAction]) {
-        for action in actions {
-            if let AppAction::SendFrame(bytes) = action {
-                self.sim.process_incoming_bytes(bytes);
-            }
-        }
-    }
-
-    fn execute_actions_on_broker(&mut self, actions: &[AppAction]) {
-        for action in actions {
-            match action {
-                AppAction::PublishState { status, .. } => {
-                    let json = launa_mqtt::state::status_to_json(status, None, None);
-                    let topic = launa_mqtt::topics::TopicBuilder::new("test_spa").state_topic();
-                    self.broker.publish(&topic, &json);
-                }
-                AppAction::PublishAvailability { online } => {
-                    let payload = if *online { "online" } else { "offline" };
-                    let topic =
-                        launa_mqtt::topics::TopicBuilder::new("test_spa").availability_topic();
-                    self.broker.publish(&topic, payload);
-                }
-                AppAction::PublishStaleAvailability => {
-                    let topic =
-                        launa_mqtt::topics::TopicBuilder::new("test_spa").availability_topic();
-                    self.broker.publish(&topic, "offline");
-                }
-                AppAction::PublishAlert { level, message } => {
-                    self.broker
-                        .publish(&format!("launa/test_spa/alert/{}", level), message);
-                }
-                AppAction::PublishDiagnostics { .. } => {
-                    self.broker.publish("launa/test_spa/diagnostics", "diag");
-                }
-                _ => {}
-            }
-        }
-    }
-
-    /// Send a command through the full pipeline: queue → Ready → SpaSim → decode → SpaApp.
-    /// Returns the SpaSim response decoded as IncomingMessage(s).
-    fn send_command_and_get_response(&mut self, cmd: Command) -> Vec<IncomingMessage> {
-        self.send_command(cmd);
-        let ready_frame = Frame {
-            message_type: [0x10, 0xBF],
-            payload: vec![0x06],
-        };
-        let actions = self.app.process_frame(&ready_frame);
-
-        let mut messages = Vec::new();
-        for action in &actions {
-            if let AppAction::SendFrame(bytes) = action {
-                let response_bytes = self.sim.process_incoming_bytes(bytes);
-                if !response_bytes.is_empty() {
-                    let resp_frames = self.decoder.feed_slice(&response_bytes);
-                    for frame in &resp_frames {
-                        let msg = launa_protocol::dispatcher::dispatch_frame(frame);
-                        messages.push(msg);
-                    }
+    let mut messages = Vec::new();
+    for action in &actions {
+        if let AppAction::SendFrame(bytes) = action {
+            let response_bytes = harness.sim.process_incoming_bytes(bytes);
+            if !response_bytes.is_empty() {
+                let resp_frames = harness.decoder.feed_slice(&response_bytes);
+                for frame in &resp_frames {
+                    let msg = launa_protocol::dispatcher::dispatch_frame(frame);
+                    messages.push(msg);
                 }
             }
         }
-        messages
     }
-
-    /// Collect all actions from a full tick cycle.
-    fn collect_actions(&mut self) -> Vec<AppAction> {
-        let actions = self.tick_spa();
-        self.process_outgoing(&actions);
-        self.execute_actions_on_broker(&actions);
-        actions
-    }
-
-    /// Full tick with app tick too.
-    fn full_tick(&mut self) -> Vec<AppAction> {
-        let mut all_actions = self.tick_spa();
-        self.process_outgoing(&all_actions);
-        all_actions.extend(self.tick_app());
-        self.execute_actions_on_broker(&all_actions);
-        all_actions
-    }
+    messages
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -197,7 +57,7 @@ impl ConfigValidationHarness {
 /// Set non-default SpaConfig values, request config, verify parsed response matches.
 #[test]
 fn test_custom_spa_config_round_trip() {
-    let mut harness = ConfigValidationHarness::new();
+    let mut harness = TestHarness::new();
     harness.complete_registration(5);
 
     // Configure SpaSim with non-default spa config
@@ -212,7 +72,7 @@ fn test_custom_spa_config_round_trip() {
         raw_payload: custom_payload,
     });
 
-    let messages = harness.send_command_and_get_response(Command::ConfigurationRequest);
+    let messages = send_command_and_get_response(&mut harness, Command::ConfigurationRequest);
     assert_eq!(messages.len(), 1, "should get exactly 1 config response");
 
     match &messages[0] {
@@ -240,7 +100,7 @@ fn test_custom_spa_config_round_trip() {
 /// Set non-default information config, request info, verify parsed response matches.
 #[test]
 fn test_custom_information_response_round_trip() {
-    let mut harness = ConfigValidationHarness::new();
+    let mut harness = TestHarness::new();
     harness.complete_registration(5);
 
     // Configure custom information: different model, signature, heater type/voltage
@@ -265,7 +125,7 @@ fn test_custom_information_response_round_trip() {
         dip_switch_byte1: 0x01,
     });
 
-    let messages = harness.send_command_and_get_response(Command::InformationRequest);
+    let messages = send_command_and_get_response(&mut harness, Command::InformationRequest);
     assert_eq!(messages.len(), 1, "should get exactly 1 info response");
 
     match &messages[0] {
@@ -296,7 +156,7 @@ fn test_custom_information_response_round_trip() {
 /// Set non-default filter cycle config, request filter cycles, verify parsed response matches.
 #[test]
 fn test_custom_filter_cycles_round_trip() {
-    let mut harness = ConfigValidationHarness::new();
+    let mut harness = TestHarness::new();
     harness.complete_registration(5);
 
     // Configure custom filter cycles: non-default start hours, durations, and filter2 disabled
@@ -317,7 +177,7 @@ fn test_custom_filter_cycles_round_trip() {
         },
     });
 
-    let messages = harness.send_command_and_get_response(Command::FilterCyclesRequest);
+    let messages = send_command_and_get_response(&mut harness, Command::FilterCyclesRequest);
     assert_eq!(messages.len(), 1, "should get exactly 1 filter response");
 
     match &messages[0] {
@@ -353,7 +213,7 @@ fn test_custom_filter_cycles_round_trip() {
 /// Configure non-default pump config, request config, parse through SpaApp.
 #[test]
 fn test_custom_spa_config_through_full_pipeline() {
-    let mut harness = ConfigValidationHarness::new();
+    let mut harness = TestHarness::new();
     harness.complete_registration(5);
     harness.collect_actions(); // get initial status for tracker
 
@@ -694,7 +554,7 @@ fn test_scale_switch_f_to_c_wire_values_2x() {
 /// VAL-CROSS-010: F→C mid-session, MQTT state shows correct Celsius values.
 #[test]
 fn test_scale_switch_f_to_c_mqtt_state() {
-    let mut harness = ConfigValidationHarness::new();
+    let mut harness = TestHarness::new();
     harness.complete_registration(5);
 
     // Collect initial state in Fahrenheit
@@ -779,7 +639,7 @@ fn test_scale_switch_f_to_c_validation_uses_celsius_range() {
 /// VAL-CROSS-010: Full end-to-end scale switch through SpaApp pipeline.
 #[test]
 fn test_scale_switch_f_to_c_e2e_pipeline() {
-    let mut harness = ConfigValidationHarness::new();
+    let mut harness = TestHarness::new();
     harness.complete_registration(5);
 
     // Get initial Fahrenheit status
@@ -1025,7 +885,7 @@ fn test_heap_lifecycle_ok_warning_critical_recovery() {
 /// Verify the alert sequence is published to the broker correctly.
 #[test]
 fn test_heap_lifecycle_integration_with_broker() {
-    let mut harness = ConfigValidationHarness::new();
+    let mut harness = TestHarness::new();
     harness.complete_registration(5);
     harness.collect_actions();
 

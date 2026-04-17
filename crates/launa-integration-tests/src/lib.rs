@@ -2,6 +2,8 @@
 //!
 //! These tests exercise the full pipeline from simulator → protocol → MQTT.
 
+pub mod harness;
+
 #[cfg(test)]
 mod tests {
     use launa_mqtt::command_parser::ParseResult;

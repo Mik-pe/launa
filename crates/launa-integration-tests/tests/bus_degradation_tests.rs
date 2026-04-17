@@ -10,142 +10,10 @@
 //! 7. Slow degraded bus endurance (VAL-TEST-015)
 //! 8. Long degraded bus with recovery (VAL-TEST-021, VAL-CROSS-005, VAL-CROSS-008)
 
-use launa_core::{AppAction, SpaApp};
+use launa_core::AppAction;
+use launa_integration_tests::harness::TestHarness;
 use launa_protocol::command::{Command, ToggleItem};
-use launa_protocol::frame::FrameDecoder;
 use launa_protocol::status::PumpState;
-use launa_sim::{SimBroker, SpaSim, VirtualClock};
-use std::boxed::Box;
-
-// ══════════════════════════════════════════════════════════════════════════
-// Bus Degradation Test Harness
-// ══════════════════════════════════════════════════════════════════════════
-
-struct BusDegradationHarness {
-    sim: SpaSim,
-    app: SpaApp<'static>,
-    broker: SimBroker,
-    clock: &'static VirtualClock,
-    decoder: FrameDecoder,
-}
-
-impl BusDegradationHarness {
-    fn new() -> Self {
-        let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
-        let sim = SpaSim::new();
-        let app = SpaApp::new(clock);
-        let broker = SimBroker::new("test_spa");
-        BusDegradationHarness {
-            sim,
-            app,
-            broker,
-            clock,
-            decoder: FrameDecoder::new(),
-        }
-    }
-
-    fn tick_spa(&mut self) -> Vec<AppAction> {
-        let spa_bytes = self.sim.tick();
-        let frames = self.decoder.feed_slice(&spa_bytes);
-        let mut all_actions = Vec::new();
-        for frame in &frames {
-            let actions = self.app.process_frame(frame);
-            all_actions.extend(actions);
-        }
-        all_actions
-    }
-
-    fn tick_app(&mut self) -> Vec<AppAction> {
-        self.app.tick()
-    }
-
-    fn advance_ms(&mut self, ms: u64) {
-        self.clock.advance_ms(ms);
-    }
-
-    fn complete_registration(&mut self, max_ticks: usize) -> usize {
-        for i in 0..max_ticks {
-            let actions = self.tick_spa();
-            self.process_outgoing(&actions);
-
-            if self.app.is_registered() {
-                return i + 1;
-            }
-
-            for action in &actions {
-                if let AppAction::SendFrame(bytes) = action {
-                    let responses = self.sim.process_incoming_bytes(bytes);
-                    if !responses.is_empty() {
-                        let resp_frames = self.decoder.feed_slice(&responses);
-                        for frame in &resp_frames {
-                            let resp_actions = self.app.process_frame(frame);
-                            for ra in &resp_actions {
-                                if let AppAction::SendFrame(rbytes) = ra {
-                                    self.sim.process_incoming_bytes(rbytes);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if self.app.is_registered() {
-                return i + 1;
-            }
-        }
-        panic!("Registration did not complete within {} ticks", max_ticks);
-    }
-
-    fn process_outgoing(&mut self, actions: &[AppAction]) {
-        for action in actions {
-            if let AppAction::SendFrame(bytes) = action {
-                self.sim.process_incoming_bytes(bytes);
-            }
-        }
-    }
-
-    fn execute_actions_on_broker(&mut self, actions: &[AppAction]) {
-        for action in actions {
-            match action {
-                AppAction::PublishState { status, .. } => {
-                    let json = launa_mqtt::state::status_to_json(status, None, None);
-                    let topic = launa_mqtt::topics::TopicBuilder::new("test_spa").state_topic();
-                    self.broker.publish(&topic, &json);
-                }
-                AppAction::PublishAvailability { online } => {
-                    self.broker.publish_availability(*online);
-                }
-                AppAction::PublishStaleAvailability => {
-                    self.broker.publish_availability(false);
-                }
-                AppAction::PublishAlert { level, message } => {
-                    self.broker
-                        .publish(&format!("launa/test_spa/alert/{}", level), message);
-                }
-                AppAction::PublishDiagnostics { .. } => {
-                    self.broker.publish("launa/test_spa/diagnostics", "diag");
-                }
-                _ => {}
-            }
-        }
-    }
-
-    /// Execute one full tick cycle: tick spa, process outgoing, run app tick, execute on broker.
-    fn full_tick(&mut self) -> Vec<AppAction> {
-        let mut all_actions = self.tick_spa();
-        self.process_outgoing(&all_actions);
-        all_actions.extend(self.tick_app());
-        self.execute_actions_on_broker(&all_actions);
-        all_actions
-    }
-
-    /// Tick spa and process outgoing (no app tick, no broker).
-    fn tick_spa_with_outgoing(&mut self) -> Vec<AppAction> {
-        let actions = self.tick_spa();
-        self.process_outgoing(&actions);
-        actions
-    }
-}
 
 // ══════════════════════════════════════════════════════════════════════════
 // Test 1: VAL-TEST-002 — Command latency + retry interaction
@@ -157,7 +25,7 @@ impl BusDegradationHarness {
 
 #[test]
 fn test_command_latency_no_false_retry_within_window() {
-    let mut harness = BusDegradationHarness::new();
+    let mut harness = TestHarness::new();
 
     // Set command latency: spa takes 3 ticks to apply state changes
     harness.sim.set_command_latency_ticks(3);
@@ -221,7 +89,7 @@ fn test_command_latency_no_false_retry_within_window() {
 
 #[test]
 fn test_frame_jitter_50_ticks_zero_frame_errors() {
-    let mut harness = BusDegradationHarness::new();
+    let mut harness = TestHarness::new();
 
     // Set frame jitter: add random padding bytes before each frame
     harness.sim.set_frame_jitter_ticks(10);
@@ -279,7 +147,7 @@ fn test_frame_jitter_50_ticks_zero_frame_errors() {
 
 #[test]
 fn test_variable_ready_interval_3_commands_all_drained() {
-    let mut harness = BusDegradationHarness::new();
+    let mut harness = TestHarness::new();
 
     // Set variable Ready interval: Ready frames arrive every 2-5 ticks
     harness.sim.set_ready_interval_range(2, 5);
@@ -335,7 +203,7 @@ fn test_variable_ready_interval_3_commands_all_drained() {
 
 #[test]
 fn test_variable_ready_stale_based_on_status_frames_only() {
-    let mut harness = BusDegradationHarness::new();
+    let mut harness = TestHarness::new();
 
     // Set variable Ready interval with extended gaps
     harness.sim.set_ready_interval_range(5, 10);
@@ -393,7 +261,7 @@ fn test_variable_ready_stale_based_on_status_frames_only() {
 
 #[test]
 fn test_intermittent_command_acceptance_retries_and_drops() {
-    let mut harness = BusDegradationHarness::new();
+    let mut harness = TestHarness::new();
 
     // Set 50% command success rate — sim accepts ~half the commands
     harness.sim.set_command_success_rate(0.5);
@@ -459,7 +327,7 @@ fn test_intermittent_command_acceptance_retries_and_drops() {
 
 #[test]
 fn test_broker_loss_rate_no_panics_eventual_consistency() {
-    let mut harness = BusDegradationHarness::new();
+    let mut harness = TestHarness::new();
 
     // Set broker loss rate: ~30% of publish messages are dropped
     harness.broker.set_loss_rate(0.3);
@@ -525,7 +393,7 @@ fn test_broker_loss_rate_no_panics_eventual_consistency() {
 
 #[test]
 fn test_degraded_bus_100_ticks_stable() {
-    let mut harness = BusDegradationHarness::new();
+    let mut harness = TestHarness::new();
 
     // Configure combined degradation
     harness.sim.set_frame_jitter_ticks(5);
@@ -616,7 +484,7 @@ fn test_degraded_bus_100_ticks_stable() {
 
 #[test]
 fn test_long_degraded_bus_200_ticks_with_recovery() {
-    let mut harness = BusDegradationHarness::new();
+    let mut harness = TestHarness::new();
 
     // Phase 1: Configure degraded conditions
     harness.sim.set_frame_jitter_ticks(3);
@@ -740,7 +608,7 @@ fn test_long_degraded_bus_200_ticks_with_recovery() {
 
 #[test]
 fn test_intermittent_bus_stale_detection_recovery() {
-    let mut harness = BusDegradationHarness::new();
+    let mut harness = TestHarness::new();
 
     // Configure intermittent bus: 50% command success
     harness.sim.set_command_success_rate(0.5);
@@ -818,7 +686,7 @@ fn test_intermittent_bus_stale_detection_recovery() {
 
 #[test]
 fn test_degraded_bus_500_ticks_stability() {
-    let mut harness = BusDegradationHarness::new();
+    let mut harness = TestHarness::new();
 
     // Configure heavy degradation
     harness.sim.set_frame_jitter_ticks(3);

@@ -14,135 +14,11 @@
 //! 7. Rapid toggle race (4 toggles, parity) — VAL-TEST-013
 //! 8. Rapid temperature race (100→104→102, last wins) — VAL-TEST-020
 
-use launa_core::{AppAction, SpaApp};
+use launa_core::AppAction;
+use launa_integration_tests::harness::TestHarness;
 use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::fault::FaultCode;
-use launa_protocol::frame::FrameDecoder;
 use launa_protocol::status::PumpState;
-use launa_sim::{SimBroker, SpaSim, VirtualClock};
-use std::boxed::Box;
-
-// ══════════════════════════════════════════════════════════════════════════
-// Fault & Timer Test Harness
-// ══════════════════════════════════════════════════════════════════════════
-
-struct FaultTimerHarness {
-    sim: SpaSim,
-    app: SpaApp<'static>,
-    broker: SimBroker,
-    clock: &'static VirtualClock,
-    decoder: FrameDecoder,
-}
-
-impl FaultTimerHarness {
-    fn new() -> Self {
-        let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
-        let sim = SpaSim::new();
-        let app = SpaApp::new(clock);
-        let broker = SimBroker::new("test_spa");
-        FaultTimerHarness {
-            sim,
-            app,
-            broker,
-            clock,
-            decoder: FrameDecoder::new(),
-        }
-    }
-
-    fn tick_spa(&mut self) -> Vec<AppAction> {
-        let spa_bytes = self.sim.tick();
-        let frames = self.decoder.feed_slice(&spa_bytes);
-        let mut all_actions = Vec::new();
-        for frame in &frames {
-            let actions = self.app.process_frame(frame);
-            all_actions.extend(actions);
-        }
-        all_actions
-    }
-
-    fn advance_ms(&mut self, ms: u64) {
-        self.clock.advance_ms(ms);
-    }
-
-    fn send_command(&mut self, cmd: Command) -> Vec<AppAction> {
-        self.app.on_mqtt_command(cmd)
-    }
-
-    fn complete_registration(&mut self, max_ticks: usize) -> usize {
-        for i in 0..max_ticks {
-            let actions = self.tick_spa();
-            self.process_outgoing(&actions);
-
-            if self.app.is_registered() {
-                return i + 1;
-            }
-
-            for action in &actions {
-                if let AppAction::SendFrame(bytes) = action {
-                    let responses = self.sim.process_incoming_bytes(bytes);
-                    if !responses.is_empty() {
-                        let resp_frames = self.decoder.feed_slice(&responses);
-                        for frame in &resp_frames {
-                            let resp_actions = self.app.process_frame(frame);
-                            for ra in &resp_actions {
-                                if let AppAction::SendFrame(rbytes) = ra {
-                                    self.sim.process_incoming_bytes(rbytes);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if self.app.is_registered() {
-                return i + 1;
-            }
-        }
-        panic!("Registration did not complete within {} ticks", max_ticks);
-    }
-
-    fn process_outgoing(&mut self, actions: &[AppAction]) {
-        for action in actions {
-            if let AppAction::SendFrame(bytes) = action {
-                self.sim.process_incoming_bytes(bytes);
-            }
-        }
-    }
-
-    fn collect_actions(&mut self) -> Vec<AppAction> {
-        let actions = self.tick_spa();
-        self.process_outgoing(&actions);
-        self.execute_actions_on_broker(&actions);
-        actions
-    }
-
-    fn execute_actions_on_broker(&mut self, actions: &[AppAction]) {
-        for action in actions {
-            match action {
-                AppAction::PublishState { status, .. } => {
-                    self.broker.publish_state(status);
-                }
-                AppAction::PublishStaleAvailability => {
-                    self.broker.publish_availability(false);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    /// Helper: check if any SendFrame action contains an encoded toggle for the given item.
-    fn has_toggle_for(actions: &[AppAction], item: ToggleItem) -> bool {
-        let (mt, payload) = Command::ToggleItem(item).encode();
-        let expected = launa_protocol::frame::FrameEncoder::encode(mt, &payload).unwrap();
-        actions.iter().any(|a| {
-            if let AppAction::SendFrame(bytes) = a {
-                bytes == &expected
-            } else {
-                false
-            }
-        })
-    }
-}
 
 // ══════════════════════════════════════════════════════════════════════════
 // Test 1: Fault appears/clears lifecycle (VAL-TEST-007, VAL-CROSS-002)
@@ -150,7 +26,7 @@ impl FaultTimerHarness {
 
 #[test]
 fn test_fault_appears_and_clears_lifecycle() {
-    let mut h = FaultTimerHarness::new();
+    let mut h = TestHarness::new();
     h.complete_registration(5);
     h.collect_actions(); // get initial status
 
@@ -262,7 +138,7 @@ fn test_fault_appears_and_clears_lifecycle() {
 
 #[test]
 fn test_multiple_fault_types_distinct_entries() {
-    let mut h = FaultTimerHarness::new();
+    let mut h = TestHarness::new();
     h.complete_registration(5);
     h.collect_actions();
 
@@ -388,7 +264,7 @@ fn test_multiple_fault_types_distinct_entries() {
 
 #[test]
 fn test_power_cycle_mid_command_no_stuck_commands() {
-    let mut h = FaultTimerHarness::new();
+    let mut h = TestHarness::new();
     h.complete_registration(5);
     h.collect_actions(); // get initial status
 
@@ -453,7 +329,7 @@ fn test_power_cycle_mid_command_no_stuck_commands() {
     // The key test is: no spurious toggle fires that wasn't commanded.
     // Check that the pump state in the sim is consistent — if it's still on,
     // that's fine (physical state preserved), but no auto-off toggle should fire.
-    let has_auto_off = FaultTimerHarness::has_toggle_for(&post_reboot_actions, ToggleItem::Pump1);
+    let has_auto_off = TestHarness::has_toggle_for(&post_reboot_actions, ToggleItem::Pump1);
     assert!(
         !has_auto_off,
         "no spurious pump1 auto-off should fire from pre-reboot timer"
@@ -481,7 +357,7 @@ fn test_power_cycle_mid_command_no_stuck_commands() {
 
 #[test]
 fn test_hold_mode_and_pump_timer_fire_independently() {
-    let mut h = FaultTimerHarness::new();
+    let mut h = TestHarness::new();
     h.complete_registration(5);
     h.collect_actions();
 
@@ -518,14 +394,14 @@ fn test_hold_mode_and_pump_timer_fire_independently() {
     h.advance_ms(5 * 60 * 1000 + 1_000); // slightly past 5 min
 
     let pump_timer_actions = h.collect_actions();
-    let pump_toggle = FaultTimerHarness::has_toggle_for(&pump_timer_actions, ToggleItem::Pump1);
+    let pump_toggle = TestHarness::has_toggle_for(&pump_timer_actions, ToggleItem::Pump1);
     assert!(
         pump_toggle,
         "pump timer should fire independently at 5 min while hold mode is active"
     );
 
     // Hold timer should NOT have fired yet (only 5 min elapsed, needs 60 min)
-    let hold_toggle = FaultTimerHarness::has_toggle_for(&pump_timer_actions, ToggleItem::HoldMode);
+    let hold_toggle = TestHarness::has_toggle_for(&pump_timer_actions, ToggleItem::HoldMode);
     assert!(
         !hold_toggle,
         "hold timer should NOT fire at 5 min (needs 60 min)"
@@ -541,7 +417,7 @@ fn test_hold_mode_and_pump_timer_fire_independently() {
     h.advance_ms(55 * 60 * 1000);
 
     let hold_timer_actions = h.collect_actions();
-    let hold_toggle = FaultTimerHarness::has_toggle_for(&hold_timer_actions, ToggleItem::HoldMode);
+    let hold_toggle = TestHarness::has_toggle_for(&hold_timer_actions, ToggleItem::HoldMode);
     assert!(
         hold_toggle,
         "hold timer should fire at 60 min independently of pump timer"
@@ -554,7 +430,7 @@ fn test_hold_mode_and_pump_timer_fire_independently() {
 
 #[test]
 fn test_multiple_pump_timers_independent() {
-    let mut h = FaultTimerHarness::new();
+    let mut h = TestHarness::new();
     h.complete_registration(5);
     h.collect_actions();
 
@@ -594,12 +470,12 @@ fn test_multiple_pump_timers_independent() {
     // Phase 1: Advance past pump2 timer (3 min) — only pump2 should auto-off
     h.advance_ms(3 * 60 * 1000 + 1_000);
     let actions_3min = h.collect_actions();
-    let pump2_off = FaultTimerHarness::has_toggle_for(&actions_3min, ToggleItem::Pump2);
+    let pump2_off = TestHarness::has_toggle_for(&actions_3min, ToggleItem::Pump2);
     assert!(pump2_off, "pump2 timer should fire at 3 min");
 
     // Pump1 and pump3 should NOT have fired yet
-    let pump1_off = FaultTimerHarness::has_toggle_for(&actions_3min, ToggleItem::Pump1);
-    let pump3_off = FaultTimerHarness::has_toggle_for(&actions_3min, ToggleItem::Pump3);
+    let pump1_off = TestHarness::has_toggle_for(&actions_3min, ToggleItem::Pump1);
+    let pump3_off = TestHarness::has_toggle_for(&actions_3min, ToggleItem::Pump3);
     assert!(
         !pump1_off,
         "pump1 timer should NOT fire at 3 min (set for 5 min)"
@@ -617,11 +493,11 @@ fn test_multiple_pump_timers_independent() {
     // We started pump1 at t=0, so we need to advance 2 more minutes from the 3-min mark
     h.advance_ms(2 * 60 * 1000);
     let actions_5min = h.collect_actions();
-    let pump1_off = FaultTimerHarness::has_toggle_for(&actions_5min, ToggleItem::Pump1);
+    let pump1_off = TestHarness::has_toggle_for(&actions_5min, ToggleItem::Pump1);
     assert!(pump1_off, "pump1 timer should fire at 5 min");
 
     // Pump3 should still NOT have fired
-    let pump3_off = FaultTimerHarness::has_toggle_for(&actions_5min, ToggleItem::Pump3);
+    let pump3_off = TestHarness::has_toggle_for(&actions_5min, ToggleItem::Pump3);
     assert!(
         !pump3_off,
         "pump3 timer should NOT fire at 5 min (set for 7 min)"
@@ -634,7 +510,7 @@ fn test_multiple_pump_timers_independent() {
     // Phase 3: Advance past pump3 timer (7 min total) — pump3 should auto-off
     h.advance_ms(2 * 60 * 1000);
     let actions_7min = h.collect_actions();
-    let pump3_off = FaultTimerHarness::has_toggle_for(&actions_7min, ToggleItem::Pump3);
+    let pump3_off = TestHarness::has_toggle_for(&actions_7min, ToggleItem::Pump3);
     assert!(pump3_off, "pump3 timer should fire at 7 min");
 }
 
@@ -644,7 +520,7 @@ fn test_multiple_pump_timers_independent() {
 
 #[test]
 fn test_pump_timer_cancels_on_mqtt_toggle_off() {
-    let mut h = FaultTimerHarness::new();
+    let mut h = TestHarness::new();
     h.complete_registration(5);
     h.collect_actions();
 
@@ -709,7 +585,7 @@ fn test_pump_timer_cancels_on_mqtt_toggle_off() {
     let post_timer_actions = h.collect_actions();
 
     // No auto-off toggle should fire (timer was cancelled when pump turned off)
-    let auto_off = FaultTimerHarness::has_toggle_for(&post_timer_actions, ToggleItem::Pump1);
+    let auto_off = TestHarness::has_toggle_for(&post_timer_actions, ToggleItem::Pump1);
     assert!(
         !auto_off,
         "pump timer should be cancelled — no auto-off toggle after MQTT toggle-off"
@@ -737,7 +613,7 @@ fn test_pump_timer_cancels_on_mqtt_toggle_off() {
 
 #[test]
 fn test_rapid_toggle_race_parity() {
-    let mut h = FaultTimerHarness::new();
+    let mut h = TestHarness::new();
     h.complete_registration(5);
     h.collect_actions();
 
@@ -828,7 +704,7 @@ fn test_rapid_toggle_race_parity() {
 
 #[test]
 fn test_rapid_temperature_race_last_wins() {
-    let mut h = FaultTimerHarness::new();
+    let mut h = TestHarness::new();
     h.complete_registration(5);
     h.collect_actions();
 
