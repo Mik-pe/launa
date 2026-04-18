@@ -25,6 +25,8 @@ How the launa system works at a high level.
 - OTA URL validation requires http:// scheme
 - Custom panic handler: esp-backtrace must use `println` feature only (NOT `panic-handler`) to avoid conflicting with the custom `#[panic_handler]` in main.rs
 - OTA state is managed in the app/ main loop, NOT in SpaApp — SpaApp doesn't own OTA state. Integration tests exercise MockOta directly for OTA rollback scenarios.
+- **Module pattern:** app/src/ modules (`diagnostics.rs`, `mqtt_task.rs`, `sniff.rs`, `types.rs`) use `use crate::*` to access statics (channels, counters, FIRMWARE_VERSION, DIAGNOSTICS_START_SECS) and utility functions (uptime_secs, init_heap) defined in main.rs. New modules should follow this pattern.
+- **Feature-gated dead code:** `config.rs` (save, nvs_set), `crypto.rs` (random_nonce, to_hex, encrypt) are used behind the `hw-test` feature gate. They appear as dead code in default builds but MUST NOT be removed.
 
 ## Key Data Flow
 

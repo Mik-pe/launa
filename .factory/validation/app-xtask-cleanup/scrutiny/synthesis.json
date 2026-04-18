@@ -1,0 +1,44 @@
+{
+  "milestone": "app-xtask-cleanup",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": { "passed": true, "command": "cargo test --workspace", "exitCode": 0 },
+    "typecheck": { "passed": true, "command": "cargo check --workspace", "exitCode": 0 },
+    "lint": { "passed": true, "command": "cargo fmt --check", "exitCode": 0 },
+    "espcheck": { "passed": true, "command": "cd app && cargo +esp check", "exitCode": 0 }
+  },
+  "reviewsSummary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Document app/src/ module pattern: new modules use `use crate::*` to access statics (channels, counters, FIRMWARE_VERSION, DIAGNOSTICS_START_SECS) and utility functions (uptime_secs, init_heap) defined in main.rs.",
+      "sourceFeature": "improve-app-structure"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Add guidance that app/src/ has feature-gated code (behind 'hw-test' and 'sniff' features) that appears as dead code in default builds. Workers should NOT remove these items. Items affected: config.rs save()/nvs_set(), crypto.rs random_nonce()/to_hex()/encrypt().",
+      "evidence": "Feature cleanup-app-xtask worker discovered that cargo +esp check warns about dead code for config.rs and crypto.rs functions that are used behind feature gates. The worker correctly identified these as pre-existing and not safe to remove.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "MqttClient::publish_alert() is unused public API",
+      "reason": "already-documented — architecture.md already notes publish_alert as pre-existing unused API"
+    },
+    {
+      "observation": "app/src/ module structure should be reflected in architecture.md",
+      "reason": "already-covered — docs worker (update-documentation feature, milestone:documentation) will update architecture.md per VAL-DOC-001"
+    }
+  ],
+  "previousRound": null
+}
