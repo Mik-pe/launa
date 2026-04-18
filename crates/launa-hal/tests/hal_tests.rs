@@ -2,6 +2,7 @@
 
 use launa_hal::network::mock::MockNetwork;
 use launa_hal::transport::mock::MockTransport;
+use launa_hal::transport::TransportError;
 use launa_hal::Network;
 use launa_hal::Transport;
 
@@ -154,6 +155,63 @@ fn test_mock_transport_full_lifecycle() {
     // 4. Clear written
     t.clear_written();
     assert!(t.written().is_empty());
+}
+
+// MockTransport error injection tests
+
+#[test]
+fn test_mock_transport_write_error_injection_and_recovery() {
+    let mut t = MockTransport::new();
+
+    // Configure write error
+    t.set_write_error(Some(TransportError::Io));
+    let result = block_on(t.write(&[0x01]));
+    assert!(result.is_err(), "write should fail when error is injected");
+    assert!(t.written().is_empty(), "no data should be written on error");
+
+    // Clear error and verify recovery
+    t.set_write_error(None);
+    block_on(t.write(&[0x42])).unwrap();
+    assert_eq!(
+        t.written(),
+        &[0x42],
+        "write should succeed after clearing error"
+    );
+}
+
+#[test]
+fn test_mock_transport_read_error_injection_and_recovery() {
+    let mut t = MockTransport::new();
+
+    // Inject data so there's something to read, but configure read error
+    t.inject(&[0xAA, 0xBB]);
+    t.set_read_error(Some(TransportError::Io));
+
+    let mut buf = [0u8; 10];
+    let result = block_on(t.read(&mut buf));
+    assert!(result.is_err(), "read should fail when error is injected");
+
+    // Clear error and verify recovery — data should still be readable
+    t.set_read_error(None);
+    let n = block_on(t.read(&mut buf)).unwrap();
+    assert_eq!(
+        n, 2,
+        "read should return injected bytes after clearing error"
+    );
+    assert_eq!(&buf[..2], &[0xAA, 0xBB]);
+}
+
+#[test]
+fn test_mock_transport_read_error_returns_zero_bytes() {
+    let mut t = MockTransport::new();
+    t.set_read_error(Some(TransportError::Timeout));
+
+    let mut buf = [0u8; 10];
+    let result = block_on(t.read(&mut buf));
+    assert!(
+        result.is_err(),
+        "read should return Err when read error is set"
+    );
 }
 
 // MockNetwork tests

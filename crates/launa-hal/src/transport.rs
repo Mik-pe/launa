@@ -35,6 +35,8 @@ pub mod mock {
     pub struct MockTransport {
         incoming: VecDeque<u8>,
         outgoing: Vec<u8>,
+        write_error: Option<super::TransportError>,
+        read_error: Option<super::TransportError>,
     }
 
     impl MockTransport {
@@ -42,6 +44,8 @@ pub mod mock {
             MockTransport {
                 incoming: VecDeque::new(),
                 outgoing: Vec::new(),
+                write_error: None,
+                read_error: None,
             }
         }
 
@@ -64,10 +68,25 @@ pub mod mock {
         pub fn has_incoming(&self) -> bool {
             !self.incoming.is_empty()
         }
+
+        /// Inject an error to be returned by the next write() call.
+        /// Pass `None` to clear a previously set error.
+        pub fn set_write_error(&mut self, error: Option<super::TransportError>) {
+            self.write_error = error;
+        }
+
+        /// Inject an error to be returned by the next read() call.
+        /// Pass `None` to clear a previously set error.
+        pub fn set_read_error(&mut self, error: Option<super::TransportError>) {
+            self.read_error = error;
+        }
     }
 
     impl super::Transport for MockTransport {
         async fn read(&mut self, buf: &mut [u8]) -> Result<usize, super::TransportError> {
+            if let Some(err) = self.read_error.take() {
+                return Err(err);
+            }
             let n = self.incoming.len().min(buf.len());
             for byte in buf.iter_mut().take(n) {
                 *byte = self.incoming.pop_front().unwrap();
@@ -76,6 +95,9 @@ pub mod mock {
         }
 
         async fn write(&mut self, data: &[u8]) -> Result<(), super::TransportError> {
+            if let Some(err) = self.write_error.take() {
+                return Err(err);
+            }
             self.outgoing.extend_from_slice(data);
             Ok(())
         }
