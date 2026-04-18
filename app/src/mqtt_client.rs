@@ -3,6 +3,8 @@
 //! Hand-rolled MQTT v5 protocol implementation. Handles: connect with
 //! username/password, publish (QoS 0/1), subscribe, keepalive PINGREQ,
 //! incoming PUBACK, packet reassembly, and reconnect.
+//!
+//! Protocol encoding/decoding is delegated to `launa_mqtt::v5_codec`.
 
 extern crate alloc;
 
@@ -19,6 +21,10 @@ use launa_mqtt::command_parser::{self, ParseResult};
 use launa_mqtt::discovery::DiscoveryBuilder;
 use launa_mqtt::state::status_to_json;
 use launa_mqtt::packet::{decode_remaining_length, try_extract_packet};
+use launa_mqtt::v5_codec::{
+    encode_connect, encode_disconnect, encode_pingreq, encode_pingresp, encode_puback,
+    encode_publish, encode_subscribe, parse_connack, parse_suback, ConnectConfig,
+};
 use launa_core::{RateLimiter, RATE_LIMIT_MAX_COMMANDS, RATE_LIMIT_WINDOW_MS};
 use launa_protocol::command::{Command, validate_set_temperature};
 use launa_protocol::status::{TemperatureScale, TempRange, StatusUpdate};
@@ -27,10 +33,6 @@ use log::{info, warn, debug, error};
 use crate::config::AppConfig;
 use crate::mk_static;
 use crate::net_util;
-
-// RateLimiter is defined in launa-core with Clock trait injection.
-// Constants RATE_LIMIT_MAX_COMMANDS (10) and RATE_LIMIT_WINDOW_MS (10_000)
-// are re-exported from launa-core.
 
 #[derive(Debug)]
 pub enum MqttAction {
@@ -270,7 +272,7 @@ impl MqttClient {
         let half_keepalive = Duration::from_secs(self.keep_alive as u64 / 2);
         if self.last_outgoing.elapsed() >= half_keepalive {
             debug!("MQTT sending PINGREQ (keepalive)");
-            self.send_bytes(&[0xC0, 0x00]).await?;
+            self.send_bytes(&encode_pingreq()).await?;
         }
         Ok(())
     }
@@ -335,46 +337,20 @@ impl MqttClient {
         username: Option<&str>,
         password: Option<&str>,
     ) -> Result<(), MqttError> {
-        let mut connect_flags = 0x02u8
-            | (1 << 2)   // Clean Start
-            | (1 << 3)   // Will Flag
-            | (1 << 4)   // Will QoS 1
-            | (1 << 5);  // Will Retain
-
-        if username.is_some() { connect_flags |= 1 << 7; }
-        if password.is_some() { connect_flags |= 1 << 6; }
-
-        let keep_alive = self.keep_alive;
-        let mut var_header = Vec::new();
-        var_header.extend_from_slice(&[0x00, 0x04]);
-        var_header.extend_from_slice(b"MQTT");
-        var_header.push(0x05);
-        var_header.push(connect_flags);
-        var_header.extend_from_slice(&keep_alive.to_be_bytes());
-        var_header.push(0x00);
-
-        let mut payload = Vec::new();
-        append_lp_string(&mut payload, client_id);
-        append_lp_string(&mut payload, lwt_topic);
-        payload.push(0x00);
-        let will_payload = b"offline";
-        payload.extend_from_slice(&(will_payload.len() as u16).to_be_bytes());
-        payload.extend_from_slice(will_payload);
-        if let Some(user) = username { append_lp_string(&mut payload, user); }
-        if let Some(pass) = password { append_lp_string(&mut payload, pass); }
-
-        let remaining_len = var_header.len() + payload.len();
-        let mut packet = Vec::new();
-        packet.push(0x10);
-        encode_remaining_length(&mut packet, remaining_len);
-        packet.extend_from_slice(&var_header);
-        packet.extend_from_slice(&payload);
+        let config = ConnectConfig {
+            client_id,
+            lwt_topic,
+            username,
+            password,
+            keep_alive: self.keep_alive,
+        };
+        let packet = encode_connect(&config);
 
         self.send_bytes(&packet).await.map_err(|_| MqttError::ConnectionFailed)?;
 
         let mut buf = [0u8; 64];
         let n = self.read_exact(&mut buf, 4).await.map_err(|_| MqttError::ConnectionFailed)?;
-        if n < 4 || buf[0] != 0x20 {
+        if parse_connack(&buf[..n]).is_err() {
             error!("MQTT CONNACK unexpected: {:?}", &buf[..n]);
             return Err(MqttError::ConnectionFailed);
         }
@@ -389,48 +365,22 @@ impl MqttClient {
         qos: u8,
         retain: bool,
     ) -> Result<(), MqttError> {
-        let retain_flag = if retain { 0x01 } else { 0x00 };
-        let qos_flag = (qos & 0x03) << 1;
-        let mut packet = Vec::new();
-        packet.push(0x30 | qos_flag | retain_flag);
-
-        let topic_bytes = topic.as_bytes();
-        let mut remaining = 2 + topic_bytes.len() + 1 + payload.len();
-        if qos > 0 { remaining += 2; }
-        encode_remaining_length(&mut packet, remaining);
-        packet.extend_from_slice(&(topic_bytes.len() as u16).to_be_bytes());
-        packet.extend_from_slice(topic_bytes);
-
-        if qos > 0 {
-            let pkt_id = self.allocate_packet_id();
-            packet.extend_from_slice(&pkt_id.to_be_bytes());
-        }
-
-        packet.push(0x00);
-        packet.extend_from_slice(payload);
-
+        let packet_id = if qos > 0 {
+            Some(self.allocate_packet_id())
+        } else {
+            None
+        };
+        let packet = encode_publish(topic, payload, qos, retain, packet_id);
         self.send_bytes(&packet).await
     }
 
     pub async fn subscribe(&mut self, topic: &str) -> Result<(), MqttError> {
-        let mut packet = Vec::new();
-        packet.push(0x82);
-
-        let topic_bytes = topic.as_bytes();
-        let remaining = 2 + 1 + 2 + topic_bytes.len() + 1;
-        encode_remaining_length(&mut packet, remaining);
-
         let pkt_id = self.allocate_packet_id();
-        packet.extend_from_slice(&pkt_id.to_be_bytes());
-        packet.push(0x00);
-        packet.extend_from_slice(&(topic_bytes.len() as u16).to_be_bytes());
-        packet.extend_from_slice(topic_bytes);
-        packet.push(0x01);
-
+        let packet = encode_subscribe(topic, pkt_id);
         self.send_bytes(&packet).await.map_err(|_| MqttError::SubscribeFailed)?;
 
         // Read SUBACK: fixed header byte + variable-byte remaining length + payload
-        let mut header_buf = [0u8; 5]; // max 1 + 4 bytes for fixed header
+        let mut header_buf = [0u8; 5];
         self.read_exact(&mut header_buf, 1).await.map_err(|_| {
             warn!("MQTT SUBACK read failed");
             MqttError::SubscribeFailed
@@ -476,34 +426,14 @@ impl MqttClient {
             MqttError::SubscribeFailed
         })?;
 
-        // Parse packet identifier (first 2 bytes of payload)
-        if remaining_len < 3 {
-            warn!("MQTT SUBACK payload too short");
-            return Err(MqttError::SubscribeFailed);
-        }
-        let ack_pkt_id = u16::from_be_bytes([payload_buf[0], payload_buf[1]]);
-        if ack_pkt_id != pkt_id {
-            warn!("MQTT SUBACK packet ID mismatch: expected {}, got {}", pkt_id, ack_pkt_id);
-            return Err(MqttError::SubscribeFailed);
-        }
+        // Reassemble full SUBACK packet for parse_suback
+        let mut suback_buf = Vec::new();
+        suback_buf.push(0x90);
+        suback_buf.extend_from_slice(&rl_buf[..rl_bytes]);
+        suback_buf.extend_from_slice(&payload_buf[..remaining_len]);
 
-        // Decode property length (variable-byte)
-        let (props_len, props_header_size) = match decode_remaining_length(&payload_buf[2..]) {
-            Some(v) => v,
-            None => {
-                warn!("MQTT SUBACK invalid property length");
-                return Err(MqttError::SubscribeFailed);
-            }
-        };
-
-        let return_code_idx = 2 + props_header_size + props_len;
-        if return_code_idx >= remaining_len {
-            warn!("MQTT SUBACK missing return code");
-            return Err(MqttError::SubscribeFailed);
-        }
-        let return_code = payload_buf[return_code_idx];
-        if return_code == 0x80 {
-            warn!("MQTT SUBACK subscription failed (return code 0x80)");
+        if parse_suback(&suback_buf, pkt_id).is_err() {
+            warn!("MQTT SUBACK parse failed");
             return Err(MqttError::SubscribeFailed);
         }
 
@@ -529,7 +459,7 @@ impl MqttClient {
 
             if let Some(packet) = self.try_extract_packet() {
                 read_retries = 0;
-                return self.process_packet(&packet).await;
+                return self.process_packets(&packet).await;
             }
 
             let mut buf = [0u8; 512];
@@ -580,7 +510,7 @@ impl MqttClient {
         try_extract_packet(&mut self.rx_buffer)
     }
 
-    async fn process_packet(&mut self, packet: &[u8]) -> Option<(String, Vec<u8>)> {
+    async fn process_packets(&mut self, packet: &[u8]) -> Option<(String, Vec<u8>)> {
         if packet.is_empty() { return None; }
         let packet_type = packet[0] >> 4;
 
@@ -620,7 +550,7 @@ impl MqttClient {
 
                 if qos >= 1 {
                     if let Some(id) = pkt_id {
-                        let puback = [0x40, 0x02, (id >> 8) as u8, (id & 0xFF) as u8];
+                        let puback = encode_puback(id);
                         if let Err(e) = self.send_bytes(&puback).await {
                             warn!("Failed to send PUBACK: {:?}", e);
                         }
@@ -633,7 +563,7 @@ impl MqttClient {
             9 => { debug!("MQTT SUBACK received"); None }
             13 => { debug!("MQTT PINGRESP"); None }
             12 => {
-                let _ = self.send_bytes(&[0xD0, 0x00]).await;
+                let _ = self.send_bytes(&encode_pingresp()).await;
                 None
             }
             14 => { warn!("MQTT DISCONNECT received"); None }
@@ -749,7 +679,7 @@ impl MqttClient {
     /// Send MQTT DISCONNECT packet and flush the transport.
     /// Call this before OTA reboot to notify the broker cleanly.
     pub async fn disconnect(&mut self) {
-        let _ = self.send_bytes(&[0xE0, 0x00]).await;
+        let _ = self.send_bytes(&encode_disconnect()).await;
         info!("MQTT DISCONNECT sent");
     }
 
@@ -757,21 +687,4 @@ impl MqttClient {
         launa_mqtt::parse_ota_url(payload)
     }
 }
-
-fn append_lp_string(buf: &mut Vec<u8>, s: &str) {
-    let bytes = s.as_bytes();
-    buf.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
-    buf.extend_from_slice(bytes);
-}
-
-fn encode_remaining_length(buf: &mut Vec<u8>, mut len: usize) {
-    loop {
-        let mut byte = (len & 0x7F) as u8;
-        len >>= 7;
-        if len > 0 { byte |= 0x80; }
-        buf.push(byte);
-        if len == 0 { break; }
-    }
-}
-
 

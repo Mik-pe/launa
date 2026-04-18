@@ -220,8 +220,9 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                             warn!("WiFi-reconnect: subscribe commands failed: {:?}", e);
                         }
                         // Re-publish last known state
-                        if let (Some(ref status), ref fault) = (last_published_status, last_published_fault) {
-                            if let Err(e) = mqtt.publish_state(status, fault.as_str()).await {
+                        if let Some(ref status) = last_published_status {
+                            let fault_str = last_published_fault.as_ref().and_then(|f| f.as_str());
+                            if let Err(e) = mqtt.publish_state(status, fault_str).await {
                                 warn!("WiFi-reconnect: publish state failed: {:?}", e);
                             }
                         }
@@ -317,7 +318,7 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 });
                 if is_stale || changed {
                     last_published_status = Some(status.clone());
-                    last_published_fault = fault;
+                    last_published_fault = Some(fault);
                     if let Err(e) = mqtt.publish_state(&status, fault.as_str()).await {
                         warn!("MQTT state publish failed: {:?}", e);
                     }
@@ -422,8 +423,9 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                                 warn!("MQTT reconnect: subscribe commands failed: {:?}", e);
                             }
                             // Re-publish last known state after reconnect
-                            if let (Some(ref status), ref fault) = (last_published_status, last_published_fault) {
-                                if let Err(e) = mqtt.publish_state(status, fault.as_str()).await {
+                            if let Some(ref status) = last_published_status {
+                                let fault_str = last_published_fault.as_ref().and_then(|f| f.as_str());
+                                if let Err(e) = mqtt.publish_state(status, fault_str).await {
                                     warn!("MQTT reconnect: publish state failed: {:?}", e);
                                 }
                             }
