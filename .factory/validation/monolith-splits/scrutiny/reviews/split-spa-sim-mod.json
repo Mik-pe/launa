@@ -1,0 +1,39 @@
+{
+  "featureId": "split-spa-sim-mod",
+  "reviewedAt": "2026-04-18T07:30:00.000Z",
+  "commitId": "06e88a1",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean extraction of 4,082 lines of inline tests from spa_sim/mod.rs into 7 concern-based test files under spa_sim/tests/. Production code (922 lines) remains in mod.rs with a single #[cfg(test)] mod tests declaration. All 157 launa-sim tests pass. The split is well-organized with shared test helpers in tests/mod.rs and logical grouping by concern.",
+    "issues": [
+      {
+        "file": "crates/launa-sim/src/spa_sim/mod.rs",
+        "line": 922,
+        "severity": "non_blocking",
+        "description": "Handoff claims mod.rs is 922 lines and lists test counts as frame_gen(18), physics(38), state(22), fault(17), config(19), command(13), error_injection(6). Actual counts from code: frame_gen(18), physics(38), state(22), fault(16), config(15), command(14), error_injection(6). The handoff numbers are slightly off (fault: 17 vs 16, config: 19 vs 15, command: 13 vs 14). This is a handoff accuracy issue, not a code issue — total spa_sim/tests count is 129, with 28 more tests in other launa-sim modules (clock, sim_broker, sim_transport) summing to the correct 157 total."
+      },
+      {
+        "file": "crates/launa-sim/src/spa_sim/tests/mod.rs",
+        "line": 1,
+        "severity": "non_blocking",
+        "description": "Feature description mentions 'registration tests' and 'thermal model tests' as expected groupings, but the implementation maps these differently: registration tests are folded into state_tests.rs and fault_tests.rs, thermal model tests are in physics_tests.rs. The actual grouping (frame_gen, physics, state, fault, config, command, error_injection) is arguably more logical and consistent with the module's structure. No tests were lost — this is a naming/organization deviation from the feature spec, not a functional issue."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "The rust-refactor-worker SKILL.md provides a solid 'Module Splitting Pattern' section, but it doesn't mention the specific pattern of using #[cfg(test)] mod tests; in the parent module to conditionally compile the tests subdirectory. This is the idiomatic Rust approach and the worker used it correctly, but it could be documented in the skill for future workers.",
+      "evidence": "crates/launa-sim/src/spa_sim/mod.rs line 922: `#[cfg(test)] mod tests;` — this pattern connects the parent module to the tests/ subdirectory. The SKILL.md 'Module Splitting Pattern' section mentions creating tests/ directories but not the #[cfg(test)] guard pattern specifically."
+    },
+    {
+      "area": "conventions",
+      "observation": "The mission AGENTS.md documents the module splitting pattern well, including the #[cfg(test)] mod tests; pattern and the snake_case_tests.rs naming convention. The worker followed all conventions correctly.",
+      "evidence": "All 7 test files follow the snake_case_tests.rs naming convention. tests/mod.rs correctly declares submodules and provides shared helpers."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The feature successfully extracts inline tests from launa-sim/src/spa_sim/mod.rs (5,004→922 lines) into 7 concern-based test files. All validation assertions are met: (1) mod.rs is 922 lines (≤930) with zero #[test] attributes, (2) extracted tests compile via cargo test -p launa-sim, (3) test count is 157 (≥ baseline), (4) all launa-sim tests pass. The implementation is clean: shared test helpers are properly extracted to tests/mod.rs, imports are correct in each file, and no behavioral changes were made. Minor handoff inaccuracy in per-file test counts, and the grouping slightly differs from the feature description (no standalone 'registration tests' or 'thermal model tests' files), but the actual grouping is logical and complete."
+}

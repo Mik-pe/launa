@@ -1,0 +1,15 @@
+{
+  "featureId": "split-integration-tests-lib",
+  "reviewedAt": "2026-04-18T06:50:00Z",
+  "commitId": "1b54602",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean extraction of all 88 inline tests from launa-integration-tests/src/lib.rs (3,291 lines → 5 lines) into 11 concern-based test files in tests/. All 160 tests pass (88 extracted + 72 pre-existing). Zero behavioral changes. Each new file has proper module-level doc comments, correct imports, and follows the existing snake_case_tests.rs naming convention. Helper functions (make_spaapp, make_status_frame, make_ready_frame, etc.) are duplicated across files, which is the expected and necessary pattern for Rust integration tests since each file compiles as a separate binary.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The feature correctly extracts all 88 inline tests from lib.rs into 11 concern-based test files organized by domain (protocol roundtrip, frame decoder, sim interaction, registration, MQTT commands, MQTT publishing, SpaApp commands, stale detection, OTA, command retry, temperature validation). lib.rs reduced from 3,291 to 5 lines with zero #[test] attributes remaining. All 160 tests pass, compilation is clean with zero warnings, and all new files follow the snake_case_tests.rs naming convention. Minor note: the commit message and handoff state '10 new files' but there are actually 11 new files (temperature_validation_tests.rs makes 11); this is a cosmetic discrepancy only, not a functional issue."
+}

@@ -1,15 +1,15 @@
 {
   "milestone": "monolith-splits",
-  "round": 1,
+  "round": 2,
   "status": "pass",
   "validatorsRun": {
     "test": { "passed": true, "command": "cargo test --workspace", "exitCode": 0 },
     "typecheck": { "passed": true, "command": "cargo check --workspace", "exitCode": 0 },
-    "lint": { "passed": true, "command": "cargo fmt --check", "exitCode": 0 }
+    "lint": { "passed": true, "command": "cargo fmt --check --all", "exitCode": 0 }
   },
   "reviewsSummary": {
-    "total": 3,
-    "passed": 3,
+    "total": 2,
+    "passed": 2,
     "failed": 0,
     "failedFeatures": []
   },
@@ -19,19 +19,29 @@
     {
       "target": "AGENTS.md",
       "suggestion": "Add convention note: when splitting a monolithic file into modules, internal items that need cross-module access within the crate should use `pub(crate)` visibility rather than `pub`. Only items that were previously in the public API should be re-exported via `pub use` from lib.rs.",
-      "evidence": "All three split features (split-launa-core, split-launa-esp-ota, split-launa-sim) followed this pattern correctly, but it could be codified as a convention for future splits.",
+      "evidence": "Split features (split-launa-core, split-launa-esp-ota, split-launa-sim) followed this pattern correctly. Codifying as convention for future splits.",
+      "isSystemic": false
+    },
+    {
+      "target": "skills",
+      "suggestion": "Add note to rust-refactor-worker SKILL.md 'Module Splitting Pattern' section: when extracting tests into a tests/ subdirectory, the parent module should use `#[cfg(test)] mod tests;` to conditionally include the test module. This is the idiomatic Rust pattern for external test modules.",
+      "evidence": "Feature split-spa-sim-mod correctly used this pattern. Documenting it would help future workers.",
       "isSystemic": false
     }
   ],
   "rejectedObservations": [
     {
-      "observation": "Update architecture.md to reflect new module structure in launa-sim and launa-esp-ota",
-      "reason": "already-documented — architecture.md already describes the module structures and internal organization of these crates"
+      "observation": "AGENTS.md already documents the module splitting pattern well, including #[cfg(test)] mod tests; pattern and snake_case_tests.rs naming convention.",
+      "reason": "already-documented — the AGENTS.md convention is already in place and workers followed it correctly"
+    },
+    {
+      "observation": "Update architecture.md to reflect new module structures in launa-sim/spa_sim/tests/",
+      "reason": "already-documented — architecture.md describes crate-level structure, not internal test module organization"
     },
     {
       "observation": "frame_gen/physics modules in launa-sim could use 'pub(crate) mod' instead of 'pub mod'",
-      "reason": "ambiguous — using 'pub mod' with 'pub(crate)' items is a valid and common Rust pattern. The external visibility of the module name is harmless since items within are not externally accessible. Not worth codifying a preference."
+      "reason": "ambiguous — using 'pub mod' with 'pub(crate)' items is a valid and common Rust pattern. External visibility of module name is harmless."
     }
   ],
-  "previousRound": null
+  "previousRound": ".factory/validation/monolith-splits/scrutiny/synthesis.json (round 1)"
 }
