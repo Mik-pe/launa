@@ -1,0 +1,39 @@
+{
+  "milestone": "mqtt-extraction",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": { "passed": true, "command": "cargo test --workspace", "exitCode": 0 },
+    "typecheck": { "passed": true, "command": "cargo check --workspace", "exitCode": 0 },
+    "lint": { "passed": true, "command": "cargo fmt --check", "exitCode": 0 }
+  },
+  "reviewsSummary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "documentation",
+      "suggestion": "When the docs-worker runs for the documentation milestone, ensure architecture.md mentions the new v5_codec module in launa-mqtt. The module (693 lines, 34 tests) is the canonical location for all MQTT v5 packet encoding/decoding and should be listed alongside packet extraction in the launa-mqtt description.",
+      "evidence": "Review of extract-mqtt-v5-codec found that architecture.md describes launa-mqtt as having 'packet extraction (try_extract_packet, decode_remaining_length)' but omits v5_codec, which is a significant addition.",
+      "isSystemic": false
+    },
+    {
+      "target": "documentation",
+      "suggestion": "Add a note to docs/architecture.md or launa-mqtt's lib.rs header about the API contract of decode_remaining_length: it expects a leading packet-type byte (starts parsing at index 1). This nuance caused confusion during the extraction implementation.",
+      "evidence": "Transcript of extract-mqtt-v5-codec worker shows iteration on parse_suback due to misunderstanding of decode_remaining_length's expectation of a leading packet-type byte.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "Pre-existing FaultBuf type errors in app/src/main.rs were blocking ESP32 cross-compilation. Worker correctly identified and fixed them.",
+      "reason": "Already fixed by the worker. No action needed. This is historical context, not actionable guidance."
+    }
+  ],
+  "previousRound": null
+}

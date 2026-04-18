@@ -1,0 +1,38 @@
+{
+  "featureId": "extract-mqtt-v5-codec",
+  "reviewedAt": "2026-04-18T01:15:00Z",
+  "commitId": "c727df2",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The feature successfully extracts MQTT v5 protocol codec from app/mqtt_client.rs into launa-mqtt/src/v5_codec.rs with 34 desktop tests. All specified functions were moved: encode_remaining_length, append_lp_string, encode_connect, encode_publish, encode_subscribe, encode_puback, encode_pingreq, encode_pingresp, encode_disconnect, parse_connack, parse_suback, plus supporting types (ConnectConfig, ConnackError, SubackError). The app/mqtt_client.rs imports from launa-mqtt and delegates correctly. The extraction preserves exact protocol behavior. launa-mqtt remains no_std compatible (uses alloc::vec::Vec, no std:: imports). One minor latent issue found in encode_publish but it is not triggered by the app's usage pattern.",
+    "issues": [
+      {
+        "file": "crates/launa-mqtt/src/v5_codec.rs",
+        "line": 165,
+        "severity": "non_blocking",
+        "description": "encode_publish(qos > 0, packet_id = None) silently produces a malformed packet: remaining_length accounts for 2 bytes of packet ID but no packet ID bytes are written. The original app code always allocated a packet_id when qos > 0, so this path is never hit in production. However, as a public library function, it would benefit from either a debug_assert or documentation noting that packet_id must be Some when qos > 0. This is a latent issue, not a bug in current usage."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The decode_remaining_length function in packet.rs expects a leading packet-type byte (starts parsing at index 1). This is an important API contract that bit the worker during implementation — they initially tried calling it on payload slices without the leading byte. The architecture.md doesn't document this nuance of decode_remaining_length's contract.",
+      "evidence": "Transcript shows worker iterating on parse_suback implementation due to misunderstanding of decode_remaining_length's expectation of a leading packet-type byte. The final implementation uses manual variable-byte decoding for property length to work around this."
+    },
+    {
+      "area": "conventions",
+      "observation": "Pre-existing FaultBuf type errors in app/src/main.rs were blocking ESP32 cross-compilation (cargo +esp check). These bugs existed before this feature but weren't caught because the previous commit didn't verify espcheck. The worker correctly identified and fixed them as a prerequisite.",
+      "evidence": "Diff shows 3 fixes in main.rs: (1) if-let pattern on tuples replaced with separate references, (2) FaultBuf.as_str() returns Option<&str> requiring .and_then(), (3) last_published_fault = fault changed to Some(fault)"
+    },
+    {
+      "area": "knowledge",
+      "observation": "The architecture.md description of launa-mqtt should be updated to mention the new v5_codec module and its role in MQTT v5 protocol encoding/decoding. Currently architecture.md describes launa-mqtt as having 'packet extraction (try_extract_packet, decode_remaining_length)' but doesn't mention v5_codec.",
+      "evidence": "architecture.md lists launa-mqtt features but omits v5_codec. The new module is a significant addition (693 lines, 34 tests) that is the canonical location for all MQTT v5 packet encoding/decoding."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The MQTT v5 codec extraction is well-executed and complete. All required functions were extracted from app/mqtt_client.rs to launa-mqtt/src/v5_codec.rs with 34 comprehensive desktop tests covering all packet types, edge cases (boundary values, empty payloads, error conditions), and a roundtrip test for remaining_length encoding. The app correctly imports and delegates to the extracted functions. mqtt_client.rs reduced from ~787 to 690 lines. launa-mqtt remains no_std compatible. ESP32 cross-compilation passes. One non-blocking latent issue: encode_publish allows qos>0 with packet_id=None producing a malformed packet (never triggered by app code). Worker also correctly fixed pre-existing FaultBuf type errors in main.rs that were blocking espcheck."
+}
