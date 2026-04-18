@@ -3185,10 +3185,6 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // Fault lifecycle tests (sim-fault-lifecycle feature)
-    // =========================================================================
-
     /// Helper: dispatch a status frame and return the parsed status.
     fn dispatch_status(sim: &mut SpaSim) -> launa_protocol::status::StatusUpdate {
         let bytes = sim.tick();
@@ -3728,10 +3724,6 @@ mod tests {
         assert_eq!(frames[0].payload[1], 0x00, "tick 3: fault cleared");
     }
 
-    // =========================================================================
-    // Temperature physics tests (sim-temperature-physics feature)
-    // =========================================================================
-
     // VAL-SIM-010: Ambient temperature is configurable via set_ambient_temp()
     #[test]
     fn test_set_ambient_temp_method_exists() {
@@ -3985,14 +3977,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // Untapped simulator features — comprehensive unit tests
-    // (sim-untapped-features-tests)
-    // =========================================================================
-
-    // -------------------------------------------------------------------------
     // Overshoot/hysteresis: full cycle
-    // -------------------------------------------------------------------------
 
     // VAL-SIM-006: Heater overshoots set_temp by configured degrees
     // VAL-SIM-007: Hysteresis re-heat after overshoot

@@ -126,7 +126,6 @@ mod tests {
     }
 
     // --- Mock fixture verification tests ---
-    //
     // These two tests verify that MockOta works correctly as a test fixture.
     // All other MockOta behavior (begin while in progress, write before begin,
     // finalize zero bytes, fail_on_begin, fail_on_finalize, firmware size exceeded)

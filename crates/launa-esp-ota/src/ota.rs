@@ -576,8 +576,6 @@ mod tests {
         assert_eq!(detected, Partition::Ota1);
     }
 
-    // ── Firmware integrity verification tests ──────────────────────────
-
     #[test]
     fn test_invalid_image_header_rejected() {
         let flash = MockFlash::new(total_flash_size());
@@ -731,8 +729,6 @@ mod tests {
         ));
     }
 
-    // ── Shared-sector otadata tests ────────────────────────────────────
-
     /// Helper: read the raw 32-byte otadata entry for a given slot index (0 or 1).
     fn read_otadata_entry(flash: &MockFlash, slot: usize) -> [u8; OTA_ENTRY_SIZE] {
         let offset = OTADATA_OFFSET as usize + slot * OTA_ENTRY_SIZE;
@@ -844,8 +840,6 @@ mod tests {
         let detected = ota.detect_running_partition().unwrap();
         assert_eq!(detected, Partition::Ota0);
     }
-
-    // ── Write offset / bytes_written tracking tests ────────────────────
 
     #[test]
     fn test_unaligned_consecutive_writes_correct() {
@@ -1068,8 +1062,6 @@ mod tests {
             "bytes_written should be 4100 (4093 + 7)"
         );
     }
-
-    // ── Signature verification OTA tests ───────────────────────────────
 
     #[test]
     fn test_verify_signature_matches() {

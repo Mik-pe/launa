@@ -7,8 +7,6 @@ use launa_protocol::{
     dispatch_frame, Frame, FrameDecoder, FrameEncoder, IncomingMessage, StatusUpdate,
 };
 
-// ── Helper: simple deterministic PRNG (xorshift32) ──────────────────────
-
 fn xorshift32(state: &mut u32) -> u32 {
     let mut x = *state;
     x ^= x << 13;

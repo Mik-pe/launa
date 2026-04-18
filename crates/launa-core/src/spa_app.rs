@@ -157,8 +157,6 @@ impl<'a> SpaApp<'a> {
         actions
     }
 
-    // ── Main processing methods ─────────────────────────────────────
-
     /// Process an incoming frame from the spa.
     pub fn process_frame(&mut self, frame: &Frame) -> Vec<AppAction> {
         let now = self.clock.now();
@@ -399,8 +397,6 @@ impl<'a> SpaApp<'a> {
         actions
     }
 }
-
-// ── Helpers ────────────────────────────────────────────────────────────
 
 fn encode_command(cmd: &Command) -> Vec<u8> {
     let (msg_type, payload) = cmd.encode();

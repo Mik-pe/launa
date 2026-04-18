@@ -98,8 +98,6 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 /// Used in HA discovery (sw_version), MQTT state JSON, and diagnostics payload.
 const FIRMWARE_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_SHORT_SHA"), ")");
 
-// ── Diagnostic counters (static, accessible from all tasks) ───────────
-
 static MQTT_RECONNECT_COUNT: AtomicU32 = AtomicU32::new(0);
 static MQTT_LOSS_COUNT: AtomicU32 = AtomicU32::new(0);
 
@@ -131,8 +129,6 @@ fn init_heap() {
     }
 }
 
-// ── Inter-task channels ────────────────────────────────────────────────
-
 static FRAME_CHANNEL: Channel<CriticalSectionRawMutex, Frame, 4> = Channel::new();
 static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
 static UART_TX_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
@@ -147,8 +143,6 @@ pub static WIFI_RECONNECT_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::
 
 /// Channel for sending alert payloads from the main loop to the MQTT task.
 static ALERT_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
-
-// ── Combined UART task (reads frames first, then writes outgoing bytes) ──────────
 
 #[embassy_executor::task]
 async fn uart_task(mut transport: transport::Rs485Transport) {
@@ -186,8 +180,6 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
         }
     }
 }
-
-// ── MQTT task (subscribes to commands + publishes state) ──────────────
 
 #[embassy_executor::task]
 async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
@@ -473,10 +465,6 @@ async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
     }
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────
-
-/// Maximum hex string length for a single frame payload.
-/// Max payload is 253 bytes → 506 hex chars. Round up to 512 (power of two).
 #[cfg(feature = "sniff")]
 const HEX_BUF_SIZE: usize = 512;
 
@@ -649,8 +637,6 @@ async fn execute_actions(actions: &[AppAction], device_id: &str) {
     }
 }
 
-// ── Sniffer mode (passive RS-485 monitoring) ──────────────────────────
-
 #[cfg(feature = "sniff")]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
@@ -662,7 +648,6 @@ async fn main(spawner: Spawner) {
 
     info!("Launa ESP32 sniffer mode starting...");
 
-    // ── Load config from NVS ────────────────────────────────────────
     let app_config = match config::AppConfig::open_nvs(peripherals.FLASH) {
         Some(mut nvs) => {
             let mut aes = esp_hal::aes::Aes::new(peripherals.AES);
@@ -677,7 +662,6 @@ async fn main(spawner: Spawner) {
     let device_id = app_config.device_id.clone();
     info!("Config loaded: device_id={}", device_id);
 
-    // ── Initialize RS-485 UART ──────────────────────────────────────
     let uart_config = esp_hal::uart::Config::default().with_baudrate(115200);
     let uart = esp_hal::uart::Uart::new(peripherals.UART1, uart_config)
         .expect("Failed to create UART")
@@ -688,7 +672,6 @@ async fn main(spawner: Spawner) {
     let mut transport = transport::Rs485Transport::new(uart, Some(peripherals.GPIO4.into()));
     info!("RS-485 UART initialized");
 
-    // ── Initialize esp-radio and connect WiFi ──────────────────────
     let radio_ctrl = esp_radio::init().expect("Failed to init esp-radio");
     let wifi_stack = wifi::WifiStack::connect(
         spawner,
@@ -700,7 +683,6 @@ async fn main(spawner: Spawner) {
     )
     .await;
 
-    // ── Connect MQTT (with retry + exponential backoff) ─────────────
     let mut mqtt = {
         let mut attempt: u32 = 0;
         loop {
@@ -763,8 +745,6 @@ async fn main(spawner: Spawner) {
     }
 }
 
-// ── Hardware test mode ─────────────────────────────────────────────────
-
 #[cfg(feature = "hw-test")]
 #[esp_rtos::main]
 async fn main(_spawner: Spawner) {
@@ -799,7 +779,6 @@ async fn main(_spawner: Spawner) {
 
     info!("TEST_PASS:all");
 
-    // ── Serial config receiver ────────────────────────────────────
     // Wait for CONFIG_START over serial, parse key=value lines,
     // write to NVS on CONFIG_END. 30-second timeout.
     info!("Waiting for serial config (30s timeout)...");
@@ -952,8 +931,6 @@ async fn main(_spawner: Spawner) {
     }
 }
 
-// ── Main entry point ──────────────────────────────────────────────────
-
 #[cfg(not(any(feature = "sniff", feature = "hw-test")))]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
@@ -979,7 +956,6 @@ async fn main(spawner: Spawner) {
 
     info!("Launa ESP32 firmware starting...");
 
-    // ── Load config from NVS ────────────────────────────────────────
     let app_config;
     let mut ota;
     let mut ota_buffers;
@@ -1002,7 +978,6 @@ async fn main(spawner: Spawner) {
         }
     }
 
-    // ── Initialize RS-485 UART ──────────────────────────────────────
     let uart_config = esp_hal::uart::Config::default().with_baudrate(115200);
     let uart = esp_hal::uart::Uart::new(peripherals.UART1, uart_config)
         .expect("Failed to create UART")
@@ -1013,7 +988,6 @@ async fn main(spawner: Spawner) {
     let uart_transport = transport::Rs485Transport::new(uart, Some(peripherals.GPIO4.into()));
     info!("RS-485 UART initialized");
 
-    // ── Initialize esp-radio and connect WiFi ──────────────────────
     let radio_ctrl = esp_radio::init().expect("Failed to init esp-radio");
     let wifi_stack = wifi::WifiStack::connect(
         spawner,
@@ -1025,7 +999,6 @@ async fn main(spawner: Spawner) {
     )
     .await;
 
-    // ── Connect MQTT (with retry + exponential backoff) ─────────────
     let mut mqtt = {
         let mut attempt: u32 = 0;
         loop {
@@ -1069,7 +1042,6 @@ async fn main(spawner: Spawner) {
         .spawn(uart_task(uart_transport))
         .expect("Failed to spawn UART task");
 
-    // ── Main event loop ─────────────────────────────────────────────
     info!("Entering main event loop");
 
     let frame_rx = FRAME_CHANNEL.receiver();
@@ -1125,7 +1097,6 @@ async fn main(spawner: Spawner) {
         let heap_actions = app.check_heap(esp_alloc::HEAP.free());
         execute_actions(&heap_actions, device_id_str).await;
 
-        // ── OTA update handling ─────────────────────────────────────
         if let Ok(firmware_url) = ota_rx.try_receive() {
             match (ota.as_mut(), ota_buffers.as_mut()) {
                 (Some(o), Some(b)) => {

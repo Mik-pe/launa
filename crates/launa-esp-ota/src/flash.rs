@@ -9,8 +9,6 @@ use log::debug;
 
 use crate::crypto::crc32;
 
-// ── Partition table constants (must match app/partitions.csv) ──────────
-
 pub(crate) const OTADATA_OFFSET: u32 = 0x10000;
 pub(crate) const OTA_0_OFFSET: u32 = 0x160000;
 pub(crate) const OTA_0_SIZE: u32 = 0x140000;

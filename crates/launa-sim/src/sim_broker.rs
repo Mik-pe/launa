@@ -325,10 +325,6 @@ mod tests {
         assert_eq!(broker.publish_count(), 0);
     }
 
-    // ========================================================================
-    // Test Group: QoS 1 PUBACK Tracking (VAL-SIM-009)
-    // ========================================================================
-
     #[test]
     fn test_simbroker_qos1_puback() {
         let mut broker = SimBroker::new("test_spa");
@@ -362,10 +358,6 @@ mod tests {
         broker.publish_qos1("topic/a", "payload1");
         broker.assert_all_acked(); // should panic
     }
-
-    // ========================================================================
-    // Test Group: Subscription Matching (VAL-SIM-010)
-    // ========================================================================
 
     #[test]
     fn test_simbroker_subscription_filtering() {
@@ -404,10 +396,6 @@ mod tests {
         assert_eq!(broker.publish_count(), 2);
     }
 
-    // ========================================================================
-    // Test Group: Message Loss Rate (VAL-SIM-011)
-    // ========================================================================
-
     #[test]
     fn test_simbroker_loss_rate() {
         // Test loss rate in isolation (no subscription filtering interference)
@@ -444,10 +432,6 @@ mod tests {
         );
     }
 
-    // ========================================================================
-    // Test Group: Disconnect Drops Publishes (VAL-SIM-012)
-    // ========================================================================
-
     #[test]
     fn test_simbroker_disconnect_drops() {
         let mut broker = SimBroker::new("test_spa");
@@ -468,10 +452,6 @@ mod tests {
         // dropped_count tracks the losses
         assert_eq!(broker.dropped_count(), 3);
     }
-
-    // ========================================================================
-    // Test Group: Reconnect Restores Publishing (VAL-SIM-013)
-    // ========================================================================
 
     #[test]
     fn test_simbroker_reconnect_restores() {
@@ -502,10 +482,6 @@ mod tests {
         assert_eq!(broker.dropped_count(), 1);
     }
 
-    // ========================================================================
-    // Test Group: Default Backward Compatibility
-    // ========================================================================
-
     #[test]
     fn test_simbroker_default_identical_to_current() {
         // All new features off by default — behavior identical to original
@@ -528,10 +504,6 @@ mod tests {
         assert_eq!(broker.unacked_count(), 0);
         broker.assert_all_acked(); // should not panic
     }
-
-    // ========================================================================
-    // Test Group: Disconnect + QoS Interaction
-    // ========================================================================
 
     #[test]
     fn test_simbroker_disconnect_drops_qos1() {

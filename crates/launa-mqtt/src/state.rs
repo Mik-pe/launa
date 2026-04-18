@@ -347,8 +347,6 @@ mod tests {
         assert_eq!(parsed["last_fault"], "before\u{0000}after");
     }
 
-    // ── Additional MQTT message format tests ────────────────────────
-
     #[test]
     fn test_status_to_json_all_pumps_on() {
         let mut status = sample_status();

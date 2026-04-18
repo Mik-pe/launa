@@ -158,8 +158,6 @@ mod tests {
     use super::*;
     use alloc::vec;
 
-    // ========== parse_http_url tests ==========
-
     #[test]
     fn test_parse_http_url_standard_cases() {
         // Standard URL with default port
@@ -237,8 +235,6 @@ mod tests {
         assert!(parse_http_url("http://example.com:65536/fw.bin").is_none());
     }
 
-    // ========== validate_http_status tests ==========
-
     #[test]
     fn test_validate_http_status_success_cases() {
         assert!(validate_http_status(
@@ -267,8 +263,6 @@ mod tests {
         assert!(!validate_http_status(b"FOOBAR/1.1 200 OK\r\n\r\n")); // wrong prefix
         assert!(!validate_http_status(b""));
     }
-
-    // ========== find_header_end tests ==========
 
     #[test]
     fn test_find_header_end_found() {
@@ -313,8 +307,6 @@ mod tests {
         assert_eq!(find_header_end(b"abc"), None);
     }
 
-    // ========== parse_crc_from_url tests ==========
-
     #[test]
     fn test_parse_crc_from_url_valid() {
         assert_eq!(
@@ -357,8 +349,6 @@ mod tests {
             None
         );
     }
-
-    // ========== parse_content_length tests ==========
 
     #[test]
     fn test_parse_content_length_valid() {
@@ -417,8 +407,6 @@ mod tests {
         assert_eq!(parse_content_length(b""), None);
     }
 
-    // ========== find_header_value_start tests ==========
-
     #[test]
     fn test_find_header_value_start_cases() {
         // Basic
@@ -459,8 +447,6 @@ mod tests {
         assert_eq!(find_header_value_start(b"X-Value:42", b"X-Value:"), Some(8));
         assert_eq!(&headers[18..22], b"5678");
     }
-
-    // ========== extract_status_line tests ==========
 
     #[test]
     fn test_extract_status_line_cases() {

@@ -1266,11 +1266,9 @@ fn test_multi_frame_fault_log_walk() {
 fn test_combined_stress_7_phase() {
     let mut harness = TestHarness::new();
 
-    // ── Phase 1: Registration ──
     harness.complete_registration(5);
     assert!(harness.app.is_registered(), "Phase 1: should be registered");
 
-    // ── Phase 2: 3 successful commands ──
     harness.collect_actions(); // get initial status for tracker
 
     harness.send_command(Command::ToggleItem(ToggleItem::Pump1));
@@ -1291,7 +1289,6 @@ fn test_combined_stress_7_phase() {
         harness.sim.state.pumps[0]
     );
 
-    // ── Phase 3: Fault injection ──
     harness.sim.simulate_fault_state(FaultCode::WaterTooHot);
     let fault_actions = harness.collect_actions();
     // Status should still be published (with fault flag in status)
@@ -1303,7 +1300,6 @@ fn test_combined_stress_7_phase() {
         "Phase 3: status should still be published with fault state"
     );
 
-    // ── Phase 4: 35-tick silence → stale ──
     harness.sim.simulate_bus_silence(40);
 
     let mut stale_alert_seen = false;
@@ -1330,7 +1326,6 @@ fn test_combined_stress_7_phase() {
         "Phase 4: app should be stale after 35s silence"
     );
 
-    // ── Phase 5: Recovery ──
     // Exhaust remaining silence ticks (40 - 35 = 5 ticks left).
     // DO NOT use tick_spa() here — we want collect_actions() below to see
     // the FIRST status after stale and set the recovery flag.
@@ -1361,7 +1356,6 @@ fn test_combined_stress_7_phase() {
         "Phase 5: recovery flag should be set on first status after stale"
     );
 
-    // ── Phase 6: Reboot → re-register ──
     harness.sim.simulate_spa_reboot();
     let _reboot_actions = harness.collect_actions();
     assert!(
@@ -1376,7 +1370,6 @@ fn test_combined_stress_7_phase() {
         ticks
     );
 
-    // ── Phase 7: Post-reboot command ──
     harness.collect_actions(); // get initial status after re-registration
 
     harness.send_command(Command::ToggleItem(ToggleItem::Pump2));

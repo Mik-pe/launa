@@ -879,7 +879,6 @@ mod tests {
     }
 
     // --- JSON escaping tests for discovery configs ---
-    //
     // Consolidated from 12 individual tests into 3 focused tests:
     // 1. All payloads produce valid JSON with special characters
     // 2. Device block fields round-trip correctly through JSON parsing

@@ -18,7 +18,6 @@ use launa_sim::VirtualClock;
 // ══════════════════════════════════════════════════════════════════════════
 // Test 1: VAL-SR-006 — Fault log walk entries 1..N
 // ══════════════════════════════════════════════════════════════════════════
-//
 // Request fault entries 1 through 5 sequentially via SpaApp command pipeline.
 // Each response should be distinct with the correct entry_number.
 // This differs from test_multi_frame_fault_log_walk (which tests SpaApp directly
@@ -152,7 +151,6 @@ fn test_fault_log_walk_entries_1_to_n() {
 // ══════════════════════════════════════════════════════════════════════════
 // Test 2: VAL-SR-007 — Configuration request/response pairing
 // ══════════════════════════════════════════════════════════════════════════
-//
 // Send ConfigurationRequest via SpaApp → SpaSim → decode pipeline.
 // Verify SpaApp emits a ControlConfiguration event with correct pump/light config.
 
@@ -224,7 +222,6 @@ fn test_configuration_request_response_pairing() {
 // ══════════════════════════════════════════════════════════════════════════
 // Test 3: VAL-SR-008 — Filter cycles request/response
 // ══════════════════════════════════════════════════════════════════════════
-//
 // Send FilterCyclesRequest via SpaApp → SpaSim → decode pipeline.
 // Verify response with expected default filter cycle values.
 
@@ -292,7 +289,6 @@ fn test_filter_cycles_request_response() {
 // ══════════════════════════════════════════════════════════════════════════
 // Test 4: VAL-SR-009 — MQTT broker disconnect/reconnect during session
 // ══════════════════════════════════════════════════════════════════════════
-//
 // Simulate MQTT broker disconnect during active session.
 // Verify: no publications during disconnect, resume after reconnect,
 // dropped_count is correct.
@@ -313,7 +309,6 @@ fn test_mqtt_broker_disconnect_reconnect() {
         initial_count
     );
 
-    // ── Phase 1: Disconnect broker ──
     harness.broker.simulate_disconnect();
 
     // Run 10 ticks — SpaApp still produces actions, but broker drops them all
@@ -339,7 +334,6 @@ fn test_mqtt_broker_disconnect_reconnect() {
         dropped
     );
 
-    // ── Phase 2: Reconnect broker ──
     harness.broker.simulate_reconnect();
 
     // Run 10 more ticks — publications should resume
@@ -390,7 +384,6 @@ fn test_mqtt_broker_disconnect_reconnect() {
 // ══════════════════════════════════════════════════════════════════════════
 // Test 5: VAL-SR-010 — Rapid command flood exceeds queue cap
 // ══════════════════════════════════════════════════════════════════════════
-//
 // Send 35 MQTT commands rapidly. Verify:
 // - 32 accepted (MAX_COMMAND_QUEUE = 32)
 // - 3+ dropped (overflow)

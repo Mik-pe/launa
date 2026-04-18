@@ -9,8 +9,6 @@ use launa_protocol::filter::FilterCycles;
 use launa_protocol::information::InformationResponse;
 use launa_protocol::{dispatch_frame, Frame, FrameDecoder, IncomingMessage, StatusUpdate};
 
-// ── Helper: simple deterministic PRNG (xorshift32) ──────────────────────
-
 fn xorshift32(state: &mut u32) -> u32 {
     let mut x = *state;
     x ^= x << 13;

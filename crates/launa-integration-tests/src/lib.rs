@@ -21,10 +21,6 @@ mod tests {
     use launa_protocol::status::{HeatingMode, PumpState, TempRange, TemperatureScale};
     use launa_sim::SpaSim;
 
-    // ========================================================================
-    // Test Group A: Protocol Round-Trip
-    // ========================================================================
-
     #[test]
     fn test_status_frame_round_trip() {
         let mut sim = SpaSim::new();
@@ -163,10 +159,6 @@ mod tests {
         }
     }
 
-    // ========================================================================
-    // Test Group B: Command Flow
-    // ========================================================================
-
     #[test]
     fn test_toggle_pump1_command() {
         let mut sim = SpaSim::new();
@@ -284,10 +276,6 @@ mod tests {
         }
     }
 
-    // ========================================================================
-    // Test Group C: End-to-End MQTT Pipeline
-    // ========================================================================
-
     #[test]
     fn test_status_to_mqtt_json() {
         let mut sim = SpaSim::new();
@@ -375,14 +363,6 @@ mod tests {
         }
     }
 
-    // ========================================================================
-    // Test Group D: OTA Mock — removed (covered by launa-ota mock tests)
-    // ========================================================================
-
-    // ========================================================================
-    // Test Group E: Discovery — removed (covered by launa-mqtt discovery tests)
-    // ========================================================================
-
     #[test]
     fn test_topic_builder() {
         let topics = launa_mqtt::topics::TopicBuilder::new("my_spa");
@@ -395,10 +375,6 @@ mod tests {
             "homeassistant/sensor/my_spa/temperature/config"
         );
     }
-
-    // ========================================================================
-    // Test Group F: Error Handling
-    // ========================================================================
 
     #[test]
     fn test_corrupted_frame_bad_crc() {
@@ -603,10 +579,6 @@ mod tests {
         assert_eq!(cmd, None);
     }
 
-    // ========================================================================
-    // Test Group G: Multi-Frame Streaming
-    // ========================================================================
-
     #[test]
     fn test_feed_bytes_one_at_a_time() {
         let mut sim = SpaSim::new();
@@ -683,10 +655,6 @@ mod tests {
         let decoded = Frame::parse(inner).unwrap();
         assert_eq!(decoded, frame);
     }
-
-    // ========================================================================
-    // Additional Simulator Tests
-    // ========================================================================
 
     #[test]
     fn test_simulator_tick_updates_time() {
@@ -863,10 +831,6 @@ mod tests {
         assert_eq!(parsed["device"]["name"], "My Hot Tub");
         assert_eq!(parsed["device"]["model"], "BP6013G1");
     }
-
-    // ========================================================================
-    // Phase 2: Desktop end-to-end tests (no HW needed)
-    // ========================================================================
 
     /// Full pipeline integration test: SpaSim generates status frame ->
     /// FrameDecoder parses -> StatusUpdate extracted -> status_to_json() produces
@@ -1134,15 +1098,6 @@ mod tests {
         assert_eq!(mt, [0x03, 0xBF]);
     }
 
-    // ========================================================================
-    // Test Group H: OTA Integration Tests
-    // ========================================================================
-    // OTA Test Helpers
-    // ========================================================================
-    //
-    // SimHttpServer and simulate_ota_download are used by SpaApp OTA pipeline
-    // tests later in this file.
-
     /// Simulates an HTTP firmware download server that serves firmware data
     /// in configurable chunk sizes, mimicking how the real OTA downloads
     /// firmware over a TCP socket.
@@ -1178,13 +1133,6 @@ mod tests {
     // graceful_shutdown_happy_path, failed_write_triggers_rollback,
     // chunked_writes, write_failure — all covered by launa-ota mock tests and
     // SpaApp OTA pipeline tests below.
-
-    // ========================================================================
-    // Test Group J: FrameDecoder Stress Tests
-    // ========================================================================
-    //
-    // Stress tests for FrameDecoder under adverse conditions: bus idle,
-    // split boundaries, corruption, and all-escape payloads.
 
     /// Bus idle: 1000 consecutive 0x7E bytes → no panic, no spurious frames,
     /// then a valid frame decoded correctly.
@@ -1382,15 +1330,6 @@ mod tests {
         // No frame errors
         assert_eq!(decoder.frame_error_count(), 0);
     }
-
-    // ========================================================================
-    // Test Group I: SpaApp Integration Tests (launa-core)
-    // ========================================================================
-    //
-    // These tests use `launa_core::SpaApp` — the REAL extracted firmware logic.
-    // Tests exercise the exact same code
-    // path as the ESP32 main loop: feed frames, advance virtual time, assert on
-    // returned `Vec<AppAction>`.
 
     use launa_core::{AppAction, SpaApp};
     use launa_sim::VirtualClock;
@@ -2070,14 +2009,6 @@ mod tests {
         assert!(!app.is_stale(), "should not be stale");
     }
 
-    // ========================================================================
-    // Test Group K: Command Queue Integration Tests
-    // ========================================================================
-    //
-    // Tests for command queue behavior: registration race conditions, FIFO
-    // drain ordering, and bounded capacity via CommandTracker's
-    // MAX_PENDING_COMMANDS=8 cap.
-
     /// Registration race condition: send commands via on_mqtt_command()
     /// during registration (before client_id assigned), complete registration,
     /// send Ready frames, verify commands drain.
@@ -2283,23 +2214,6 @@ mod tests {
         // All 8 will eventually timeout and be dropped (spa never confirms).
         // But the 9th was never tracked, so it won't contribute to drops.
     }
-
-    // ========================================================================
-    // Test Group L: SpaApp + SpaSim Full Integration Tests
-    // ========================================================================
-    //
-    // These tests exercise the complete SpaApp → SpaSim pipeline, where SpaSim
-    // generates realistic frame bytes and SpaApp processes them through the same
-    // code path as the ESP32 main loop. VirtualClock provides deterministic timing.
-    //
-    // These satisfy validation contract assertions:
-    //   VAL-APP-026: SpaApp pipeline (process_frame, tick, on_mqtt_command)
-    //   VAL-APP-027: VirtualClock usage for deterministic timing
-    //   VAL-APP-028: Registration flow end-to-end
-    //   VAL-APP-029: OTA full download cycle
-    //   VAL-APP-030: Stale detection lifecycle (probe → alert → recovery)
-    //   VAL-APP-031: OTA rollback on failure
-    //   VAL-APP-032: Command retry and drop when spa doesn't confirm
 
     /// Helper: run a full SpaSim tick, decode all frames, feed them to SpaApp.
     /// Returns all AppActions produced during this cycle.
@@ -3139,13 +3053,6 @@ mod tests {
         assert!(has_fault, "should include fault in state publish");
     }
 
-    // ========================================================================
-    // Test Group M: Pump Timer Cancellation & Temperature Pipeline
-    // ========================================================================
-    //
-    // VAL-BM-011: Validated temperature full pipeline test.
-    // VAL-BM-010: SpaApp cancels pump timer on external Off (integration).
-
     /// VAL-BM-011: Validated temperature full pipeline — Fahrenheit.
     /// MQTT payload → validated parse → SpaApp queue → Ready → wire frame →
     /// SpaSim processes → status confirms new temp.
@@ -3381,21 +3288,4 @@ mod tests {
             .iter()
             .any(|a| matches!(a, AppAction::PublishState { .. })));
     }
-
-    // ========================================================================
-    // parse_ota_url & OTA alert tests — removed (covered by launa-mqtt)
-    // ========================================================================
-    //
-    // parse_ota_url rejection/acceptance tests, OTA mock-only flow tests,
-    // and OTA alert construction tests are covered by launa-mqtt ota_url
-    // and launa-ota mock tests respectively. SpaApp OTA pipeline tests
-    // in the VAL-APP sections above cover the integration scenarios.
-
-    // ========================================================================
-    // Remote Log Buffer tests — removed (covered by launa-core & launa-mqtt)
-    // ========================================================================
-    //
-    // RemoteLogBuffer push/drain/ring/truncation tests are covered by
-    // launa-core unit tests. log_entry_to_json tests are covered by
-    // launa-mqtt remote_log tests.
 }

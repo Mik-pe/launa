@@ -589,8 +589,6 @@ mod tests {
         );
     }
 
-    // ── Pump timer command tests ────────────────────────────────────
-
     #[test]
     fn test_parse_pump1_timer() {
         let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump1_timer", b"15");
@@ -645,8 +643,6 @@ mod tests {
         assert!(matches!(result, ParseResult::InvalidPayload(_)));
     }
 
-    // ── Pump 4-6 toggle tests ──────────────────────────────────────
-
     #[test]
     fn test_parse_pump4() {
         let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump4", b"true");
@@ -674,8 +670,6 @@ mod tests {
         );
     }
 
-    // ── Topic base edge cases ──────────────────────────────────────
-
     #[test]
     fn test_parse_command_with_trailing_slash_in_base() {
         let result = parse_command(
@@ -701,8 +695,6 @@ mod tests {
         let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump7", b"true");
         assert!(matches!(result, ParseResult::UnknownSubtopic(_)));
     }
-
-    // ── Temperature edge cases ─────────────────────────────────────
 
     #[test]
     fn test_parse_set_temperature_boundary_80() {

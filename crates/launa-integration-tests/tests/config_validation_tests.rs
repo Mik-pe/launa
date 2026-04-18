@@ -839,7 +839,6 @@ fn test_heap_lifecycle_ok_warning_critical_recovery() {
     let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
     let mut app = SpaApp::new(clock);
 
-    // ── Phase 1: OK (10 KiB) — no alert ──
     clock.advance_ms(31_000); // past first check interval (30s)
     let actions = app.check_heap(10_240); // 10 KiB — well above warning threshold
     let has_alert = actions
@@ -847,7 +846,6 @@ fn test_heap_lifecycle_ok_warning_critical_recovery() {
         .any(|a| matches!(a, AppAction::PublishAlert { .. }));
     assert!(!has_alert, "no alert at 10 KiB");
 
-    // ── Phase 2: Warning (3 KiB) — check_heap returns Some(false), but no PublishAlert ──
     clock.advance_ms(31_000); // next check interval
     let actions = app.check_heap(3_072); // 3 KiB — below warn threshold (4 KiB) but above crit (1 KiB)
     let has_critical = actions.iter().any(|a| {
@@ -861,7 +859,6 @@ fn test_heap_lifecycle_ok_warning_critical_recovery() {
         "should not have critical alert at 3 KiB (warning level only)"
     );
 
-    // ── Phase 3: Critical (500 B) — PublishAlert with "heap_critically_low" ──
     clock.advance_ms(31_000); // next check interval
     let actions = app.check_heap(500); // 500 B — below critical threshold (1 KiB)
     let has_critical = actions.iter().any(|a| {
@@ -872,7 +869,6 @@ fn test_heap_lifecycle_ok_warning_critical_recovery() {
     });
     assert!(has_critical, "should have critical alert at 500 bytes");
 
-    // ── Phase 4: Recovery (20 KiB) — no alert ──
     clock.advance_ms(31_000); // next check interval
     let actions = app.check_heap(20_480); // 20 KiB — well above all thresholds
     let has_alert = actions
@@ -889,14 +885,12 @@ fn test_heap_lifecycle_integration_with_broker() {
     harness.complete_registration(5);
     harness.collect_actions();
 
-    // ── Phase 1: OK ──
     harness.advance_ms(31_000);
     let actions = harness.app.check_heap(10_240);
     harness.execute_actions_on_broker(&actions);
     let alert_count = harness.broker.count_topic("launa/test_spa/alert/error");
     assert_eq!(alert_count, 0, "no alert at 10 KiB");
 
-    // ── Phase 2: Critical ──
     harness.advance_ms(31_000);
     let actions = harness.app.check_heap(500);
     harness.execute_actions_on_broker(&actions);
@@ -908,7 +902,6 @@ fn test_heap_lifecycle_integration_with_broker() {
     let alert_count = harness.broker.count_topic("launa/test_spa/alert/error");
     assert_eq!(alert_count, 1, "should have 1 critical alert at 500 bytes");
 
-    // ── Phase 3: Recovery ──
     harness.advance_ms(31_000);
     let actions = harness.app.check_heap(20_480);
     harness.execute_actions_on_broker(&actions);

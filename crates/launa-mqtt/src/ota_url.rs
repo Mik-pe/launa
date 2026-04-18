@@ -194,8 +194,6 @@ mod tests {
         assert_eq!(parse_ota_url(br#"{"url":""}"#), None);
     }
 
-    // ── Additional OTA validation tests ─────────────────────────────
-
     #[test]
     fn test_parse_ota_url_with_crc_query_param() {
         let payload = br#"{"url":"http://192.168.1.100/firmware.bin?crc=DEADBEEF"}"#;

@@ -28,20 +28,15 @@ use crate::config::AppConfig;
 use crate::mk_static;
 use crate::net_util;
 
-// ── MQTT command rate limiting ─────────────────────────────────────────
 // RateLimiter is defined in launa-core with Clock trait injection.
 // Constants RATE_LIMIT_MAX_COMMANDS (10) and RATE_LIMIT_WINDOW_MS (10_000)
 // are re-exported from launa-core.
-
-// ── MQTT action type (command vs timer) ────────────────────────────────
 
 #[derive(Debug)]
 pub enum MqttAction {
     Command(Command),
     StartPumpTimer { pump: u8, minutes: u32 },
 }
-
-// ── TCP transport wrapper ──────────────────────────────────────────────
 
 pub struct TcpTransport {
     socket: TcpSocket<'static>,
@@ -77,8 +72,6 @@ impl Write for TcpTransport {
         self.socket.write(buf).await.map_err(|_| TransportError)
     }
 }
-
-// ── MQTT client ────────────────────────────────────────────────────────
 
 const DEFAULT_KEEP_ALIVE_SECS: u16 = 30;
 const RX_BUFFER_MAX_SIZE: usize = 2048; // 2 KiB cap
@@ -764,8 +757,6 @@ impl MqttClient {
         launa_mqtt::parse_ota_url(payload)
     }
 }
-
-// ── Helpers ────────────────────────────────────────────────────────────
 
 fn append_lp_string(buf: &mut Vec<u8>, s: &str) {
     let bytes = s.as_bytes();

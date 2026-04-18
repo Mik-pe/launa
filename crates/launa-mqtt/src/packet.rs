@@ -103,8 +103,6 @@ mod tests {
         }
     }
 
-    // ── decode_remaining_length tests ────────────────────────────────
-
     #[test]
     fn test_decode_remaining_length_single_byte() {
         // Single byte: value = 0x05, header_size = 2 (type byte + 1 length byte)
@@ -148,8 +146,6 @@ mod tests {
         // Continuation bit set but no next byte
         assert!(decode_remaining_length(&[0x30, 0x80]).is_none());
     }
-
-    // ── try_extract_packet tests ─────────────────────────────────────
 
     #[test]
     fn test_try_extract_packet_empty_buffer() {

@@ -560,7 +560,6 @@ fn test_pump_timer_cancels_on_mqtt_toggle_off() {
     // Since the timer start set it to Low (first toggle), one MQTT toggle → High.
     // We may need 2 toggles to get to Off. But the PumpTimer.tick() checks
     // if the pump is NOT on (not Low/High), and if so, cancels the timer.
-    //
     // Let's verify the current state and toggle more if needed:
     for _ in 0..3 {
         if h.sim.state.pumps[0] == PumpState::Off {
@@ -602,7 +601,6 @@ fn test_pump_timer_cancels_on_mqtt_toggle_off() {
 // ══════════════════════════════════════════════════════════════════════════
 // Test 7: Rapid toggle race (4 toggles, parity) (VAL-TEST-013)
 // ══════════════════════════════════════════════════════════════════════════
-//
 // Queue 4 rapid toggle pump1 commands. The CommandTracker tracks based on
 // the pre_status at the time of sending, so rapid toggles may cause retries.
 // The key assertions are:
@@ -695,7 +693,6 @@ fn test_rapid_toggle_race_parity() {
 // ══════════════════════════════════════════════════════════════════════════
 // Test 8: Rapid temperature race (100→104→102, last wins) (VAL-TEST-020)
 // ══════════════════════════════════════════════════════════════════════════
-//
 // Set temp 100, immediately set 104, immediately set 102.
 // Verify final set_temp is 102 (last queued value wins).
 // The CommandTracker tracks based on pre_status, so the first two SetTemperature
