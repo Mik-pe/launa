@@ -47,7 +47,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     // Ctrl+C handler
     let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let r = running.clone();
-    ctrlc_handler(move || {
+    crate::util::ctrlc_handler(move || {
         r.store(false, std::sync::atomic::Ordering::SeqCst);
     });
 
@@ -66,8 +66,4 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     println!("\nMonitor stopped.");
     Ok(())
-}
-
-fn ctrlc_handler<F: Fn() + Send + 'static>(handler: F) {
-    let _ = ctrlc::set_handler(handler);
 }

@@ -18,10 +18,20 @@ use log::{info, warn};
 use crate::WIFI_RECONNECT_SIGNAL;
 use crate::mk_static;
 
+/// Handle to the embassy-net network stack.
+///
+/// Provides access to the static `Stack` reference needed for TCP/MQTT
+/// connections. Created by `WifiStack::connect()` after WiFi association
+/// and DHCP address acquisition succeed.
 pub struct WifiStack {
     pub stack: &'static Stack<'static>,
 }
 
+/// Embassy task managing WiFi connection lifecycle.
+///
+/// Handles initial connection, automatic reconnection on disconnect,
+/// and signals `WIFI_RECONNECT_SIGNAL` on subsequent reconnections so
+/// the MQTT task can force a clean broker reconnect.
 #[embassy_executor::task]
 async fn connection_task(mut controller: WifiController<'static>) {
     let mut first_connect = true;
@@ -52,12 +62,22 @@ async fn connection_task(mut controller: WifiController<'static>) {
     }
 }
 
+/// Embassy task running the embassy-net network stack.
+///
+/// Must be spawned alongside `connection_task` for the network stack
+/// to process packets and manage the TCP/IP stack.
 #[embassy_executor::task]
 async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
     runner.run().await;
 }
 
 impl WifiStack {
+    /// Connect to WiFi and wait for DHCP address.
+    ///
+    /// Initializes the esp-radio WiFi client with the given SSID/password,
+    /// spawns the connection management and network stack tasks, and blocks
+    /// until a DHCP lease is acquired. Returns a `WifiStack` handle for
+    /// creating TCP sockets.
     pub async fn connect(
         spawner: Spawner,
         radio_ctrl: esp_radio::Controller<'static>,

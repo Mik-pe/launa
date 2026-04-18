@@ -9,7 +9,6 @@ launa-sim = { path = "../crates/launa-sim" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
-log = { workspace = true }
 env_logger = "0.11"
 toml = "0.8"
 serialport = "4"

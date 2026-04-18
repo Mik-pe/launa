@@ -548,7 +548,6 @@ fn publish_diagnostics(
 
     let mqtt_reconnects = MQTT_RECONNECT_COUNT.load(Ordering::Relaxed);
     let mqtt_losses = MQTT_LOSS_COUNT.load(Ordering::Relaxed);
-    let heap_free = esp_alloc::HEAP.free();
 
     let json = alloc::format!(
         r#"{{"device_id":"{}","uptime_secs":{},"mqtt_reconnect_count":{},"mqtt_loss_count":{},"command_retry_count":{},"command_drop_count":{},"frames_received":{},"heap_free":{},"fw_version":"{}"}}"#,

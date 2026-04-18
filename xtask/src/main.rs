@@ -9,6 +9,7 @@ mod provision;
 mod self_test;
 mod sniff_decode;
 mod spa_sim;
+mod util;
 
 use anyhow::bail;
 use std::env;

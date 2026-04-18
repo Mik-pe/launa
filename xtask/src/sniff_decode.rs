@@ -52,7 +52,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let r = running.clone();
-    let _ = ctrlc::set_handler(move || {
+    crate::util::ctrlc_handler(move || {
         r.store(false, std::sync::atomic::Ordering::SeqCst);
     });
 

@@ -1,19 +1,11 @@
 use anyhow::{bail, Context};
 use serde::Deserialize;
-use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-fn project_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf()
-}
-
 /// Read the firmware version from app/Cargo.toml.
 fn read_firmware_version() -> anyhow::Result<String> {
-    let app_cargo_toml = project_root().join("app").join("Cargo.toml");
+    let app_cargo_toml = crate::util::project_root().join("app").join("Cargo.toml");
     let contents =
         std::fs::read_to_string(&app_cargo_toml).context("Failed to read app/Cargo.toml")?;
 
@@ -86,7 +78,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     println!("\n[1/7] Running cargo test...");
     let test_status = Command::new("cargo")
         .arg("test")
-        .current_dir(project_root())
+        .current_dir(crate::util::project_root())
         .status()
         .context("Failed to run cargo test")?;
     if !test_status.success() {
@@ -96,8 +88,8 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     // Step 2: Build firmware
     println!("\n[2/7] Building firmware...");
-    let bin_path = project_root().join("target").join("launa.bin");
-    let app_dir = project_root().join("app");
+    let bin_path = crate::util::project_root().join("target").join("launa.bin");
+    let app_dir = crate::util::project_root().join("app");
 
     let mut build_cmd = Command::new("cargo");
     build_cmd

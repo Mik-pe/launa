@@ -64,15 +64,8 @@ fn default_ota_port() -> u16 {
     8080
 }
 
-fn project_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask must be inside project root")
-        .to_path_buf()
-}
-
 pub fn config_path() -> PathBuf {
-    project_root().join("launa.toml")
+    crate::util::project_root().join("launa.toml")
 }
 
 pub fn load() -> anyhow::Result<Config> {

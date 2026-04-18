@@ -1,15 +1,7 @@
 use anyhow::{bail, Context};
 use std::io::Read;
-use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
-
-fn project_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf()
-}
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut port_name = None;
@@ -35,7 +27,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     // Step 1: Flash with hw-test feature
     println!("Building and flashing self-test firmware...");
-    let app_dir = project_root().join("app");
+    let app_dir = crate::util::project_root().join("app");
     let status = Command::new("cargo")
         .args(&[
             "espflash",

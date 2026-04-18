@@ -46,7 +46,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let r = running.clone();
-    ctrlc_handler(move || {
+    crate::util::ctrlc_handler(move || {
         r.store(false, std::sync::atomic::Ordering::SeqCst);
     });
 
@@ -116,8 +116,4 @@ fn print_state(tick: u64, state: &SpaState) {
         state.mister,
         state.hold,
     );
-}
-
-fn ctrlc_handler<F: Fn() + Send + 'static>(handler: F) {
-    let _ = ctrlc::set_handler(handler);
 }

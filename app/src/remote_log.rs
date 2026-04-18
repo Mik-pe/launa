@@ -159,7 +159,10 @@ impl RemoteLogBuffer {
 static mut REMOTE_LOG_BUFFER: Option<RemoteLogBuffer> = None;
 
 /// Get a reference to the global remote log buffer.
-/// Must call `init_remote_log()` first.
+///
+/// Returns `None` if `init_remote_log()` has not been called yet.
+/// The returned reference is `'static` and safe to use from any task
+/// in the cooperative embassy executor.
 pub fn remote_log_buffer() -> Option<&'static RemoteLogBuffer> {
     unsafe { REMOTE_LOG_BUFFER.as_ref() }
 }

@@ -1,13 +1,5 @@
 use anyhow::{bail, Context};
-use std::path::PathBuf;
 use std::process::Command;
-
-fn project_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf()
-}
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut feature = None;
@@ -34,7 +26,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         i += 1;
     }
 
-    let app_dir = project_root().join("app");
+    let app_dir = crate::util::project_root().join("app");
     let mut cmd = Command::new("cargo");
     cmd.arg("espflash").arg("flash").arg("--chip").arg("esp32");
     cmd.arg("--partition-table").arg("partitions.csv");

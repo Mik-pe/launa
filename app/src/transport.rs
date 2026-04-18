@@ -11,12 +11,24 @@ use esp_hal::Async;
 use launa_hal::transport::{Transport, TransportError};
 use log::{trace, warn};
 
+/// RS-485 half-duplex UART transport for Balboa spa communication.
+///
+/// Wraps an async UART and optional DE (Driver Enable) pin for RS-485
+/// transceiver control. When a DE pin is configured, it is automatically
+/// asserted HIGH during writes and released LOW after the UART TX FIFO
+/// and shift register have fully drained.
 pub struct Rs485Transport {
     uart: Uart<'static, Async>,
     de_pin: Option<Output<'static>>,
 }
 
 impl Rs485Transport {
+    /// Create a new RS-485 transport.
+    ///
+    /// - `uart`: An async UART peripheral configured for 115200 baud.
+    /// - `de_pin`: Optional GPIO pin connected to the RS-485 transceiver's
+    ///   DE (Driver Enable) input. When `None`, DE pin control is skipped
+    ///   (useful for loopback testing or direct UART connections).
     pub fn new(
         uart: Uart<'static, Async>,
         de_pin: Option<AnyPin<'static>>,

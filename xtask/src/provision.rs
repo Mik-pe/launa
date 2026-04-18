@@ -6,7 +6,6 @@ use std::process::Command;
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     // Parse arguments
     let mut port_name = None;
-    let mut _skip_confirm = false; // kept for backward compat
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -18,7 +17,8 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                 port_name = Some(args[i].clone());
             }
             "--no-confirm" => {
-                _skip_confirm = true;
+                // Accepted for backward compat but ignored — espefuse is always
+                // called with --no-confirm since the user already confirmed via xtask.
             }
             other => bail!("Unknown argument: {}", other),
         }
