@@ -220,7 +220,6 @@ impl FrameEncoder {
     }
 }
 
-// Use alloc for Vec in no_std
 extern crate alloc;
 
 use alloc::vec::Vec;

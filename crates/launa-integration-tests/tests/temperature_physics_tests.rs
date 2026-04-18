@@ -354,7 +354,6 @@ fn test_unknown_temp_on_startup_first_n_frames_none_then_valid() {
     );
 }
 
-/// Verify that exactly 10 consecutive None frames are followed by a valid frame.
 #[test]
 fn test_unknown_temp_exact_boundary_10_ticks() {
     let mut harness = TempPhysicsHarness::new();
@@ -645,9 +644,6 @@ fn test_noise_stale_triggers_at_30s_silence() {
 }
 
 // Test 6: VAL-CROSS-003 — Temperature overshoot end-to-end MQTT state
-// Verify that MQTT state reflects the overshoot peak temperature.
-// Collect PublishState actions and verify they show temperatures
-// reaching set_temp + overshoot.
 
 #[test]
 fn test_overshoot_mqtt_state_reflects_peak() {

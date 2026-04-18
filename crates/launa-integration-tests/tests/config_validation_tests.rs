@@ -790,7 +790,6 @@ fn test_mqtt_reconnect_discovery_in_broker() {
     // Post-reconnect: publish discovery and verify
     broker.publish_discovery("test_spa");
 
-    // Check that new discovery configs are in the broker
     let discovery_payloads = broker.discovery_payloads();
     assert_eq!(
         discovery_payloads.len(),
