@@ -109,7 +109,6 @@ impl StatusUpdate {
             return Err(StatusError::UnexpectedLength(payload.len()));
         }
 
-        // Offset 9 (F9): temperature scale, time format, filter mode
         let scale = if payload[9] & 0x01 != 0 {
             TemperatureScale::Celsius
         } else {
@@ -121,17 +120,14 @@ impl StatusUpdate {
             TemperatureScale::Fahrenheit => 1.0,
         };
 
-        // Offset 2: current temperature
         let current_temp = if payload[2] == 0xFF {
             None
         } else {
             Some(payload[2] as f32 / temp_divisor)
         };
 
-        // Offset 20: set temperature
         let set_temp = payload[20] as f32 / temp_divisor;
 
-        // Offset 5 (HM): heating mode (0=Ready, 1=Rest, 3=Ready-in-Rest)
         let heating_mode = match payload[5] & 0x03 {
             0 => HeatingMode::Ready,
             1 => HeatingMode::Rest,
@@ -139,10 +135,8 @@ impl StatusUpdate {
             _ => HeatingMode::Ready,
         };
 
-        // Offset 11 (P1): pump status (pumps 1-4, 2 bits each)
         let pp = payload[11];
 
-        // Offset 12 (P2): pump5 bits 0-1, pump6 bits 2-3
         let p2 = payload[12];
         let pumps = [
             decode_pump_state(pp & 0x03),        // pump1
@@ -153,15 +147,12 @@ impl StatusUpdate {
             decode_pump_state((p2 >> 2) & 0x03), // pump6
         ];
 
-        // Offset 13 (CB): circ pump, blower
         let circ_blower = payload[13];
         let circ_pump = circ_blower & 0x02 != 0;
         let blower = circ_blower & 0x0C != 0;
 
-        // Offset 15 (MR): mister
         let mister = payload[15] != 0;
 
-        // Offset 10 (FA): heating state, temp range
         let heating_flags = payload[10];
         let is_heating = heating_flags & 0x30 != 0;
         let temp_range = if heating_flags & 0x04 != 0 {
@@ -170,21 +161,14 @@ impl StatusUpdate {
             TempRange::Low
         };
 
-        // Offset 6: reminder/notification type
         let notification_type = payload[6];
 
-        // Offset 18: panel lock (bit 0)
         let panel_locked = payload[18] & 0x01 != 0;
 
-        // Offset 19: settings lock (bit 0)
         let settings_lock = payload[19] & 0x01 != 0;
 
-        // Offset 21: M8 cycle time
         let m8_cycle_time = payload[21];
 
-        // Offset 7: dual-interpretation based on hold mode
-        // - Hold mode (payload[0] == 0x05): hold timer minutes
-        // - Normal mode: Sensor A temperature (÷2 if Celsius)
         let is_hold = payload[0] == 0x05;
         let is_ab_temps = payload[0] == 0x14;
 
@@ -194,7 +178,6 @@ impl StatusUpdate {
             (Some(payload[7] as f32 / temp_divisor), None)
         };
 
-        // Offset 8: Sensor B temperature (only in A/B temps mode)
         let sensor_b_temp = if is_ab_temps {
             Some(payload[8] as f32 / temp_divisor)
         } else {

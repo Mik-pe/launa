@@ -16,13 +16,11 @@ pub struct InformationResponse {
     pub software_id: String,
     /// System model string from 8 ASCII bytes, trimmed (e.g. "BFBP20")
     pub system_model: String,
-    /// Current setup byte
+    /// Current setup byte — controller configuration identifier.
     pub current_setup: u8,
-    /// Configuration signature as hex string (e.g. "3D12382E")
+    /// Configuration signature as 4-byte hex string (e.g. "3D12382E").
     pub config_signature: String,
-    /// Heater voltage
     pub heater_voltage: HeaterVoltage,
-    /// Heater type
     pub heater_type: HeaterType,
     /// DIP switch settings as binary string
     pub dip_switches: String,
@@ -73,10 +71,8 @@ impl InformationResponse {
             return Err(InformationError::UnexpectedLength(payload.len()));
         }
 
-        // Bytes 0-1: Software ID (SI) - two ASCII bytes
         let si_bytes = &payload[0..2];
 
-        // Bytes 2-3: Software Version (SV) - two bytes
         let sv_bytes = &payload[2..4];
 
         // Derive software_id string from SI+SV using standard Balboa format:
@@ -88,27 +84,22 @@ impl InformationResponse {
             si_bytes[0], si_bytes[1], sv_bytes[0], sv_bytes[1]
         );
 
-        // Bytes 4-11: System Model (8 ASCII bytes)
         let model_bytes = &payload[4..12];
         let system_model = String::from_utf8_lossy(model_bytes)
             .trim_end()
             .trim_end_matches('\0')
             .to_string();
 
-        // Byte 12: Current Setup
         let current_setup = payload[12];
 
-        // Bytes 13-16: Configuration Signature (4 bytes as hex)
         let config_signature = format!(
             "{:02X}{:02X}{:02X}{:02X}",
             payload[13], payload[14], payload[15], payload[16]
         );
 
-        // Bytes 17-18: Heater Voltage, Heater Type
         let heater_voltage = HeaterVoltage::from_byte(payload[17]);
         let heater_type = HeaterType::from_byte(payload[18]);
 
-        // Bytes 19-20: DIP Switch Settings (2 bytes as binary string)
         let dip_switches = format!("{:08b}{:08b}", payload[19], payload[20]);
 
         Ok(InformationResponse {

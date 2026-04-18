@@ -8,25 +8,19 @@
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FaultLogEntry {
-    /// Total number of faults recorded
+    /// Total number of entries in the controller's fault log.
     pub fault_count: u8,
-    /// This entry's number
+    /// Sequential index of this entry within the log (1-based).
     pub entry_number: u8,
-    /// Fault code identifying the type of fault
+    /// Categorized fault code — see [`FaultCode`] for known values.
     pub message_code: FaultCode,
-    /// How many days ago the fault occurred
     pub days_ago: u8,
-    /// Hour the fault occurred
     pub hour: u8,
-    /// Minute the fault occurred
     pub minute: u8,
-    /// Flags (heating mode, temp range)
+    /// Bitfield encoding the heating mode and temperature range at the time of fault.
     pub flags: u8,
-    /// Set temperature at time of fault
     pub set_temperature: u8,
-    /// Sensor A temperature at time of fault
     pub sensor_a_temp: u8,
-    /// Sensor B temperature at time of fault
     pub sensor_b_temp: u8,
 }
 
