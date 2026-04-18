@@ -228,199 +228,282 @@ mod tests {
 
     const CMD_BASE: &str = "launa/test_spa_001/command";
 
+    /// Each toggle subtopic + payload should produce the corresponding ToggleItem.
+    /// Both "true" and "false" payloads are accepted for toggle commands.
     #[test]
-    fn test_parse_pump1_on() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump1", b"true");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::Pump1))
+    fn test_toggle_commands() {
+        let cases: &[(&str, &ToggleItem)] = &[
+            ("pump1", &ToggleItem::Pump1),
+            ("pump2", &ToggleItem::Pump2),
+            ("pump3", &ToggleItem::Pump3),
+            ("pump4", &ToggleItem::Pump4),
+            ("pump5", &ToggleItem::Pump5),
+            ("pump6", &ToggleItem::Pump6),
+            ("light1", &ToggleItem::Light1),
+            ("light2", &ToggleItem::Light2),
+            ("light3", &ToggleItem::Light3),
+            ("light4", &ToggleItem::Light4),
+            ("blower", &ToggleItem::Blower),
+            ("mister", &ToggleItem::Mister),
+            ("circulation_pump", &ToggleItem::CirculationPump),
+            ("aux1", &ToggleItem::Aux1),
+            ("aux2", &ToggleItem::Aux2),
+            ("heat_mode", &ToggleItem::HeatingMode),
+            ("temp_range", &ToggleItem::TemperatureRange),
+            ("hold_mode", &ToggleItem::HoldMode),
+            ("soak_mode", &ToggleItem::SoakMode),
+            ("normal_operation", &ToggleItem::NormalOperation),
+            ("clear_notification", &ToggleItem::ClearNotification),
+        ];
+
+        for (i, (subtopic, expected_item)) in cases.iter().enumerate() {
+            let topic = format!("{}/{}", CMD_BASE, subtopic);
+
+            let result = parse_command(CMD_BASE, &topic, b"true");
+            assert_eq!(
+                result,
+                ParseResult::Valid(Command::ToggleItem(**expected_item)),
+                "case {i}: true payload for subtopic '{subtopic}'"
+            );
+
+            let result = parse_command(CMD_BASE, &topic, b"false");
+            assert_eq!(
+                result,
+                ParseResult::Valid(Command::ToggleItem(**expected_item)),
+                "case {i}: false payload for subtopic '{subtopic}'"
+            );
+        }
+    }
+
+    /// Pump timer commands: valid minute ranges and boundary values.
+    #[test]
+    fn test_pump_timer_commands() {
+        let valid_cases: &[(&str, u32, u8)] = &[
+            ("pump1_timer", 15, 1),
+            ("pump6_timer", 20, 6),
+            ("pump2_timer", 120, 2), // upper boundary
+            ("pump1_timer", 1, 1),   // lower boundary
+        ];
+
+        for (i, (subtopic, minutes, pump_index)) in valid_cases.iter().enumerate() {
+            let topic = format!("{}/{}", CMD_BASE, subtopic);
+            let payload = format!("{}", minutes);
+            let result = parse_command(CMD_BASE, &topic, payload.as_bytes());
+            assert_eq!(
+                result,
+                ParseResult::TimerPump {
+                    minutes: *minutes,
+                    pump_index: *pump_index,
+                },
+                "case {i}: valid timer for {subtopic}={minutes}"
+            );
+        }
+
+        // Invalid minute values
+        let invalid_cases: &[(&str, &[u8])] = &[
+            ("pump1_timer", b"0"),   // zero minutes
+            ("pump3_timer", b"121"), // over max
+            ("pump1_timer", b"abc"), // non-numeric
+        ];
+
+        for (i, (subtopic, payload)) in invalid_cases.iter().enumerate() {
+            let topic = format!("{}/{}", CMD_BASE, subtopic);
+            let result = parse_command(CMD_BASE, &topic, *payload);
+            assert!(
+                matches!(result, ParseResult::InvalidPayload(_)),
+                "case {i}: invalid timer payload for {subtopic}: expected InvalidPayload, got {:?}",
+                result
+            );
+        }
+    }
+
+    /// Temperature commands: valid values, boundary conditions, and error cases.
+    #[test]
+    fn test_set_temperature() {
+        let valid_cases: &[(u8, u8)] = &[
+            (104, 104),
+            (80, 80),
+            (108, 108), // ABSOLUTE_MAX_TEMP_F
+            (1, 1),     // minimum non-zero
+            (50, 50),   // mid-range
+        ];
+
+        for (i, (input, expected)) in valid_cases.iter().enumerate() {
+            let topic = format!("{}/set_temperature", CMD_BASE);
+            let payload = format!("{}", input);
+            let result = parse_command(CMD_BASE, &topic, payload.as_bytes());
+            assert_eq!(
+                result,
+                ParseResult::Valid(Command::SetTemperature(*expected)),
+                "case {i}: set_temperature={input}"
+            );
+        }
+
+        let out_of_range_cases: &[(u8, TempError)] = &[
+            (0, TempError::BelowMin),
+            (109, TempError::AboveAbsoluteLimit), // just above max
+            (200, TempError::AboveAbsoluteLimit), // well above max
+            (255, TempError::AboveAbsoluteLimit), // u8 max
+        ];
+
+        for (i, (input, expected_error)) in out_of_range_cases.iter().enumerate() {
+            let topic = format!("{}/set_temperature", CMD_BASE);
+            let payload = format!("{}", input);
+            let result = parse_command(CMD_BASE, &topic, payload.as_bytes());
+            assert_eq!(
+                result,
+                ParseResult::TemperatureOutOfRange {
+                    raw_value: *input,
+                    error: *expected_error,
+                },
+                "case {i}: out-of-range set_temperature={input}"
+            );
+        }
+
+        // Non-numeric payload
+        let topic = format!("{}/set_temperature", CMD_BASE);
+        let result = parse_command(CMD_BASE, &topic, b"abc");
+        assert!(
+            matches!(result, ParseResult::InvalidPayload(_)),
+            "non-numeric temperature: expected InvalidPayload, got {:?}",
+            result
         );
     }
 
+    /// Temperature validation with scale and range context via parse_set_temperature_validated.
     #[test]
-    fn test_parse_pump1_off() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump1", b"false");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::Pump1))
-        );
-    }
+    fn test_set_temperature_validated() {
+        let valid_cases: &[(&str, TemperatureScale, TempRange, u8)] = &[
+            ("100", TemperatureScale::Fahrenheit, TempRange::High, 100),
+            ("35", TemperatureScale::Celsius, TempRange::High, 35),
+            ("20", TemperatureScale::Celsius, TempRange::Low, 20),
+        ];
 
-    #[test]
-    fn test_parse_pump2() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump2", b"true");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::Pump2))
-        );
-    }
+        for (i, (payload, scale, range, expected)) in valid_cases.iter().enumerate() {
+            let result = parse_set_temperature_validated(payload, *scale, *range);
+            assert_eq!(
+                result,
+                ParseResult::Valid(Command::SetTemperature(*expected)),
+                "case {i}: validated temp={payload} {scale:?}/{range:?}"
+            );
+        }
 
-    #[test]
-    fn test_parse_pump3() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump3", b"false");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::Pump3))
-        );
-    }
+        let error_cases: &[(&str, TemperatureScale, TempRange)] = &[
+            ("50", TemperatureScale::Fahrenheit, TempRange::High), // below range
+            ("200", TemperatureScale::Fahrenheit, TempRange::High), // above absolute
+            ("0", TemperatureScale::Celsius, TempRange::High),     // zero rejected
+        ];
 
-    #[test]
-    fn test_parse_light1() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/light1", b"true");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::Light1))
-        );
-    }
+        for (i, (payload, scale, range)) in error_cases.iter().enumerate() {
+            let result = parse_set_temperature_validated(payload, *scale, *range);
+            assert!(
+                matches!(result, ParseResult::TemperatureOutOfRange { .. }),
+                "case {i}: validated error temp={payload} {scale:?}/{range:?}: expected TemperatureOutOfRange, got {:?}",
+                result
+            );
+        }
 
-    #[test]
-    fn test_parse_blower() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/blower", b"true");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::Blower))
-        );
-    }
-
-    #[test]
-    fn test_parse_heat_mode() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/heat_mode", b"true");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::HeatingMode))
-        );
-    }
-
-    #[test]
-    fn test_parse_temp_range() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/temp_range", b"true");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::TemperatureRange))
-        );
-    }
-
-    #[test]
-    fn test_parse_hold_mode() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/hold_mode", b"true");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::HoldMode))
-        );
-    }
-
-    #[test]
-    fn test_parse_set_temperature() {
-        let result = parse_command(
-            CMD_BASE,
-            "launa/test_spa_001/command/set_temperature",
-            b"104",
-        );
-        assert_eq!(result, ParseResult::Valid(Command::SetTemperature(104)));
-    }
-
-    #[test]
-    fn test_parse_set_temperature_low() {
-        let result = parse_command(
-            CMD_BASE,
-            "launa/test_spa_001/command/set_temperature",
-            b"80",
-        );
-        assert_eq!(result, ParseResult::Valid(Command::SetTemperature(80)));
-    }
-
-    #[test]
-    fn test_parse_unknown_subtopic() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/unknown", b"true");
-        assert!(matches!(result, ParseResult::UnknownSubtopic(_)));
-    }
-
-    #[test]
-    fn test_parse_wrong_base() {
-        let result = parse_command(
-            "launa/other_spa/command",
-            "launa/test_spa_001/command/pump1",
-            b"true",
-        );
-        assert!(matches!(result, ParseResult::UnknownSubtopic(_)));
-    }
-
-    #[test]
-    fn test_parse_invalid_toggle_payload() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump1", b"on");
-        assert!(matches!(result, ParseResult::InvalidPayload(_)));
-    }
-
-    #[test]
-    fn test_parse_invalid_temperature() {
-        let result = parse_command(
-            CMD_BASE,
-            "launa/test_spa_001/command/set_temperature",
-            b"abc",
-        );
-        assert!(matches!(result, ParseResult::InvalidPayload(_)));
-    }
-
-    #[test]
-    fn test_parse_state_topic_not_command() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/state", b"true");
-        assert!(matches!(result, ParseResult::UnknownSubtopic(_)));
-    }
-
-    #[test]
-    fn test_parse_exact_base_topic_no_subtopic() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command", b"true");
-        assert!(matches!(result, ParseResult::UnknownSubtopic(_)));
-    }
-
-    // --- New tests for allowlist and validation ---
-
-    #[test]
-    fn test_parse_non_utf8_payload_rejected() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump1", &[0xFF, 0xFE]);
-        assert!(matches!(result, ParseResult::InvalidPayload(_)));
-    }
-
-    #[test]
-    fn test_allowlist_rejects_garbage_subtopic() {
-        let result = parse_command(
-            CMD_BASE,
-            "launa/test_spa_001/command/random_garbage",
-            b"true",
-        );
-        assert!(matches!(result, ParseResult::UnknownSubtopic(_)));
-    }
-
-    #[test]
-    fn test_parse_set_temperature_validated_ok() {
-        let result =
-            parse_set_temperature_validated("100", TemperatureScale::Fahrenheit, TempRange::High);
-        assert_eq!(result, ParseResult::Valid(Command::SetTemperature(100)));
-    }
-
-    #[test]
-    fn test_parse_set_temperature_validated_out_of_range() {
-        let result =
-            parse_set_temperature_validated("50", TemperatureScale::Fahrenheit, TempRange::High);
-        assert!(matches!(result, ParseResult::TemperatureOutOfRange { .. }));
-    }
-
-    #[test]
-    fn test_parse_set_temperature_validated_above_absolute() {
+        // Verify exact error variant for above-absolute case
         let result =
             parse_set_temperature_validated("200", TemperatureScale::Fahrenheit, TempRange::High);
         assert!(matches!(
             result,
             ParseResult::TemperatureOutOfRange {
                 raw_value: 200,
-                error: launa_protocol::command::TempError::AboveAbsoluteLimit
+                error: TempError::AboveAbsoluteLimit
+            }
+        ));
+
+        // Verify exact error variant for celsius zero
+        let result =
+            parse_set_temperature_validated("0", TemperatureScale::Celsius, TempRange::High);
+        assert!(matches!(
+            result,
+            ParseResult::TemperatureOutOfRange {
+                raw_value: 0,
+                error: TempError::BelowMin
             }
         ));
     }
 
+    /// Unknown subtopics and topic-mismatch errors.
+    #[test]
+    fn test_unknown_subtopic_errors() {
+        let cases: &[(&str, &str, &[u8])] = &[
+            // Unknown subtopic
+            (CMD_BASE, "launa/test_spa_001/command/unknown", b"true"),
+            // Garbage subtopic
+            (
+                CMD_BASE,
+                "launa/test_spa_001/command/random_garbage",
+                b"true",
+            ),
+            // Wrong base topic
+            (
+                "launa/other_spa/command",
+                "launa/test_spa_001/command/pump1",
+                b"true",
+            ),
+            // State topic (not command)
+            (CMD_BASE, "launa/test_spa_001/state", b"true"),
+            // Exact base topic with no subtopic
+            (CMD_BASE, "launa/test_spa_001/command", b"true"),
+            // Trailing slash in base causes mismatch
+            (
+                "launa/test_spa_001/command/",
+                "launa/test_spa_001/command/pump1",
+                b"true",
+            ),
+            // Case-sensitive: uppercase rejected
+            (CMD_BASE, "launa/test_spa_001/command/PUMP1", b"true"),
+            // pump7 not in allowlist
+            (CMD_BASE, "launa/test_spa_001/command/pump7", b"true"),
+        ];
+
+        for (i, (base, topic, payload)) in cases.iter().enumerate() {
+            let result = parse_command(base, topic, *payload);
+            assert!(
+                matches!(result, ParseResult::UnknownSubtopic(_)),
+                "case {i}: topic '{topic}' with base '{base}': expected UnknownSubtopic, got {:?}",
+                result
+            );
+        }
+    }
+
+    /// Invalid payload edge cases: non-UTF8, invalid toggle payloads.
+    #[test]
+    fn test_invalid_payload_errors() {
+        // Non-UTF8 payload
+        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump1", &[0xFF, 0xFE]);
+        assert!(
+            matches!(result, ParseResult::InvalidPayload(_)),
+            "non-utf8: expected InvalidPayload, got {:?}",
+            result
+        );
+
+        // Invalid toggle payload (not "true" or "false")
+        let toggle_subtopics: &[&str] = &[
+            "pump1",
+            "light1",
+            "blower",
+            "mister",
+            "heat_mode",
+            "hold_mode",
+        ];
+        for subtopic in toggle_subtopics {
+            let topic = format!("{}/{}", CMD_BASE, subtopic);
+            let result = parse_command(CMD_BASE, &topic, b"on");
+            assert!(
+                matches!(result, ParseResult::InvalidPayload(_)),
+                "invalid toggle payload for {subtopic}: expected InvalidPayload, got {:?}",
+                result
+            );
+        }
+    }
+
+    /// Backward-compatible parse_command_ok returns Some for valid, None otherwise.
     #[test]
     fn test_backward_compat_parse_command_ok() {
-        // parse_command_ok returns None for unknown/invalid, Some for valid
         assert_eq!(
             parse_command_ok(CMD_BASE, "launa/test_spa_001/command/pump1", b"true"),
             Some(Command::ToggleItem(ToggleItem::Pump1)),
@@ -433,310 +516,5 @@ mod tests {
             parse_command_ok(CMD_BASE, "launa/test_spa_001/command/pump1", b"garbage"),
             None,
         );
-    }
-
-    // --- Absolute max temperature gating tests ---
-
-    #[test]
-    fn test_parse_set_temperature_above_absolute_max() {
-        let result = parse_command(
-            CMD_BASE,
-            "launa/test_spa_001/command/set_temperature",
-            b"200",
-        );
-        assert_eq!(
-            result,
-            ParseResult::TemperatureOutOfRange {
-                raw_value: 200,
-                error: TempError::AboveAbsoluteLimit,
-            }
-        );
-    }
-
-    #[test]
-    fn test_parse_set_temperature_at_max() {
-        // 108 = ABSOLUTE_MAX_TEMP_F, should be accepted
-        let result = parse_command(
-            CMD_BASE,
-            "launa/test_spa_001/command/set_temperature",
-            b"108",
-        );
-        assert_eq!(result, ParseResult::Valid(Command::SetTemperature(108)));
-    }
-
-    #[test]
-    fn test_parse_set_temperature_just_above_max() {
-        // 109 > ABSOLUTE_MAX_TEMP_F, should be rejected
-        let result = parse_command(
-            CMD_BASE,
-            "launa/test_spa_001/command/set_temperature",
-            b"109",
-        );
-        assert_eq!(
-            result,
-            ParseResult::TemperatureOutOfRange {
-                raw_value: 109,
-                error: TempError::AboveAbsoluteLimit,
-            }
-        );
-    }
-
-    #[test]
-    fn test_parse_set_temperature_zero() {
-        // 0 is rejected as invalid temperature
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/set_temperature", b"0");
-        assert!(matches!(
-            result,
-            ParseResult::TemperatureOutOfRange {
-                raw_value: 0,
-                error: TempError::BelowMin,
-            }
-        ));
-    }
-
-    // --- New toggle subtopic tests ---
-
-    #[test]
-    fn test_parse_mister() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/mister", b"true");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::Mister))
-        );
-    }
-
-    #[test]
-    fn test_parse_circulation_pump() {
-        let result = parse_command(
-            CMD_BASE,
-            "launa/test_spa_001/command/circulation_pump",
-            b"true",
-        );
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::CirculationPump))
-        );
-    }
-
-    #[test]
-    fn test_parse_light3() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/light3", b"true");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::Light3))
-        );
-    }
-
-    #[test]
-    fn test_parse_light4() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/light4", b"true");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::Light4))
-        );
-    }
-
-    #[test]
-    fn test_parse_aux1() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/aux1", b"true");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::Aux1))
-        );
-    }
-
-    #[test]
-    fn test_parse_aux2() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/aux2", b"true");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::Aux2))
-        );
-    }
-
-    #[test]
-    fn test_parse_soak_mode() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/soak_mode", b"true");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::SoakMode))
-        );
-    }
-
-    #[test]
-    fn test_parse_normal_operation() {
-        let result = parse_command(
-            CMD_BASE,
-            "launa/test_spa_001/command/normal_operation",
-            b"true",
-        );
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::NormalOperation))
-        );
-    }
-
-    #[test]
-    fn test_parse_clear_notification() {
-        let result = parse_command(
-            CMD_BASE,
-            "launa/test_spa_001/command/clear_notification",
-            b"true",
-        );
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::ClearNotification))
-        );
-    }
-
-    #[test]
-    fn test_parse_pump1_timer() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump1_timer", b"15");
-        assert_eq!(
-            result,
-            ParseResult::TimerPump {
-                minutes: 15,
-                pump_index: 1
-            }
-        );
-    }
-
-    #[test]
-    fn test_parse_pump6_timer() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump6_timer", b"20");
-        assert_eq!(
-            result,
-            ParseResult::TimerPump {
-                minutes: 20,
-                pump_index: 6
-            }
-        );
-    }
-
-    #[test]
-    fn test_parse_pump_timer_rejects_zero_minutes() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump1_timer", b"0");
-        assert!(matches!(result, ParseResult::InvalidPayload(_)));
-    }
-
-    #[test]
-    fn test_parse_pump_timer_rejects_over_120_minutes() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump3_timer", b"121");
-        assert!(matches!(result, ParseResult::InvalidPayload(_)));
-    }
-
-    #[test]
-    fn test_parse_pump_timer_accepts_120_minutes() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump2_timer", b"120");
-        assert_eq!(
-            result,
-            ParseResult::TimerPump {
-                minutes: 120,
-                pump_index: 2
-            }
-        );
-    }
-
-    #[test]
-    fn test_parse_pump_timer_rejects_non_numeric() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump1_timer", b"abc");
-        assert!(matches!(result, ParseResult::InvalidPayload(_)));
-    }
-
-    #[test]
-    fn test_parse_pump4() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump4", b"true");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::Pump4))
-        );
-    }
-
-    #[test]
-    fn test_parse_pump5() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump5", b"true");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::Pump5))
-        );
-    }
-
-    #[test]
-    fn test_parse_pump6() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump6", b"false");
-        assert_eq!(
-            result,
-            ParseResult::Valid(Command::ToggleItem(ToggleItem::Pump6))
-        );
-    }
-
-    #[test]
-    fn test_parse_command_with_trailing_slash_in_base() {
-        let result = parse_command(
-            "launa/test_spa_001/command/",
-            "launa/test_spa_001/command/pump1",
-            b"true",
-        );
-        // With trailing slash, the suffix becomes "//pump1" which doesn't start with just "/"
-        // Actually, it does start with "/" — the topic matches but the subtopic is "/pump1" (with extra /)
-        // This is an edge case in topic matching
-        assert!(matches!(result, ParseResult::UnknownSubtopic(_)));
-    }
-
-    #[test]
-    fn test_parse_command_case_sensitive_subtopic() {
-        // Subtopics must be lowercase — uppercase should be rejected
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/PUMP1", b"true");
-        assert!(matches!(result, ParseResult::UnknownSubtopic(_)));
-    }
-
-    #[test]
-    fn test_parse_command_pump7_not_in_allowlist() {
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/pump7", b"true");
-        assert!(matches!(result, ParseResult::UnknownSubtopic(_)));
-    }
-
-    #[test]
-    fn test_parse_set_temperature_boundary_80() {
-        let result = parse_command(
-            CMD_BASE,
-            "launa/test_spa_001/command/set_temperature",
-            b"80",
-        );
-        assert_eq!(result, ParseResult::Valid(Command::SetTemperature(80)));
-    }
-
-    #[test]
-    fn test_parse_set_temperature_boundary_1() {
-        // 1 is above zero, should be accepted by the hard limit check
-        let result = parse_command(CMD_BASE, "launa/test_spa_001/command/set_temperature", b"1");
-        assert_eq!(result, ParseResult::Valid(Command::SetTemperature(1)));
-    }
-
-    #[test]
-    fn test_parse_set_temperature_validated_celsius_high_range() {
-        let result =
-            parse_set_temperature_validated("35", TemperatureScale::Celsius, TempRange::High);
-        assert_eq!(result, ParseResult::Valid(Command::SetTemperature(35)));
-    }
-
-    #[test]
-    fn test_parse_set_temperature_validated_celsius_low_range() {
-        let result =
-            parse_set_temperature_validated("20", TemperatureScale::Celsius, TempRange::Low);
-        assert_eq!(result, ParseResult::Valid(Command::SetTemperature(20)));
-    }
-
-    #[test]
-    fn test_parse_set_temperature_validated_celsius_zero_rejected() {
-        let result =
-            parse_set_temperature_validated("0", TemperatureScale::Celsius, TempRange::High);
-        assert!(matches!(
-            result,
-            ParseResult::TemperatureOutOfRange {
-                raw_value: 0,
-                error: TempError::BelowMin
-            }
-        ));
     }
 }
