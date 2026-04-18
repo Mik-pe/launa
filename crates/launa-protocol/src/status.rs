@@ -413,9 +413,7 @@ mod tests {
         assert_eq!(status.m8_cycle_time, 45);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
     // Tests for sensor_a_temp, sensor_b_temp, hold_timer_minutes
-    // ═══════════════════════════════════════════════════════════════════════
 
     #[test]
     fn test_sensor_a_temp_fahrenheit_normal_mode() {

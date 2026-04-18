@@ -32,9 +32,7 @@ use launa_protocol::fault::FaultCode;
 use launa_protocol::frame::FrameDecoder;
 use launa_protocol::status::PumpState;
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 1: VAL-IT-001 — Harness initial state
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_harness_initial_state() {
@@ -77,9 +75,7 @@ fn test_harness_initial_state() {
     assert!(!harness.app.is_stale(), "initial state should not be stale");
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 2: VAL-IT-002 — Full registration handshake end-to-end
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_registration_e2e() {
@@ -104,9 +100,7 @@ fn test_registration_e2e() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 3: VAL-IT-003 — Status updates produce MQTT publish actions
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_status_to_mqtt_publish() {
@@ -148,9 +142,7 @@ fn test_status_to_mqtt_publish() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 4: VAL-IT-004 — MQTT command → SpaApp queue → Ready → wire frame
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_command_to_wire_frame() {
@@ -206,9 +198,7 @@ fn test_command_to_wire_frame() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 5: VAL-IT-005 — Pump timer auto-off end-to-end
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_pump_timer_auto_off() {
@@ -252,9 +242,7 @@ fn test_pump_timer_auto_off() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 6: VAL-IT-006 — Hold mode timer auto-release
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_hold_mode_auto_release() {
@@ -329,9 +317,7 @@ fn test_hold_mode_auto_release() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 7: VAL-IT-007 — Stale detection and recovery
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_stale_detection_and_recovery() {
@@ -422,13 +408,9 @@ fn test_stale_detection_and_recovery() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Tier 2 — Spa-Side Fault Scenarios
-// ══════════════════════════════════════════════════════════════════════════
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 8: VAL-IT-013 — Spa reboots mid-session → clean re-registration
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_spa_reboot_mid_session() {
@@ -498,9 +480,7 @@ fn test_spa_reboot_mid_session() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 9: VAL-IT-014 — Spa silently drops toggle command → retry/drop
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_dropped_commands_retry_and_drop() {
@@ -563,9 +543,7 @@ fn test_dropped_commands_retry_and_drop() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 10: VAL-IT-015 — Bus silence mid-session → stale lifecycle
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_bus_silence_lifecycle() {
@@ -643,9 +621,7 @@ fn test_bus_silence_lifecycle() {
     assert!(recovering, "should indicate stale recovery on first status");
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 11: VAL-IT-016 — Corrupt frame doesn't desync parser
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_corrupt_frame_no_desync() {
@@ -704,9 +680,7 @@ fn test_corrupt_frame_no_desync() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 12: VAL-IT-017 — Spontaneous filter cycle while command pending
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_spontaneous_filter_cycle_while_command_pending() {
@@ -791,13 +765,9 @@ fn test_spontaneous_filter_cycle_while_command_pending() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Tier 3 — Protocol Misbehavior Tests
-// ══════════════════════════════════════════════════════════════════════════
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 13: VAL-IT-018 — Out-of-order frames (Ready before Status)
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_out_of_order_frames_ready_before_status() {
@@ -857,9 +827,7 @@ fn test_out_of_order_frames_ready_before_status() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 14: VAL-IT-019 — Interleaved response and status
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_interleaved_frames_in_single_buffer() {
@@ -932,9 +900,7 @@ fn test_interleaved_frames_in_single_buffer() {
     assert!(harness.app.last_status().is_some());
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 15: VAL-IT-020 — Rapid re-registration (multiple NewClientQuery frames)
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_rapid_reregistration_multiple_queries() {
@@ -1006,9 +972,7 @@ fn test_rapid_reregistration_multiple_queries() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 16: VAL-IT-021 — Partial frame across tick boundary
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_partial_frame_across_tick_boundary() {
@@ -1090,9 +1054,7 @@ fn test_partial_frame_across_tick_boundary() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 17: VAL-IT-022 — Duplicate status frame in one tick
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_duplicate_status_frame_in_one_tick() {
@@ -1175,9 +1137,7 @@ fn test_duplicate_status_frame_in_one_tick() {
     assert!(harness.app.last_status().is_some());
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 18: VAL-IT-023 — Multi-frame fault log walk
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_multi_frame_fault_log_walk() {
@@ -1258,9 +1218,7 @@ fn test_multi_frame_fault_log_walk() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 19: VAL-IT-024 — Combined stress test (7-phase sequence)
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_combined_stress_7_phase() {

@@ -15,9 +15,7 @@ use launa_integration_tests::harness::TestHarness;
 use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::status::PumpState;
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 1: VAL-TEST-002 — Command latency + retry interaction
-// ══════════════════════════════════════════════════════════════════════════
 // Set command latency to 3 ticks, send toggle pump1, advance 3 ticks
 // with status showing pump still off. Verify no false retry occurs within
 // the latency window and pump state confirms on tick 3.
@@ -79,9 +77,7 @@ fn test_command_latency_no_false_retry_within_window() {
     assert_eq!(harness.app.total_dropped(), 0, "should have zero drops");
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 2: VAL-TEST-005 — Frame jitter resilience
-// ══════════════════════════════════════════════════════════════════════════
 // Set frame jitter to 10, run 50 ticks. Verify zero frame decoder errors,
 // no protocol desync, all status updates processed correctly.
 
@@ -136,9 +132,7 @@ fn test_frame_jitter_50_ticks_zero_frame_errors() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 3: VAL-TEST-006 — Variable Ready interval + command queuing
-// ══════════════════════════════════════════════════════════════════════════
 // Set Ready interval range (2, 5), queue 3 commands, run 15 ticks.
 // Verify all 3 commands eventually dequeued despite irregular Ready timing.
 
@@ -191,9 +185,7 @@ fn test_variable_ready_interval_3_commands_all_drained() {
     assert!(!harness.app.is_stale());
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 4: VAL-TEST-018 — Extended Ready gap + stale detection
-// ══════════════════════════════════════════════════════════════════════════
 // Set Ready interval range (5, 10), verify stale detection uses status
 // frame timing not Ready timing, and does not false-trigger.
 
@@ -248,9 +240,7 @@ fn test_variable_ready_stale_based_on_status_frames_only() {
     assert!(harness.app.is_stale());
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 5: VAL-TEST-008 — Intermittent command acceptance
-// ══════════════════════════════════════════════════════════════════════════
 // Set success rate to 0.5, send 10 toggle commands. Verify mix of
 // confirmed, retried, and dropped commands with both counters > 0.
 
@@ -313,9 +303,7 @@ fn test_intermittent_command_acceptance_retries_and_drops() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 6: VAL-TEST-010 — Broker message loss
-// ══════════════════════════════════════════════════════════════════════════
 // Set SimBroker loss rate to 0.3, run 20 ticks. Verify no panics and
 // latest state eventually consistent.
 
@@ -378,9 +366,7 @@ fn test_broker_loss_rate_no_panics_eventual_consistency() {
     assert!(!harness.app.is_stale());
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 7: VAL-TEST-015 — Slow degraded bus endurance
-// ══════════════════════════════════════════════════════════════════════════
 // Combined: jitter(5) + latency(2) + variable Ready(3,8) + success_rate(0.7),
 // run 100 ticks. Verify no panics, no stuck commands, no protocol desync.
 
@@ -468,9 +454,7 @@ fn test_degraded_bus_100_ticks_stable() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 8: VAL-TEST-021 + VAL-CROSS-005 + VAL-CROSS-008 — Long degraded bus
-// ══════════════════════════════════════════════════════════════════════════
 // Degraded bus for 200 ticks with recovery. Verify bounded command queue,
 // no timer drift, eventual recovery when conditions normalize.
 
@@ -591,9 +575,7 @@ fn test_long_degraded_bus_200_ticks_with_recovery() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 9: VAL-CROSS-005 — Intermittent bus with stale detection
-// ══════════════════════════════════════════════════════════════════════════
 // Sim drops commands + introduces bus silence → SpaApp detects stale →
 // publishes alert → bus recovers → commands retry → eventual consistency.
 
@@ -667,9 +649,7 @@ fn test_intermittent_bus_stale_detection_recovery() {
     let _ = has_stale_alert; // Broker recorded events during the cycle
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 10: VAL-CROSS-008 — Degraded bus long-run stability
-// ══════════════════════════════════════════════════════════════════════════
 // Combined jitter + latency + loss + variable timing for 500+ ticks.
 // Verify no unbounded memory growth, no stuck state, no protocol desync,
 // eventual command delivery.

@@ -20,9 +20,7 @@ use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::fault::FaultCode;
 use launa_protocol::status::PumpState;
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 1: Fault appears/clears lifecycle (VAL-TEST-007, VAL-CROSS-002)
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_fault_appears_and_clears_lifecycle() {
@@ -132,9 +130,7 @@ fn test_fault_appears_and_clears_lifecycle() {
     }
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 2: Multiple fault types lifecycle (VAL-TEST-019)
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_multiple_fault_types_distinct_entries() {
@@ -258,9 +254,7 @@ fn test_multiple_fault_types_distinct_entries() {
     }
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 3: Power cycle mid-command (VAL-TEST-009, VAL-CROSS-006)
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_power_cycle_mid_command_no_stuck_commands() {
@@ -351,9 +345,7 @@ fn test_power_cycle_mid_command_no_stuck_commands() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 4: Hold mode + pump timer interaction (VAL-TEST-012)
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_hold_mode_and_pump_timer_fire_independently() {
@@ -424,9 +416,7 @@ fn test_hold_mode_and_pump_timer_fire_independently() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 5: Multiple pump timers simultaneously (VAL-TEST-022)
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_multiple_pump_timers_independent() {
@@ -514,9 +504,7 @@ fn test_multiple_pump_timers_independent() {
     assert!(pump3_off, "pump3 timer should fire at 7 min");
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 6: Pump timer cancels on MQTT toggle-off (VAL-TEST-023)
-// ══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_pump_timer_cancels_on_mqtt_toggle_off() {
@@ -598,9 +586,7 @@ fn test_pump_timer_cancels_on_mqtt_toggle_off() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 7: Rapid toggle race (4 toggles, parity) (VAL-TEST-013)
-// ══════════════════════════════════════════════════════════════════════════
 // Queue 4 rapid toggle pump1 commands. The CommandTracker tracks based on
 // the pre_status at the time of sending, so rapid toggles may cause retries.
 // The key assertions are:
@@ -690,9 +676,7 @@ fn test_rapid_toggle_race_parity() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 8: Rapid temperature race (100→104→102, last wins) (VAL-TEST-020)
-// ══════════════════════════════════════════════════════════════════════════
 // Set temp 100, immediately set 104, immediately set 102.
 // Verify final set_temp is 102 (last queued value wins).
 // The CommandTracker tracks based on pre_status, so the first two SetTemperature

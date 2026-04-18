@@ -30,9 +30,7 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // MockTransport tests
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_mock_transport_new_is_empty() {
@@ -158,9 +156,7 @@ fn test_mock_transport_full_lifecycle() {
     assert!(t.written().is_empty());
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // MockNetwork tests
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_mock_network_new_not_connected() {

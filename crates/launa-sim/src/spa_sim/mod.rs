@@ -2272,9 +2272,7 @@ mod tests {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
     // Tests for new SpaSim methods (VAL-IT-008 through VAL-IT-012)
-    // ═══════════════════════════════════════════════════════════════════════
 
     // VAL-IT-008: SpaSim::simulate_spa_reboot() resets registration, sends NewClientQuery
     #[test]
@@ -2667,9 +2665,7 @@ mod tests {
         );
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
     // Tests for physics improvements (VAL-SR-001 through VAL-SR-005)
-    // ═══════════════════════════════════════════════════════════════════════
 
     // VAL-SR-001: Realistic thermal model — heating 80→104°F takes 48-72 ticks
     #[test]

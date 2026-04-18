@@ -26,9 +26,7 @@ fn random_bytes(state: &mut u32, len: usize) -> Vec<u8> {
     out
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // Random input resilience tests
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_frame_decoder_random_input_no_panic() {
@@ -119,9 +117,7 @@ fn test_filter_cycles_random_input_no_panic() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // Edge case tests
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_frame_with_length_zero() {

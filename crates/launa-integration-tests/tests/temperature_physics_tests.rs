@@ -14,9 +14,7 @@ use launa_protocol::dispatcher::IncomingMessage;
 use launa_protocol::frame::FrameDecoder;
 use launa_protocol::status::{PumpState, TemperatureScale};
 
-// ══════════════════════════════════════════════════════════════════════════
 // Temperature Physics Helpers
-// ══════════════════════════════════════════════════════════════════════════
 
 /// Domain-specific helpers for temperature physics tests.
 struct TempPhysicsHarness {
@@ -78,9 +76,7 @@ impl std::ops::DerefMut for TempPhysicsHarness {
     }
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 1: VAL-TEST-003 / VAL-CROSS-003 — Temperature overshoot cycle
-// ══════════════════════════════════════════════════════════════════════════
 // Set overshoot to 2°F, heat toward 104°F. Verify temperature reaches
 // 106°F (set_temp + overshoot), heater stops, cools to hysteresis
 // threshold (103°F = set_temp - overshoot/2), then reheats.
@@ -186,9 +182,7 @@ fn test_overshoot_full_cycle_heat_overshoot_stop_cool_hysteresis_reheat() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 2: VAL-TEST-017 — Overshoot with Celsius mode
-// ══════════════════════════════════════════════════════════════════════════
 // Set overshoot in Celsius, verify overshoot/hysteresis works with
 // Celsius temperature scaling (wire values are 2× display values).
 
@@ -280,9 +274,7 @@ fn test_celsius_overshoot_wire_values_correct() {
     }
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 3: VAL-TEST-004 — Unknown temp on startup
-// ══════════════════════════════════════════════════════════════════════════
 // Set unknown temp period to 10 ticks. Verify first 10 status frames
 // report current_temp = None in MQTT state, tick 11 reports valid temperature.
 
@@ -407,9 +399,7 @@ fn test_unknown_temp_exact_boundary_10_ticks() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 4: VAL-TEST-001 / VAL-CROSS-004 — Sensor noise with command tracking
-// ══════════════════════════════════════════════════════════════════════════
 // Simulate sensor noise (±2°F), send toggle pump1 through the full pipeline.
 // Verify intermediate status frames show fluctuating temperatures but
 // the command tracker confirms the pump1 state change with zero retries
@@ -505,9 +495,7 @@ fn test_sensor_noise_command_tracking_zero_retries() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 5: VAL-TEST-016 — Sensor noise with stale detection
-// ══════════════════════════════════════════════════════════════════════════
 // Enable sensor noise, verify:
 // a) Stale detection still triggers at 30s silence
 // b) No false stale trigger while noisy frames arrive regularly
@@ -656,9 +644,7 @@ fn test_noise_stale_triggers_at_30s_silence() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 6: VAL-CROSS-003 — Temperature overshoot end-to-end MQTT state
-// ══════════════════════════════════════════════════════════════════════════
 // Verify that MQTT state reflects the overshoot peak temperature.
 // Collect PublishState actions and verify they show temperatures
 // reaching set_temp + overshoot.
@@ -714,9 +700,7 @@ fn test_overshoot_mqtt_state_reflects_peak() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test 7: VAL-CROSS-004 — Sensor noise with command tracking end-to-end
-// ══════════════════════════════════════════════════════════════════════════
 // Full end-to-end: Sim adds noise → protocol parses noisy temps →
 // CommandTracker confirms command despite noise → MQTT publishes confirmed state.
 

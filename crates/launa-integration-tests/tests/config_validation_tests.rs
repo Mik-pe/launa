@@ -49,9 +49,7 @@ fn send_command_and_get_response(harness: &mut TestHarness, cmd: Command) -> Vec
     messages
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test Group 1: Custom Config Responses
-// ══════════════════════════════════════════════════════════════════════════
 
 /// VAL-SIM-019 / VAL-TEST-011: Custom SpaConfig returns configured values.
 /// Set non-default SpaConfig values, request config, verify parsed response matches.
@@ -276,9 +274,7 @@ fn test_custom_spa_config_through_full_pipeline() {
     }
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test Group 2: Temperature Boundary Validation
-// ══════════════════════════════════════════════════════════════════════════
 
 /// VAL-TEST-014: Test exact min/max boundaries for all scale/range combos.
 /// Fahrenheit High: 80-104°F accepted, 79 and 105 rejected.
@@ -501,9 +497,7 @@ fn test_temp_boundary_validation_through_mqtt_parser() {
     ));
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test Group 3: Temperature Scale Switching Mid-Session
-// ══════════════════════════════════════════════════════════════════════════
 
 /// VAL-CROSS-010: Switch temperature scale from Fahrenheit to Celsius mid-session.
 #[test]
@@ -685,9 +679,7 @@ fn test_scale_switch_f_to_c_e2e_pipeline() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test Group 4: MQTT Reconnect Re-Publish Discovery
-// ══════════════════════════════════════════════════════════════════════════
 
 /// VAL-CROSS-009: MQTT reconnect re-publishes discovery configs.
 /// After disconnect and reconnect, discovery configs are re-published to the broker.
@@ -828,9 +820,7 @@ fn test_mqtt_reconnect_discovery_in_broker() {
     }
 }
 
-// ══════════════════════════════════════════════════════════════════════════
 // Test Group 5: Heap Monitoring Lifecycle
-// ══════════════════════════════════════════════════════════════════════════
 
 /// VAL-CROSS-011: Heap monitoring lifecycle: OK → warning → critical → recovery.
 /// Simulate decreasing heap and verify alert sequence.

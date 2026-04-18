@@ -29,9 +29,7 @@ fn random_bytes(state: &mut u32, len: usize) -> Vec<u8> {
     out
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // Frame round-trip property tests
-// ═══════════════════════════════════════════════════════════════════════════
 
 fn round_trip_frame(msg_type: [u8; 2], payload: &[u8]) {
     let frame = Frame {
@@ -156,9 +154,7 @@ fn test_frame_round_trip_various_sizes() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // CRC property tests
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_crc_append_then_verify() {
@@ -221,9 +217,7 @@ fn test_crc_empty_data() {
     assert_eq!(crc1, crc2);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // Status update property tests
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_status_all_pump_state_combinations() {
@@ -337,9 +331,7 @@ fn test_status_too_short_returns_err() {
     assert!(StatusUpdate::parse(&payload).is_err());
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // FrameEncoder property test
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_frame_encoder_matches_frame_encode() {
@@ -378,9 +370,7 @@ fn test_frame_encoder_matches_frame_encode() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
 // Dispatcher round-trip property tests
-// ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
 fn test_dispatch_valid_status_roundtrip() {
