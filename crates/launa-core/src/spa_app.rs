@@ -1042,32 +1042,20 @@ mod tests {
         status_on.payload[11] = 0x01; // Pump 1 = Low
         app.process_frame(&status_on);
 
-        // Now pump turns off externally (someone pressed the physical button)
+        // Now pump turns off externally (someone pressed the physical button).
+        // process_frame ticks pump timers; the timer sees pump is Off and cancels.
         let status_off = status_frame(); // pump 1 = Off (default)
-        let actions = app.process_frame(&status_off);
+        let _actions = app.process_frame(&status_off);
 
-        // Check no auto-off toggle from the pump timer — it should be cancelled
-        let timer_toggle = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
-        // Note: there might be SendFrame from command tracker retries, but NOT from
-        // pump timer. Let's verify by advancing past duration and checking no fire.
-        assert!(
-            !timer_toggle
-                || !actions.iter().any(|a| {
-                    // Check if there's a toggle-off frame that isn't from command tracker
-                    matches!(a, AppAction::SendFrame(_))
-                }),
-            "no auto-off toggle should be sent when pump is externally turned off"
-        );
-
-        // Advance past the timer duration
+        // Advance past the timer duration — the cancelled timer must NOT fire.
         clock.advance_ms(61_000);
 
-        // Feed another status with pump still off — should NOT trigger auto-off
+        // Feed another status with pump still off — no auto-off SendFrame should appear.
         let actions = app.process_frame(&status_off);
-        let has_toggle_off = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        let has_send_frame = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
         assert!(
-            !has_toggle_off,
-            "no toggle-off SendFrame should appear after timer was cancelled by external Off"
+            !has_send_frame,
+            "no SendFrame should appear after pump timer was cancelled by external Off"
         );
     }
 

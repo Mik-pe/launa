@@ -49,17 +49,13 @@ pub fn decode_remaining_length(buf: &[u8]) -> Option<(usize, usize)> {
 /// returns them in a new `Vec`.  If the buffer is incomplete (not enough
 /// bytes yet), returns `None` and leaves `buffer` unchanged.
 ///
-/// This replaces the old double-`Vec::from()` pattern:
-/// ```ignore
-/// // OLD (two allocations):
-/// let packet = Vec::from(&self.rx_buffer[..total_size]);
-/// self.rx_buffer = Vec::from(&self.rx_buffer[total_size..]);
-/// ```
-/// With a single `drain()` that shifts the tail in-place:
-/// ```ignore
-/// // NEW (one allocation, in-place shift):
-/// let packet: Vec<u8> = buffer.drain(..total_size).collect();
-/// ```
+// This replaces the old double-`Vec::from()` pattern:
+//   OLD (two allocations):
+//     let packet = Vec::from(&self.rx_buffer[..total_size]);
+//     self.rx_buffer = Vec::from(&self.rx_buffer[total_size..]);
+// With a single `drain()` that shifts the tail in-place:
+//   NEW (one allocation, in-place shift):
+//     let packet: Vec<u8> = buffer.drain(..total_size).collect();
 pub fn try_extract_packet(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
     if buffer.len() < 2 {
         return None;
