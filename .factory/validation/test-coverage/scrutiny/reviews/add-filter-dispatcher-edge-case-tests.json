@@ -1,0 +1,26 @@
+{
+  "featureId": "add-filter-dispatcher-edge-case-tests",
+  "reviewedAt": "2026-04-18T10:30:00Z",
+  "commitId": "3d10828",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The commit adds 7 new test functions (3 filter, 4 dispatcher) covering all 6 specified edge cases. The tests are well-structured, correctly verify the production code behavior, and use appropriate assertions. No production code was modified. All assertions (VAL-FILT-001 through VAL-DISP-003) are fully covered.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The Balboa protocol dispatcher has a catch-all arm `[_, 0xBF] => IncomingMessage::Ready` that matches any second byte 0xBF with an unmatched first byte. This means escape byte tests (0x7E/0x7D) with message_type [0x7E, 0xBF] would dispatch as Ready, not Unknown. Workers writing dispatcher tests for message types must use a second byte != 0xBF to actually test the Unknown path. The worker correctly discovered and adapted to this during implementation.",
+      "evidence": "Transcript shows worker initially tried [0x7E, 0xBF] and got Ready, then fixed to use [mt, 0xCD]. Dispatcher match arm at dispatcher.rs line ~75: `[_, 0xBF] => IncomingMessage::Ready`."
+    },
+    {
+      "area": "knowledge",
+      "observation": "FilterCycle parsing uses raw u8 for duration_hours and start_hour without range validation. Values like duration_hours=25 (exceeding 24h) or start_hour=127 (from 0x7F enable-bit boundary) are stored as-is without clamping. This is intentional per the feature description — the parser is a thin wire-format decoder. Workers should be aware that no semantic validation is performed at the parse layer.",
+      "evidence": "filter.rs parse(): `duration_hours: payload[2]` and `start_hour: f2_start_hour` are raw u8 values with no range checks."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "All 6 edge case requirements met with 7 well-written test functions. Filter tests correctly verify non-zero start_minute (VAL-FILT-001), >24h duration (VAL-FILT-002), and enable bit boundary 0x80/0x7F (VAL-FILT-003). Dispatcher tests correctly verify escape bytes in message_type route to Unknown (VAL-DISP-001), dispatch idempotency (VAL-DISP-002), and short 0x22 payloads (VAL-DISP-003, covered by two test functions for [0x22] alone and [0x22, 0x01]). Worker correctly adapted the escape byte test after discovering the [_, 0xBF] catch-all arm dispatches as Ready. No production code was changed. All tests pass."
+}

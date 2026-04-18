@@ -1,0 +1,28 @@
+{
+  "featureId": "add-hal-error-injection-tests",
+  "reviewedAt": "2026-04-18T08:15:00.000Z",
+  "commitId": "23044a3",
+  "transcriptSkeletonReviewed": false,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean, well-structured implementation of error injection for MockTransport. Two new Optional<TransportError> fields added to the struct, with setter methods and one-shot (auto-clear via .take()) semantics in the Transport impl. Three tests cover write error injection+recovery, read error injection+recovery (preserving queued data), and read error returning Err. All changes are properly gated behind the std feature (the entire mock module is #[cfg(feature = \"std\")]).",
+    "issues": [
+      {
+        "file": "crates/launa-hal/src/transport.rs",
+        "line": 94,
+        "severity": "non_blocking",
+        "description": "The doc comments say 'Inject an error to be returned by the next write()/read() call' and 'Pass None to clear a previously set error'. However, the auto-clear behavior (via .take()) is a one-shot mechanism that is not explicitly documented. A consumer might expect the error to persist until explicitly cleared. The handoff clarifies this is intentional (one-shot), but the doc comment could be more explicit about this. Minor — does not affect correctness."
+      },
+      {
+        "file": "crates/launa-hal/tests/hal_tests.rs",
+        "line": 213,
+        "severity": "non_blocking",
+        "description": "test_mock_transport_read_error_returns_zero_bytes is somewhat redundant with test_mock_transport_read_error_injection_and_recovery. Both test read error injection — the difference is that one uses TransportError::Timeout vs TransportError::Io, and the 'zero bytes' test does not inject data beforehand. This is fine for coverage clarity, just noting the overlap."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The implementation fully satisfies VAL-HAL-001 (write error injection with recovery test) and VAL-HAL-002 (read error injection with recovery test). Both assertion requirements are met: (1) at least 1 test configures MockTransport to return error on write, verifies error, verifies recovery — done in test_mock_transport_write_error_injection_and_recovery; (2) at least 1 test configures read error injection, verifies error, verifies recovery — done in test_mock_transport_read_error_injection_and_recovery and test_mock_transport_read_error_returns_zero_bytes. The implementation is properly gated behind #[cfg(feature = \"std\")] (the entire mock module). The one-shot auto-clear behavior is a clean design choice. Production code changes are limited to test-only infrastructure (MockTransport is only used in tests). Code quality is high — follows existing patterns, clean assertions, no unsafe blocks added."
+}

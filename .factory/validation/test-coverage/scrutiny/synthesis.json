@@ -1,11 +1,11 @@
 {
   "milestone": "test-coverage",
-  "round": 1,
+  "round": 2,
   "status": "pass",
   "validatorsRun": {
     "test": { "passed": true, "command": "cargo test --workspace", "exitCode": 0 },
     "typecheck": { "passed": true, "command": "cargo check --workspace", "exitCode": 0 },
-    "lint": { "passed": true, "command": "cargo fmt --check", "exitCode": 0 }
+    "lint": { "passed": true, "command": "cargo fmt --check --all", "exitCode": 0 }
   },
   "reviewsSummary": {
     "total": 4,
@@ -17,28 +17,16 @@
   "appliedUpdates": [
     {
       "target": "library",
-      "description": "Document integration test harness pattern: each test file in launa-integration-tests/tests/ builds its own harness struct (SpaSim + SpaApp + SimBroker + VirtualClock + FrameDecoder) with methods tick_spa, tick_app, advance_ms, complete_registration, process_outgoing, execute_actions_on_broker. Multiple harnesses exist: SpaAppTestHarness, TempPhysicsHarness, BusDegradationHarness, FaultTimerHarness, ConfigValidationHarness.",
-      "sourceFeature": "integration-bus-degradation, integration-fault-timers, integration-config-validation"
-    },
-    {
-      "target": "library",
-      "description": "Document SpaSim fault lifecycle and power cycle APIs: simulate_fault_state(FaultCode), clear_fault_state(), set_fault_log_config(FaultLogConfig), simulate_spa_reboot(). These are now stable simulation APIs used across multiple integration test features.",
-      "sourceFeature": "integration-fault-timers"
+      "description": "Dispatcher catch-all arm: dispatcher.rs has a catch-all match arm `[_, 0xBF] => IncomingMessage::Ready` that matches any first byte with second byte 0xBF. Workers writing dispatcher tests for message types must use a second byte != 0xBF to actually test the Unknown path. Using [0x7E, 0xBF] will dispatch as Ready, not Unknown.",
+      "sourceFeature": "add-filter-dispatcher-edge-case-tests"
     }
   ],
-  "suggestedGuidanceUpdates": [
-    {
-      "target": "AGENTS.md",
-      "suggestion": "Add guidance for integration test harness conventions: when to extend existing SpaAppTestHarness vs. creating a custom harness per test file. Currently workers create custom harnesses for each feature, leading to 5+ harness structs with duplicated boilerplate (tick_spa, process_outgoing, complete_registration, execute_actions_on_broker). Consider recommending extension or a shared trait.",
-      "evidence": "integration-config-validation created ConfigValidationHarness, integration-bus-degradation created BusDegradationHarness, integration-temperature-physics created TempPhysicsHarness, integration-fault-timers created FaultTimerHarness — all duplicating the same core wiring logic.",
-      "isSystemic": true
-    }
-  ],
+  "suggestedGuidanceUpdates": [],
   "rejectedObservations": [
     {
-      "observation": "The rust-worker skill's procedure was followed (TDD, test first, verify workspace, cargo fmt). No skill gaps identified.",
-      "reason": "Already documented in skill procedure; not new knowledge"
+      "observation": "FilterCycle parsing uses raw u8 for duration_hours and start_hour without range validation. Values like duration_hours=25 or start_hour=127 are stored as-is without clamping.",
+      "reason": "already-documented — architecture.md already describes the protocol parser as a thin wire-format decoder; this is implicit in the existing documentation"
     }
   ],
-  "previousRound": null
+  "previousRound": ".factory/validation/test-coverage/scrutiny/synthesis.json (round 1)"
 }

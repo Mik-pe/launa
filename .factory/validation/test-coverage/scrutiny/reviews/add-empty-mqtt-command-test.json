@@ -1,0 +1,28 @@
+{
+  "featureId": "add-empty-mqtt-command-test",
+  "reviewedAt": "2026-04-18T08:30:00Z",
+  "commitId": "deea21b",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "5 well-structured integration tests added to mqtt_command_tests.rs covering the empty MQTT command payload edge case. Tests cover three command types (pump1 toggle, set_temperature, hold_mode) at the parse_command_ok level, verify the detailed ParseResult::InvalidPayload variant is returned (not UnknownSubtopic), and include one full-pipeline test via TestHarness verifying no SendFrame is emitted. Only test code was modified — zero production code changes. The commit is clean, focused, and directly fulfills VAL-INTG-001.",
+    "issues": [
+      {
+        "file": "crates/launa-integration-tests/tests/mqtt_command_tests.rs",
+        "line": 297,
+        "severity": "non_blocking",
+        "description": "The feature description mentions testing via 'app.on_mqtt_command with topic and empty bytes', but the production code's on_mqtt_command() takes a Command object, not raw topic+payload. The tests correctly test parse_command_ok (the actual gateway) instead, which is the right approach — the parser returning None means on_mqtt_command is never called. However, test_empty_mqtt_command_no_send_frame_via_harness (line 287) does not actually call on_mqtt_command either; it calls parse_command_ok directly and then ticks the harness with no command queued. This is still a valid test (proving the pipeline has no side effects when no command is produced) but doesn't exercise the on_mqtt_command path at all. A more thorough test would verify that the harness's own command submission method (if it has one) also handles None gracefully. This is minor since the logic chain is: parse_command_ok returns None → caller never invokes on_mqtt_command → correct behavior."
+      },
+      {
+        "file": "crates/launa-integration-tests/tests/mqtt_command_tests.rs",
+        "line": 289,
+        "severity": "non_blocking",
+        "description": "test_empty_mqtt_command_no_send_frame_via_harness uses base topic 'launa/test_spa/command' while the other 4 tests use 'launa/DEVICE/command'. This inconsistency is harmless (both are valid test strings) but slightly reduces uniformity across the test group."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The feature adds 5 focused, well-named integration tests to mqtt_command_tests.rs (111 lines added, 0 production code changed). Tests verify that empty MQTT command payloads (b\"\") are correctly rejected at the parse layer for pump1, set_temperature, and hold_mode topics, returning InvalidPayload (not UnknownSubtopic), and that no SendFrame action is produced via the TestHarness pipeline. VAL-INTG-001 is fully met. Two minor non-blocking observations: the harness-level test doesn't exercise on_mqtt_command directly (the production API takes Command, not raw bytes, so testing the parser is the correct layer), and one test uses a different base topic string than the others."
+}
