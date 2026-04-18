@@ -122,4 +122,96 @@ mod tests {
         assert_eq!(sm.state(), &RegistrationState::WaitingForQuery);
         assert!(!sm.is_registered());
     }
+
+    // --- Error path tests ---
+
+    #[test]
+    fn test_wrong_frame_type_in_waiting_for_query_stays_and_returns_none() {
+        let mut sm = RegistrationStateMachine::new();
+        let action = sm.process([0xAB, 0xCD], &[0x00]);
+        assert_eq!(action, RegistrationAction::None);
+        assert_eq!(sm.state(), &RegistrationState::WaitingForQuery);
+    }
+
+    #[test]
+    fn test_empty_payload_in_waiting_for_query_returns_none() {
+        let mut sm = RegistrationStateMachine::new();
+        let action = sm.process([0xFE, 0xBF], &[]);
+        assert_eq!(action, RegistrationAction::None);
+        assert_eq!(sm.state(), &RegistrationState::WaitingForQuery);
+    }
+
+    #[test]
+    fn test_assignment_missing_id_byte_in_waiting_for_assignment_returns_none() {
+        let mut sm = RegistrationStateMachine::new();
+        sm.process([0xFE, 0xBF], &[0x00]);
+        assert_eq!(sm.state(), &RegistrationState::WaitingForAssignment);
+
+        let action = sm.process([0xFE, 0xBF], &[0x02]);
+        assert_eq!(action, RegistrationAction::None);
+        assert_eq!(sm.state(), &RegistrationState::WaitingForAssignment);
+    }
+
+    #[test]
+    fn test_assignment_frame_in_waiting_for_query_ignored() {
+        let mut sm = RegistrationStateMachine::new();
+        let action = sm.process([0xFE, 0xBF], &[0x02, 0x05]);
+        assert_eq!(action, RegistrationAction::None);
+        assert_eq!(sm.state(), &RegistrationState::WaitingForQuery);
+    }
+
+    #[test]
+    fn test_query_frame_while_registered_ignored() {
+        let mut sm = RegistrationStateMachine::new();
+        sm.process([0xFE, 0xBF], &[0x00]);
+        sm.process([0xFE, 0xBF], &[0x02, 0x03]);
+        assert!(sm.is_registered());
+
+        let action = sm.process([0xFE, 0xBF], &[0x00]);
+        assert_eq!(action, RegistrationAction::None);
+        assert!(sm.is_registered());
+        assert_eq!(sm.client_id(), Some(0x03));
+    }
+
+    #[test]
+    fn test_payload_02_alone_in_waiting_for_assignment_returns_none() {
+        let mut sm = RegistrationStateMachine::new();
+        sm.process([0xFE, 0xBF], &[0x00]);
+
+        let action = sm.process([0xFE, 0xBF], &[0x02]);
+        assert_eq!(action, RegistrationAction::None);
+        assert_eq!(sm.state(), &RegistrationState::WaitingForAssignment);
+    }
+
+    #[test]
+    fn test_assignment_with_id_zero_transitions_correctly() {
+        let mut sm = RegistrationStateMachine::new();
+        sm.process([0xFE, 0xBF], &[0x00]);
+
+        let action = sm.process([0xFE, 0xBF], &[0x02, 0x00]);
+        assert_eq!(action, RegistrationAction::SendIdAck { client_id: 0x00 });
+        assert!(sm.is_registered());
+        assert_eq!(sm.client_id(), Some(0x00));
+    }
+
+    #[test]
+    fn test_wrong_frame_type_in_waiting_for_assignment_ignored() {
+        let mut sm = RegistrationStateMachine::new();
+        sm.process([0xFE, 0xBF], &[0x00]);
+
+        let action = sm.process([0xAA, 0xBB], &[0x02, 0x05]);
+        assert_eq!(action, RegistrationAction::None);
+        assert_eq!(sm.state(), &RegistrationState::WaitingForAssignment);
+    }
+
+    #[test]
+    fn test_registered_state_ignores_all_frames() {
+        let mut sm = RegistrationStateMachine::new();
+        sm.process([0xFE, 0xBF], &[0x00]);
+        sm.process([0xFE, 0xBF], &[0x02, 0x07]);
+
+        let action = sm.process([0xFE, 0xBF], &[0x02, 0x09]);
+        assert_eq!(action, RegistrationAction::None);
+        assert_eq!(sm.client_id(), Some(0x07));
+    }
 }
