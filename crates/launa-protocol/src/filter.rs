@@ -137,4 +137,56 @@ mod tests {
         assert_eq!(cycles.filter2.duration_minutes, 30);
         assert!(cycles.filter2.enabled);
     }
+
+    #[test]
+    fn test_filter2_nonzero_start_minute() {
+        // Filter 2 with start_minute = 30 (non-zero)
+        let payload: &[u8] = &[
+            0x08, 0x00, 0x04, 0x00, // Filter 1
+            0x90, 0x1E, 0x02, 0x00, // Filter 2: enabled, hour=16, minute=30
+        ];
+
+        let cycles = FilterCycles::parse(payload).unwrap();
+        assert_eq!(cycles.filter2.start_hour, 16);
+        assert_eq!(cycles.filter2.start_minute, 30);
+        assert!(cycles.filter2.enabled);
+    }
+
+    #[test]
+    fn test_filter_duration_exceeding_24_hours() {
+        // Duration hours = 25 (exceeds a single day)
+        let payload: &[u8] = &[
+            0x08, 0x00, 0x19, 0x00, // Filter 1: duration 25h 0m
+            0x90, 0x00, 0x19, 0x00, // Filter 2: duration 25h 0m
+        ];
+
+        let cycles = FilterCycles::parse(payload).unwrap();
+        assert_eq!(cycles.filter1.duration_hours, 25);
+        assert_eq!(cycles.filter1.duration_minutes, 0);
+        assert_eq!(cycles.filter2.duration_hours, 25);
+        assert_eq!(cycles.filter2.duration_minutes, 0);
+    }
+
+    #[test]
+    fn test_filter2_enable_bit_boundary() {
+        // 0x80: high bit set → enabled=true, hour=0
+        let payload_enabled: &[u8] = &[
+            0x08, 0x00, 0x04, 0x00, // Filter 1
+            0x80, 0x00, 0x02, 0x00, // Filter 2: 0x80 = enabled + hour 0
+        ];
+
+        let cycles = FilterCycles::parse(payload_enabled).unwrap();
+        assert!(cycles.filter2.enabled, "0x80 should set enabled=true");
+        assert_eq!(cycles.filter2.start_hour, 0, "0x80 should yield hour=0");
+
+        // 0x7F: high bit clear → enabled=false, hour=127
+        let payload_disabled: &[u8] = &[
+            0x08, 0x00, 0x04, 0x00, // Filter 1
+            0x7F, 0x00, 0x02, 0x00, // Filter 2: 0x7F = not enabled + hour 127
+        ];
+
+        let cycles = FilterCycles::parse(payload_disabled).unwrap();
+        assert!(!cycles.filter2.enabled, "0x7F should set enabled=false");
+        assert_eq!(cycles.filter2.start_hour, 127, "0x7F should yield hour=127");
+    }
 }

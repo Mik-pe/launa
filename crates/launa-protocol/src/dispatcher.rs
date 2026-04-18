@@ -869,4 +869,81 @@ mod tests {
             warnings[0]
         );
     }
+
+    #[test]
+    fn test_dispatch_escape_bytes_in_message_type() {
+        // Message types containing 0x7E or 0x7D (HDLC escape bytes) should
+        // dispatch as Unknown without panicking. Use second byte != 0xBF
+        // to avoid the Ready catch-all arm.
+        for mt in [0x7E, 0x7D] {
+            let frame = Frame {
+                message_type: [mt, 0xCD],
+                payload: vec![0x01, 0x02],
+            };
+            let msg = dispatch_frame(&frame);
+            match msg {
+                IncomingMessage::Unknown {
+                    message_type,
+                    payload,
+                } => {
+                    assert_eq!(message_type, [mt, 0xCD]);
+                    assert_eq!(payload, vec![0x01, 0x02]);
+                }
+                _ => panic!(
+                    "Expected Unknown for message_type [0x{:02X}, 0xCD], got {:?}",
+                    mt, msg
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn test_dispatch_idempotency() {
+        // Dispatching the same frame twice must produce identical results.
+        let mut payload = vec![0u8; 24];
+        payload[2] = 100;
+        payload[20] = 104;
+        let frame = Frame {
+            message_type: [0xFF, 0xAF],
+            payload,
+        };
+
+        let result1 = dispatch_frame(&frame);
+        let result2 = dispatch_frame(&frame);
+        assert_eq!(
+            result1, result2,
+            "Dispatching the same frame twice must produce equal results"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_short_0x22_payload_alone() {
+        // Payload [0x22] alone: sub-type byte present but no second byte
+        let frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: vec![0x22],
+        };
+        let msg = dispatch_frame(&frame);
+        assert!(
+            matches!(msg, IncomingMessage::Unknown { .. }),
+            "Expected Unknown for [0x22] alone, got {:?}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_dispatch_short_0x22_payload_too_short_for_data() {
+        // Payload [0x22, 0x01]: sub-type and settings-type present, but
+        // only 2 bytes total — no room for the 3-byte header + filter data.
+        let frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: vec![0x22, 0x01],
+        };
+        let msg = dispatch_frame(&frame);
+        assert!(
+            matches!(msg, IncomingMessage::Unknown { .. }),
+            "Expected Unknown for [0x22, 0x01] too-short payload, got {:?}",
+            msg
+        );
+    }
 }
