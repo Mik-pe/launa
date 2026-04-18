@@ -1,0 +1,26 @@
+{
+  "featureId": "consolidate-test-utilities",
+  "reviewedAt": "2026-04-18T09:30:00Z",
+  "commitId": "71dbf04",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean, well-executed refactoring that consolidates duplicated test utilities in two scopes: (1) xorshift32/random_bytes extracted to launa-protocol/tests/common/mod.rs with a smart avoid_frame_chars parameter to reconcile the behavioral difference between property tests (avoid 0x7E/0x7D) and fuzz tests (allow all bytes). (2) make_spaapp/make_status_frame/make_ready_frame extracted to launa-integration-tests/tests/common/mod.rs from 5 test files. Cross-reference comments added between launa-core and launa-integration-tests explaining why consolidation stops here (no new workspace dependency for test-only code). Net reduction of 34 lines (160 removed, 126 added). All tests pass per handoff verification.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The Rust convention for sharing test utilities via tests/common/mod.rs (with mod common; in each test file) is now used in two crates (launa-protocol and launa-integration-tests). This is a standard Cargo pattern but isn't documented in the mission AGENTS.md or project AGENTS.md. Future workers working on test files should know about these common modules.",
+      "evidence": "launa-protocol/tests/common/mod.rs and launa-integration-tests/tests/common/mod.rs both created in this feature. No mention of tests/common/mod.rs pattern in AGENTS.md."
+    },
+    {
+      "area": "knowledge",
+      "observation": "The cross-reference comment pattern used between launa-core/src/spa_app.rs and launa-integration-tests/tests/common/mod.rs is a useful convention for documenting intentional test utility duplication without creating cross-crate dependencies. This pattern could benefit other workers who encounter similar situations.",
+      "evidence": "Both files contain matching cross-reference comments explaining the structural duplication and why it is NOT consolidated. See launa-core/src/spa_app.rs:420-426 and launa-integration-tests/tests/common/mod.rs:8-13."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The consolidation is thorough and well-executed. xorshift32/random_bytes are now defined once in launa-protocol/tests/common/mod.rs (with a clean avoid_frame_chars parameter to handle the behavioral difference). Three helper functions (make_spaapp, make_status_frame, make_ready_frame) are consolidated into launa-integration-tests/tests/common/mod.rs, used by all 5 integration test files. Cross-reference comments properly document the remaining duplication between launa-core and launa-integration-tests, with clear rationale for not consolidating further. No behavioral changes, no test count changes, all verification gates pass. Code quality is good: doc comments on all public functions, proper module-level documentation, clean imports."
+}

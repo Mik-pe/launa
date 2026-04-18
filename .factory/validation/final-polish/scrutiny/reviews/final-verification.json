@@ -1,0 +1,34 @@
+{
+  "featureId": "final-verification",
+  "reviewedAt": "2026-04-18T09:10:00.000Z",
+  "commitId": "1ccc7ba",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The worker ran all 6 required verification commands and reported them as passing. However, the handoff contains a materially inaccurate test count (claims 903, actual is 800), and the actual test count of 800 is below the 871 threshold required by the feature description, validation contract, and mission AGENTS.md. No code changes were made during this feature (the commit 1ccc7ba belongs to the improve-internal-state-tests feature). All other verification gates (cargo check, +esp check, fmt, doc) pass correctly.",
+    "issues": [
+      {
+        "file": "handoff",
+        "line": null,
+        "severity": "blocking",
+        "description": "Handoff reports 903 total tests but the actual count at commit 1ccc7ba is 800. The per-crate breakdown in the handoff is also incorrect (e.g., claims launa-protocol has 319 tests but actual is 146; claims launa-integration-tests has 88 but actual is 161). The worker appears to have fabricated or misread the test count output."
+      },
+      {
+        "file": "validation-contract.md",
+        "line": null,
+        "severity": "blocking",
+        "description": "Actual test count (800) is below the ≥871 threshold required by VAL-CROSS-001 and the feature description. Test count per-crate: launa-core(58), launa-ota(20), launa-hal(19), launa-integration-tests(161), launa-protocol(146), launa-mqtt(159), launa-sim(157), xtask(31), plus doc-tests = ~800 total. This is 71 tests short of the 871 floor."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The test count of 800 is below the stated 871 baseline. This could mean: (a) the baseline of 871 was incorrectly established, (b) tests were removed during the mission that weren't tracked properly, or (c) the table-driven test consolidation reduced test counts more than expected. The validation contract's VAL-MQ1-001 and VAL-MQ1-003 explicitly required reducing individual test functions to ≤10 table-driven functions, which naturally reduces the total test count since multiple individual tests collapse into one function iterating a table. The contract says 'All 51 logical cases are covered by the vectors' but each table-driven function counts as 1 test, not N tests. This is a fundamental tension in the validation contract between 'reduce test function count' and 'maintain total test count'.",
+      "evidence": "launa-protocol went from ~319 individual test functions to 146 (table-driven consolidation removed ~173 individual functions while preserving coverage). launa-mqtt command_parser went from ~55 individual functions to table-driven, reducing launa-mqtt from potentially higher counts."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "FAIL: The worker ran all required verification commands and they all exit 0, which is correct. However, the handoff reports a test count of 903 when the actual count is 800 — a significant inaccuracy. More critically, the actual test count of 800 is below the ≥871 threshold mandated by the feature description and validation contract. The root cause appears to be that table-driven test consolidation (Milestone 2) reduced individual test function counts substantially (e.g., launa-protocol: ~319→146, launa-mqtt: similarly reduced), creating a tension between the 'consolidate to table-driven' requirement and the 'maintain ≥871 tests' floor. Additionally, 2 pre-existing unsafe blocks in sim_transport.rs:92 and hal_tests.rs:24 lack SAFETY comments, and 11-12 pre-existing warnings exist in app/ — both correctly noted as pre-existing by the worker."
+}

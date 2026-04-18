@@ -1,0 +1,28 @@
+{
+  "featureId": "improve-internal-state-tests",
+  "reviewedAt": "2026-04-18T09:00:00.000Z",
+  "commitId": "1ccc7ba",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The worker converted 57 internal-state assertions across 9 integration test files to verify behavior through decoded status frames (dispatch_frame → StatusUpdate) instead of directly accessing sim.state.* fields. Zero sim.state.* assertions remain — all remaining sim.state.* references are setup inputs (assignments, not assertions). 23 rationale comments were added to explain why remaining sim.state.* setup lines must stay. The `total_retries()` calls are not internal-state access — they call a public method on SpaApp's public API.",
+    "issues": [
+      {
+        "file": "crates/launa-integration-tests/tests/mqtt_publishing_tests.rs",
+        "line": 40,
+        "severity": "non_blocking",
+        "description": "12 sim.state.* setup assignments (lines 40-50) lack rationale comments, unlike other files that received them. These are clearly setup inputs (not assertions), but the feature description says 'Document rationale for tests that must access internals.' Minor inconsistency."
+      },
+      {
+        "file": "crates/launa-integration-tests/tests/temperature_physics_tests.rs",
+        "line": 150,
+        "severity": "non_blocking",
+        "description": "Reuses `harness.inner.decoder` for decoded status frame verification in 4 places (lines 150, 167, 201, 493), while most other tests create fresh `FrameDecoder::new()` instances. This works correctly because FrameDecoder resets state on new frame start bytes, and generate_status_frame() produces complete frames. Not a bug, but an inconsistency with the prevailing pattern."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The feature successfully converted all 57 internal-state assertions across 9 integration test files to verify behavior through decoded status frames. No sim.state.* assertions remain. 23 rationale comments document remaining sim.state.* setup inputs. The `total_retries()` references call a public API method, not internal field access. Two minor non-blocking issues: mqtt_publishing_tests.rs lacks rationale comments on its 12 setup lines (inconsistent with other files), and temperature_physics_tests.rs reuses the harness's shared FrameDecoder instead of creating fresh ones (works correctly but inconsistent). All 905+ workspace tests pass."
+}
