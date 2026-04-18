@@ -3,28 +3,14 @@
 //! Tests resilience against random/edge-case inputs. Verifies that parsers
 //! never panic on arbitrary input.
 
+mod common;
+
+use common::{random_bytes, xorshift32};
 use launa_protocol::config::SpaConfig;
 use launa_protocol::fault::FaultLogEntry;
 use launa_protocol::filter::FilterCycles;
 use launa_protocol::information::InformationResponse;
 use launa_protocol::{dispatch_frame, Frame, FrameDecoder, IncomingMessage, StatusUpdate};
-
-fn xorshift32(state: &mut u32) -> u32 {
-    let mut x = *state;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    *state = x;
-    x
-}
-
-fn random_bytes(state: &mut u32, len: usize) -> Vec<u8> {
-    let mut out = Vec::with_capacity(len);
-    for _ in 0..len {
-        out.push(xorshift32(state) as u8);
-    }
-    out
-}
 
 // Random input resilience tests
 
@@ -32,7 +18,7 @@ fn random_bytes(state: &mut u32, len: usize) -> Vec<u8> {
 fn test_frame_decoder_random_input_no_panic() {
     let mut rng = 0xDEADBEEF;
     let mut decoder = FrameDecoder::new();
-    let data = random_bytes(&mut rng, 10_000);
+    let data = random_bytes(&mut rng, 10_000, false);
 
     // Feed 10000 random bytes through FrameDecoder — verify it never panics
     for &byte in &data {
@@ -47,7 +33,7 @@ fn test_status_parse_random_input_no_panic() {
     // Feed random payloads to StatusUpdate::parse — verify it never panics
     for _ in 0..1000 {
         let len = (xorshift32(&mut rng) % 50) as usize;
-        let payload = random_bytes(&mut rng, len);
+        let payload = random_bytes(&mut rng, len, false);
         let _ = StatusUpdate::parse(&payload);
     }
 }
@@ -59,7 +45,7 @@ fn test_spa_config_parse_random_input_no_panic() {
     // Feed random payloads to SpaConfig::parse — verify it never panics
     for _ in 0..1000 {
         let len = (xorshift32(&mut rng) % 30) as usize;
-        let payload = random_bytes(&mut rng, len);
+        let payload = random_bytes(&mut rng, len, false);
         let _ = SpaConfig::parse(&payload);
     }
 }
@@ -71,7 +57,7 @@ fn test_dispatch_frame_random_input_no_panic() {
     // Feed random payloads to dispatch_frame — verify it never panics
     for _ in 0..1000 {
         let payload_len = (xorshift32(&mut rng) % 50) as usize;
-        let payload = random_bytes(&mut rng, payload_len);
+        let payload = random_bytes(&mut rng, payload_len, false);
         let msg_type = [
             (xorshift32(&mut rng) % 256) as u8,
             (xorshift32(&mut rng) % 256) as u8,
@@ -90,7 +76,7 @@ fn test_information_response_random_input_no_panic() {
 
     for _ in 0..1000 {
         let len = (xorshift32(&mut rng) % 50) as usize;
-        let payload = random_bytes(&mut rng, len);
+        let payload = random_bytes(&mut rng, len, false);
         let _ = InformationResponse::parse(&payload);
     }
 }
@@ -101,7 +87,7 @@ fn test_fault_log_random_input_no_panic() {
 
     for _ in 0..1000 {
         let len = (xorshift32(&mut rng) % 30) as usize;
-        let payload = random_bytes(&mut rng, len);
+        let payload = random_bytes(&mut rng, len, false);
         let _ = FaultLogEntry::parse(&payload);
     }
 }
@@ -112,7 +98,7 @@ fn test_filter_cycles_random_input_no_panic() {
 
     for _ in 0..1000 {
         let len = (xorshift32(&mut rng) % 20) as usize;
-        let payload = random_bytes(&mut rng, len);
+        let payload = random_bytes(&mut rng, len, false);
         let _ = FilterCycles::parse(&payload);
     }
 }

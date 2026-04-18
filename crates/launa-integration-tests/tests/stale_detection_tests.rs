@@ -5,26 +5,13 @@
 //! - Stale detection lifecycle with multiple probe phases
 //! - Exact timing boundaries (29s not stale, 30s stale)
 
-use launa_core::{AppAction, SpaApp};
+mod common;
+
+use common::{make_spaapp, make_status_frame};
+
+use launa_core::AppAction;
 use launa_protocol::command::Command;
-use launa_protocol::frame::{Frame, FrameEncoder};
-use launa_sim::VirtualClock;
-
-fn make_spaapp() -> (&'static VirtualClock, SpaApp<'static>) {
-    let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
-    let app = SpaApp::new(clock);
-    (clock, app)
-}
-
-fn make_status_frame() -> Frame {
-    let mut payload = vec![0u8; 24];
-    payload[2] = 100;
-    payload[20] = 104;
-    Frame {
-        message_type: [0xFF, 0xAF],
-        payload,
-    }
-}
+use launa_protocol::frame::FrameEncoder;
 
 #[test]
 fn test_spaapp_stale_detection_flow() {

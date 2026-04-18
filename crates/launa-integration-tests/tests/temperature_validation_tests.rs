@@ -6,36 +6,17 @@
 //! - Fahrenheit through SpaApp command queue
 //! - Celsius through SpaApp command queue
 
-use launa_core::{AppAction, SpaApp};
+mod common;
+
+use common::{make_ready_frame, make_spaapp, make_status_frame};
+
+use launa_core::AppAction;
 use launa_mqtt::command_parser::ParseResult;
 use launa_protocol::command::Command;
 use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
-use launa_protocol::frame::{Frame, FrameDecoder};
+use launa_protocol::frame::FrameDecoder;
 use launa_protocol::status::{TempRange, TemperatureScale};
-use launa_sim::{SpaSim, VirtualClock};
-
-fn make_spaapp() -> (&'static VirtualClock, SpaApp<'static>) {
-    let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
-    let app = SpaApp::new(clock);
-    (clock, app)
-}
-
-fn make_status_frame() -> Frame {
-    let mut payload = vec![0u8; 24];
-    payload[2] = 100;
-    payload[20] = 104;
-    Frame {
-        message_type: [0xFF, 0xAF],
-        payload,
-    }
-}
-
-fn make_ready_frame() -> Frame {
-    Frame {
-        message_type: [0x10, 0xBF],
-        payload: vec![0x06],
-    }
-}
+use launa_sim::SpaSim;
 
 #[test]
 fn test_validated_temperature_pipeline_fahrenheit() {

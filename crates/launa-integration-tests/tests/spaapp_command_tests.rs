@@ -5,34 +5,15 @@
 //! diagnostics, registration timeout, bus reset, fault log capture,
 //! heap monitoring, and stress scenarios.
 
-use launa_core::{AppAction, SpaApp};
+mod common;
+
+use common::{make_ready_frame, make_spaapp, make_status_frame};
+
+use launa_core::AppAction;
 use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::frame::{Frame, FrameDecoder, FrameEncoder};
 use launa_protocol::status::{HeatingMode, PumpState};
-use launa_sim::{SpaSim, VirtualClock};
-
-fn make_spaapp() -> (&'static VirtualClock, SpaApp<'static>) {
-    let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
-    let app = SpaApp::new(clock);
-    (clock, app)
-}
-
-fn make_status_frame() -> Frame {
-    let mut payload = vec![0u8; 24];
-    payload[2] = 100;
-    payload[20] = 104;
-    Frame {
-        message_type: [0xFF, 0xAF],
-        payload,
-    }
-}
-
-fn make_ready_frame() -> Frame {
-    Frame {
-        message_type: [0x10, 0xBF],
-        payload: vec![0x06],
-    }
-}
+use launa_sim::SpaSim;
 
 fn make_new_client_query_frame() -> Frame {
     Frame {

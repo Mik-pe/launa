@@ -419,6 +419,13 @@ mod tests {
     use launa_protocol::frame::Frame;
     use launa_sim::VirtualClock;
 
+    // Cross-reference: structurally identical helpers exist in
+    // launa-integration-tests/tests/common/mod.rs (make_spaapp, make_status_frame,
+    // make_ready_frame). These are NOT consolidated into a shared crate because
+    // launa-core does not (and should not) depend on launa-integration-tests, and
+    // extracting a shared test-util crate would add a new workspace dependency
+    // for test-only code.
+
     fn make_app_with_clock() -> (&'static VirtualClock, SpaApp<'static>) {
         let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
         let app = SpaApp::new(clock);

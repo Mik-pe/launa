@@ -2,32 +2,13 @@
 //!
 //! Uses manual property-style testing (no proptest dependency).
 
+mod common;
+
+use common::{random_bytes, xorshift32};
 use launa_protocol::crc8;
 use launa_protocol::{
     dispatch_frame, Frame, FrameDecoder, FrameEncoder, IncomingMessage, StatusUpdate,
 };
-
-fn xorshift32(state: &mut u32) -> u32 {
-    let mut x = *state;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    *state = x;
-    x
-}
-
-fn random_bytes(state: &mut u32, len: usize) -> Vec<u8> {
-    let mut out = Vec::with_capacity(len);
-    for _ in 0..len {
-        // Avoid 0x7E (frame marker) and 0x7D (escape char) in payload
-        let mut b = xorshift32(state) as u8;
-        if b == 0x7E || b == 0x7D {
-            b = 0x7F;
-        }
-        out.push(b);
-    }
-    out
-}
 
 // Frame round-trip property tests
 
@@ -148,7 +129,7 @@ fn test_frame_round_trip_max_payload() {
 fn test_frame_round_trip_various_sizes() {
     let mut rng = 42;
     for size in &[0, 1, 2, 5, 10, 50, 100, 150, 200, 253] {
-        let payload = random_bytes(&mut rng, *size);
+        let payload = random_bytes(&mut rng, *size, true);
         round_trip_frame([0xFF, 0xAF], &payload);
         round_trip_frame([0x0A, 0xBF], &payload);
     }
@@ -162,7 +143,7 @@ fn test_crc_append_then_verify() {
     let mut rng = 12345;
     for _ in 0..100 {
         let len = (xorshift32(&mut rng) % 256) as usize;
-        let data = random_bytes(&mut rng, len);
+        let data = random_bytes(&mut rng, len, true);
 
         let crc = crc8::compute(&data);
         let mut with_crc = data.clone();
@@ -180,7 +161,7 @@ fn test_crc_flip_bit_fails() {
     let mut rng = 54321;
     for _ in 0..100 {
         let len = ((xorshift32(&mut rng) % 30) + 1) as usize;
-        let data = random_bytes(&mut rng, len);
+        let data = random_bytes(&mut rng, len, true);
         let crc = crc8::compute(&data);
 
         // Try flipping each bit in the data
@@ -338,7 +319,7 @@ fn test_frame_encoder_matches_frame_encode() {
     let mut rng = 9999;
     for _ in 0..50 {
         let payload_len = (xorshift32(&mut rng) % 100) as usize;
-        let payload = random_bytes(&mut rng, payload_len);
+        let payload = random_bytes(&mut rng, payload_len, true);
         let msg_type_bytes = [
             {
                 let mut b = (xorshift32(&mut rng) % 256) as u8;

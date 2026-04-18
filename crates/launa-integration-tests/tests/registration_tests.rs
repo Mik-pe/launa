@@ -7,6 +7,10 @@
 //! - SpaApp registration end-to-end with SpaSim
 //! - Registration with interleaved frames
 
+mod common;
+
+use common::{make_spaapp, make_status_frame};
+
 use launa_core::{AppAction, SpaApp};
 use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
@@ -14,23 +18,7 @@ use launa_protocol::frame::{Frame, FrameDecoder, FrameEncoder};
 use launa_protocol::registration::{
     RegistrationAction, RegistrationState, RegistrationStateMachine,
 };
-use launa_sim::{SpaSim, VirtualClock};
-
-fn make_spaapp() -> (&'static VirtualClock, SpaApp<'static>) {
-    let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
-    let app = SpaApp::new(clock);
-    (clock, app)
-}
-
-fn make_status_frame() -> Frame {
-    let mut payload = vec![0u8; 24];
-    payload[2] = 100;
-    payload[20] = 104;
-    Frame {
-        message_type: [0xFF, 0xAF],
-        payload,
-    }
-}
+use launa_sim::SpaSim;
 
 fn make_new_client_query_frame() -> Frame {
     Frame {
