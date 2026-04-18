@@ -1,0 +1,22 @@
+{
+  "featureId": "cleanup-triple-documented-offsets",
+  "reviewedAt": "2026-04-18T09:45:00Z",
+  "commitId": "0352f95",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean removal of 22 inline offset/byte comments from parse functions in status.rs (15 `// Offset N`) and information.rs (7 `// Bytes N`). Layout diagrams and field doc comments preserved as canonical. Restating doc comments removed from fault.rs (days_ago, hour, minute, set_temperature, sensor_a_temp, sensor_b_temp) and information.rs (heater_voltage, heater_type). Fault.rs field docs enhanced with protocol context (fault_count → 'entries in controller fault log', entry_number → '1-based sequential index', message_code → cross-ref to FaultCode, flags → 'bitfield encoding'). All 130 existing tests pass. No behavioral changes.",
+    "issues": [
+      {
+        "file": "crates/launa-protocol/src/filter.rs",
+        "line": 22,
+        "severity": "non_blocking",
+        "description": "Borderline restating doc comments: `/// Duration hours` on `duration_hours` and `/// Duration minutes` on `duration_minutes`. These add minimal info beyond the field name. However, the feature description listed filter.rs as an affected file and the worker correctly identified it had no inline offset comments needing removal, so the doc comment issue is minor. The field names are already reasonably self-documenting."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The feature successfully removes all triple-documented protocol offsets from parse functions in status.rs, fault.rs, filter.rs, and information.rs. VAL-MC1-002 verified: no inline `// Offset` or `// Byte` comments remain in any parse function; only layout diagram doc comments (`///`) reference offsets. VAL-MC1-003 verified: all remaining doc comments on pub struct fields contain meaningful information (protocol offsets, bit encodings, value ranges, cross-references, conversion rules) beyond just restating the field name. One non-blocking observation: filter.rs has borderline restating docs on duration_hours/duration_minutes, but these are minor. Worker followed the rust-refactor-worker skill procedure correctly. All tests pass (130 total)."
+}
