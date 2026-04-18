@@ -10,7 +10,7 @@ ESP32 firmware (Rust, no_std) that interfaces with Balboa BP6013G1 spa controlle
 
 - **launa-protocol** — Balboa spa protocol parser (frame encode/decode, status, commands, config, registration, fault/filter/info)
 - **launa-hal** — Hardware abstraction traits + mock implementations
-- **launa-mqtt** — MQTT client with Home Assistant auto-discovery (14 entities)
+- **launa-mqtt** — MQTT client with Home Assistant auto-discovery (27 entities)
 - **launa-ota** — OTA firmware update trait + mock
 - **launa-esp-ota** — ESP32 OTA using esp-storage (custom, replaces esp-hal-ota)
 - **launa-sim** — Spa simulator (mock BP6013G1 mainboard) for integration testing

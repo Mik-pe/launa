@@ -47,53 +47,129 @@ publishes state to Home Assistant via MQTT. Supports OTA firmware updates.
 Balboa spa protocol parser. Pure logic, no hardware dependencies, `no_std`
 compatible, fully testable on desktop.
 
-- CRC-8 computation
-- Message frame encoding/decoding (0x7E delimited)
-- Status update parsing
-- Configuration response parsing
-- Command message construction (toggle, set temp, etc.)
-- Client ID registration state machine
+- `frame` — Message frame encoding/decoding (0x7E delimited, CRC-8)
+- `status` — Status update parsing (temperature, pumps, heating mode, etc.)
+- `command` — Command construction (toggle items, set temperature, config requests)
+- `config` — Configuration response parsing
+- `registration` — Client ID registration state machine
+- `dispatcher` — Frame type routing / dispatching
+- `fault` — Fault log entry parsing
+- `filter` — Filter cycle schedule parsing
+- `information` — Spa information response parsing
+- `crc8` — CRC-8 computation
 
 ### `launa-hal`
 
 Hardware abstraction traits. Defines the interface between protocol logic and
 real hardware. Enables desktop testing via mock implementations.
 
-- `Transport` trait (read/write bytes)
-- `Network` trait (WiFi connect, TCP socket)
-- `Clock` trait (current time)
+- `Transport` trait (async read/write bytes over UART/RS-485)
+- `Network` trait (WiFi connect, TCP socket creation)
+- `TcpSocket` trait (read/write/close over TCP)
+- `Clock` trait (current time, timestamps)
 - Mock implementations behind `std` feature flag
 
 ### `launa-mqtt`
 
-MQTT client wrapper with Home Assistant discovery support.
+MQTT topics, Home Assistant auto-discovery, command parsing, and state serialization.
+Includes an extracted MQTT v5 protocol codec.
 
-- Home Assistant MQTT auto-discovery message generation
-- State publication (temperature, pump status, etc.)
-- Command subscription (toggle pumps, set temperature, etc.)
-- Device configuration for HA UI
+- `discovery` — HA auto-discovery message generation (27 entities)
+- `topics` — MQTT topic builder and LWT/birth configuration
+- `command_parser` — MQTT command parsing (toggle, set temp)
+- `state` — Spa state to JSON serialization
+- `v5_codec` — MQTT v5 protocol packet encoding/decoding
+- `packet` — Packet extraction from TCP stream
+- `remote_log` — Remote log entry serialization
+- `ota_url` — OTA URL parsing
+- `escape` — JSON string escaping (no_std, no serde_json)
 
 ### `launa-ota`
 
-OTA firmware update support.
+OTA firmware update trait with mock implementation for desktop testing.
+Provides the `OtaUpdate` trait that `launa-esp-ota` implements for real hardware.
 
-- Firmware download (HTTP or MQTT)
-- Partition management
-- Boot partition switching
-- Rollback support
+- `OtaUpdate` trait (begin, write, finalize, mark_valid, rollback)
+- `OtaError` error types
+- `http` — HTTP response parser for firmware download (Range header, status parsing)
+- `MockOta` for unit testing
+
+### `launa-esp-ota`
+
+Custom ESP32 OTA implementation using `esp-storage` (embedded-storage traits)
+for direct flash access. Replaces `esp-hal-ota`.
+
+- `crypto` — SHA-256, HMAC-SHA256, CRC-32/MPEG-2 implementations
+- `flash` — Partition operations (read, erase, write, otadata management)
+- `ota` — `EspOtaFlash` state machine (begin/write/finalize/rollback with CRC + signature verification)
+
+### `launa-core`
+
+Extracted application logic — `SpaApp` owns all stateful firmware logic including
+registration, command tracking, pump timers, hold timers, stale detection,
+diagnostics, and fault handling. Returns `Vec<AppAction>` side effects.
+
+- `spa_app` — Main `SpaApp` struct (process frames, tick, registration lifecycle)
+- `actions` — `AppAction` enum (side effects: publish state, send frames, OTA, etc.)
+- `command_tracker` — Tracks pending commands and confirms/refires on mismatch
+- `timers` — `PumpTimer`, `PumpTimerManager`, `HoldModeTimer`
+- `rate_limiter` — Command rate limiting (sliding window)
+- `log_buffer` — `RemoteLogBuffer` for MQTT remote logging
+- `heap_monitor` — Free heap tracking with alert thresholds
+- `types` — Shared types and constants
+
+### `launa-sim`
+
+Spa simulator — mock Balboa BP6013G1 mainboard for integration testing.
+Also provides `SimBroker` (mock MQTT broker) and `SimTransport` (virtual RS-485 wire).
+
+- `spa_sim` — `SpaSim` with configurable responses, error injection, physics
+  - `config` — Simulator configuration structs
+  - `state` — `SpaState`, `SpaEvent`, `SpaEventType`
+  - `frame_gen` — Status/config/fault/filter/info frame generation
+  - `physics` — Thermal model, sensor noise, heater/pump interlock, overshoot
+- `sim_broker` — `SimBroker` mock MQTT broker for verification
+- `sim_transport` — `SimTransport` virtual RS-485 bidirectional pipe
+- `clock` — `VirtualClock` for deterministic time in tests
+
+### `launa-integration-tests`
+
+130+ integration tests exercising `SpaApp` through the full simulation pipeline.
+Tests use `SpaSimulator` → `SimTransport` → `SpaApp` → `SimBroker`.
+
+- `harness` — Shared `TestHarness` base (eliminates duplicate setup code)
+- `lib` — Integration test suites (registration, commands, OTA, fault, stale, etc.)
+
+### `xtask`
+
+Host-side Cargo xtask tooling. Not part of the firmware.
+
+- Flash, monitor, flash-monitor
+- OTA build + serve + trigger
+- Spa simulator (USB-RS485)
+- Sniffer frame decoder
+- Hardware self-test
+- NVS config flash
 
 ### `app/` (ESP32 firmware binary)
 
 The final firmware binary. Excluded from the main workspace because it targets
 `xtensa-esp32-none-elf` with `esp-hal` + `embassy` (pure Rust, no_std, no ESP-IDF C SDK).
 
-- ESP32-specific hardware implementations of `launa-hal` traits
-- UART/RS-485 transport (esp-hal UART with optional DE pin)
-- WiFi connectivity (esp-radio + embassy-net)
-- MQTT v5 client (hand-rolled over embassy-net TCP)
-- OTA partition management (launa-esp-ota with esp-storage)
-- NVS config storage (esp-nvs)
-- Embassy async main loop with inter-task channels
+- `main` — Embassy async main loop with inter-task channels
+- `mqtt_client` — MQTT v5 client over embassy-net TCP (uses `launa-mqtt` codec)
+- `mqtt_task` — MQTT task wiring (connect, subscribe, publish loop)
+- `transport` — UART/RS-485 transport (esp-hal UART with optional DE pin)
+- `wifi` — WiFi connectivity (esp-radio + embassy-net)
+- `ota` — OTA download and partition management
+- `config` — NVS config storage (esp-nvs)
+- `clock` — ESP32 real-time clock implementation
+- `diagnostics` — Diagnostic publishing and alerts
+- `remote_log` — Remote log publishing over MQTT
+- `sniff` — Sniffer firmware (passive RS-485 monitoring)
+- `types` — App-specific types (FaultBuf, etc.)
+- `net_util` — Network utility functions
+- `crypto` — ESP32-specific crypto utilities
 
 ## Desktop Testing Strategy
 
@@ -111,22 +187,28 @@ ESP32-specific code that glues everything together.
 
 ## Home Assistant Integration
 
-Uses MQTT auto-discovery to automatically create entities in Home Assistant:
+Uses MQTT auto-discovery to automatically create 27 entities in Home Assistant:
 
 | Entity | HA Component | Description |
 |--------|-------------|-------------|
 | Water Temperature | `sensor` | Current water temp |
 | Set Temperature | `number` | Target temperature |
 | Heating State | `binary_sensor` | Is the heater active |
-| Pump 1/2/3 | `switch` | On/Off toggle |
-| Light | `light` | On/Off |
+| Pump 1–6 | `switch` | On/Off toggle (6 pumps) |
+| Light 1–4 | `light` | On/Off (4 light zones) |
 | Blower | `fan` | On/Off |
 | Heat Mode | `select` | Ready / Rest / Ready-in-Rest |
-| Circulation Pump | `switch` | Circ pump status |
+| Circulation Pump | `switch` | Circ pump toggle |
 | Temperature Range | `select` | High / Low |
 | Hold Mode | `switch` | Hold mode toggle |
-| Mister | `switch` | Mister status |
+| Mister | `switch` | Mister toggle |
+| AUX 1 / AUX 2 | `switch` | Optimistic switches (no state feedback) |
+| Soak Mode | `switch` | Optimistic switch |
+| Normal Operation | `switch` | Optimistic switch |
+| Clear Notification | `switch` | Optimistic switch |
 | Fault | `sensor` | Last fault code |
+| Diagnostics | `sensor` | Diagnostic counters (entity_category: diagnostic) |
+| Alert | `sensor` | Alert messages (entity_category: diagnostic) |
 
 ## OTA Update Flow
 

@@ -101,14 +101,20 @@ Bad updates auto-rollback — if the new firmware crashes before connecting to M
 | Set Temperature | Number | Target temp |
 | Heat Mode | Select | Ready / Rest / Ready-in-Rest |
 | Temperature Range | Select | High / Low |
-| Pump 1 / 2 / 3 | Switch | Toggle pumps |
-| Light | Light | Toggle spa light |
+| Pump 1–6 | Switch | Toggle pumps |
+| Light 1–4 | Light | Toggle spa lights |
 | Blower | Fan | Toggle blower |
 | Circ Pump | Switch | Circ pump state |
 | Mister | Switch | Mister state |
 | Hold Mode | Switch | Hold mode |
+| AUX 1 / AUX 2 | Switch | Auxiliary toggles |
+| Soak Mode | Switch | Soak mode |
+| Normal Operation | Switch | Return to normal |
+| Clear Notification | Switch | Clear alerts |
 | Heating | Binary Sensor | Heater active |
 | Fault | Sensor | Last fault code |
+| Diagnostics | Sensor | Uptime and counters |
+| Alert | Sensor | Active alerts |
 
 ## Safety
 
@@ -123,7 +129,7 @@ Bad updates auto-rollback — if the new firmware crashes before connecting to M
 |-------|-------------|
 | `launa-protocol` | Balboa protocol parser, CRC-8, frame codec, status/command types |
 | `launa-hal` | Hardware abstraction traits (async Transport, Clock) with mock impls for desktop testing |
-| `launa-mqtt` | MQTT topics, HA discovery builder (20 entities), command parser, state serialization, packet extraction |
+| `launa-mqtt` | MQTT topics, HA discovery builder (27 entities), command parser, state serialization, MQTT v5 codec |
 | `launa-ota` | OTA update trait with mock for testing |
 | `launa-esp-ota` | ESP32 OTA using esp-storage with CRC-32 verification and dual-partition management |
 | `launa-core` | SpaApp: extracted app logic (registration, command tracking, stale detection, diagnostics) |

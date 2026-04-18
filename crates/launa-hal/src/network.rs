@@ -5,6 +5,10 @@ pub trait Network {
     fn tcp_connect(&mut self, addr: &str, port: u16) -> Result<Box<dyn TcpSocket>, NetworkError>;
 }
 
+/// TCP socket abstraction for network communication.
+///
+/// Used by the MQTT client to send/receive data over a TCP connection.
+/// Implementations wrap platform-specific socket APIs.
 pub trait TcpSocket {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, NetworkError>;
     fn write(&mut self, data: &[u8]) -> Result<(), NetworkError>;

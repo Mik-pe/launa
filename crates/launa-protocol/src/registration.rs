@@ -7,17 +7,28 @@
 /// 3. Spa replies `FE BF 02 <ID>` — assigned ID
 /// 4. Client acknowledges `<ID> BF 03`
 
+/// Client ID registration state.
+///
+/// Tracks the current phase of the RS-485 bus registration handshake:
+/// waiting for the spa to query → waiting for ID assignment → registered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegistrationState {
+    /// Waiting for the spa to send the new-client query frame.
     WaitingForQuery,
+    /// Client has requested an ID; waiting for the spa to assign one.
     WaitingForAssignment,
+    /// Registration complete; the client has been assigned an ID.
     Registered { client_id: u8 },
 }
 
+/// Action to take during the registration handshake.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistrationAction {
+    /// Respond with an ID request frame.
     SendIdRequest,
+    /// Acknowledge the assigned client ID.
     SendIdAck { client_id: u8 },
+    /// No action needed.
     None,
 }
 

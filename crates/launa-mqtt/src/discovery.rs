@@ -1,6 +1,6 @@
 //! Home Assistant MQTT auto-discovery message generation.
 //!
-//! Generates JSON discovery payloads for 20 HA entities using `alloc` only
+//! Generates JSON discovery payloads for 27 HA entities using `alloc` only
 //! (no serde_json dependency), so this works in `no_std` environments.
 
 extern crate alloc;
@@ -20,6 +20,11 @@ pub struct DiscoveryMessage {
     pub retain: bool,
 }
 
+/// Generates Home Assistant MQTT auto-discovery config payloads for a spa device.
+///
+/// Produces 27 discovery messages covering sensors, switches, lights, fans,
+/// selects, numbers, and binary sensors. Each message is a JSON config payload
+/// with its corresponding MQTT topic.
 pub struct DiscoveryBuilder {
     device_id: String,
     device_name: String,

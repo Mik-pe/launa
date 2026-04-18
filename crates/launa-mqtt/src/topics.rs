@@ -12,6 +12,11 @@ pub const AVAILABILITY_ONLINE: &str = "online";
 /// Payload published to the availability topic when the device is offline.
 pub const AVAILABILITY_OFFLINE: &str = "offline";
 
+/// Builds MQTT topic paths for a specific spa device.
+///
+/// All topics follow the pattern `launa/<device_id>/...` for state, commands,
+/// and availability. Discovery topics follow the Home Assistant convention
+/// `homeassistant/<component>/<device_id>/<object_id>/config`.
 pub struct TopicBuilder {
     device_id: String,
 }
@@ -71,7 +76,8 @@ impl TopicBuilder {
 }
 
 /// MQTT Last Will and Testament (LWT) configuration.
-/// The MQTT broker publishes the offline payload to the availability topic
+///
+/// The broker publishes the offline payload to the availability topic
 /// if the device disconnects ungracefully.
 pub struct LwtConfig {
     pub topic: String,

@@ -71,6 +71,9 @@ pub enum Command {
     NothingToSend { client_id: u8 },
 }
 
+/// Toggleable spa component — used in toggle commands and pump timers.
+///
+/// Each variant maps to a specific bit in the Balboa toggle command payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToggleItem {
     Pump1,
@@ -172,6 +175,7 @@ impl ToggleItem {
     }
 }
 
+/// Settings page type — determines which configuration response is requested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsType {
     Panel,
