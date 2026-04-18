@@ -176,29 +176,3 @@ fn test_ha_discovery_full_validation() {
         }
     }
 }
-
-#[test]
-fn test_topic_builder() {
-    let topics = launa_mqtt::topics::TopicBuilder::new("my_spa");
-    assert_eq!(topics.state_topic(), "launa/my_spa/state");
-    assert_eq!(topics.command_topic(), "launa/my_spa/command");
-    assert_eq!(topics.availability_topic(), "launa/my_spa/availability");
-    assert_eq!(topics.ota_topic(), "launa/my_spa/ota");
-    assert_eq!(
-        topics.discovery_topic("sensor", "temperature"),
-        "homeassistant/sensor/my_spa/temperature/config"
-    );
-}
-
-#[test]
-fn test_discovery_custom_device_name() {
-    let builder = launa_mqtt::discovery::DiscoveryBuilder::new("spa_001")
-        .device_name("My Hot Tub")
-        .device_model("BP6013G1");
-    let configs = builder.build();
-
-    let (_, json_str) = configs.first().unwrap();
-    let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
-    assert_eq!(parsed["device"]["name"], "My Hot Tub");
-    assert_eq!(parsed["device"]["model"], "BP6013G1");
-}

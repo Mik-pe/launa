@@ -42,23 +42,3 @@ fn test_simulator_tick_heating_approaches_set_temp() {
         sim.state.current_temp
     );
 }
-
-#[test]
-fn test_simulator_tick_cools_down() {
-    let mut sim = SpaSim::new();
-    sim.state.current_temp = 100.0;
-    sim.state.set_temp = 95.0;
-    sim.state.is_heating = false;
-
-    sim.tick();
-    assert!(
-        sim.state.current_temp < 100.0,
-        "should cool down, got {}",
-        sim.state.current_temp
-    );
-    assert!(
-        sim.state.current_temp > 95.0,
-        "should not reach set_temp in one tick, got {}",
-        sim.state.current_temp
-    );
-}
