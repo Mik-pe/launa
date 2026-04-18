@@ -1,0 +1,34 @@
+{
+  "featureId": "update-documentation",
+  "reviewedAt": "2026-04-18T08:30:00.000Z",
+  "commitId": "ed3bd36",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Comprehensive documentation update covering all 5 sub-tasks: (1) architecture.md updated with all 9 workspace crates + xtask + app/ including detailed module listings; (2) HA entity count corrected to 27 across AGENTS.md (was 14), README.md (was 20), and discovery.rs module doc (was 20); (3) README.md crate table updated to reflect final module structure; (4) /// doc comments added to 12 public types across launa-protocol (HeatingMode, TemperatureScale, TempRange, PumpState, ToggleItem, SettingsType, RegistrationState, RegistrationAction), launa-mqtt (TopicBuilder, DiscoveryBuilder), and launa-hal (TcpSocket); PumpTimer/PumpTimerManager/HoldModeTimer in launa-core already had doc comments. All module listings in architecture.md cross-verified against actual source file structure — all accurate.",
+    "issues": [
+      {
+        "file": "docs/architecture.md",
+        "line": 12,
+        "severity": "non_blocking",
+        "description": "The high-level architecture ASCII diagram does not show launa-core, which sits between launa-protocol and launa-mqtt/launa-hal conceptually. The diagram shows the old 4-crate structure (protocol, hal, mqtt, ota). This is a minor cosmetic gap — the detailed Crate Structure section below it correctly lists all crates. Updating the diagram was not part of this feature's scope (it would require a meaningful redesign of the ASCII art)."
+      },
+      {
+        "file": "docs/architecture.md",
+        "line": 140,
+        "severity": "non_blocking",
+        "description": "architecture.md app/ section lists 14 modules but omits macros.rs (an internal helper with macro_rules). This is a reasonable omission — macros.rs is not a user-facing module, just an internal implementation detail. Not a real gap."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The feature description specified adding doc comments to LwtConfig in launa-mqtt. The worker noted LwtConfig already had a doc comment and only reformatted it (split the single-line doc into a two-line /// + /// format). This is correct behavior — no actual gap, just noting the feature description listed a type that was already documented.",
+      "evidence": "crates/launa-mqtt/src/topics.rs:78 — LwtConfig already had /// doc comment, worker reformatted to multi-line style"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS — All documentation updates are complete, accurate, and verified. The 27 entity count is verified against the actual discovery.rs build_messages() function (which pushes exactly 27 config entries: 1 sensor + 1 number + 1 binary_sensor + 6 pump switches + 4 lights + 1 fan + 1 select + 1 switch + 1 select + 1 switch + 5 optimistic switches + 1 switch + 3 sensors). All module listings in architecture.md match the actual source file structure. Doc comments are present on all specified public types. cargo doc --workspace builds without errors, and all tests pass."
+}
