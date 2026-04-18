@@ -155,56 +155,123 @@ fn test_filter_cycles_round_trip() {
 #[test]
 fn test_toggle_pump1_command() {
     let mut sim = SpaSim::new();
-    assert_eq!(sim.state.pumps[0], PumpState::Off);
+    let mut decoder = FrameDecoder::new();
+
+    // Verify initial state through decoded status frame
+    let status_bytes = sim.generate_status_frame();
+    let status_frames = decoder.feed_slice(&status_bytes);
+    let msg = dispatch_frame(&status_frames[0]);
+    if let IncomingMessage::StatusUpdate(s) = msg {
+        assert_eq!(s.pumps[0], PumpState::Off);
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     let (mt, payload) = Command::ToggleItem(ToggleItem::Pump1).encode();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
-    let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&encoded);
     let frame = &frames[0];
 
     sim.process_frame(frame);
-    assert_eq!(sim.state.pumps[0], PumpState::Low);
+    // Verify through decoded status: Off → Low
+    let status_bytes = sim.generate_status_frame();
+    let status_frames = decoder.feed_slice(&status_bytes);
+    let msg = dispatch_frame(&status_frames[0]);
+    if let IncomingMessage::StatusUpdate(s) = msg {
+        assert_eq!(s.pumps[0], PumpState::Low);
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     sim.process_frame(frame);
-    assert_eq!(sim.state.pumps[0], PumpState::High);
+    // Verify through decoded status: Low → High
+    let status_bytes = sim.generate_status_frame();
+    let status_frames = decoder.feed_slice(&status_bytes);
+    let msg = dispatch_frame(&status_frames[0]);
+    if let IncomingMessage::StatusUpdate(s) = msg {
+        assert_eq!(s.pumps[0], PumpState::High);
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     sim.process_frame(frame);
-    assert_eq!(sim.state.pumps[0], PumpState::Off);
+    // Verify through decoded status: High → Off
+    let status_bytes = sim.generate_status_frame();
+    let status_frames = decoder.feed_slice(&status_bytes);
+    let msg = dispatch_frame(&status_frames[0]);
+    if let IncomingMessage::StatusUpdate(s) = msg {
+        assert_eq!(s.pumps[0], PumpState::Off);
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 }
 
 #[test]
 fn test_toggle_light_command() {
     let mut sim = SpaSim::new();
-    assert!(!sim.state.lights[0]);
+    let mut decoder = FrameDecoder::new();
+
+    // Verify initial state through decoded status frame
+    let status_bytes = sim.generate_status_frame();
+    let status_frames = decoder.feed_slice(&status_bytes);
+    let msg = dispatch_frame(&status_frames[0]);
+    if let IncomingMessage::StatusUpdate(s) = msg {
+        assert!(!s.lights[0]);
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     let (mt, payload) = Command::ToggleItem(ToggleItem::Light1).encode();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
-    let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&encoded);
     let frame = &frames[0];
 
     sim.process_frame(frame);
-    assert!(sim.state.lights[0]);
+    // Verify through decoded status: light on
+    let status_bytes = sim.generate_status_frame();
+    let status_frames = decoder.feed_slice(&status_bytes);
+    let msg = dispatch_frame(&status_frames[0]);
+    if let IncomingMessage::StatusUpdate(s) = msg {
+        assert!(s.lights[0]);
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     sim.process_frame(frame);
-    assert!(!sim.state.lights[0]);
+    // Verify through decoded status: light off
+    let status_bytes = sim.generate_status_frame();
+    let status_frames = decoder.feed_slice(&status_bytes);
+    let msg = dispatch_frame(&status_frames[0]);
+    if let IncomingMessage::StatusUpdate(s) = msg {
+        assert!(!s.lights[0]);
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 }
 
 #[test]
 fn test_set_temperature_command() {
     let mut sim = SpaSim::new();
-    assert_eq!(sim.state.set_temp, 104.0);
+    let mut decoder = FrameDecoder::new();
+
+    // Verify initial state through decoded status frame
+    let status_bytes = sim.generate_status_frame();
+    let status_frames = decoder.feed_slice(&status_bytes);
+    let msg = dispatch_frame(&status_frames[0]);
+    if let IncomingMessage::StatusUpdate(s) = msg {
+        assert_eq!(s.set_temp, 104.0);
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     let (mt, payload) = Command::SetTemperature(100).encode();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
-    let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&encoded);
     let frame = &frames[0];
 
     sim.process_frame(frame);
-    assert_eq!(sim.state.set_temp, 100.0);
 
+    // Verify through decoded status frame
     let status_encoded = sim.generate_status_frame();
     let status_frames = decoder.feed_slice(&status_encoded);
     let msg = dispatch_frame(&status_frames[0]);
@@ -292,6 +359,8 @@ fn test_unknown_0abf_subtype() {
 #[test]
 fn test_status_unknown_temp() {
     let mut sim = SpaSim::new();
+    // Rationale: sim.state.current_temp is test input to configure unknown temp (255).
+    // Verification is through the decoded status frame's current_temp being None.
     sim.state.current_temp = 255.0;
 
     let encoded = sim.generate_status_frame();
@@ -310,6 +379,8 @@ fn test_status_unknown_temp() {
 #[test]
 fn test_status_max_temp() {
     let mut sim = SpaSim::new();
+    // Rationale: sim.state fields are test inputs for boundary values.
+    // Verification is through the decoded status frame.
     sim.state.current_temp = 254.0;
     sim.state.set_temp = 254.0;
 
@@ -330,6 +401,8 @@ fn test_status_max_temp() {
 #[test]
 fn test_status_min_temp() {
     let mut sim = SpaSim::new();
+    // Rationale: sim.state fields are test inputs for boundary values.
+    // Verification is through the decoded status frame.
     sim.state.current_temp = 1.0;
     sim.state.set_temp = 1.0;
 
@@ -350,6 +423,8 @@ fn test_status_min_temp() {
 #[test]
 fn test_celsius_status_values() {
     let mut sim = SpaSim::new();
+    // Rationale: sim.state fields are test inputs for Celsius configuration.
+    // Verification is through the decoded status frame.
     sim.state.temp_scale = TemperatureScale::Celsius;
     sim.state.current_temp = 38.0;
     sim.state.set_temp = 40.0;
@@ -402,39 +477,68 @@ fn test_config_payload_too_short() {
 #[test]
 fn test_toggle_all_items() {
     let mut sim = SpaSim::new();
+    let mut decoder = FrameDecoder::new();
 
     let toggles = [ToggleItem::Pump1, ToggleItem::Pump2, ToggleItem::Pump3];
 
     for item in &toggles {
         let (mt, payload) = Command::ToggleItem(*item).encode();
         let encoded = FrameEncoder::encode(mt, &payload).unwrap();
-        let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&encoded);
         sim.process_frame(&frames[0]);
     }
 
-    assert_eq!(sim.state.pumps[0], PumpState::Low);
-    assert_eq!(sim.state.pumps[1], PumpState::Low);
-    assert_eq!(sim.state.pumps[2], PumpState::Low);
+    // Verify pump states through decoded status frame
+    let status_bytes = sim.generate_status_frame();
+    let status_frames = decoder.feed_slice(&status_bytes);
+    let msg = dispatch_frame(&status_frames[0]);
+    if let IncomingMessage::StatusUpdate(s) = msg {
+        assert_eq!(s.pumps[0], PumpState::Low);
+        assert_eq!(s.pumps[1], PumpState::Low);
+        assert_eq!(s.pumps[2], PumpState::Low);
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     let (mt, payload) = Command::ToggleItem(ToggleItem::Blower).encode();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
-    let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&encoded);
     sim.process_frame(&frames[0]);
-    assert!(sim.state.blower);
+    // Verify blower through decoded status
+    let status_bytes = sim.generate_status_frame();
+    let status_frames = decoder.feed_slice(&status_bytes);
+    let msg = dispatch_frame(&status_frames[0]);
+    if let IncomingMessage::StatusUpdate(s) = msg {
+        assert!(s.blower);
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     let (mt, payload) = Command::ToggleItem(ToggleItem::HeatingMode).encode();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
-    let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&encoded);
     sim.process_frame(&frames[0]);
-    assert_eq!(sim.state.heating_mode, HeatingMode::Rest);
+    // Verify heating mode through decoded status
+    let status_bytes = sim.generate_status_frame();
+    let status_frames = decoder.feed_slice(&status_bytes);
+    let msg = dispatch_frame(&status_frames[0]);
+    if let IncomingMessage::StatusUpdate(s) = msg {
+        assert_eq!(s.heating_mode, HeatingMode::Rest);
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     let (mt, payload) = Command::ToggleItem(ToggleItem::TemperatureRange).encode();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
-    let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&encoded);
     sim.process_frame(&frames[0]);
-    assert_eq!(sim.state.temp_range, TempRange::Low);
+    // Verify temp range through decoded status
+    let status_bytes = sim.generate_status_frame();
+    let status_frames = decoder.feed_slice(&status_bytes);
+    let msg = dispatch_frame(&status_frames[0]);
+    if let IncomingMessage::StatusUpdate(s) = msg {
+        assert_eq!(s.temp_range, TempRange::Low);
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 }

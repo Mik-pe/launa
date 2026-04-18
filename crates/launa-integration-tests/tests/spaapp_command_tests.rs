@@ -46,6 +46,8 @@ fn test_spaapp_command_ack_and_confirmation() {
     assert_eq!(app.queued_command_count(), 0);
 
     let mut sim = SpaSim::new();
+    // Rationale: sim.state is test setup to create a confirming status frame —
+    // the pump being on in sim is an input, verified through decoded status.
     sim.state.pumps[0] = PumpState::Low;
     let status_frame = decode_first_frame(&sim.generate_status_frame());
 
@@ -272,6 +274,8 @@ fn test_spaapp_concurrent_operations() {
     assert_eq!(app.queued_command_count(), 0);
 
     let mut sim = SpaSim::new();
+    // Rationale: sim.state fields are test setup to create a confirming status
+    // frame that reflects all three command results simultaneously.
     sim.state.pumps[0] = PumpState::Low;
     sim.state.set_temp = 102.0;
     sim.state.heating_mode = HeatingMode::Rest;
@@ -350,6 +354,8 @@ fn test_spaapp_24_hour_smoke() {
     let mut diag_count: u32 = 0;
     let mut sim = SpaSim::new();
 
+    // Rationale: sim.state.pumps is test setup — pump on creates a realistic
+    // thermal model in the 24h smoke test; verified through SpaApp status.
     sim.state.pumps[0] = PumpState::Low;
 
     for _ in 0..1000 {

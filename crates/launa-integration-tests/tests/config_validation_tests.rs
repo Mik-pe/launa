@@ -504,11 +504,7 @@ fn test_temp_boundary_validation_through_mqtt_parser() {
 fn test_scale_switch_f_to_c_wire_values_2x() {
     let mut sim = SpaSim::new();
 
-    // Start in Fahrenheit, set_temp=104°F
-    assert_eq!(sim.state.temp_scale, TemperatureScale::Fahrenheit);
-    assert_eq!(sim.state.set_temp, 104.0);
-
-    // Generate status frame in Fahrenheit — set_temp wire value should be 104
+    // Verify initial Fahrenheit state through decoded status frame (not sim.state)
     let status_bytes_f = sim.generate_status_frame();
     let mut decoder = FrameDecoder::new();
     let frames_f = decoder.feed_slice(&status_bytes_f);
@@ -523,8 +519,9 @@ fn test_scale_switch_f_to_c_wire_values_2x() {
     }
 
     // Switch to Celsius
+    // Rationale: sim.state fields are test scenario setup inputs for mid-session
+    // scale switching — verification is through decoded status frames below.
     sim.state.temp_scale = TemperatureScale::Celsius;
-    // Set temperature to 40°C
     sim.state.set_temp = 40.0;
 
     // Generate status frame in Celsius — set_temp wire value should be 80 (40*2)
@@ -562,6 +559,8 @@ fn test_scale_switch_f_to_c_mqtt_state() {
     }
 
     // Switch sim to Celsius mid-session
+    // Rationale: sim.state fields are test scenario setup for mid-session scale switch.
+    // Verification is through the MQTT JSON state published by the broker.
     harness.sim.state.temp_scale = TemperatureScale::Celsius;
     harness.sim.state.set_temp = 38.0; // 38°C
     harness.sim.state.current_temp = 36.0; // 36°C
@@ -649,6 +648,8 @@ fn test_scale_switch_f_to_c_e2e_pipeline() {
     );
 
     // Switch sim to Celsius mid-session
+    // Rationale: sim.state fields are test scenario setup for mid-session scale switch.
+    // Verification is through the PublishState action carrying Celsius values.
     harness.sim.state.temp_scale = TemperatureScale::Celsius;
     harness.sim.state.set_temp = 38.0;
     harness.sim.state.current_temp = 36.0;

@@ -255,6 +255,8 @@ fn test_hold_mode_auto_release() {
     harness.collect_actions();
 
     // Put sim into hold mode
+    // Rationale: sim.state.hold is test setup to configure the hold mode scenario.
+    // Verification is through the hold timer firing an auto-off toggle.
     harness.sim.state.hold = true;
 
     // Tick to get a status with hold active — this starts the hold timer
@@ -300,6 +302,7 @@ fn test_hold_mode_auto_release() {
     );
 
     // Release hold mode — timer should re-arm
+    // Rationale: sim.state.hold is test setup to trigger hold timer reset.
     harness.sim.state.hold = false;
     harness.collect_actions();
 
@@ -535,12 +538,19 @@ fn test_dropped_commands_retry_and_drop() {
         "command should be dropped after max retries"
     );
 
-    // Pump state should never have changed in the sim
-    assert_eq!(
-        harness.sim.state.pumps[0],
-        PumpState::Off,
-        "pump should remain off — sim dropped all commands"
-    );
+    // Pump state should never have changed — verify through decoded status frame
+    let status_bytes = harness.sim.generate_status_frame();
+    let status_frames = harness.decoder.feed_slice(&status_bytes);
+    let status_msg = launa_protocol::dispatcher::dispatch_frame(&status_frames[0]);
+    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = status_msg {
+        assert_eq!(
+            s.pumps[0],
+            PumpState::Off,
+            "pump should remain off — sim dropped all commands"
+        );
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 }
 
 // Test 10: VAL-IT-015 — Bus silence mid-session → stale lifecycle
@@ -720,12 +730,19 @@ fn test_spontaneous_filter_cycle_while_command_pending() {
         harness.collect_actions();
     }
 
-    // Pump 1 should be on from the spontaneous filter cycle
-    assert_eq!(
-        harness.sim.state.pumps[0],
-        PumpState::Low,
-        "pump1 should be on from spontaneous filter cycle"
-    );
+    // Pump 1 should be on from the spontaneous filter cycle — verify through decoded status
+    let status_bytes = harness.sim.generate_status_frame();
+    let status_frames = harness.decoder.feed_slice(&status_bytes);
+    let status_msg = launa_protocol::dispatcher::dispatch_frame(&status_frames[0]);
+    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = status_msg {
+        assert_eq!(
+            s.pumps[0],
+            PumpState::Low,
+            "pump1 should be on from spontaneous filter cycle"
+        );
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     // Now feed a status that shows pump2 still off (the command for pump2
     // hasn't been confirmed yet). The tracker should only confirm based on
@@ -738,6 +755,7 @@ fn test_spontaneous_filter_cycle_while_command_pending() {
     let _actions = harness.collect_actions();
 
     // Now manually toggle pump2 in the sim to confirm our command
+    // Rationale: sim.state setup to create a confirming status frame for the command tracker.
     harness.sim.state.pumps[1] = PumpState::Low;
 
     // Get the next status — pump2 is now on, confirming our command
@@ -1240,12 +1258,19 @@ fn test_combined_stress_7_phase() {
         harness.process_outgoing(&actions);
     }
 
-    // Verify at least pump1 changed (commands were processed)
-    assert!(
-        matches!(harness.sim.state.pumps[0], PumpState::Low | PumpState::High),
-        "Phase 2: pump1 should be on (got {:?})",
-        harness.sim.state.pumps[0]
-    );
+    // Verify at least pump1 changed (commands were processed) — through decoded status
+    let check_bytes = harness.sim.generate_status_frame();
+    let check_frames = harness.decoder.feed_slice(&check_bytes);
+    let check_msg = launa_protocol::dispatcher::dispatch_frame(&check_frames[0]);
+    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = check_msg {
+        assert!(
+            matches!(s.pumps[0], PumpState::Low | PumpState::High),
+            "Phase 2: pump1 should be on (got {:?})",
+            s.pumps[0]
+        );
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     harness.sim.simulate_fault_state(FaultCode::WaterTooHot);
     let fault_actions = harness.collect_actions();
@@ -1334,12 +1359,19 @@ fn test_combined_stress_7_phase() {
     let cmd_actions = harness.collect_actions();
     harness.process_outgoing(&cmd_actions);
 
-    // Verify command took effect
-    assert!(
-        matches!(harness.sim.state.pumps[1], PumpState::Low | PumpState::High),
-        "Phase 7: pump2 should be on after post-reboot command (got {:?})",
-        harness.sim.state.pumps[1]
-    );
+    // Verify command took effect — through decoded status frame
+    let verify_bytes = harness.sim.generate_status_frame();
+    let verify_frames = harness.decoder.feed_slice(&verify_bytes);
+    let verify_msg = launa_protocol::dispatcher::dispatch_frame(&verify_frames[0]);
+    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = verify_msg {
+        assert!(
+            matches!(s.pumps[1], PumpState::Low | PumpState::High),
+            "Phase 7: pump2 should be on after post-reboot command (got {:?})",
+            s.pumps[1]
+        );
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     // No state leaks between phases — verify clean final state
     assert!(harness.app.is_registered());

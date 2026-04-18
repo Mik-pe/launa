@@ -269,11 +269,18 @@ fn test_power_cycle_mid_command_no_stuck_commands() {
     // Get status with pump running
     h.collect_actions();
 
-    // Verify pump is on
-    assert!(
-        matches!(h.sim.state.pumps[0], PumpState::Low | PumpState::High),
-        "pump1 should be on after timer start"
-    );
+    // Verify pump is on through decoded status frame
+    let status_bytes = h.sim.generate_status_frame();
+    let status_frames = h.decoder.feed_slice(&status_bytes);
+    let status_msg = launa_protocol::dispatcher::dispatch_frame(&status_frames[0]);
+    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = status_msg {
+        assert!(
+            matches!(s.pumps[0], PumpState::Low | PumpState::High),
+            "pump1 should be on after timer start"
+        );
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     // Queue a command
     h.send_command(Command::ToggleItem(ToggleItem::Light1));
@@ -339,10 +346,18 @@ fn test_power_cycle_mid_command_no_stuck_commands() {
         h.collect_actions();
     }
 
-    assert!(
-        matches!(h.sim.state.pumps[1], PumpState::Low | PumpState::High),
-        "pump2 should respond to new command after re-registration"
-    );
+    // Verify pump2 state through decoded status frame
+    let status_bytes = h.sim.generate_status_frame();
+    let status_frames = h.decoder.feed_slice(&status_bytes);
+    let status_msg = launa_protocol::dispatcher::dispatch_frame(&status_frames[0]);
+    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = status_msg {
+        assert!(
+            matches!(s.pumps[1], PumpState::Low | PumpState::High),
+            "pump2 should respond to new command after re-registration"
+        );
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 }
 
 // Test 4: Hold mode + pump timer interaction (VAL-TEST-012)
@@ -358,13 +373,22 @@ fn test_hold_mode_and_pump_timer_fire_independently() {
     h.process_outgoing(&start_actions);
     h.collect_actions();
 
-    // Verify pump1 is on
-    assert!(
-        matches!(h.sim.state.pumps[0], PumpState::Low | PumpState::High),
-        "pump1 should be on after timer start"
-    );
+    // Verify pump1 is on through decoded status frame
+    let status_bytes = h.sim.generate_status_frame();
+    let status_frames = h.decoder.feed_slice(&status_bytes);
+    let status_msg = launa_protocol::dispatcher::dispatch_frame(&status_frames[0]);
+    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = status_msg {
+        assert!(
+            matches!(s.pumps[0], PumpState::Low | PumpState::High),
+            "pump1 should be on after timer start"
+        );
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     // Enter hold mode in the sim
+    // Rationale: sim.state.hold is test setup to configure the hold mode scenario.
+    // Verification is through PublishState actions carrying is_hold=true.
     h.sim.state.hold = true;
     let hold_actions = h.collect_actions();
 
@@ -443,19 +467,26 @@ fn test_multiple_pump_timers_independent() {
     h.collect_actions();
     h.collect_actions();
 
-    // Verify all 3 pumps are on
-    assert!(
-        matches!(h.sim.state.pumps[0], PumpState::Low | PumpState::High),
-        "pump1 should be on"
-    );
-    assert!(
-        matches!(h.sim.state.pumps[1], PumpState::Low | PumpState::High),
-        "pump2 should be on"
-    );
-    assert!(
-        matches!(h.sim.state.pumps[2], PumpState::Low | PumpState::High),
-        "pump3 should be on"
-    );
+    // Verify all 3 pumps are on through decoded status frame
+    let status_bytes = h.sim.generate_status_frame();
+    let status_frames = h.decoder.feed_slice(&status_bytes);
+    let status_msg = launa_protocol::dispatcher::dispatch_frame(&status_frames[0]);
+    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = status_msg {
+        assert!(
+            matches!(s.pumps[0], PumpState::Low | PumpState::High),
+            "pump1 should be on"
+        );
+        assert!(
+            matches!(s.pumps[1], PumpState::Low | PumpState::High),
+            "pump2 should be on"
+        );
+        assert!(
+            matches!(s.pumps[2], PumpState::Low | PumpState::High),
+            "pump3 should be on"
+        );
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     // Phase 1: Advance past pump2 timer (3 min) — only pump2 should auto-off
     h.advance_ms(3 * 60 * 1000 + 1_000);
@@ -517,18 +548,22 @@ fn test_pump_timer_cancels_on_mqtt_toggle_off() {
     h.process_outgoing(&start_actions);
     h.collect_actions();
 
-    // Verify pump1 is on
-    assert!(
-        matches!(h.sim.state.pumps[0], PumpState::Low | PumpState::High),
-        "pump1 should be on after timer start"
-    );
+    // Verify pump1 is on through decoded status frame
+    let status_bytes = h.sim.generate_status_frame();
+    let status_frames = h.decoder.feed_slice(&status_bytes);
+    let status_msg = launa_protocol::dispatcher::dispatch_frame(&status_frames[0]);
+    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = status_msg {
+        assert!(
+            matches!(s.pumps[0], PumpState::Low | PumpState::High),
+            "pump1 should be on after timer start"
+        );
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     // Advance 2 minutes (well within the 5-min timer)
     h.advance_ms(2 * 60 * 1000);
     h.collect_actions();
-
-    // Verify no auto-off yet
-    // (The timer hasn't expired)
 
     // Now manually toggle pump1 OFF via MQTT command
     h.send_command(Command::ToggleItem(ToggleItem::Pump1));
@@ -540,18 +575,18 @@ fn test_pump_timer_cancels_on_mqtt_toggle_off() {
     // Additional tick to confirm pump is off in sim
     h.collect_actions();
 
-    // The pump should now be off in the sim
-    // (The sim toggled it off via the command we sent)
-    // Note: pump was Low, toggling once → High, toggling again → Off
-    // The timer started it at Low. One toggle → High. We need to make sure
-    // the sim has pump off. The toggle item cycles Off→Low→High→Off.
-    // Since the timer start set it to Low (first toggle), one MQTT toggle → High.
-    // We may need 2 toggles to get to Off. But the PumpTimer.tick() checks
-    // if the pump is NOT on (not Low/High), and if so, cancels the timer.
-    // Let's verify the current state and toggle more if needed:
+    // The pump should now be off in the sim.
+    // The toggle item cycles Off→Low→High→Off. The timer started it at Low,
+    // one MQTT toggle → High. We may need additional toggles to reach Off.
+    // Verify through decoded status frame and toggle more if needed.
     for _ in 0..3 {
-        if h.sim.state.pumps[0] == PumpState::Off {
-            break;
+        let check_bytes = h.sim.generate_status_frame();
+        let check_frames = h.decoder.feed_slice(&check_bytes);
+        let check_msg = launa_protocol::dispatcher::dispatch_frame(&check_frames[0]);
+        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = check_msg {
+            if s.pumps[0] == PumpState::Off {
+                break;
+            }
         }
         h.send_command(Command::ToggleItem(ToggleItem::Pump1));
         let actions = h.collect_actions();
@@ -559,11 +594,19 @@ fn test_pump_timer_cancels_on_mqtt_toggle_off() {
         h.collect_actions();
     }
 
-    assert_eq!(
-        h.sim.state.pumps[0],
-        PumpState::Off,
-        "pump1 should be off after MQTT toggle-off"
-    );
+    // Verify pump is off through decoded status frame
+    let status_bytes = h.sim.generate_status_frame();
+    let status_frames = h.decoder.feed_slice(&status_bytes);
+    let status_msg = launa_protocol::dispatcher::dispatch_frame(&status_frames[0]);
+    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = status_msg {
+        assert_eq!(
+            s.pumps[0],
+            PumpState::Off,
+            "pump1 should be off after MQTT toggle-off"
+        );
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     // Now advance past the original timer expiry (5 min)
     h.advance_ms(5 * 60 * 1000);
@@ -578,12 +621,19 @@ fn test_pump_timer_cancels_on_mqtt_toggle_off() {
         "pump timer should be cancelled — no auto-off toggle after MQTT toggle-off"
     );
 
-    // Pump should remain off (no spurious re-toggle)
-    assert_eq!(
-        h.sim.state.pumps[0],
-        PumpState::Off,
-        "pump1 should remain off (no spurious toggle from cancelled timer)"
-    );
+    // Pump should remain off — verify through decoded status frame
+    let final_bytes = h.sim.generate_status_frame();
+    let final_frames = h.decoder.feed_slice(&final_bytes);
+    let final_msg = launa_protocol::dispatcher::dispatch_frame(&final_frames[0]);
+    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = final_msg {
+        assert_eq!(
+            s.pumps[0],
+            PumpState::Off,
+            "pump1 should remain off (no spurious toggle from cancelled timer)"
+        );
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 }
 
 // Test 7: Rapid toggle race (4 toggles, parity) (VAL-TEST-013)
@@ -601,12 +651,15 @@ fn test_rapid_toggle_race_parity() {
     h.complete_registration(5);
     h.collect_actions();
 
-    // Verify initial state: pump1 = Off
-    assert_eq!(
-        h.sim.state.pumps[0],
-        PumpState::Off,
-        "pump1 should start Off"
-    );
+    // Verify initial state: pump1 = Off through decoded status frame
+    let status_bytes = h.sim.generate_status_frame();
+    let status_frames = h.decoder.feed_slice(&status_bytes);
+    let status_msg = launa_protocol::dispatcher::dispatch_frame(&status_frames[0]);
+    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = status_msg {
+        assert_eq!(s.pumps[0], PumpState::Off, "pump1 should start Off");
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     // Queue 4 rapid toggle commands
     h.send_command(Command::ToggleItem(ToggleItem::Pump1));
@@ -633,17 +686,19 @@ fn test_rapid_toggle_race_parity() {
         "command queue should be empty after draining"
     );
 
-    // Verify pump state is deterministic and NOT Off
-    // (4 toggles from Off in 3-state cycle should cycle through and land on a non-Off state,
-    //  but retries may add extra toggles. The key invariant is no panics and queue drains.)
-    // Note: The Balboa protocol uses 3-state cycling: Off→Low→High→Off
-    // With CommandTracker retries, we may get extra toggles. The final state is deterministic
-    // given the same conditions but may differ from a simple "4 toggles" count.
-    assert_ne!(
-        h.sim.state.pumps[0],
-        PumpState::Off,
-        "after 4+ toggles from Off, pump should NOT be Off (some toggle was effective)"
-    );
+    // Verify pump state through decoded status frame
+    let check_bytes = h.sim.generate_status_frame();
+    let check_frames = h.decoder.feed_slice(&check_bytes);
+    let check_msg = launa_protocol::dispatcher::dispatch_frame(&check_frames[0]);
+    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = check_msg {
+        assert_ne!(
+            s.pumps[0],
+            PumpState::Off,
+            "after 4+ toggles from Off, pump should NOT be Off (some toggle was effective)"
+        );
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     // Verify no command drops (all toggles were eventually sent)
     let drops = h.app.total_dropped();
@@ -653,7 +708,8 @@ fn test_rapid_toggle_race_parity() {
     );
 
     // Run the same scenario again to verify determinism
-    // Reset pump to Off
+    // Reset pump to Off — Rationale: sim.state setup to reset for determinism test.
+    // Verification is through decoded status frames.
     h.sim.state.pumps[0] = PumpState::Off;
     h.collect_actions(); // let app see pump off
     h.collect_actions(); // another tick for tracker to settle
@@ -689,8 +745,16 @@ fn test_rapid_temperature_race_last_wins() {
     h.complete_registration(5);
     h.collect_actions();
 
-    // Record initial set_temp
-    let initial_set_temp = h.sim.state.set_temp;
+    // Record initial set_temp through decoded status frame
+    let initial_status_bytes = h.sim.generate_status_frame();
+    let initial_status_frames = h.decoder.feed_slice(&initial_status_bytes);
+    let initial_msg = launa_protocol::dispatcher::dispatch_frame(&initial_status_frames[0]);
+    let initial_set_temp =
+        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = initial_msg {
+            s.set_temp
+        } else {
+            panic!("Expected StatusUpdate");
+        };
     assert_eq!(initial_set_temp, 104.0, "default set_temp should be 104");
 
     // Queue 3 rapid set_temperature commands: 100 → 104 → 102
@@ -717,14 +781,18 @@ fn test_rapid_temperature_race_last_wins() {
         "command queue should be empty after draining"
     );
 
-    // The LAST SetTemperature command should win — set_temp should be 102.
-    // Commands are dequeued FIFO: first SetTemperature(100), then SetTemperature(104),
-    // then SetTemperature(102). Each one updates the sim's set_temp.
-    // The sim processes them in order, so the final value is 102.
-    assert_eq!(
-        h.sim.state.set_temp, 102.0,
-        "final set_temp should be 102 (last queued value wins)"
-    );
+    // The LAST SetTemperature command should win — verify through decoded status frame
+    let final_status_bytes = h.sim.generate_status_frame();
+    let final_status_frames = h.decoder.feed_slice(&final_status_bytes);
+    let final_msg = launa_protocol::dispatcher::dispatch_frame(&final_status_frames[0]);
+    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = final_msg {
+        assert_eq!(
+            s.set_temp, 102.0,
+            "final set_temp should be 102 (last queued value wins)"
+        );
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     // Verify the status frame reflects the final temperature
     let status_bytes = h.sim.generate_status_frame();

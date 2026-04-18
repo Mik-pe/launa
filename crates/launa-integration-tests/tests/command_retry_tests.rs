@@ -236,13 +236,21 @@ fn test_spaapp_full_pipeline_register_status_command() {
         .expect("should send command on Ready");
 
     sim.process_incoming_bytes(&send_bytes);
-    assert_eq!(
-        sim.state.pumps[0],
-        PumpState::Low,
-        "sim should apply toggle"
-    );
 
+    // Verify sim applied the toggle through decoded status frame
     let status_bytes = sim.generate_status_frame();
+    let new_status_frame = decode_first_frame(&status_bytes);
+    let new_msg = launa_protocol::dispatcher::dispatch_frame(&new_status_frame);
+    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = new_msg {
+        assert_eq!(
+            s.pumps[0],
+            PumpState::Low,
+            "sim should apply toggle — pump1 should be Low in decoded status"
+        );
+    } else {
+        panic!("Expected StatusUpdate");
+    }
+
     let new_status_frame = decode_first_frame(&status_bytes);
     let _actions = app.process_frame(&new_status_frame);
 

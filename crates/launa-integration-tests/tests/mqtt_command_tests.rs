@@ -91,8 +91,8 @@ fn test_mqtt_command_to_frame_to_simulator() {
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&encoded);
     sim.process_frame(&frames[0]);
-    assert_eq!(sim.state.pumps[0], PumpState::Low);
 
+    // Verify through decoded status frame (observable output), not sim.state
     let status_encoded = sim.generate_status_frame();
     let status_frames = decoder.feed_slice(&status_encoded);
     let msg = dispatch_frame(&status_frames[0]);
@@ -122,8 +122,8 @@ fn test_mqtt_set_temperature_pipeline() {
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&encoded);
     sim.process_frame(&frames[0]);
-    assert_eq!(sim.state.set_temp, 102.0);
 
+    // Verify through decoded status frame (observable output), not sim.state
     let status_encoded = sim.generate_status_frame();
     let status_frames = decoder.feed_slice(&status_encoded);
     let msg = dispatch_frame(&status_frames[0]);
@@ -138,7 +138,17 @@ fn test_mqtt_set_temperature_pipeline() {
 #[test]
 fn test_command_round_trip_pump_toggle() {
     let mut sim = SpaSim::new();
-    assert_eq!(sim.state.pumps[0], PumpState::Off);
+
+    // Verify initial state through decoded status frame
+    let status_bytes = sim.generate_status_frame();
+    let mut decoder = FrameDecoder::new();
+    let status_frames = decoder.feed_slice(&status_bytes);
+    let msg = dispatch_frame(&status_frames[0]);
+    if let IncomingMessage::StatusUpdate(s) = msg {
+        assert_eq!(s.pumps[0], PumpState::Off, "pump1 should start Off");
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     let cmd = launa_mqtt::command_parser::parse_command_ok(
         "launa/spa/command",
@@ -150,20 +160,19 @@ fn test_command_round_trip_pump_toggle() {
     let (mt, payload) = cmd.encode();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
-    let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&encoded);
     sim.process_frame(&frames[0]);
 
-    assert_eq!(
-        sim.state.pumps[0],
-        PumpState::Low,
-        "pump1 should be on after toggle"
-    );
-
+    // Verify pump state through decoded status frame and MQTT JSON
     let status_bytes = sim.generate_status_frame();
     let status_frames = decoder.feed_slice(&status_bytes);
     let msg = dispatch_frame(&status_frames[0]);
     if let IncomingMessage::StatusUpdate(s) = msg {
+        assert_eq!(
+            s.pumps[0],
+            PumpState::Low,
+            "pump1 should be on after toggle"
+        );
         let json_str = launa_mqtt::state::status_to_json(&s, None, None);
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["pump1_on"], true);
@@ -190,7 +199,17 @@ fn test_command_round_trip_set_temperature() {
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&encoded);
     sim.process_frame(&frames[0]);
-    assert_eq!(sim.state.set_temp, 100.0);
+
+    // Verify through decoded status frame (observable output), not sim.state
+    let status_bytes = sim.generate_status_frame();
+    let status_frames = decoder.feed_slice(&status_bytes);
+    let msg = dispatch_frame(&status_frames[0]);
+    match msg {
+        IncomingMessage::StatusUpdate(s) => {
+            assert_eq!(s.set_temp, 100.0);
+        }
+        _ => panic!("Expected StatusUpdate"),
+    }
 }
 
 // --- Empty MQTT command payload edge case tests (VAL-INTG-001) ---

@@ -56,12 +56,19 @@ fn test_command_latency_no_false_retry_within_window() {
 
     // After 3 latency ticks + 1 send tick = 4 total ticks since send,
     // the sim should have applied the toggle.
-    // Verify pump1 is now on in the simulator.
-    assert_eq!(
-        harness.sim.state.pumps[0],
-        PumpState::Low,
-        "pump1 should be Low after 3 latency ticks"
-    );
+    // Verify pump1 is now on through decoded status frame.
+    let check_bytes = harness.sim.generate_status_frame();
+    let check_frames = harness.decoder.feed_slice(&check_bytes);
+    let check_msg = launa_protocol::dispatcher::dispatch_frame(&check_frames[0]);
+    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = check_msg {
+        assert_eq!(
+            s.pumps[0],
+            PumpState::Low,
+            "pump1 should be Low after 3 latency ticks"
+        );
+    } else {
+        panic!("Expected StatusUpdate");
+    }
 
     // Now tick once more so SpaApp receives a status frame with pump1=Low
     harness.advance_ms(1_000);
