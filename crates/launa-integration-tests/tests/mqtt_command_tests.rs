@@ -192,3 +192,114 @@ fn test_command_round_trip_set_temperature() {
     sim.process_frame(&frames[0]);
     assert_eq!(sim.state.set_temp, 100.0);
 }
+
+// --- Empty MQTT command payload edge case tests (VAL-INTG-001) ---
+
+/// Empty payload on a pump toggle topic should be rejected by the command parser.
+/// The command parser should return None for empty bytes — no Command produced.
+#[test]
+fn test_empty_payload_pump1_command_rejected() {
+    let result = launa_mqtt::command_parser::parse_command_ok(
+        "launa/DEVICE/command",
+        "launa/DEVICE/command/pump1",
+        b"",
+    );
+    assert_eq!(
+        result, None,
+        "empty payload on pump1 should produce no command"
+    );
+}
+
+/// Empty payload on set_temperature should be rejected — no panic, no Command.
+#[test]
+fn test_empty_payload_set_temperature_rejected() {
+    let result = launa_mqtt::command_parser::parse_command_ok(
+        "launa/DEVICE/command",
+        "launa/DEVICE/command/set_temperature",
+        b"",
+    );
+    assert_eq!(
+        result, None,
+        "empty payload on set_temperature should produce no command"
+    );
+}
+
+/// Empty payload on hold_mode toggle should be rejected — no panic, no Command.
+#[test]
+fn test_empty_payload_hold_mode_rejected() {
+    let result = launa_mqtt::command_parser::parse_command_ok(
+        "launa/DEVICE/command",
+        "launa/DEVICE/command/hold_mode",
+        b"",
+    );
+    assert_eq!(
+        result, None,
+        "empty payload on hold_mode should produce no command"
+    );
+}
+
+/// Verify that the parse_command (detailed) variant returns InvalidPayload for empty bytes,
+/// not UnknownSubtopic — the topic is valid but the payload is not.
+#[test]
+fn test_empty_payload_returns_invalid_payload_not_unknown() {
+    use launa_mqtt::command_parser::parse_command;
+    use launa_mqtt::command_parser::ParseResult;
+
+    let result = parse_command("launa/DEVICE/command", "launa/DEVICE/command/pump1", b"");
+    assert!(
+        matches!(result, ParseResult::InvalidPayload(_)),
+        "empty payload should be InvalidPayload, got {:?}",
+        result
+    );
+
+    let result = parse_command(
+        "launa/DEVICE/command",
+        "launa/DEVICE/command/set_temperature",
+        b"",
+    );
+    assert!(
+        matches!(result, ParseResult::InvalidPayload(_)),
+        "empty set_temperature payload should be InvalidPayload, got {:?}",
+        result
+    );
+
+    let result = parse_command(
+        "launa/DEVICE/command",
+        "launa/DEVICE/command/hold_mode",
+        b"",
+    );
+    assert!(
+        matches!(result, ParseResult::InvalidPayload(_)),
+        "empty hold_mode payload should be InvalidPayload, got {:?}",
+        result
+    );
+}
+
+/// Integration-level test: since parse_command_ok returns None for empty payloads,
+/// no command is ever queued into SpaApp, so no SendFrame action for a pump toggle
+/// can be emitted. This verifies the full pipeline from empty MQTT payload → no
+/// pump-related SendFrame side effect.
+#[test]
+fn test_empty_mqtt_command_no_send_frame_via_harness() {
+    use launa_integration_tests::harness::TestHarness;
+
+    let mut harness = TestHarness::new();
+    harness.complete_registration(50);
+
+    let empty_cmd = launa_mqtt::command_parser::parse_command_ok(
+        "launa/test_spa/command",
+        "launa/test_spa/command/pump1",
+        b"",
+    );
+    assert!(
+        empty_cmd.is_none(),
+        "empty payload should produce no command"
+    );
+
+    // No command queued — verify tick produces no pump1 toggle SendFrame
+    let actions = harness.tick_spa_with_outgoing();
+    assert!(
+        !TestHarness::has_toggle_for(&actions, ToggleItem::Pump1),
+        "no pump1 toggle SendFrame should be emitted when empty payload produced no command"
+    );
+}
