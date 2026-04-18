@@ -232,380 +232,430 @@ use alloc::vec::Vec;
 mod tests {
     use super::*;
 
+    /// Every ToggleItem variant must map to the correct Balboa protocol code byte.
     #[test]
-    fn test_configuration_request() {
-        let (mt, payload) = Command::ConfigurationRequest.encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x04]);
-    }
-
-    #[test]
-    fn test_toggle_pump1() {
-        let (mt, payload) = Command::ToggleItem(ToggleItem::Pump1).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x11, 0x04, 0x00]);
-    }
-
-    #[test]
-    fn test_toggle_light1() {
-        let (mt, payload) = Command::ToggleItem(ToggleItem::Light1).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x11, 0x11, 0x00]);
-    }
-
-    #[test]
-    fn test_set_temp() {
-        let (mt, payload) = Command::SetTemperature(104).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x20, 104]);
-    }
-
-    #[test]
-    fn test_set_time_24h() {
-        let (mt, payload) = Command::SetTime {
-            hour: 14,
-            minute: 30,
-            is_24h: true,
+    fn toggle_item_code_table() {
+        let cases: [(ToggleItem, u8); 21] = [
+            (ToggleItem::Pump1, 0x04),
+            (ToggleItem::Pump2, 0x05),
+            (ToggleItem::Pump3, 0x06),
+            (ToggleItem::Pump4, 0x07),
+            (ToggleItem::Pump5, 0x08),
+            (ToggleItem::Pump6, 0x09),
+            (ToggleItem::Blower, 0x0C),
+            (ToggleItem::Mister, 0x0E),
+            (ToggleItem::Light1, 0x11),
+            (ToggleItem::Light2, 0x12),
+            (ToggleItem::Light3, 0x13),
+            (ToggleItem::Light4, 0x14),
+            (ToggleItem::Aux1, 0x16),
+            (ToggleItem::Aux2, 0x17),
+            (ToggleItem::SoakMode, 0x1D),
+            (ToggleItem::NormalOperation, 0x01),
+            (ToggleItem::ClearNotification, 0x03),
+            (ToggleItem::HoldMode, 0x3C),
+            (ToggleItem::CirculationPump, 0x3D),
+            (ToggleItem::TemperatureRange, 0x50),
+            (ToggleItem::HeatingMode, 0x51),
+        ];
+        for (i, (item, expected_code)) in cases.iter().enumerate() {
+            assert_eq!(
+                item.code(),
+                *expected_code,
+                "case {i}: {item:?}.code() mismatch"
+            );
         }
-        .encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x21, 0x80 | 14, 30]);
     }
 
+    /// Every Command variant must encode to the correct (message_type, payload) pair.
     #[test]
-    fn test_set_time_12h() {
-        let (mt, payload) = Command::SetTime {
-            hour: 9,
-            minute: 5,
-            is_24h: false,
+    fn command_encode_table() {
+        #[derive(Debug)]
+        struct Case {
+            name: &'static str,
+            cmd: Command,
+            expected_mt: [u8; 2],
+            expected_payload: Vec<u8>,
         }
-        .encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x21, 9, 5]);
+
+        let cases = [
+            Case {
+                name: "ConfigurationRequest",
+                cmd: Command::ConfigurationRequest,
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x04],
+            },
+            Case {
+                name: "ToggleItem(Pump1)",
+                cmd: Command::ToggleItem(ToggleItem::Pump1),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x11, 0x04, 0x00],
+            },
+            Case {
+                name: "ToggleItem(Light1)",
+                cmd: Command::ToggleItem(ToggleItem::Light1),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x11, 0x11, 0x00],
+            },
+            Case {
+                name: "ToggleItem(Mister)",
+                cmd: Command::ToggleItem(ToggleItem::Mister),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x11, 0x0E, 0x00],
+            },
+            Case {
+                name: "ToggleItem(CirculationPump)",
+                cmd: Command::ToggleItem(ToggleItem::CirculationPump),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x11, 0x3D, 0x00],
+            },
+            Case {
+                name: "ToggleItem(Light3)",
+                cmd: Command::ToggleItem(ToggleItem::Light3),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x11, 0x13, 0x00],
+            },
+            Case {
+                name: "ToggleItem(Light4)",
+                cmd: Command::ToggleItem(ToggleItem::Light4),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x11, 0x14, 0x00],
+            },
+            Case {
+                name: "ToggleItem(Aux1)",
+                cmd: Command::ToggleItem(ToggleItem::Aux1),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x11, 0x16, 0x00],
+            },
+            Case {
+                name: "ToggleItem(Aux2)",
+                cmd: Command::ToggleItem(ToggleItem::Aux2),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x11, 0x17, 0x00],
+            },
+            Case {
+                name: "ToggleItem(SoakMode)",
+                cmd: Command::ToggleItem(ToggleItem::SoakMode),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x11, 0x1D, 0x00],
+            },
+            Case {
+                name: "ToggleItem(NormalOperation)",
+                cmd: Command::ToggleItem(ToggleItem::NormalOperation),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x11, 0x01, 0x00],
+            },
+            Case {
+                name: "ToggleItem(ClearNotification)",
+                cmd: Command::ToggleItem(ToggleItem::ClearNotification),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x11, 0x03, 0x00],
+            },
+            Case {
+                name: "SetTemperature(104)",
+                cmd: Command::SetTemperature(104),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x20, 104],
+            },
+            Case {
+                name: "SetTime 24h",
+                cmd: Command::SetTime {
+                    hour: 14,
+                    minute: 30,
+                    is_24h: true,
+                },
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x21, 0x80 | 14, 30],
+            },
+            Case {
+                name: "SetTime 12h",
+                cmd: Command::SetTime {
+                    hour: 9,
+                    minute: 5,
+                    is_24h: false,
+                },
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x21, 9, 5],
+            },
+            Case {
+                name: "SetTemperatureScale(celsius)",
+                cmd: Command::SetTemperatureScale(true),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x27, 0x01, 0x01],
+            },
+            Case {
+                name: "SetTemperatureScale(fahrenheit)",
+                cmd: Command::SetTemperatureScale(false),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x27, 0x01, 0x00],
+            },
+            Case {
+                name: "SettingsRequest(Panel)",
+                cmd: Command::SettingsRequest(SettingsType::Panel),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x22, 0x00, 0x00, 0x01],
+            },
+            Case {
+                name: "SettingsRequest(FilterCycles)",
+                cmd: Command::SettingsRequest(SettingsType::FilterCycles),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x22, 0x01, 0x00, 0x00],
+            },
+            Case {
+                name: "FilterCyclesRequest alias",
+                cmd: Command::FilterCyclesRequest,
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x22, 0x01, 0x00, 0x00],
+            },
+            Case {
+                name: "SettingsRequest(Information)",
+                cmd: Command::SettingsRequest(SettingsType::Information),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x22, 0x02, 0x00, 0x00],
+            },
+            Case {
+                name: "InformationRequest alias",
+                cmd: Command::InformationRequest,
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x22, 0x02, 0x00, 0x00],
+            },
+            Case {
+                name: "SettingsRequest(Preferences)",
+                cmd: Command::SettingsRequest(SettingsType::Preferences),
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x22, 0x08, 0x00, 0x00],
+            },
+            Case {
+                name: "FaultLogRequest{0xFF}",
+                cmd: Command::FaultLogRequest { entry: 0xFF },
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x22, 0x20, 0xFF, 0x00],
+            },
+            Case {
+                name: "NothingToSend{0x02}",
+                cmd: Command::NothingToSend { client_id: 0x02 },
+                expected_mt: [0x02, 0xBF],
+                expected_payload: vec![0x07],
+            },
+        ];
+
+        for (i, case) in cases.iter().enumerate() {
+            let (mt, payload) = case.cmd.encode();
+            assert_eq!(
+                mt, case.expected_mt,
+                "case {i} '{}': message_type mismatch",
+                case.name
+            );
+            assert_eq!(
+                payload, case.expected_payload,
+                "case {i} '{}': payload mismatch",
+                case.name
+            );
+        }
     }
 
+    /// Temperature validation: in-range, boundary, out-of-range, and absolute limit cases.
     #[test]
-    fn test_set_temp_scale_celsius() {
-        let (mt, payload) = Command::SetTemperatureScale(true).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x27, 0x01, 0x01]);
+    fn temperature_validation_table() {
+        #[derive(Debug)]
+        struct Case {
+            name: &'static str,
+            value: u8,
+            scale: TemperatureScale,
+            range: TempRange,
+            expected: Result<u8, TempError>,
+        }
+
+        let cases = [
+            // Fahrenheit high range
+            Case {
+                name: "F/High in-range (100)",
+                value: 100,
+                scale: TemperatureScale::Fahrenheit,
+                range: TempRange::High,
+                expected: Ok(100),
+            },
+            Case {
+                name: "F/High min boundary (80)",
+                value: 80,
+                scale: TemperatureScale::Fahrenheit,
+                range: TempRange::High,
+                expected: Ok(80),
+            },
+            Case {
+                name: "F/High max boundary (104)",
+                value: 104,
+                scale: TemperatureScale::Fahrenheit,
+                range: TempRange::High,
+                expected: Ok(104),
+            },
+            Case {
+                name: "F/High below min (79)",
+                value: 79,
+                scale: TemperatureScale::Fahrenheit,
+                range: TempRange::High,
+                expected: Err(TempError::BelowMin),
+            },
+            Case {
+                name: "F/High above max (105)",
+                value: 105,
+                scale: TemperatureScale::Fahrenheit,
+                range: TempRange::High,
+                expected: Err(TempError::AboveMax),
+            },
+            // Fahrenheit low range
+            Case {
+                name: "F/Low in-range (65)",
+                value: 65,
+                scale: TemperatureScale::Fahrenheit,
+                range: TempRange::Low,
+                expected: Ok(65),
+            },
+            Case {
+                name: "F/Low min boundary (50)",
+                value: 50,
+                scale: TemperatureScale::Fahrenheit,
+                range: TempRange::Low,
+                expected: Ok(50),
+            },
+            Case {
+                name: "F/Low max boundary (80)",
+                value: 80,
+                scale: TemperatureScale::Fahrenheit,
+                range: TempRange::Low,
+                expected: Ok(80),
+            },
+            // Celsius high range
+            Case {
+                name: "C/High in-range (38)",
+                value: 38,
+                scale: TemperatureScale::Celsius,
+                range: TempRange::High,
+                expected: Ok(38),
+            },
+            Case {
+                name: "C/High min boundary (26)",
+                value: 26,
+                scale: TemperatureScale::Celsius,
+                range: TempRange::High,
+                expected: Ok(26),
+            },
+            Case {
+                name: "C/High max boundary (40)",
+                value: 40,
+                scale: TemperatureScale::Celsius,
+                range: TempRange::High,
+                expected: Ok(40),
+            },
+            // Celsius low range
+            Case {
+                name: "C/Low min boundary (10)",
+                value: 10,
+                scale: TemperatureScale::Celsius,
+                range: TempRange::Low,
+                expected: Ok(10),
+            },
+            Case {
+                name: "C/Low max boundary (26)",
+                value: 26,
+                scale: TemperatureScale::Celsius,
+                range: TempRange::Low,
+                expected: Ok(26),
+            },
+            // Absolute limit — between range max and absolute max
+            Case {
+                name: "F/High above max but below absolute (106)",
+                value: 106,
+                scale: TemperatureScale::Fahrenheit,
+                range: TempRange::High,
+                expected: Err(TempError::AboveMax),
+            },
+            // Absolute limit — exceeds hard cap
+            Case {
+                name: "F absolute limit exceeded (109)",
+                value: 109,
+                scale: TemperatureScale::Fahrenheit,
+                range: TempRange::High,
+                expected: Err(TempError::AboveAbsoluteLimit),
+            },
+            Case {
+                name: "C absolute limit exceeded (43)",
+                value: 43,
+                scale: TemperatureScale::Celsius,
+                range: TempRange::High,
+                expected: Err(TempError::AboveAbsoluteLimit),
+            },
+            // Zero
+            Case {
+                name: "F zero rejected",
+                value: 0,
+                scale: TemperatureScale::Fahrenheit,
+                range: TempRange::High,
+                expected: Err(TempError::BelowMin),
+            },
+        ];
+
+        for (i, case) in cases.iter().enumerate() {
+            let result = validate_set_temperature(case.value, case.scale, case.range);
+            assert_eq!(
+                result, case.expected,
+                "case {i} '{}': validate_set_temperature({}, {:?}, {:?})",
+                case.name, case.value, case.scale, case.range
+            );
+        }
     }
 
+    /// pump_index() / from_pump_index() and light_index() / from_light_index() round-trips.
     #[test]
-    fn test_set_temp_scale_fahrenheit() {
-        let (mt, payload) = Command::SetTemperatureScale(false).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x27, 0x01, 0x00]);
-    }
+    fn toggle_item_index_helpers() {
+        // Pump index round-trip
+        let pump_cases: [(ToggleItem, usize); 6] = [
+            (ToggleItem::Pump1, 0),
+            (ToggleItem::Pump2, 1),
+            (ToggleItem::Pump3, 2),
+            (ToggleItem::Pump4, 3),
+            (ToggleItem::Pump5, 4),
+            (ToggleItem::Pump6, 5),
+        ];
+        for (i, (item, expected_idx)) in pump_cases.iter().enumerate() {
+            assert_eq!(
+                item.pump_index(),
+                Some(*expected_idx),
+                "case {i}: {item:?}.pump_index()"
+            );
+            assert_eq!(
+                ToggleItem::from_pump_index(*expected_idx),
+                Some(*item),
+                "case {i}: from_pump_index({expected_idx})"
+            );
+        }
+        // Non-pumps return None for pump_index
+        assert_eq!(ToggleItem::Light1.pump_index(), None);
+        assert_eq!(ToggleItem::Blower.pump_index(), None);
+        assert_eq!(ToggleItem::from_pump_index(6), None);
 
-    #[test]
-    fn test_settings_request_panel() {
-        let (mt, payload) = Command::SettingsRequest(SettingsType::Panel).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x22, 0x00, 0x00, 0x01]);
-    }
-
-    #[test]
-    fn test_settings_request_filter_cycles() {
-        let (mt, payload) = Command::SettingsRequest(SettingsType::FilterCycles).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x22, 0x01, 0x00, 0x00]);
-    }
-
-    #[test]
-    fn test_filter_cycles_request_alias() {
-        let (mt, payload) = Command::FilterCyclesRequest.encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x22, 0x01, 0x00, 0x00]);
-    }
-
-    #[test]
-    fn test_settings_request_information() {
-        let (mt, payload) = Command::SettingsRequest(SettingsType::Information).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x22, 0x02, 0x00, 0x00]);
-    }
-
-    #[test]
-    fn test_information_request_alias() {
-        let (mt, payload) = Command::InformationRequest.encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x22, 0x02, 0x00, 0x00]);
-    }
-
-    #[test]
-    fn test_settings_request_preferences() {
-        let (mt, payload) = Command::SettingsRequest(SettingsType::Preferences).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x22, 0x08, 0x00, 0x00]);
-    }
-
-    #[test]
-    fn test_fault_log_request() {
-        let (mt, payload) = Command::FaultLogRequest { entry: 0xFF }.encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x22, 0x20, 0xFF, 0x00]);
-    }
-
-    #[test]
-    fn test_nothing_to_send() {
-        let (mt, payload) = Command::NothingToSend { client_id: 0x02 }.encode();
-        assert_eq!(mt, [0x02, 0xBF]);
-        assert_eq!(payload, vec![0x07]);
-    }
-
-    // --- Temperature validation tests ---
-
-    #[test]
-    fn test_validate_temp_fahrenheit_high_in_range() {
-        assert_eq!(
-            validate_set_temperature(100, TemperatureScale::Fahrenheit, TempRange::High),
-            Ok(100)
-        );
-    }
-
-    #[test]
-    fn test_validate_temp_fahrenheit_high_min_boundary() {
-        assert_eq!(
-            validate_set_temperature(80, TemperatureScale::Fahrenheit, TempRange::High),
-            Ok(80)
-        );
-    }
-
-    #[test]
-    fn test_validate_temp_fahrenheit_high_max_boundary() {
-        assert_eq!(
-            validate_set_temperature(104, TemperatureScale::Fahrenheit, TempRange::High),
-            Ok(104)
-        );
-    }
-
-    #[test]
-    fn test_validate_temp_fahrenheit_high_below_min() {
-        assert_eq!(
-            validate_set_temperature(79, TemperatureScale::Fahrenheit, TempRange::High),
-            Err(TempError::BelowMin)
-        );
-    }
-
-    #[test]
-    fn test_validate_temp_fahrenheit_high_above_max() {
-        assert_eq!(
-            validate_set_temperature(105, TemperatureScale::Fahrenheit, TempRange::High),
-            Err(TempError::AboveMax)
-        );
-    }
-
-    #[test]
-    fn test_validate_temp_fahrenheit_low_in_range() {
-        assert_eq!(
-            validate_set_temperature(65, TemperatureScale::Fahrenheit, TempRange::Low),
-            Ok(65)
-        );
-    }
-
-    #[test]
-    fn test_validate_temp_fahrenheit_low_boundaries() {
-        assert_eq!(
-            validate_set_temperature(50, TemperatureScale::Fahrenheit, TempRange::Low),
-            Ok(50)
-        );
-        assert_eq!(
-            validate_set_temperature(80, TemperatureScale::Fahrenheit, TempRange::Low),
-            Ok(80)
-        );
-    }
-
-    #[test]
-    fn test_validate_temp_celsius_high_in_range() {
-        assert_eq!(
-            validate_set_temperature(38, TemperatureScale::Celsius, TempRange::High),
-            Ok(38)
-        );
-    }
-
-    #[test]
-    fn test_validate_temp_celsius_high_boundaries() {
-        assert_eq!(
-            validate_set_temperature(26, TemperatureScale::Celsius, TempRange::High),
-            Ok(26)
-        );
-        assert_eq!(
-            validate_set_temperature(40, TemperatureScale::Celsius, TempRange::High),
-            Ok(40)
-        );
-    }
-
-    #[test]
-    fn test_validate_temp_celsius_low_boundaries() {
-        assert_eq!(
-            validate_set_temperature(10, TemperatureScale::Celsius, TempRange::Low),
-            Ok(10)
-        );
-        assert_eq!(
-            validate_set_temperature(26, TemperatureScale::Celsius, TempRange::Low),
-            Ok(26)
-        );
-    }
-
-    #[test]
-    fn test_validate_temp_absolute_limit_fahrenheit() {
-        // 108 is the absolute max - accepted in high range (80-104 won't accept it though)
-        // It's above 104 (range max) but below 108 (absolute max)
-        assert_eq!(
-            validate_set_temperature(106, TemperatureScale::Fahrenheit, TempRange::High),
-            Err(TempError::AboveMax)
-        );
-        // 109 exceeds absolute limit
-        assert_eq!(
-            validate_set_temperature(109, TemperatureScale::Fahrenheit, TempRange::High),
-            Err(TempError::AboveAbsoluteLimit)
-        );
-    }
-
-    #[test]
-    fn test_validate_temp_absolute_limit_celsius() {
-        assert_eq!(
-            validate_set_temperature(43, TemperatureScale::Celsius, TempRange::High),
-            Err(TempError::AboveAbsoluteLimit)
-        );
-    }
-
-    #[test]
-    fn test_validate_temp_zero_rejected() {
-        assert_eq!(
-            validate_set_temperature(0, TemperatureScale::Fahrenheit, TempRange::High),
-            Err(TempError::BelowMin)
-        );
-    }
-
-    // --- New ToggleItem variant code() tests ---
-
-    #[test]
-    fn test_toggle_mister_code() {
-        assert_eq!(ToggleItem::Mister.code(), 0x0E);
-    }
-
-    #[test]
-    fn test_toggle_circulation_pump_code() {
-        assert_eq!(ToggleItem::CirculationPump.code(), 0x3D);
-    }
-
-    #[test]
-    fn test_toggle_light3_code() {
-        assert_eq!(ToggleItem::Light3.code(), 0x13);
-    }
-
-    #[test]
-    fn test_toggle_light4_code() {
-        assert_eq!(ToggleItem::Light4.code(), 0x14);
-    }
-
-    #[test]
-    fn test_toggle_aux1_code() {
-        assert_eq!(ToggleItem::Aux1.code(), 0x16);
-    }
-
-    #[test]
-    fn test_toggle_aux2_code() {
-        assert_eq!(ToggleItem::Aux2.code(), 0x17);
-    }
-
-    #[test]
-    fn test_toggle_soak_mode_code() {
-        assert_eq!(ToggleItem::SoakMode.code(), 0x1D);
-    }
-
-    #[test]
-    fn test_toggle_normal_operation_code() {
-        assert_eq!(ToggleItem::NormalOperation.code(), 0x01);
-    }
-
-    #[test]
-    fn test_toggle_clear_notification_code() {
-        assert_eq!(ToggleItem::ClearNotification.code(), 0x03);
-    }
-
-    // --- Wire frame encoding tests for new variants ---
-
-    #[test]
-    fn test_encode_toggle_mister() {
-        let (mt, payload) = Command::ToggleItem(ToggleItem::Mister).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x11, 0x0E, 0x00]);
-    }
-
-    #[test]
-    fn test_encode_toggle_circulation_pump() {
-        let (mt, payload) = Command::ToggleItem(ToggleItem::CirculationPump).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x11, 0x3D, 0x00]);
-    }
-
-    #[test]
-    fn test_encode_toggle_light3() {
-        let (mt, payload) = Command::ToggleItem(ToggleItem::Light3).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x11, 0x13, 0x00]);
-    }
-
-    #[test]
-    fn test_encode_toggle_light4() {
-        let (mt, payload) = Command::ToggleItem(ToggleItem::Light4).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x11, 0x14, 0x00]);
-    }
-
-    #[test]
-    fn test_encode_toggle_aux1() {
-        let (mt, payload) = Command::ToggleItem(ToggleItem::Aux1).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x11, 0x16, 0x00]);
-    }
-
-    #[test]
-    fn test_encode_toggle_aux2() {
-        let (mt, payload) = Command::ToggleItem(ToggleItem::Aux2).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x11, 0x17, 0x00]);
-    }
-
-    #[test]
-    fn test_encode_toggle_soak_mode() {
-        let (mt, payload) = Command::ToggleItem(ToggleItem::SoakMode).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x11, 0x1D, 0x00]);
-    }
-
-    #[test]
-    fn test_encode_toggle_normal_operation() {
-        let (mt, payload) = Command::ToggleItem(ToggleItem::NormalOperation).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x11, 0x01, 0x00]);
-    }
-
-    #[test]
-    fn test_encode_toggle_clear_notification() {
-        let (mt, payload) = Command::ToggleItem(ToggleItem::ClearNotification).encode();
-        assert_eq!(mt, [0x0A, 0xBF]);
-        assert_eq!(payload, vec![0x11, 0x03, 0x00]);
-    }
-
-    // --- light_index() extended for new lights ---
-
-    #[test]
-    fn test_light3_light_index() {
-        assert_eq!(ToggleItem::Light3.light_index(), Some(2));
-    }
-
-    #[test]
-    fn test_light4_light_index() {
-        assert_eq!(ToggleItem::Light4.light_index(), Some(3));
-    }
-
-    #[test]
-    fn test_from_light_index_extended() {
-        assert_eq!(ToggleItem::from_light_index(2), Some(ToggleItem::Light3));
-        assert_eq!(ToggleItem::from_light_index(3), Some(ToggleItem::Light4));
+        // Light index round-trip
+        let light_cases: [(ToggleItem, usize); 4] = [
+            (ToggleItem::Light1, 0),
+            (ToggleItem::Light2, 1),
+            (ToggleItem::Light3, 2),
+            (ToggleItem::Light4, 3),
+        ];
+        for (i, (item, expected_idx)) in light_cases.iter().enumerate() {
+            assert_eq!(
+                item.light_index(),
+                Some(*expected_idx),
+                "case {i}: {item:?}.light_index()"
+            );
+            assert_eq!(
+                ToggleItem::from_light_index(*expected_idx),
+                Some(*item),
+                "case {i}: from_light_index({expected_idx})"
+            );
+        }
+        // Non-lights return None for light_index
+        assert_eq!(ToggleItem::Pump1.light_index(), None);
+        assert_eq!(ToggleItem::Mister.light_index(), None);
+        assert_eq!(ToggleItem::from_light_index(4), None);
     }
 }
