@@ -1,15 +1,15 @@
 {
   "milestone": "test-quality",
-  "round": 1,
+  "round": 2,
   "status": "pass",
   "validatorsRun": {
     "test": { "passed": true, "command": "cargo test --workspace", "exitCode": 0 },
     "typecheck": { "passed": true, "command": "cargo check --workspace", "exitCode": 0 },
-    "lint": { "passed": true, "command": "cargo fmt --check", "exitCode": 0 }
+    "lint": { "passed": true, "command": "cargo fmt --check --all", "exitCode": 0 }
   },
   "reviewsSummary": {
-    "total": 2,
-    "passed": 2,
+    "total": 4,
+    "passed": 4,
     "failed": 0,
     "failedFeatures": []
   },
@@ -18,16 +18,24 @@
   "suggestedGuidanceUpdates": [
     {
       "target": "AGENTS.md",
-      "suggestion": "Add convention: When consolidating duplicate tests, prefer parameterized test patterns (for loops over assertion arrays/cases) to reduce test count while maintaining coverage. This pattern was used successfully in remote_log.rs, discovery.rs, and http.rs consolidation.",
-      "evidence": "consolidate-tests feature used parameterized patterns across 3 crates (remote_log.rs:78-119, discovery.rs:1011-1058, http.rs:163-250) reducing 39 escape tests to ~8 and 72 HTTP tests to ~35.",
+      "suggestion": "Add convention: When consolidating duplicate tests, prefer parameterized test patterns (for loops over assertion arrays/cases) to reduce test count while maintaining coverage. This pattern was used successfully in remote_log.rs, discovery.rs, http.rs consolidation, command.rs, and command_parser.rs.",
+      "evidence": "Table-driven test consolidation used across 5+ features: command.rs (50→4 tests), command_parser.rs (53→7 tests), remote_log.rs, discovery.rs, http.rs. All preserved coverage while reducing test count significantly.",
       "isSystemic": false
     }
   ],
   "rejectedObservations": [
     {
       "observation": "The rust-refactor-worker skill was followed correctly. No skill gaps detected.",
-      "reason": "Not actionable — this is confirmation that existing skill documentation is adequate, not a new observation requiring documentation."
+      "reason": "Not actionable — confirmation that existing skill documentation is adequate."
+    },
+    {
+      "observation": "command_encode_table tests only 12 of 21 ToggleItem variants via Command::ToggleItem().encode(). Missing: Pump2-6, Blower, Light2, HoldMode, HeatingMode, TemperatureRange.",
+      "reason": "Pre-existing coverage gap that existed before this refactoring — not a regression. toggle_item_code_table provides indirect coverage and encode path is trivially vec![0x11, item.code(), 0x00]."
+    },
+    {
+      "observation": "test_invalid_payload_errors in command_parser.rs only tests 6 of 21 toggle subtopics with invalid payloads.",
+      "reason": "Pre-existing coverage gap matching original test coverage. All toggle subtopics share the same parse_toggle() function, risk negligible."
     }
   ],
-  "previousRound": null
+  "previousRound": "round 1 (2 features reviewed: consolidate-tests, deduplicate-test-harness)"
 }

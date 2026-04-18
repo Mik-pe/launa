@@ -1,0 +1,22 @@
+{
+  "featureId": "table-drive-parser-tests",
+  "reviewedAt": "2026-04-18T09:15:00Z",
+  "commitId": "a9c3325",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "53 individual #[test] functions consolidated into 7 well-structured table-driven test functions in launa-mqtt/src/command_parser.rs. File reduced from 743 to 521 lines (222 line reduction, 467 lines removed, 245 added). All original test coverage preserved and expanded. Tests pass cleanly.",
+    "issues": [
+      {
+        "file": "crates/launa-mqtt/src/command_parser.rs",
+        "line": 348,
+        "severity": "non_blocking",
+        "description": "test_invalid_payload_errors only tests 6 of the 21 toggle subtopics with the invalid 'on' payload. This is a minor coverage gap — the original tests also only spot-checked a few subtopics for invalid payloads. The production code handles all toggle subtopics through the same parse_toggle() function, so the risk is very low."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "Excellent refactoring. 53 individual test functions consolidated into 7 table-driven tests with zero behavioral changes to production code. The 7 test functions are: (1) test_toggle_commands — 21 subtopics × 2 payloads (true/false) = 42 assertions, (2) test_pump_timer_commands — 4 valid + 3 invalid timer cases, (3) test_set_temperature — 5 valid + 4 out-of-range + non-numeric, (4) test_set_temperature_validated — 3 valid + 3 error + 2 exact variant checks, (5) test_unknown_subtopic_errors — 8 topic-mismatch cases including case sensitivity and boundary conditions, (6) test_invalid_payload_errors — non-UTF8 + 6 invalid toggle payloads, (7) test_backward_compat_parse_command_ok — 3 assertions. Coverage is preserved or expanded from the original 53 tests. All assertions include descriptive context messages for debugging failures. The single non-blocking issue is that test_invalid_payload_errors tests only 6 of 21 toggle subtopics with invalid payloads, but this matches the original test coverage and the shared parse_toggle() function makes the risk negligible."
+}

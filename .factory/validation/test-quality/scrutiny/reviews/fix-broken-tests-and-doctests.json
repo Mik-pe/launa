@@ -1,0 +1,15 @@
+{
+  "featureId": "fix-broken-tests-and-doctests",
+  "reviewedAt": "2026-04-18T07:30:00.000Z",
+  "commitId": "b0499e9",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Both fixes are clean and correct. The vacuous assertion (A || !A tautology) in test_spaapp_pump_timer_cancel_on_external_off was replaced with a meaningful test that advances past the timer duration and verifies no SendFrame appears after external pump-off cancellation. The 2 ignored doc-tests in packet.rs were converted from `/// ```ignore` doc-comment code blocks to plain `//` line comments, preserving the explanatory content while eliminating the ignored doc-tests.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS. Two focused, correct fixes: (1) The vacuous assertion in test_spaapp_pump_timer_cancel_on_external_off was replaced with a non-tautological test that properly verifies the pump timer cancellation behavior — advance past timer duration, feed status_off, check no SendFrame appears. The new test logic aligns with PumpTimer::tick() which cancels when !is_on. (2) The 2 ignored doc-tests in packet.rs were converted to plain `//` comments, preserving the explanatory value (showing old vs new allocation patterns). Zero `\\`\\`\\`ignore` matches remain in packet.rs. No behavioral changes, no regressions. Worker followed the rust-refactor-worker skill procedure correctly."
+}

@@ -1,0 +1,15 @@
+{
+  "featureId": "remove-misplaced-tests",
+  "reviewedAt": "2026-04-18T07:30:00.000Z",
+  "commitId": "36debf6",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "All 4 misplaced unit-level tests cleanly removed from launa-integration-tests. Each removal is justified by equivalent or superior coverage already existing in the correct home crate. The diff is pure deletion (60 lines removed, 0 added) with no behavioral changes.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS — All 4 misplaced tests correctly removed with equivalent coverage verified in home crates.\n\n1. test_crc8_known_values removed from protocol_roundtrip_tests.rs. Covered by 3 tests in launa-protocol/src/crc8.rs: test_crc_known_value (same 0xC2 assertion on the protocol doc example), test_crc_empty (same empty array → 0x00), test_crc_single_byte (same [0x00] → 0x0C). Coverage is equivalent.\n\n2. test_topic_builder removed from mqtt_publishing_tests.rs. Covered by 7 granular tests in launa-mqtt/src/topics.rs: test_topic_builder_state, test_topic_builder_command, test_topic_builder_availability, test_topic_builder_discovery, test_topic_builder_ota, test_topic_builder_sniff, test_topic_builder_ha_status. These cover all topic types including two extra ones (sniff, ha_status) not tested by the removed test. Coverage is superior.\n\n3. test_discovery_custom_device_name removed from mqtt_publishing_tests.rs. Covered by test_discovery_normal_names_still_work in launa-mqtt/src/discovery.rs (lines 1016-1049), which builds a DiscoveryBuilder with device_name(\"My Spa\"), manufacturer(\"Acme Corp\"), device_model(\"BP6013G1\"), sw_version(\"1.0.0\") and asserts device.name, device.manufacturer, device.model, and device.sw_version across ALL config payloads. The removed test only checked the first payload; the replacement checks every payload. Coverage is superior.\n\n4. test_simulator_tick_cools_down removed from sim_interaction_tests.rs. Covered by test_physics_cooling in launa-sim/src/spa_sim/tests/physics_tests.rs (lines 33-47), which sets current_temp=105.0, set_temp=100.0, is_heating=false, calls simulate_physics(), and asserts current_temp < 105.0 and current_temp > 100.0. The removed test used 100.0/95.0 and called tick() instead of simulate_physics(), but both test the same cooling behavior. Coverage is equivalent.\n\nThe worker followed the rust-refactor-worker skill procedure correctly: established baseline, verified equivalent coverage in home crates before each removal, ran cargo test --workspace (all passed), cargo check --workspace (clean), and cargo fmt. No unintended side effects — only 3 files modified, all in launa-integration-tests, with clean trailing-end deletions."
+}

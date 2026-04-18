@@ -1,0 +1,22 @@
+{
+  "featureId": "table-drive-command-tests",
+  "reviewedAt": "2026-04-18T07:30:00.000Z",
+  "commitId": "8aae268",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Successfully consolidated 50 pre-existing individual #[test] functions into 4 well-structured table-driven test functions. The refactoring is clean, uses good diagnostic messages, and preserves all previously-tested behavior. One minor improvement opportunity: 10 ToggleItem variants (Pump2–Pump6, Blower, Light2, HoldMode, HeatingMode, TemperatureRange) have .code() coverage in toggle_item_code_table but lack explicit Command::ToggleItem().encode() coverage in command_encode_table. This is a pre-existing coverage gap (not a regression) — the encode path is trivially `vec![0x11, item.code(), 0x00]`, so code() coverage implicitly validates encode. The refactoring is correctly classified as non-blocking since the original tests had the same gap.",
+    "issues": [
+      {
+        "file": "crates/launa-protocol/src/command.rs",
+        "line": 289,
+        "severity": "non_blocking",
+        "description": "command_encode_table tests only 12 of 21 ToggleItem variants via Command::ToggleItem().encode(). Missing: Pump2, Pump3, Pump4, Pump5, Pump6, Blower, Light2, HoldMode, HeatingMode, TemperatureRange. This is a pre-existing coverage gap (the original 50 tests also omitted these), but the table-driven format makes it easy to add them. The encode logic is trivially `vec![0x11, item.code(), 0x00]`, so the toggle_item_code_table test provides implicit coverage of the key mapping."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS. Clean refactoring of 50 individual test functions into 4 table-driven test functions (toggle_item_code_table with 21 cases, command_encode_table with 25 cases, temperature_validation_table with 17 cases, toggle_item_index_helpers with pump/light round-trips). All previously-tested scenarios are preserved with identical assertion values. Good diagnostic messages with case index and name in every assert_eq!. The worker followed the rust-refactor-worker skill procedure correctly: established baseline, made a single focused edit, ran full workspace tests, verified with cargo check/fmt. One non-blocking observation: the command_encode_table could be extended to cover all 21 ToggleItem variants (currently covers 12), but this matches pre-existing coverage."
+}
