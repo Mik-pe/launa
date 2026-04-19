@@ -80,10 +80,8 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                         let backoff_secs = if wifi_attempt > 10 {
                             60
                         } else {
-                            5u64 << (wifi_attempt.min(4) - 1).min(4)
+                            crate::net_util::backoff_secs(wifi_attempt)
                         };
-                        // min of backoff and 60: the shift gives 5,10,20,40,80... so cap at 60
-                        let backoff_secs = backoff_secs.min(60);
                         error!(
                             "WiFi-reconnect MQTT attempt {} failed: {:?}, retrying in {}s",
                             wifi_attempt, e, backoff_secs
@@ -105,10 +103,11 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                                 last_wifi_alert = Some(now);
                             }
                         }
-                        if wifi_attempt >= 10 {
+                        if wifi_attempt >= 30 {
                             error!(
-                                "WiFi reconnect exceeded 10 attempts, continuing at max backoff"
+                                "WiFi reconnect exceeded 30 attempts, resetting device"
                             );
+                            esp_hal::system::software_reset();
                         }
                         Timer::after(Duration::from_secs(backoff_secs)).await;
                     }
@@ -235,6 +234,16 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                     continue;
                 }
 
+                // Handle self-test toggle command
+                let self_test_subtopic = alloc::format!("{}/self_test", cmd_base);
+                if topic == self_test_subtopic {
+                    let payload_str = core::str::from_utf8(&payload).unwrap_or("");
+                    let enable = matches!(payload_str, "ON" | "on" | "1" | "true" | "TRUE");
+                    info!("MQTT self-test command: {}", if enable { "ON" } else { "OFF" });
+                    cmd_sender.send(Command::SelfTest(enable)).await;
+                    continue;
+                }
+
                 // Handle commands and pump timers (with rate limiting)
                 let (scale, range) = match last_scale_range {
                     Some((s, r)) => (Some(s), Some(r)),
@@ -255,11 +264,15 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                             info!("MQTT pump timer: pump {} for {} min", pump, minutes);
                             PUMP_TIMER_CHANNEL.send((pump, minutes)).await;
                         }
+                        mqtt_client::MqttAction::SelfTest(_) => {
+                            // Handled above before parse_command; unreachable here
+                        }
                     }
                 }
             }
             None => {
-                warn!("MQTT connection lost, attempting reconnect...");
+                let reason = mqtt.last_disconnect.take().unwrap_or_else(|| alloc::string::String::from("unknown"));
+                warn!("MQTT connection lost ({}), attempting reconnect...", reason);
                 MQTT_RECONNECT_COUNT.fetch_add(1, Ordering::Relaxed);
                 MQTT_LOSS_COUNT.fetch_add(1, Ordering::Relaxed);
                 let mut attempt: u32 = 0;
@@ -294,7 +307,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                         Err(e) => {
                             // Exponential backoff: 5s, 10s, 20s, 40s, 60s, 60s, ...
                             let backoff_secs =
-                                (5u64 << attempt.saturating_sub(1).min(4)).min(60);
+                                crate::net_util::backoff_secs(attempt);
                             error!(
                                 "MQTT reconnect attempt {} failed: {:?}, retrying in {}s",
                                 attempt, e, backoff_secs
@@ -316,10 +329,11 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                                     last_alert_time = Some(now);
                                 }
                             }
-                            if attempt >= 10 {
+                            if attempt >= 30 {
                                 error!(
-                                    "MQTT reconnect exceeded 10 attempts, continuing at max backoff"
+                                    "MQTT reconnect exceeded 30 attempts, resetting device"
                                 );
+                                esp_hal::system::software_reset();
                             }
                             Timer::after(Duration::from_secs(backoff_secs)).await;
                         }

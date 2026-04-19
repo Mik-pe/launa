@@ -26,6 +26,7 @@ use launa_mqtt::v5_codec::{
     encode_publish, encode_subscribe, parse_connack, parse_suback, ConnectConfig,
 };
 use launa_core::{RateLimiter, RATE_LIMIT_MAX_COMMANDS, RATE_LIMIT_WINDOW_MS};
+
 use launa_protocol::command::{Command, validate_set_temperature};
 use launa_protocol::status::{TemperatureScale, TempRange, StatusUpdate};
 use log::{info, warn, debug, error};
@@ -94,9 +95,6 @@ const RX_BUFFER_MAX_SIZE: usize = 2048; // 2 KiB cap
 pub struct MqttClient {
     transport: Option<TcpTransport>,
     stack: &'static Stack<'static>,
-    /// TCP socket buffers reused across reconnects to avoid leaking static memory.
-    /// Wrapped in `UnsafeCell` so we can safely reborrow the interior via `get_mut()`
-    /// after dropping the previous `TcpSocket`, without raw-pointer aliasing UB.
     socket_rx_buf: &'static UnsafeCell<[u8; 1024]>,
     socket_tx_buf: &'static UnsafeCell<[u8; 1024]>,
     pub device_id: String,
@@ -109,6 +107,8 @@ pub struct MqttClient {
     last_outgoing: Instant,
     rx_buffer: Vec<u8>,
     rate_limiter: RateLimiter,
+    /// Last disconnect reason, set by recv() before returning None.
+    pub last_disconnect: Option<String>,
 }
 
 #[derive(Debug)]
@@ -185,7 +185,11 @@ impl MqttClient {
         let rx: &'static mut [u8] = unsafe { &mut *socket_rx_buf.get() };
         let tx: &'static mut [u8] = unsafe { &mut *socket_tx_buf.get() };
         let mut socket = TcpSocket::new(*stack, rx, tx);
-        socket.set_timeout(Some(Duration::from_secs(10)));
+        // Socket timeout must be longer than the keepalive interval (30s)
+        // so the socket doesn't error during idle periods. maybe_ping()
+        // sends PINGREQ every 15s to keep the broker happy. The timeout
+        // only fires if the broker is truly unresponsive.
+        socket.set_timeout(Some(Duration::from_secs(60)));
 
         let addr = match net_util::resolve_host(stack, &config.mqtt_host).await {
             Some(a) => a,
@@ -221,6 +225,7 @@ impl MqttClient {
             last_outgoing: Instant::now(),
             rx_buffer: Vec::with_capacity(RX_BUFFER_MAX_SIZE),
             rate_limiter: RateLimiter::new(),
+            last_disconnect: None,
         };
 
         let client_id = format!("launa_{}", config.device_id);
@@ -281,13 +286,18 @@ impl MqttClient {
         Ok(pos)
     }
 
-    pub async fn maybe_ping(&mut self) -> Result<(), MqttError> {
+    /// Send a PINGREQ if half the keepalive interval has elapsed since the
+    /// last outgoing packet. Returns `true` if a ping was sent, `false` if
+    /// not needed. A successful ping proves the connection is alive.
+    pub async fn maybe_ping(&mut self) -> Result<bool, MqttError> {
         let half_keepalive = Duration::from_secs(self.keep_alive as u64 / 2);
         if self.last_outgoing.elapsed() >= half_keepalive {
             debug!("MQTT sending PINGREQ (keepalive)");
             self.send_bytes(&encode_pingreq()).await?;
+            Ok(true)
+        } else {
+            Ok(false)
         }
-        Ok(())
     }
 
     pub async fn reconnect(&mut self) -> Result<(), MqttError> {
@@ -305,7 +315,7 @@ impl MqttClient {
         let rx: &'static mut [u8] = unsafe { &mut *self.socket_rx_buf.get() };
         let tx: &'static mut [u8] = unsafe { &mut *self.socket_tx_buf.get() };
         let mut socket = TcpSocket::new(*self.stack, rx, tx);
-        socket.set_timeout(Some(Duration::from_secs(10)));
+        socket.set_timeout(Some(Duration::from_secs(60)));
 
         let addr = match net_util::resolve_host(self.stack, &self.config_host).await {
             Some(a) => a,
@@ -477,63 +487,65 @@ impl MqttClient {
     }
 
     pub async fn recv(&mut self) -> Option<(String, Vec<u8>)> {
-        /// Maximum number of consecutive TCP read errors before giving up
-        /// and triggering a reconnect. This prevents transient network
-        /// glitches (brief packet loss, TCP retransmission timeout) from
-        /// causing unnecessary MQTT reconnect cycles.
-        const MAX_READ_RETRIES: u8 = 3;
-
         #[allow(unused_assignments)]
-        let mut read_retries: u8 = 0;
+        let mut read_retries: u16 = 0;
 
         loop {
-            if let Err(e) = self.maybe_ping().await {
-                error!("MQTT keepalive ping failed: {:?}", e);
-                return None;
+            match self.maybe_ping().await {
+                Ok(true) => {
+                    read_retries = 0;
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    self.last_disconnect = Some(alloc::format!("PING FAIL {:?}", e));
+                    return None;
+                }
             }
 
             if let Some(packet) = self.try_extract_packet() {
                 read_retries = 0;
-                return self.process_packets(&packet).await;
+                match self.process_packets(&packet).await {
+                    Some(Some(result)) => return Some(result),
+                    Some(None) => continue,
+                    None => {
+                        self.last_disconnect = Some(alloc::format!("FATAL PKT type {}", packet[0] >> 4));
+                        return None;
+                    }
+                }
             }
 
             let mut buf = [0u8; 512];
             let transport = match self.transport.as_mut() {
                 Some(t) => t,
-                None => return None,
+                None => {
+                    self.last_disconnect = Some(String::from("NO TRANSPORT"));
+                    return None;
+                }
             };
             let n = match transport.read(&mut buf).await {
                 Ok(0) => {
-                    Timer::after(Duration::from_millis(10)).await;
-                    continue;
+                    self.last_disconnect = Some(alloc::format!("FIN retries={}", read_retries));
+                    return None;
                 }
                 Ok(n) => n,
                 Err(_) => {
                     read_retries += 1;
-                    if read_retries <= MAX_READ_RETRIES {
-                        warn!(
-                            "MQTT TCP read error (attempt {}/{})",
-                            read_retries, MAX_READ_RETRIES
-                        );
-                        Timer::after(Duration::from_millis(100)).await;
-                        continue;
+                    if read_retries > 100 {
+                        self.last_disconnect = Some(alloc::format!("STUCK retries={}", read_retries));
+                        return None;
                     }
-                    error!(
-                        "MQTT TCP read failed after {} retries, triggering reconnect",
-                        MAX_READ_RETRIES
-                    );
-                    return None;
+                    // Yield to executor and wait before retrying — the socket
+                    // may return errors immediately after a timeout, without
+                    // blocking. Without this delay, we'd loop 100+ times
+                    // instantly and hit the STUCK limit.
+                    Timer::after(Duration::from_secs(1)).await;
+                    continue;
                 }
             };
 
-            // Successful read resets the retry counter
             read_retries = 0;
-            // Check before extending to prevent temporary overshoot
             if self.rx_buffer.len() + n > RX_BUFFER_MAX_SIZE {
-                warn!(
-                    "MQTT rx_buffer would exceed {} bytes ({} + {}), treating as protocol error",
-                    RX_BUFFER_MAX_SIZE, self.rx_buffer.len(), n
-                );
+                self.last_disconnect = Some(String::from("BUF OVERFLOW"));
                 self.rx_buffer.clear();
                 return None;
             }
@@ -545,8 +557,15 @@ impl MqttClient {
         try_extract_packet(&mut self.rx_buffer)
     }
 
-    async fn process_packets(&mut self, packet: &[u8]) -> Option<(String, Vec<u8>)> {
-        if packet.is_empty() { return None; }
+    /// Process a single extracted MQTT packet.
+    ///
+    /// Returns:
+    /// - `Some(Some((topic, payload)))` — PUBLISH packet with topic and payload
+    /// - `Some(None)` — packet handled internally (PUBACK, SUBACK, PINGRESP, etc.)
+    /// - `None` — fatal: connection should be terminated (malformed PUBLISH, or
+    ///   broker-initiated DISCONNECT)
+    async fn process_packets(&mut self, packet: &[u8]) -> Option<Option<(String, Vec<u8>)>> {
+        if packet.is_empty() { return Some(None); }
         let packet_type = packet[0] >> 4;
 
         match packet_type {
@@ -583,23 +602,23 @@ impl MqttClient {
                     }
                 }
 
-                Some((topic, payload))
+                Some(Some((topic, payload)))
             }
-            4 => { debug!("MQTT PUBACK received"); None }
-            9 => { debug!("MQTT SUBACK received"); None }
-            13 => { debug!("MQTT PINGRESP"); None }
+            4 => { debug!("MQTT PUBACK received"); Some(None) }
+            9 => { debug!("MQTT SUBACK received"); Some(None) }
+            13 => { debug!("MQTT PINGRESP"); Some(None) }
             12 => {
                 let _ = self.send_bytes(&encode_pingresp()).await;
-                None
+                Some(None)
             }
             14 => {
-                // Broker-initiated DISCONNECT. Returning None causes recv()
-                // to signal connection loss, triggering the reconnect loop
-                // in mqtt_task.rs.
+                // Broker-initiated DISCONNECT. Returning None (outer) causes
+                // recv() to signal connection loss, triggering the reconnect
+                // loop in mqtt_task.rs.
                 warn!("MQTT DISCONNECT received from broker");
                 None
             }
-            _ => { debug!("MQTT packet type {} (unhandled)", packet_type); None }
+            _ => { debug!("MQTT packet type {} (unhandled)", packet_type); Some(None) }
         }
     }
 
@@ -719,4 +738,3 @@ impl MqttClient {
         launa_mqtt::parse_ota_url(payload)
     }
 }
-
