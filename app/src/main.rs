@@ -12,6 +12,11 @@
 
 extern crate alloc;
 
+use esp_alloc as _;
+use esp_backtrace as _;
+
+esp_bootloader_esp_idf::esp_app_desc!();
+
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -21,6 +26,8 @@ use embassy_sync::channel::Channel;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
+use esp_hal::clock::CpuClock;
+use esp_hal::ram;
 use launa_hal::Transport as _;
 use launa_core::{AppAction, SpaApp};
 use launa_protocol::command::Command;
@@ -48,8 +55,6 @@ mod remote_log;
 
 #[cfg(feature = "sniff")]
 mod sniff;
-
-use esp_backtrace as _;
 
 /// Custom panic handler: logs panic location, waits 500ms for log flush,
 /// then triggers a software reset. Replaces esp-backtrace's default infinite
@@ -95,19 +100,6 @@ fn uptime_secs() -> u64 {
     }
     let now = (Instant::now().as_millis() / 1000) as u32;
     now.saturating_sub(start) as u64
-}
-
-// Heap allocator: 32 KiB (initialized in main)
-fn init_heap() {
-    const HEAP_SIZE: usize = 32 * 1024;
-    static mut HEAP: core::mem::MaybeUninit<[u8; HEAP_SIZE]> = core::mem::MaybeUninit::uninit();
-    unsafe {
-        esp_alloc::HEAP.add_region(esp_alloc::HeapRegion::new(
-            HEAP.as_mut_ptr() as *mut u8,
-            HEAP_SIZE,
-            esp_alloc::MemoryCapability::Internal.into(),
-        ));
-    }
 }
 
 static FRAME_CHANNEL: Channel<CriticalSectionRawMutex, Frame, 4> = Channel::new();
@@ -214,11 +206,16 @@ async fn execute_actions(actions: &[AppAction], device_id: &str) {
 #[cfg(feature = "hw-test")]
 #[esp_rtos::main]
 async fn main(_spawner: Spawner) {
-    init_heap();
-    let peripherals = esp_hal::init(esp_hal::Config::default());
+    esp_println::logger::init_logger_from_env();
+    esp_alloc::heap_allocator!(#[ram(reclaimed)] size: 64 * 1024);
+    esp_alloc::heap_allocator!(size: 36 * 1024);
+
+    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
+    let peripherals = esp_hal::init(config);
 
     let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
-    esp_rtos::start(timg0.timer0);
+    let sw_int = esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+    esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
     info!("HW test mode");
 
@@ -401,14 +398,20 @@ async fn main(_spawner: Spawner) {
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
     use launa_ota::OtaUpdate;
-    init_heap();
-    let peripherals = esp_hal::init(esp_hal::Config::default());
+
+    esp_println::logger::init_logger_from_env();
+    esp_alloc::heap_allocator!(#[ram(reclaimed)] size: 64 * 1024);
+    esp_alloc::heap_allocator!(size: 36 * 1024);
+
+    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
+    let peripherals = esp_hal::init(config);
 
     // Record boot timestamp for diagnostics uptime calculation
     DIAGNOSTICS_START_SECS.store((Instant::now().as_millis() / 1000) as u32, Ordering::Relaxed);
 
     let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
-    esp_rtos::start(timg0.timer0);
+    let sw_int = esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+    esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
     // Configure TIMG1 as independent hardware watchdog (30s timeout)
     let timg1 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG1);
@@ -454,16 +457,26 @@ async fn main(spawner: Spawner) {
     let uart_transport = transport::Rs485Transport::new(uart, Some(peripherals.GPIO4.into()));
     info!("RS-485 UART initialized");
 
-    let radio_ctrl = esp_radio::init().expect("Failed to init esp-radio");
-    let wifi_stack = wifi::WifiStack::connect(
+    let wifi_stack = match wifi::WifiStack::connect(
         spawner,
-        radio_ctrl,
         peripherals.WIFI,
         esp_hal::rng::Rng::new(),
         &app_config.wifi_ssid,
         &app_config.wifi_password,
     )
-    .await;
+    .await
+    {
+        Ok(stack) => stack,
+        Err(e) => {
+            error!(
+                "WiFi init failed: {:?} (free heap: {} bytes), resetting in 5s",
+                e,
+                esp_alloc::HEAP.free()
+            );
+            Timer::after(Duration::from_secs(5)).await;
+            esp_hal::system::software_reset();
+        }
+    };
 
     let mut mqtt = {
         let mut attempt: u32 = 0;
@@ -502,11 +515,9 @@ async fn main(spawner: Spawner) {
 
     // Spawn background tasks
     spawner
-        .spawn(mqtt_task::mqtt_task(mqtt))
-        .expect("Failed to spawn MQTT task");
+        .spawn(mqtt_task::mqtt_task(mqtt).unwrap());
     spawner
-        .spawn(uart_task(uart_transport))
-        .expect("Failed to spawn UART task");
+        .spawn(uart_task(uart_transport).unwrap());
 
     info!("Entering main event loop");
 
