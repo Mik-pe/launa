@@ -1,6 +1,6 @@
-//! MQTT v5 protocol codec — pure encode/decode functions.
+//! MQTT 3.1.1 protocol codec — pure encode/decode functions.
 //!
-//! Provides packet-level encoding and decoding for MQTT v5. All functions
+//! Provides packet-level encoding and decoding for MQTT 3.1.1. All functions
 //! are pure protocol logic with no TCP/socket/ESP32 dependencies, making
 //! them fully testable on desktop.
 
@@ -54,10 +54,9 @@ pub struct ConnectConfig<'a> {
 /// The packet uses Clean Start, Will Flag with QoS 1 + Retain, and optional
 /// username/password.
 pub fn encode_connect(config: &ConnectConfig<'_>) -> Vec<u8> {
-    let mut connect_flags: u8 = 0x02 // Reserved (must be 1)
-        | (1 << 2) // Clean Start
-        | (1 << 3) // Will Flag
-        | (1 << 4) // Will QoS 1
+    let mut connect_flags: u8 = 0x02 // Clean Session
+        | (1 << 2) // Will Flag
+        | (1 << 3) // Will QoS 1 (bit 3)
         | (1 << 5); // Will Retain
 
     if config.username.is_some() {
@@ -71,16 +70,14 @@ pub fn encode_connect(config: &ConnectConfig<'_>) -> Vec<u8> {
     let mut var_header = Vec::new();
     var_header.extend_from_slice(&[0x00, 0x04]);
     var_header.extend_from_slice(b"MQTT");
-    var_header.push(0x05); // Protocol level 5
+    var_header.push(0x04); // Protocol level 4 (MQTT 3.1.1)
     var_header.push(connect_flags);
     var_header.extend_from_slice(&config.keep_alive.to_be_bytes());
-    var_header.push(0x00); // Connect properties length = 0
 
-    // Payload
+    // Payload (no v5 properties — MQTT 3.1.1 format)
     let mut payload = Vec::new();
     append_lp_string(&mut payload, config.client_id);
     append_lp_string(&mut payload, config.lwt_topic);
-    payload.push(0x00); // Will properties length = 0
     let will_payload = b"offline";
     payload.extend_from_slice(&(will_payload.len() as u16).to_be_bytes());
     payload.extend_from_slice(will_payload);
@@ -133,10 +130,14 @@ pub fn parse_connack(buf: &[u8]) -> Result<(), ConnackError> {
     Ok(())
 }
 
-/// Encode an MQTT v5 PUBLISH packet.
+/// Encode an MQTT 3.1.1 PUBLISH packet.
 ///
 /// `qos` must be 0 or 1. For QoS > 0, `packet_id` must be provided.
 /// Returns the complete packet bytes ready to send.
+///
+/// # Panics
+///
+/// Panics if `qos > 1` (only QoS 0 and QoS 1 are supported).
 pub fn encode_publish(
     topic: &str,
     payload: &[u8],
@@ -144,13 +145,14 @@ pub fn encode_publish(
     retain: bool,
     packet_id: Option<u16>,
 ) -> Vec<u8> {
+    assert!(qos <= 1, "MQTT QoS must be 0 or 1, got {}", qos);
     let retain_flag = if retain { 0x01 } else { 0x00 };
     let qos_flag = (qos & 0x03) << 1;
     let mut packet = Vec::new();
     packet.push(0x30 | qos_flag | retain_flag);
 
     let topic_bytes = topic.as_bytes();
-    let mut remaining = 2 + topic_bytes.len() + 1 + payload.len();
+    let mut remaining = 2 + topic_bytes.len() + payload.len();
     if qos > 0 {
         remaining += 2;
     }
@@ -164,29 +166,27 @@ pub fn encode_publish(
         }
     }
 
-    packet.push(0x00); // Properties length = 0
     packet.extend_from_slice(payload);
 
     packet
 }
 
-/// Encode an MQTT v5 SUBSCRIBE packet.
+/// Encode an MQTT 3.1.1 SUBSCRIBE packet.
 ///
 /// Returns the complete packet bytes including the fixed header,
-/// packet identifier, subscription options, and topic filter.
+/// packet identifier, topic filter, and requested QoS.
 pub fn encode_subscribe(topic: &str, packet_id: u16) -> Vec<u8> {
     let mut packet = Vec::new();
     packet.push(0x82); // SUBSCRIBE (type 8, flags 2)
 
     let topic_bytes = topic.as_bytes();
-    let remaining = 2 + 1 + 2 + topic_bytes.len() + 1; // pkt_id + props_len + topic_lp + sub_opts
+    let remaining = 2 + 2 + topic_bytes.len() + 1; // pkt_id + topic_lp + sub_opts
     encode_remaining_length(&mut packet, remaining);
 
     packet.extend_from_slice(&packet_id.to_be_bytes());
-    packet.push(0x00); // Properties length = 0
     packet.extend_from_slice(&(topic_bytes.len() as u16).to_be_bytes());
     packet.extend_from_slice(topic_bytes);
-    packet.push(0x01); // Subscription options: QoS 1
+    packet.push(0x01); // Requested QoS 1
 
     packet
 }
@@ -227,8 +227,6 @@ pub enum SubackError {
     PayloadTooShort,
     /// Packet identifier mismatch.
     PacketIdMismatch { expected: u16, got: u16 },
-    /// Invalid property length encoding.
-    InvalidPropertyLength,
     /// Subscription rejected (return code 0x80).
     SubscriptionFailed(u8),
 }
@@ -264,39 +262,12 @@ pub fn parse_suback(buf: &[u8], expected_packet_id: u16) -> Result<(), SubackErr
         });
     }
 
-    // Decode property length (variable-byte starting at payload[2]).
-    // We manually decode the variable-byte integer to avoid allocating a Vec
-    // (the decode_remaining_length function expects a leading packet-type byte
-    // that we don't have here).
+    // MQTT 3.1.1 SUBACK: no properties field. The return code immediately
+    // follows the 2-byte packet identifier.
     if payload.len() < 3 {
         return Err(SubackError::PayloadTooShort);
     }
-    let mut multiplier = 1usize;
-    let mut props_len = 0usize;
-    let mut props_bytes = 0;
-    loop {
-        let idx = 2 + props_bytes;
-        if idx >= payload.len() {
-            return Err(SubackError::InvalidPropertyLength);
-        }
-        let byte = payload[idx];
-        props_len += ((byte & 0x7F) as usize) * multiplier;
-        multiplier *= 128;
-        props_bytes += 1;
-        if (byte & 0x80) == 0 {
-            break;
-        }
-        if props_bytes >= 4 {
-            return Err(SubackError::InvalidPropertyLength);
-        }
-    }
-    let props_header_size = props_bytes;
-
-    let return_code_idx = 2 + props_header_size + props_len;
-    if return_code_idx >= remaining_len {
-        return Err(SubackError::PayloadTooShort);
-    }
-    let return_code = payload[return_code_idx];
+    let return_code = payload[2];
     if return_code == 0x80 {
         return Err(SubackError::SubscriptionFailed(return_code));
     }
@@ -393,9 +364,9 @@ mod tests {
             &[0x00, 0x04, b'M', b'Q', b'T', b'T']
         );
         // Protocol level
-        assert_eq!(packet[rl_end + 6], 0x05);
-        // Connect flags: reserved + clean start + will flag + will qos1 + will retain
-        let expected_flags: u8 = 0x02 | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5);
+        assert_eq!(packet[rl_end + 6], 0x04);
+        // Connect flags: clean session + will flag + will qos1 + will retain
+        let expected_flags: u8 = 0x02 | (1 << 2) | (1 << 3) | (1 << 5);
         assert_eq!(packet[rl_end + 7], expected_flags);
         // Keep alive
         assert_eq!(&packet[rl_end + 8..rl_end + 10], &[0x00, 0x1E]); // 30 big-endian
@@ -521,19 +492,16 @@ mod tests {
         let pkt_id = u16::from_be_bytes([payload[0], payload[1]]);
         assert_eq!(pkt_id, 1);
 
-        // Properties length = 0
-        assert_eq!(payload[2], 0x00);
-
-        // Topic filter length
-        let topic_len = u16::from_be_bytes([payload[3], payload[4]]) as usize;
+        // Topic filter length (no properties byte in MQTT 3.1.1)
+        let topic_len = u16::from_be_bytes([payload[2], payload[3]]) as usize;
         assert_eq!(topic_len, 10);
         assert_eq!(
-            core::str::from_utf8(&payload[5..5 + topic_len]).unwrap(),
+            core::str::from_utf8(&payload[4..4 + topic_len]).unwrap(),
             "cmd/test/#"
         );
 
-        // Subscription options: QoS 1
-        assert_eq!(payload[5 + topic_len], 0x01);
+        // Requested QoS 1
+        assert_eq!(payload[4 + topic_len], 0x01);
     }
 
     #[test]
@@ -584,34 +552,25 @@ mod tests {
 
     // ── parse_suback tests ──
 
-    fn build_suback(packet_id: u16, props_len: u8, return_code: u8) -> Vec<u8> {
+    /// Build a MQTT 3.1.1 SUBACK packet: [0x90, remaining_len, pkt_id_hi, pkt_id_lo, return_code]
+    fn build_suback(packet_id: u16, return_code: u8) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.push(0x90); // SUBACK type
-                        // Remaining = pkt_id(2) + props_len_encoding(1) + props_data + return_code(1)
-        let payload_len = 2 + 1 + props_len as usize + 1;
-        encode_remaining_length_helper(&mut buf, payload_len);
+        encode_remaining_length_helper(&mut buf, 3); // pkt_id(2) + return_code(1)
         buf.extend_from_slice(&packet_id.to_be_bytes());
-        // Properties length as a single byte (works for props_len < 128)
-        let mut props_buf = Vec::new();
-        encode_remaining_length_helper(&mut props_buf, props_len as usize);
-        buf.extend_from_slice(&props_buf);
-        // If props_len > 0, add dummy property bytes
-        for _ in 0..props_len {
-            buf.push(0x00);
-        }
         buf.push(return_code);
         buf
     }
 
     #[test]
     fn test_parse_suback_success() {
-        let buf = build_suback(1, 0, 0x00); // Success, QoS 0 granted
+        let buf = build_suback(1, 0x00); // Success, QoS 0 granted
         assert!(parse_suback(&buf, 1).is_ok());
     }
 
     #[test]
     fn test_parse_suback_success_qos1() {
-        let buf = build_suback(42, 0, 0x01); // QoS 1 granted
+        let buf = build_suback(42, 0x01); // QoS 1 granted
         assert!(parse_suback(&buf, 42).is_ok());
     }
 
@@ -628,7 +587,7 @@ mod tests {
 
     #[test]
     fn test_parse_suback_packet_id_mismatch() {
-        let buf = build_suback(2, 0, 0x00);
+        let buf = build_suback(2, 0x00);
         assert_eq!(
             parse_suback(&buf, 1),
             Err(SubackError::PacketIdMismatch {
@@ -640,7 +599,7 @@ mod tests {
 
     #[test]
     fn test_parse_suback_subscription_failed() {
-        let buf = build_suback(1, 0, 0x80); // Failure
+        let buf = build_suback(1, 0x80); // Failure
         assert_eq!(
             parse_suback(&buf, 1),
             Err(SubackError::SubscriptionFailed(0x80))
@@ -648,8 +607,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_suback_with_properties() {
-        let buf = build_suback(5, 3, 0x01); // 3 bytes of properties, QoS 1 granted
+    fn test_parse_suback_multiple_subscriptions() {
+        // MQTT 3.1.1 SUBACK with multiple return codes
+        let mut buf = Vec::new();
+        buf.push(0x90);
+        encode_remaining_length_helper(&mut buf, 4); // pkt_id(2) + 2 return codes
+        buf.extend_from_slice(&5u16.to_be_bytes());
+        buf.push(0x01); // QoS 1 granted for first subscription
+        buf.push(0x00); // QoS 0 granted for second subscription
         assert!(parse_suback(&buf, 5).is_ok());
     }
 

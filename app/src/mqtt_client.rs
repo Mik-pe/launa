@@ -38,6 +38,7 @@ use crate::net_util;
 pub enum MqttAction {
     Command(Command),
     StartPumpTimer { pump: u8, minutes: u32 },
+    SelfTest(bool),
 }
 
 pub struct TcpTransport {
@@ -46,6 +47,14 @@ pub struct TcpTransport {
 
 #[derive(Debug)]
 pub struct TransportError;
+
+impl core::fmt::Display for TransportError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "TransportError")
+    }
+}
+
+impl core::error::Error for TransportError {}
 
 impl embedded_io_async::Error for TransportError {
     fn kind(&self) -> embedded_io_async::ErrorKind {
@@ -72,6 +81,10 @@ impl Read for TcpTransport {
 impl Write for TcpTransport {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         self.socket.write(buf).await.map_err(|_| TransportError)
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        self.socket.flush().await.map_err(|_| TransportError)
     }
 }
 
@@ -118,7 +131,7 @@ pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8], scal
                         // Fahrenheit display values ARE wire values (no conversion).
                         let wire_value = match s {
                             TemperatureScale::Celsius => temp.saturating_mul(2),
-                            TemperatureScale::Fahrenheit => temp,
+                            _ => temp,
                         };
                         Some(MqttAction::Command(Command::SetTemperature(wire_value)))
                     }
@@ -379,66 +392,88 @@ impl MqttClient {
         let packet = encode_subscribe(topic, pkt_id);
         self.send_bytes(&packet).await.map_err(|_| MqttError::SubscribeFailed)?;
 
-        // Read SUBACK: fixed header byte + variable-byte remaining length + payload
-        let mut header_buf = [0u8; 5];
-        self.read_exact(&mut header_buf, 1).await.map_err(|_| {
-            warn!("MQTT SUBACK read failed");
-            MqttError::SubscribeFailed
-        })?;
+        // Read packets until we get our SUBACK. After a reconnect, the broker
+        // may send PUBACKs for QoS 1 publishes (up to 28 discovery + 1
+        // availability = 29), or other packets before our SUBACK arrives.
+        const MAX_SKIP: u8 = 50;
+        let mut skipped = 0;
 
-        if header_buf[0] != 0x90 {
-            warn!("MQTT SUBACK unexpected type: 0x{:02X}", header_buf[0]);
-            return Err(MqttError::SubscribeFailed);
-        }
-
-        // Read remaining length (variable-byte encoded, up to 4 bytes)
-        let mut rl_buf = [0u8; 4];
-        let mut rl_bytes = 1;
-        self.read_exact(&mut rl_buf[..1], 1).await.map_err(|_| {
-            warn!("MQTT SUBACK remaining length read failed");
-            MqttError::SubscribeFailed
-        })?;
-
-        while rl_buf[rl_bytes - 1] & 0x80 != 0 && rl_bytes < 4 {
-            self.read_exact(&mut rl_buf[rl_bytes..rl_bytes + 1], 1).await.map_err(|_| {
-                warn!("MQTT SUBACK remaining length read failed");
+        loop {
+            // Read fixed header byte
+            let mut header_buf = [0u8; 1];
+            self.read_exact(&mut header_buf, 1).await.map_err(|_| {
+                warn!("MQTT SUBACK read failed");
                 MqttError::SubscribeFailed
             })?;
-            rl_bytes += 1;
-        }
 
-        let remaining_len = match decode_remaining_length(&rl_buf[..rl_bytes]) {
-            Some((len, _)) => len,
-            None => {
-                warn!("MQTT SUBACK invalid remaining length encoding");
+            // Read remaining length (variable-byte encoded, up to 4 bytes)
+            let mut rl_buf = [0u8; 4];
+            let mut rl_bytes: usize = 0;
+            loop {
+                self.read_exact(&mut rl_buf[rl_bytes..rl_bytes + 1], 1).await.map_err(|_| {
+                    warn!("MQTT packet remaining length read failed");
+                    MqttError::SubscribeFailed
+                })?;
+                rl_bytes += 1;
+                if rl_buf[rl_bytes - 1] & 0x80 == 0 || rl_bytes >= 4 {
+                    break;
+                }
+            }
+
+            let mut multiplier = 1usize;
+            let mut remaining_len = 0usize;
+            for i in 0..rl_bytes {
+                remaining_len += ((rl_buf[i] & 0x7F) as usize) * multiplier;
+                multiplier *= 128;
+            }
+
+            // Read the full remaining payload
+            let mut payload_buf = [0u8; 128];
+            if remaining_len > payload_buf.len() {
+                warn!("MQTT packet payload too large: {} bytes", remaining_len);
                 return Err(MqttError::SubscribeFailed);
             }
-        };
+            if remaining_len > 0 {
+                self.read_exact(&mut payload_buf[..remaining_len], remaining_len).await.map_err(|_| {
+                    warn!("MQTT packet payload read failed");
+                    MqttError::SubscribeFailed
+                })?;
+            }
 
-        // Read the full remaining payload
-        let mut payload_buf = [0u8; 64];
-        if remaining_len > payload_buf.len() {
-            warn!("MQTT SUBACK payload too large: {} bytes", remaining_len);
-            return Err(MqttError::SubscribeFailed);
+            let packet_type = header_buf[0] >> 4;
+
+            if header_buf[0] == 0x90 {
+                // SUBACK — reassemble and validate
+                let mut suback_buf = Vec::new();
+                suback_buf.push(0x90);
+                suback_buf.extend_from_slice(&rl_buf[..rl_bytes]);
+                suback_buf.extend_from_slice(&payload_buf[..remaining_len]);
+
+                if parse_suback(&suback_buf, pkt_id).is_err() {
+                    warn!("MQTT SUBACK parse failed");
+                    return Err(MqttError::SubscribeFailed);
+                }
+
+                self.last_outgoing = Instant::now();
+                return Ok(());
+            }
+
+            // Not a SUBACK — skip it
+            skipped += 1;
+            if skipped > MAX_SKIP {
+                warn!("MQTT: too many non-SUBACK packets ({})", skipped);
+                return Err(MqttError::SubscribeFailed);
+            }
+            debug!(
+                "MQTT subscribe: skipping packet type {} ({} bytes), waiting for SUBACK",
+                packet_type, remaining_len
+            );
+
+            // Handle PINGREQ from broker (packet type 12) by sending PINGRESP
+            if packet_type == 12 {
+                let _ = self.send_bytes(&encode_pingresp()).await;
+            }
         }
-        self.read_exact(&mut payload_buf[..remaining_len], remaining_len).await.map_err(|_| {
-            warn!("MQTT SUBACK payload read failed");
-            MqttError::SubscribeFailed
-        })?;
-
-        // Reassemble full SUBACK packet for parse_suback
-        let mut suback_buf = Vec::new();
-        suback_buf.push(0x90);
-        suback_buf.extend_from_slice(&rl_buf[..rl_bytes]);
-        suback_buf.extend_from_slice(&payload_buf[..remaining_len]);
-
-        if parse_suback(&suback_buf, pkt_id).is_err() {
-            warn!("MQTT SUBACK parse failed");
-            return Err(MqttError::SubscribeFailed);
-        }
-
-        self.last_outgoing = Instant::now();
-        Ok(())
     }
 
     pub async fn recv(&mut self) -> Option<(String, Vec<u8>)> {
@@ -536,17 +571,8 @@ impl MqttClient {
                 }
 
                 if idx >= packet.len() { return None; }
-                let (props_len, props_header_size) = match decode_remaining_length(&packet[idx..]) {
-                    Some(v) => v,
-                    None => return None,
-                };
-                idx += props_header_size + props_len;
-
-                let payload = if idx < packet.len() {
-                    Vec::from(&packet[idx..])
-                } else {
-                    Vec::new()
-                };
+                // MQTT 3.1.1: no properties field — payload starts immediately after topic (+ pkt_id if QoS>0)
+                let payload = Vec::from(&packet[idx..]);
 
                 if qos >= 1 {
                     if let Some(id) = pkt_id {
@@ -566,7 +592,13 @@ impl MqttClient {
                 let _ = self.send_bytes(&encode_pingresp()).await;
                 None
             }
-            14 => { warn!("MQTT DISCONNECT received"); None }
+            14 => {
+                // Broker-initiated DISCONNECT. Returning None causes recv()
+                // to signal connection loss, triggering the reconnect loop
+                // in mqtt_task.rs.
+                warn!("MQTT DISCONNECT received from broker");
+                None
+            }
             _ => { debug!("MQTT packet type {} (unhandled)", packet_type); None }
         }
     }
