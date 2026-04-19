@@ -53,6 +53,7 @@ mod wifi;
 
 #[cfg(feature = "remote-log")]
 mod remote_log;
+mod self_test;
 
 #[cfg(feature = "sniff")]
 mod sniff;
@@ -199,6 +200,42 @@ async fn execute_actions(actions: &[AppAction], device_id: &str) {
             }
             AppAction::PublishAvailability { .. } | AppAction::PublishDiscovery => {
                 // These are handled by the MQTT task on initial connect, not emitted by SpaApp.
+            }
+        }
+    }
+}
+
+/// Handle an incoming MQTT command, routing through self-test or SpaApp.
+async fn handle_mqtt_command(
+    cmd: Command,
+    app: &mut SpaApp<'_>,
+    self_test_state: &mut Option<self_test::SelfTestState>,
+    device_id: &str,
+) -> bool {
+    // Returns true if self-test state changed and should be published immediately
+    match cmd {
+        Command::SelfTest(enable) => {
+            if enable {
+                if self_test_state.is_none() {
+                    info!("Self-test mode enabled");
+                    *self_test_state = Some(self_test::SelfTestState::new());
+                    return true;
+                }
+            } else {
+                if self_test_state.is_some() {
+                    info!("Self-test mode disabled, resuming normal operation");
+                    *self_test_state = None;
+                }
+            }
+            false
+        }
+        _ => {
+            if let Some(ref mut st) = self_test_state {
+                st.apply_command(&cmd)
+            } else {
+                let actions = app.on_mqtt_command(cmd);
+                execute_actions(&actions, device_id).await;
+                false
             }
         }
     }
@@ -530,6 +567,9 @@ async fn main(spawner: Spawner) {
     let clock = clock::EmbassyClock::new();
     let mut app = SpaApp::new(&clock);
     let device_id_str: &str = &app_config.device_id;
+    let mut self_test_state: Option<self_test::SelfTestState> = None;
+    let mut self_test_last_publish: Option<Instant> = None;
+    const SELF_TEST_PUBLISH_INTERVAL_SECS: u64 = 5;
 
     let tick_interval = Duration::from_secs(1);
 
@@ -537,25 +577,41 @@ async fn main(spawner: Spawner) {
         // Feed the hardware watchdog each iteration
         wdt.feed();
 
+        // When self-test is active, skip UART frames entirely
+        let skip_uart = self_test_state.is_some();
+
         // Multiplex: wait for either a UART frame, an MQTT command, or a
         // 1-second tick timer. This replaces the old blocking receive() that
         // hung indefinitely when the spa was off (no OTA, no commands, no ticks).
         match select(frame_rx.receive(), select(cmd_rx.receive(), Timer::after(tick_interval))).await {
             // UART frame received
             Either::First(frame) => {
-                let actions = app.process_frame(&frame);
-                execute_actions(&actions, device_id_str).await;
-
-                // Drain all available frames
-                while let Ok(frame) = frame_rx.try_receive() {
+                if !skip_uart {
                     let actions = app.process_frame(&frame);
                     execute_actions(&actions, device_id_str).await;
+
+                    // Drain all available frames
+                    while let Ok(frame) = frame_rx.try_receive() {
+                        let actions = app.process_frame(&frame);
+                        execute_actions(&actions, device_id_str).await;
+                    }
                 }
+                // When in self-test mode, drain and discard UART frames
+                while frame_rx.try_receive().is_ok() {}
             }
             // MQTT command received
             Either::Second(Either::First(cmd)) => {
-                let actions = app.on_mqtt_command(cmd);
-                execute_actions(&actions, device_id_str).await;
+                let changed = handle_mqtt_command(cmd, &mut app, &mut self_test_state, device_id_str).await;
+                if changed {
+                    if let Some(ref st) = self_test_state {
+                        execute_actions(&[AppAction::PublishState {
+                            status: st.status().clone(),
+                            fault: None,
+                            recovering_from_stale: false,
+                        }], device_id_str).await;
+                        self_test_last_publish = Some(Instant::now());
+                    }
+                }
             }
             // Tick timer expired
             Either::Second(Either::Second(_)) => {}
@@ -563,13 +619,38 @@ async fn main(spawner: Spawner) {
 
         // Drain MQTT commands (non-blocking)
         while let Ok(cmd) = cmd_rx.try_receive() {
-            let actions = app.on_mqtt_command(cmd);
-            execute_actions(&actions, device_id_str).await;
+            let changed = handle_mqtt_command(cmd, &mut app, &mut self_test_state, device_id_str).await;
+            if changed {
+                if let Some(ref st) = self_test_state {
+                    execute_actions(&[AppAction::PublishState {
+                        status: st.status().clone(),
+                        fault: None,
+                        recovering_from_stale: false,
+                    }], device_id_str).await;
+                    self_test_last_publish = Some(Instant::now());
+                }
+            }
         }
 
-        // Periodic tick: stale detection, registration timeout, diagnostics
-        let tick_actions = app.tick();
-        execute_actions(&tick_actions, device_id_str).await;
+        // In self-test mode, publish simulated status periodically
+        if let Some(ref st) = self_test_state {
+            let now = Instant::now();
+            let should_publish = self_test_last_publish
+                .map_or(true, |t| t.elapsed().as_secs() >= SELF_TEST_PUBLISH_INTERVAL_SECS);
+            if should_publish {
+                execute_actions(&[AppAction::PublishState {
+                    status: st.status().clone(),
+                    fault: None,
+                    recovering_from_stale: false,
+                }], device_id_str).await;
+                self_test_last_publish = Some(now);
+            }
+        } else {
+            self_test_last_publish = None;
+            // Periodic tick: stale detection, registration timeout, diagnostics
+            let tick_actions = app.tick();
+            execute_actions(&tick_actions, device_id_str).await;
+        }
 
         // Heap check (uses actual ESP32 free heap)
         let heap_actions = app.check_heap(esp_alloc::HEAP.free());
