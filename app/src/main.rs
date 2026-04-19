@@ -40,6 +40,7 @@ use types::FaultBuf;
 
 mod clock;
 mod config;
+mod core_logger;
 mod crypto;
 mod diagnostics;
 mod macros;
@@ -399,7 +400,7 @@ async fn main(_spawner: Spawner) {
 async fn main(spawner: Spawner) {
     use launa_ota::OtaUpdate;
 
-    esp_println::logger::init_logger_from_env();
+    core_logger::init();
     esp_alloc::heap_allocator!(#[ram(reclaimed)] size: 64 * 1024);
     esp_alloc::heap_allocator!(size: 36 * 1024);
 

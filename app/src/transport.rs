@@ -42,7 +42,7 @@ impl Rs485Transport {
 
 impl Transport for Rs485Transport {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, TransportError> {
-        self.uart.read(buf).map_err(|_e| {
+        self.uart.read_async(buf).await.map_err(|_e| {
             TransportError::Io
         })
     }
