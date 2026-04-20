@@ -43,6 +43,7 @@ pub struct StatusUpdate {
 
 /// Spa heating mode — controls when the heater is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HeatingMode {
     /// Heater runs whenever temperature is below set point.
     Ready,
@@ -54,6 +55,7 @@ pub enum HeatingMode {
 
 /// Temperature display scale reported by the spa controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TemperatureScale {
     Fahrenheit,
     Celsius,
@@ -67,6 +69,7 @@ pub enum TimeFormat {
 
 /// Temperature range — determines the min/max set temperature bounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TempRange {
     Low,
     High,
@@ -74,6 +77,7 @@ pub enum TempRange {
 
 /// Pump speed state as reported by the spa controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PumpState {
     /// Pump is off.
     Off,

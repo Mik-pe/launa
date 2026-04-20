@@ -134,23 +134,17 @@ pub fn find_header_value_start(headers: &[u8], name: &[u8]) -> Option<usize> {
     if name.is_empty() {
         return None;
     }
-    let search_from = 0;
-    while search_from < headers.len() {
-        if let Some(pos) = headers[search_from..]
-            .windows(name.len())
-            .position(|w| w == name)
-        {
-            let abs_pos = search_from + pos + name.len();
-            // Skip any leading whitespace
-            let mut start = abs_pos;
-            while start < headers.len() && headers[start] == b' ' {
-                start += 1;
-            }
-            return Some(start);
+    if let Some(pos) = headers.windows(name.len()).position(|w| w == name) {
+        let abs_pos = pos + name.len();
+        // Skip any leading whitespace
+        let mut start = abs_pos;
+        while start < headers.len() && headers[start] == b' ' {
+            start += 1;
         }
-        break;
+        Some(start)
+    } else {
+        None
     }
-    None
 }
 
 #[cfg(test)]

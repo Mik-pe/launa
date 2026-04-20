@@ -40,7 +40,7 @@ use types::FaultBuf;
 
 mod clock;
 mod config;
-mod core_logger;
+mod logger;
 mod crypto;
 mod diagnostics;
 mod macros;
@@ -63,14 +63,34 @@ mod sniff;
 /// loop to allow automatic recovery from panics.
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    // Use esp-println directly since the log framework may not be usable
-    // during a panic (e.g., if the panic occurred in a log call).
-    esp_println::println!("PANIC: {}", info);
+    // Write directly to UART0 registers - don't use the logger since
+    // the panic might have occurred while holding the logger lock.
+    const UART_FIFO: usize = 0x60000000;
+    const UART_STATUS: usize = 0x6000001C;
+    const TX_FIFO_CNT_MASK: u32 = 0x7F << 16;
+    const FIFO_SIZE: u16 = 128;
 
-    // Busy-wait ~500ms to allow UART TX to flush the panic message.
-    // esp-hal provides esp_hal::delay::Delay for blocking delays, but it
-    // requires Peripherals which aren't available in a panic handler.
-    // Instead, we use a volatile busy-loop to avoid optimization.
+    let msg = core::format_args!("PANIC: {}\n", info);
+    let mut buf = [0u8; 256];
+    let mut writer = SliceWrite::new(&mut buf);
+    let _ = core::fmt::Write::write_fmt(&mut writer, msg);
+    let written = writer.len();
+
+    unsafe {
+        for &b in &buf[..written] {
+            // Wait for FIFO space
+            while (((UART_STATUS as *const u32).read_volatile() & TX_FIFO_CNT_MASK) >> 16) as u16 >= FIFO_SIZE {
+                core::hint::spin_loop();
+            }
+            (UART_FIFO as *mut u8).write_volatile(b);
+        }
+        // Wait for FIFO to drain
+        while (((UART_STATUS as *const u32).read_volatile() & TX_FIFO_CNT_MASK) >> 16) as u16 > 0 {
+            core::hint::spin_loop();
+        }
+    }
+
+    // Busy-wait ~500ms to allow UART TX to fully transmit.
     let mut counter: u32 = 0;
     let iterations = 5_000_000; // ~500ms at 240 MHz with overhead
     while counter < iterations {
@@ -79,6 +99,33 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     }
 
     esp_hal::system::software_reset()
+}
+
+/// Minimal writer that writes to a byte slice and tracks position.
+struct SliceWrite<'a> {
+    buf: &'a mut [u8],
+    pos: usize,
+}
+
+impl<'a> SliceWrite<'a> {
+    fn new(buf: &'a mut [u8]) -> Self {
+        SliceWrite { buf, pos: 0 }
+    }
+
+    fn len(&self) -> usize {
+        self.pos
+    }
+}
+
+impl<'a> core::fmt::Write for SliceWrite<'a> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let bytes = s.as_bytes();
+        let remaining = &mut self.buf[self.pos..];
+        let len = bytes.len().min(remaining.len());
+        remaining[..len].copy_from_slice(&bytes[..len]);
+        self.pos += len;
+        Ok(())
+    }
 }
 
 /// Firmware version embedded at compile time from Cargo.toml [package].version
@@ -174,7 +221,7 @@ async fn execute_actions(actions: &[AppAction], device_id: &str) {
             } => {
                 let fb = fault.as_ref().map_or(FaultBuf::EMPTY, |s| FaultBuf::from_str(s));
                 if STATE_CHANNEL.try_send((status.clone(), fb, *recovering_from_stale)).is_err() {
-                    warn!("STATE_CHANNEL full, dropping state update (capacity 2)");
+                    warn!("STATE_CHANNEL full, dropping state update (capacity 4)");
                 }
             }
             AppAction::PublishStaleAvailability => {
@@ -437,12 +484,14 @@ async fn main(_spawner: Spawner) {
 async fn main(spawner: Spawner) {
     use launa_ota::OtaUpdate;
 
-    core_logger::init();
     esp_alloc::heap_allocator!(#[ram(reclaimed)] size: 64 * 1024);
     esp_alloc::heap_allocator!(size: 36 * 1024);
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
+
+    // Initialize logger (uses raw UART0 registers, bypasses buggy ROM function)
+    logger::init();
 
     // Record boot timestamp for diagnostics uptime calculation
     DIAGNOSTICS_START_SECS.store((Instant::now().as_millis() / 1000) as u32, Ordering::Relaxed);
@@ -456,10 +505,10 @@ async fn main(spawner: Spawner) {
     let mut wdt = timg1.wdt;
     wdt.set_timeout(
         esp_hal::timer::timg::MwdtStage::Stage0,
-        esp_hal::time::Duration::from_secs(30),
+        esp_hal::time::Duration::from_secs(120),
     );
     wdt.enable();
-    info!("Hardware watchdog enabled (30s timeout)");
+    info!("Hardware watchdog enabled (120s timeout)");
 
     info!("Launa ESP32 firmware starting...");
 
@@ -657,23 +706,44 @@ async fn main(spawner: Spawner) {
         execute_actions(&heap_actions, device_id_str).await;
 
         if let Ok(firmware_url) = ota_rx.try_receive() {
-            match (ota.as_mut(), ota_buffers.as_mut()) {
-                (Some(o), Some(b)) => {
-                    info!("OTA: starting firmware download from main loop");
-                    if let Err(()) = ota::perform_ota_update(wifi_stack.stack, o, &firmware_url, b, || wdt.feed()).await {
-                        error!("OTA update failed");
-                        send_alert("error", "ota_update_failed");
+            // If URL contains "?test=1", run TCP connectivity test instead of OTA
+            if firmware_url.contains("?test=1") {
+                info!("OTA: TCP test requested via ?test=1 parameter");
+                match ota_buffers.as_mut() {
+                    Some(b) => {
+                        match ota::tcp_test(wifi_stack.stack, &firmware_url, b).await {
+                            Ok(()) => info!("OTA: TCP test PASSED"),
+                            Err(()) => {
+                                error!("OTA: TCP test FAILED");
+                                send_alert("error", "tcp_test_failed");
+                            }
+                        }
                     }
-                    // If we get here without resetting, something went very wrong
-                    error!("OTA: device did not reset after update, rolling back");
-                    let _ = o.rollback_and_reboot();
+                    None => {
+                        warn!("TCP test requested but buffers unavailable");
+                        send_alert("error", "ota_unavailable_no_flash");
+                    }
                 }
-                _ => {
-                    warn!("OTA requested but NVS/flash unavailable — cannot update");
-                    send_alert("error", "ota_unavailable_no_flash");
+                // Do NOT reset — continue normal operation
+            } else {
+                match (ota.as_mut(), ota_buffers.as_mut()) {
+                    (Some(o), Some(b)) => {
+                        info!("OTA: starting firmware download from main loop");
+                        if let Err(()) = ota::perform_ota_update(wifi_stack.stack, o, &firmware_url, b, || wdt.feed()).await {
+                            error!("OTA update failed");
+                            send_alert("error", "ota_update_failed");
+                        }
+                        // If we get here without resetting, something went very wrong
+                        error!("OTA: device did not reset after update, rolling back");
+                        let _ = o.rollback_and_reboot();
+                    }
+                    _ => {
+                        warn!("OTA requested but NVS/flash unavailable — cannot update");
+                        send_alert("error", "ota_unavailable_no_flash");
+                    }
                 }
+                esp_hal::system::software_reset();
             }
-            esp_hal::system::software_reset();
         }
 
         // Drain pump timer commands

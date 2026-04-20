@@ -83,8 +83,8 @@ fn test_ha_discovery_full_validation() {
 
     assert_eq!(
         configs.len(),
-        27,
-        "should produce exactly 27 discovery configs"
+        28,
+        "should produce exactly 28 discovery configs"
     );
 
     let mut topics_seen = std::collections::HashSet::new();

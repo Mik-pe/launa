@@ -27,12 +27,14 @@ pub struct InformationResponse {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HeaterVoltage {
     Unknown(u8),
     V240,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HeaterType {
     Unknown(u8),
     Standard,

@@ -26,22 +26,23 @@ opt-level = 3
 opt-level = 3
 
 [dependencies]
-esp-hal = { version = "=1.0.0", features = ["esp32", "unstable"] }
-esp-rtos = { version = "0.2.0", features = ["esp32", "embassy", "log-04"] }
-esp-radio = { version = "=0.17.0", features = ["esp32", "unstable", "wifi", "smoltcp", "log-04"] }
-esp-alloc = "0.9"
-esp-nvs = { version = "0.4", features = ["esp32"] }
-esp-storage = { version = "0.8", features = ["esp32"] }
-esp-backtrace = { version = "0.18", features = ["esp32", "println"] }
-esp-println = { version = "0.16", default-features = false, features = ["esp32", "auto"] }
+esp-hal = { version = "=1.1.0-rc.0", features = ["esp32", "unstable"] }
+esp-rtos = { version = "0.3.0", features = ["esp32", "embassy", "esp-radio", "esp-alloc", "log-04"] }
+esp-radio = { version = "0.18.0", features = ["esp32", "unstable", "wifi", "log-04"] }
+esp-alloc = "0.10"
+esp-nvs = { path = "vendor/esp-nvs-vendor/esp-nvs", features = ["esp32"] }
+esp-storage = { version = "0.9", features = ["esp32"] }
+esp-backtrace = { version = "0.19", features = ["esp32", "println"] }
+esp-println = { version = "0.17", default-features = false, features = ["esp32", "log-04", "uart"] }
+esp-bootloader-esp-idf = { version = "0.5", default-features = false, features = ["esp32"] }
 
-embassy-executor = "0.9"
+embassy-executor = "0.10"
 embassy-time = "0.5"
-embassy-net = { version = "0.7", features = ["tcp", "dhcpv4", "medium-ethernet", "dns"] }
-embassy-sync = "0.7"
+embassy-net = { version = "0.9", features = ["tcp", "dhcpv4", "medium-ethernet", "dns"] }
+embassy-sync = "0.8"
 embassy-futures = "0.1"
 
-embedded-io-async = "0.6"
+embedded-io-async = "0.7"
 
 static_cell = "2"
 log = "0.4"

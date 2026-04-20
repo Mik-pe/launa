@@ -16,6 +16,7 @@ pub(crate) fn pump_state_to_bits(state: PumpState) -> u8 {
         PumpState::Off => 0,
         PumpState::Low => 1,
         PumpState::High => 2,
+        _ => 0,
     }
 }
 
@@ -25,6 +26,7 @@ pub(crate) fn cycle_pump(state: PumpState) -> PumpState {
         PumpState::Off => PumpState::Low,
         PumpState::Low => PumpState::High,
         PumpState::High => PumpState::Off,
+        _ => PumpState::Off,
     }
 }
 
@@ -34,6 +36,7 @@ pub(crate) fn cycle_heating_mode(mode: HeatingMode) -> HeatingMode {
         HeatingMode::Ready => HeatingMode::Rest,
         HeatingMode::Rest => HeatingMode::ReadyInRest,
         HeatingMode::ReadyInRest => HeatingMode::Ready,
+        _ => HeatingMode::Ready,
     }
 }
 
@@ -42,6 +45,7 @@ pub(crate) fn flip_temp_range(range: TempRange) -> TempRange {
     match range {
         TempRange::High => TempRange::Low,
         TempRange::Low => TempRange::High,
+        _ => TempRange::High,
     }
 }
 
@@ -61,7 +65,21 @@ pub(crate) fn apply_toggle_by_code(state: &mut SpaState, item_code: u8) {
         0x12 => state.lights[1] = !state.lights[1],
         0x3C => state.hold = !state.hold,
         0x51 => state.heating_mode = cycle_heating_mode(state.heating_mode),
-        0x50 => state.temp_range = flip_temp_range(state.temp_range),
+        0x50 => {
+            // Save current set_temp to the active range before switching
+            match state.temp_range {
+                TempRange::High => state.set_temp_high = state.set_temp,
+                TempRange::Low => state.set_temp_low = state.set_temp,
+                _ => {}
+            }
+            state.temp_range = flip_temp_range(state.temp_range);
+            // Restore set_temp from the new range's saved value
+            state.set_temp = match state.temp_range {
+                TempRange::High => state.set_temp_high,
+                TempRange::Low => state.set_temp_low,
+                _ => state.set_temp,
+            };
+        }
         _ => {}
     }
 }
@@ -124,6 +142,7 @@ pub(crate) fn generate_status_frame(
         HeatingMode::Ready => 0,
         HeatingMode::Rest => 1,
         HeatingMode::ReadyInRest => 3,
+        _ => 0,
     };
 
     // Offset 9: Flags (temp scale bit 0, 24h time bit 1, filter mode bits 2-3)

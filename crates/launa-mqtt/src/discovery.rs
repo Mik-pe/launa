@@ -22,7 +22,7 @@ pub struct DiscoveryMessage {
 
 /// Generates Home Assistant MQTT auto-discovery config payloads for a spa device.
 ///
-/// Produces 27 discovery messages covering sensors, switches, lights, fans,
+/// Produces 28 discovery messages covering sensors, switches, lights, fans,
 /// selects, numbers, and binary sensors. Each message is a JSON config payload
 /// with its corresponding MQTT topic.
 pub struct DiscoveryBuilder {
@@ -363,9 +363,22 @@ impl DiscoveryBuilder {
             retain: false,
         });
 
+        // Self-test switch (publishes mock spa state when no real spa connected)
+        configs.push(Self::make_switch_optimistic(
+            &topics,
+            &self.device_id,
+            &device_info,
+            &origin,
+            &avail_topic,
+            "self_test",
+            "Self Test",
+            &format!("{}/self_test", cmd_topic),
+        ));
+
         configs
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn make_sensor(
         topics: &TopicBuilder,
         device_id: &str,
@@ -398,6 +411,7 @@ impl DiscoveryBuilder {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn make_binary_sensor(
         topics: &TopicBuilder,
         device_id: &str,
@@ -428,6 +442,7 @@ impl DiscoveryBuilder {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn make_switch(
         topics: &TopicBuilder,
         device_id: &str,
@@ -460,6 +475,7 @@ impl DiscoveryBuilder {
 
     /// Build an optimistic switch entity for commands that have no state feedback.
     /// HA will assume the state changed immediately after sending a command.
+    #[allow(clippy::too_many_arguments)]
     fn make_switch_optimistic(
         topics: &TopicBuilder,
         device_id: &str,
@@ -480,6 +496,7 @@ impl DiscoveryBuilder {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn make_select(
         topics: &TopicBuilder,
         device_id: &str,
@@ -557,8 +574,8 @@ mod tests {
         let configs = builder.build();
 
         assert!(
-            configs.len() >= 27,
-            "expected at least 27 discovery configs, got {}",
+            configs.len() >= 28,
+            "expected at least 28 discovery configs, got {}",
             configs.len()
         );
 
@@ -574,8 +591,8 @@ mod tests {
         let messages = builder.build_with_retain();
 
         assert!(
-            messages.len() >= 27,
-            "expected at least 27 discovery messages, got {}",
+            messages.len() >= 28,
+            "expected at least 28 discovery messages, got {}",
             messages.len()
         );
         for msg in &messages {
@@ -903,7 +920,7 @@ mod tests {
         // and sw_version produce valid JSON in ALL discovery payloads.
         let builder = builder_with_special_chars();
         let configs = builder.build();
-        assert!(configs.len() >= 27, "expected at least 27 configs");
+        assert!(configs.len() >= 28, "expected at least 28 configs");
 
         for (topic, json_str) in &configs {
             let _: serde_json::Value = serde_json::from_str(json_str).unwrap_or_else(|e| {

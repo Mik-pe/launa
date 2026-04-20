@@ -76,11 +76,16 @@ fn bytes_to_hex<'a>(bytes: &[u8], buf: &'a mut HexBuf) -> &'a str {
 
 #[esp_rtos::main]
 pub(crate) async fn main(spawner: Spawner) {
-    init_heap();
-    let peripherals = esp_hal::init(esp_hal::Config::default());
+    esp_println::logger::init_logger_from_env();
+    esp_alloc::heap_allocator!(#[ram(reclaimed)] size: 64 * 1024);
+    esp_alloc::heap_allocator!(size: 36 * 1024);
+
+    let config = esp_hal::Config::default().with_cpu_clock(esp_hal::clock::CpuClock::max());
+    let peripherals = esp_hal::init(config);
 
     let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
-    esp_rtos::start(timg0.timer0);
+    let sw_int = esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+    esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
     info!("Launa ESP32 sniffer mode starting...");
 
@@ -108,10 +113,8 @@ pub(crate) async fn main(spawner: Spawner) {
     let mut transport = transport::Rs485Transport::new(uart, Some(peripherals.GPIO4.into()));
     info!("RS-485 UART initialized");
 
-    let radio_ctrl = esp_radio::init().expect("Failed to init esp-radio");
     let wifi_stack = wifi::WifiStack::connect(
         spawner,
-        radio_ctrl,
         peripherals.WIFI,
         esp_hal::rng::Rng::new(),
         &app_config.wifi_ssid,

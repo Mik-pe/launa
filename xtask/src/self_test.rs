@@ -30,6 +30,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let app_dir = crate::util::project_root().join("app");
     let status = Command::new("cargo")
         .args(&[
+            "+esp",
             "espflash",
             "flash",
             "--chip",

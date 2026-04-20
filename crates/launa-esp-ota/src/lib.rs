@@ -33,6 +33,6 @@ pub mod flash;
 pub mod ota;
 
 // Re-export public API
-pub use crypto::{crc32, crc32_update, SigningKey};
+pub use crypto::{crc32, crc32_ota, crc32_update};
 pub use flash::Partition;
 pub use ota::EspOtaFlash;

@@ -11,6 +11,14 @@ fn main() {
     println!("cargo:rerun-if-changed=../.git/HEAD");
     println!("cargo:rerun-if-changed=../.git/refs/");
 
+    // Use esp-hal's linkall.x as the top-level linker script.
+    // linkall.x INCLUDEs hal-defaults.x which INCLUDEs device.x (PAC interrupt
+    // handler PROVIDE directives) and also includes stack.x (stack sections).
+    // Without this, the default link.x from xtensa-lx-rt is used, which lacks
+    // these sections and causes undefined-reference errors for interrupt
+    // handlers like RWBT_NMI, GPIO, UART0, etc.
+    println!("cargo:rustc-link-arg=-Tlinkall.x");
+
     let short_sha = git_short_sha().unwrap_or_else(|| {
         // Fallback: try GITHUB_SHA env var (CI environments)
         std::env::var("GITHUB_SHA")

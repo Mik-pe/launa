@@ -24,5 +24,5 @@ id = "launa_spa"               # required — unique ID for HA entity prefixes
 serial_port = "COM3"           # required for USB flash commands
 
 [ota]
-serve_port = 8080              # optional, default 8080 — port for local OTA HTTP server
+serve_port = 8081              # optional, default 8081 — port for local OTA HTTP server
 host = ""                      # optional, default empty (uses mqtt.host) — OTA server address if different from MQTT broker

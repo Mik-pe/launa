@@ -1,7 +1,13 @@
 use anyhow::{bail, Context};
 use serde::Deserialize;
+use std::io::{Read as _, Write as _};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
+
+/// Offset of the factory/app partition in the merged flash image (from partitions.csv).
+const APP_PARTITION_OFFSET: usize = 0x20000;
 
 /// Read the firmware version from app/Cargo.toml.
 fn read_firmware_version() -> anyhow::Result<String> {
@@ -88,21 +94,26 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     // Step 2: Build firmware
     println!("\n[2/7] Building firmware...");
-    let bin_path = crate::util::project_root().join("target").join("launa.bin");
+    let target_dir = crate::util::project_root().join("target");
+    let merged_path = target_dir.join("launa-merged.bin");
+    let ota_bin_path = target_dir.join("launa-ota.bin");
     let app_dir = crate::util::project_root().join("app");
 
     let mut build_cmd = Command::new("cargo");
     build_cmd
+        .arg("+esp")
         .arg("espflash")
         .arg("save-image")
         .arg("--chip")
         .arg("esp32")
+        .arg("--merge")
         .arg("--partition-table")
-        .arg("partitions.csv");
+        .arg("partitions.csv")
+        .arg("--skip-padding");
     if feature != "default" {
         build_cmd.arg("--features").arg(&feature);
     }
-    build_cmd.arg("-o").arg(&bin_path);
+    build_cmd.arg(&merged_path);
     build_cmd.current_dir(&app_dir);
 
     let build_status = build_cmd
@@ -111,7 +122,36 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     if !build_status.success() {
         bail!("Firmware build failed.");
     }
-    println!("Firmware built: {}", bin_path.display());
+
+    // Extract the app partition from the merged image for OTA.
+    // The merged binary contains bootloader + partition table + app.
+    // OTA only needs the raw app image (starts with 0xE9 magic).
+    let merged_data = std::fs::read(&merged_path)
+        .with_context(|| format!("Failed to read {}", merged_path.display()))?;
+    if merged_data.len() <= APP_PARTITION_OFFSET {
+        bail!(
+            "Merged image too small ({} bytes), expected app at offset 0x{:X}",
+            merged_data.len(),
+            APP_PARTITION_OFFSET
+        );
+    }
+    let app_image = &merged_data[APP_PARTITION_OFFSET..];
+    if app_image[0] != 0xE9 {
+        bail!(
+            "App image does not start with ESP32 magic 0xE9, got 0x{:02X}",
+            app_image[0]
+        );
+    }
+    let mut f = std::fs::File::create(&ota_bin_path)
+        .with_context(|| format!("Failed to create {}", ota_bin_path.display()))?;
+    f.write_all(app_image)
+        .context("Failed to write OTA binary")?;
+
+    println!(
+        "Firmware built: {} ({} bytes, app partition extracted)",
+        ota_bin_path.display(),
+        app_image.len()
+    );
 
     // Step 3: Start OTA server in background
     println!("\n[3/7] Starting OTA server...");
@@ -120,7 +160,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     ota_serve_cmd
         .arg("ota-serve")
         .arg("--firmware")
-        .arg(&bin_path)
+        .arg(&ota_bin_path)
         .arg("--port")
         .arg(ota_port.to_string());
 
@@ -129,8 +169,21 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         .context("Failed to start OTA server")?;
     println!("OTA server started (PID {}).", ota_serve_child.id());
 
-    // Wait for server to be ready
-    std::thread::sleep(Duration::from_secs(2));
+    // Wait for server to be ready (verify with TCP connect)
+    let server_addr = format!("127.0.0.1:{}", ota_port);
+    for attempt in 1..=10 {
+        std::thread::sleep(Duration::from_millis(500));
+        if std::net::TcpStream::connect(&server_addr).is_ok() {
+            println!("OTA server ready on port {}", ota_port);
+            break;
+        }
+        if attempt == 10 {
+            let _ = ota_serve_child.kill();
+            let _ = ota_serve_child.wait();
+            bail!("OTA server did not become ready on port {}", ota_port);
+        }
+        println!("Waiting for OTA server... (attempt {}/10)", attempt);
+    }
 
     // Step 4: Publish OTA command via MQTT
     println!("\n[4/7] Publishing OTA command via MQTT...");
@@ -150,6 +203,30 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     let (client, mut connection) = rumqttc::Client::new(mqttoptions, 10);
 
+    // Subscribe early so we can drain any stale retained messages before
+    // sending the OTA command.  The availability topic has retain=true,
+    // so subscribing now delivers the current-boot "online" immediately.
+    let status_topic = format!("launa/{}/state", device_id);
+    let avail_topic = format!("launa/{}/availability", device_id);
+    client.subscribe(&status_topic, rumqttc::QoS::AtLeastOnce)?;
+    client.subscribe(&avail_topic, rumqttc::QoS::AtLeastOnce)?;
+
+    // Drain stale retained messages from the current boot
+    let drain_deadline = std::time::Instant::now() + Duration::from_secs(3);
+    for notification in connection.iter() {
+        if std::time::Instant::now() > drain_deadline {
+            break;
+        }
+        match notification {
+            Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(_))) => {}
+            Ok(rumqttc::Event::Incoming(rumqttc::Packet::SubAck(_))) => {}
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+
+    // Now publish the OTA command — any subsequent availability "online"
+    // will be from the *new* boot after OTA completes.
     let payload = serde_json::json!({
         "url": firmware_url,
     });
@@ -164,10 +241,54 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         .context("Failed to publish OTA command")?;
     println!("OTA command published to {}", topic);
 
-    // Step 5: Wait for device to come back online
+    // Step 5: Wait for device to come back online (with serial monitor)
     println!("\n[5/7] Waiting for device to come back online (timeout 120s)...");
-    let status_topic = format!("launa/{}/state", device_id);
-    client.subscribe(&status_topic, rumqttc::QoS::AtLeastOnce)?;
+
+    // Start serial monitor thread to show device output during OTA
+    let monitor_running = Arc::new(AtomicBool::new(true));
+    let monitor_port = config.device.serial_port.clone();
+    let ota_partition_info: Arc<std::sync::Mutex<String>> = Arc::new(std::sync::Mutex::new(String::new()));
+    let ota_partition_info_clone = ota_partition_info.clone();
+    let monitor_handle = {
+        let running = monitor_running.clone();
+        std::thread::spawn(move || {
+            let Ok(mut port) = serialport::new(&monitor_port, 115200)
+                .timeout(Duration::from_millis(100))
+                .open()
+            else {
+                return;
+            };
+            let mut buf = [0u8; 256];
+            let mut line_buf = String::new();
+            while running.load(Ordering::SeqCst) {
+                match port.read(&mut buf) {
+                    Ok(n) if n > 0 => {
+                        let text = String::from_utf8_lossy(&buf[..n]);
+                        print!("{}", text);
+                        // Capture OTA partition info from serial log
+                        line_buf.push_str(&text);
+                        for pattern in &["OTA: beginning update to", "Loaded app from partition at offset"] {
+                            if let Some(pos) = line_buf.find(pattern) {
+                                let line_end = line_buf[pos..].find('\n').unwrap_or(line_buf[pos..].len());
+                                let line = line_buf[pos..pos + line_end].trim().to_string();
+                                if let Ok(mut info) = ota_partition_info_clone.lock() {
+                                    *info = line;
+                                }
+                            }
+                        }
+                        // Keep line_buf bounded
+                        if line_buf.len() > 4096 {
+                            line_buf = line_buf[line_buf.len() - 2048..].to_string();
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {}
+                    Err(_) => break,
+                }
+            }
+        })
+    };
+    println!("Serial monitor active on {}", config.device.serial_port);
 
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
     let mut came_online = false;
@@ -179,10 +300,19 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         }
         match notification {
             Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
-                if publish.topic.contains(&device_id) && publish.topic.contains("state") {
+                if publish.topic == avail_topic {
+                    let payload = String::from_utf8_lossy(&publish.payload);
+                    if payload == "online" {
+                        came_online = true;
+                        println!("\nDevice {} is back online!", device_id);
+                    }
+                }
+                if publish.topic == status_topic {
                     came_online = true;
                     state_payload = Some(String::from_utf8_lossy(&publish.payload).to_string());
-                    println!("Device {} is back online!", device_id);
+                    println!("\nDevice {} published state!", device_id);
+                }
+                if came_online {
                     break;
                 }
             }
@@ -190,6 +320,16 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             Err(e) => {
                 eprintln!("MQTT error: {}", e);
             }
+        }
+    }
+
+    monitor_running.store(false, Ordering::SeqCst);
+    let _ = monitor_handle.join();
+
+    // Report OTA partition info captured from serial output
+    if let Ok(info) = ota_partition_info.lock() {
+        if !info.is_empty() {
+            println!("\nOTA target: {}", *info);
         }
     }
 

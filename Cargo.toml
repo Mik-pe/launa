@@ -9,6 +9,7 @@ members = [
     "crates/launa-core",
     "crates/launa-sim",
     "crates/launa-integration-tests",
+    "crates/launa-server",
     "xtask",
 ]
 exclude = [

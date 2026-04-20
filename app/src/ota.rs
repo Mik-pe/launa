@@ -267,6 +267,133 @@ pub async fn perform_ota_update(
     esp_hal::system::software_reset()
 }
 
+/// TCP connectivity test for verifying OTA server reachability.
+///
+/// Connects to the OTA HTTP server, sends a GET request for `/firmware.bin`,
+/// and logs the response without performing any OTA operation. Useful for
+/// diagnosing network issues before attempting a real firmware update.
+///
+/// Does NOT reset the device on completion — returns Ok(()) or Err(()).
+pub async fn tcp_test(
+    stack: &'static Stack<'static>,
+    firmware_url: &str,
+    buffers: &mut OtaBuffers,
+) -> Result<(), ()> {
+    let (host, port, path) = match parse_http_url(firmware_url) {
+        Some(v) => v,
+        None => {
+            error!("TCP_TEST: invalid URL: {}", firmware_url);
+            return Err(());
+        }
+    };
+
+    info!("TCP_TEST: parsed URL -> host={} port={} path={}", host, port, path);
+
+    // Reuse pre-allocated TCP socket buffers (same pattern as perform_ota_update)
+    let rx: &'static mut [u8] =
+        unsafe { &mut *(buffers.rx_buf as *mut [u8; 4096] as *mut [u8]) };
+    let tx: &'static mut [u8] =
+        unsafe { &mut *(buffers.tx_buf as *mut [u8; 1024] as *mut [u8]) };
+    let mut socket = TcpSocket::new(*stack, rx, tx);
+    socket.set_timeout(Some(Duration::from_secs(10)));
+
+    info!("TCP_TEST: resolving host '{}'", host);
+    let addr = match net_util::resolve_host(stack, &host).await {
+        Some(a) => {
+            info!("TCP_TEST: resolved {} -> {}.{}.{}.{}", host, a[0], a[1], a[2], a[3]);
+            a
+        }
+        None => {
+            error!("TCP_TEST: failed to resolve host '{}'", host);
+            return Err(());
+        }
+    };
+
+    info!("TCP_TEST: connecting to {}.{}.{}.{}:{} ...", addr[0], addr[1], addr[2], addr[3], port);
+    if let Err(e) = socket
+        .connect(IpEndpoint {
+            addr: IpAddress::Ipv4(Ipv4Address::from_octets(addr)),
+            port,
+        })
+        .await
+    {
+        error!("TCP_TEST: TCP connect failed: {:?}", e);
+        return Err(());
+    }
+    info!("TCP_TEST: connected to {}:{}", host, port);
+
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        path, host
+    );
+    info!("TCP_TEST: sending HTTP request ({} bytes)", request.len());
+    if let Err(e) = socket.write_all(request.as_bytes()).await {
+        error!("TCP_TEST: failed to send HTTP request: {:?}", e);
+        return Err(());
+    }
+    info!("TCP_TEST: request sent, waiting for response");
+
+    let mut buf = [0u8; 512];
+    let mut total_read: usize = 0;
+
+    loop {
+        let n = match socket.read(&mut buf[total_read..]).await {
+            Ok(0) => {
+                info!("TCP_TEST: server closed connection (total read: {} bytes)", total_read);
+                break;
+            }
+            Ok(n) => {
+                info!("TCP_TEST: read {} bytes (total: {})", n, total_read + n);
+                n
+            }
+            Err(e) => {
+                error!("TCP_TEST: read error: {:?}", e);
+                return Err(());
+            }
+        };
+
+        total_read += n;
+
+        // Stop after filling the buffer or reading ~512 bytes
+        if total_read >= 512 {
+            info!("TCP_TEST: buffer full ({} bytes), stopping read", total_read);
+            break;
+        }
+    }
+
+    if total_read == 0 {
+        error!("TCP_TEST: no data received from server");
+        return Err(());
+    }
+
+    // Log HTTP status line (first line up to \r\n)
+    let response = &buf[..total_read];
+    if let Some(line_end) = response.iter().position(|&b| b == b'\r') {
+        let status_line = core::str::from_utf8(&response[..line_end]).unwrap_or("<non-utf8>");
+        info!("TCP_TEST: HTTP status: {}", status_line);
+    } else {
+        info!("TCP_TEST: raw response (no status line found): {:02x?}", &response[..total_read.min(64)]);
+    }
+
+    // Log first 32 bytes of response as hex for debugging
+    let hex_len = total_read.min(32);
+    info!("TCP_TEST: first {} bytes: {:02x?}", hex_len, &response[..hex_len]);
+
+    // Try to find and log the start of the body
+    if let Some(pos) = response.windows(4).position(|w| w == b"\r\n\r\n") {
+        let body_start = pos + 4;
+        let body_len = total_read.saturating_sub(body_start).min(32);
+        if body_len > 0 {
+            info!("TCP_TEST: body starts at offset {}, first {} bytes: {:02x?}", body_start, body_len, &response[body_start..body_start + body_len]);
+        } else {
+            info!("TCP_TEST: headers end at offset {} but no body data in this chunk", body_start);
+        }
+    }
+
+    info!("TCP_TEST: SUCCESS ({} bytes read)", total_read);
+    Ok(())
+}
+
 /// Roll back OTA and immediately reboot. Used on download/write failures
 /// to ensure the device doesn't continue running with a wiped partition.
 fn ota_rollback(ota: &mut EspOta) {

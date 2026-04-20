@@ -18,6 +18,7 @@ const KEY_MQTT_PORT: &str = "mqtt_port";
 const KEY_MQTT_USER: &str = "mqtt_user";
 const KEY_MQTT_PASS: &str = "mqtt_pass";
 const KEY_DEVICE_ID: &str = "device_id";
+const KEY_SELF_TEST: &str = "self_test";
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -28,6 +29,7 @@ pub struct AppConfig {
     pub mqtt_user: String,
     pub mqtt_password: String,
     pub device_id: String,
+    pub self_test: bool,
 }
 
 impl Default for AppConfig {
@@ -40,6 +42,7 @@ impl Default for AppConfig {
             mqtt_user: String::new(),
             mqtt_password: String::new(),
             device_id: String::from("launa_spa"),
+            self_test: false,
         }
     }
 }
@@ -68,10 +71,13 @@ impl AppConfig {
             .unwrap_or_else(|| String::new());
         let device_id = nvs_get_str(nvs, &ns, KEY_DEVICE_ID)
             .unwrap_or_else(|| String::from("launa_spa"));
+        let self_test = nvs.get::<bool>(&ns, &esp_nvs::Key::from_str(KEY_SELF_TEST))
+            .unwrap_or(false);
 
         info!(
-            "Config loaded: ssid={} mqtt={}:{} device={}",
-            wifi_ssid, mqtt_host, mqtt_port, device_id
+            "Config loaded: ssid=<{} chars> mqtt={}:{} device={}",
+            wifi_ssid.len(),
+            mqtt_host, mqtt_port, device_id
         );
 
         AppConfig {
@@ -82,6 +88,7 @@ impl AppConfig {
             mqtt_user,
             mqtt_password,
             device_id,
+            self_test,
         }
     }
 
@@ -99,6 +106,7 @@ impl AppConfig {
         nvs_set(nvs, &ns, KEY_MQTT_USER, self.mqtt_user.as_str());
         nvs_set(nvs, &ns, KEY_MQTT_PASS, crypto::encrypt(&self.mqtt_password, aes, rng).as_str());
         nvs_set(nvs, &ns, KEY_DEVICE_ID, self.device_id.as_str());
+        nvs_set(nvs, &ns, KEY_SELF_TEST, self.self_test);
         info!("Config saved to NVS");
     }
 

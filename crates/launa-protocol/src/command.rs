@@ -58,6 +58,7 @@ pub fn validate_set_temperature(
 
 /// Outgoing commands to the spa controller.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Command {
     ConfigurationRequest,
     ToggleItem(ToggleItem),
@@ -69,12 +70,14 @@ pub enum Command {
     InformationRequest,
     FaultLogRequest { entry: u8 },
     NothingToSend { client_id: u8 },
+    SelfTest(bool),
 }
 
 /// Toggleable spa component — used in toggle commands and pump timers.
 ///
 /// Each variant maps to a specific bit in the Balboa toggle command payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ToggleItem {
     Pump1,
     Pump2,
@@ -220,6 +223,7 @@ impl Command {
             }
             Command::FaultLogRequest { entry } => ([0x0A, 0xBF], vec![0x22, 0x20, *entry, 0x00]),
             Command::NothingToSend { client_id } => ([*client_id, 0xBF], vec![0x07]),
+            Command::SelfTest(_) => ([0x00, 0x00], Vec::new()), // not sent to spa
         }
     }
 }

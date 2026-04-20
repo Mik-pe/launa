@@ -50,7 +50,7 @@ pub struct OtaConfig {
 impl Default for OtaConfig {
     fn default() -> Self {
         OtaConfig {
-            serve_port: 8080,
+            serve_port: 8081,
             host: String::new(),
         }
     }
@@ -61,7 +61,7 @@ fn default_mqtt_port() -> u16 {
 }
 
 fn default_ota_port() -> u16 {
-    8080
+    8081
 }
 
 pub fn config_path() -> PathBuf {

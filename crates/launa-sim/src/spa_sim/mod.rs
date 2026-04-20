@@ -733,13 +733,13 @@ impl SpaSim {
                                 let raw_temp = frame.payload[1];
                                 let scale = self.state.temp_scale;
                                 if self.command_latency_ticks == 0 {
-                                    self.state.set_temp = SpaState::decode_temp(raw_temp, scale);
+                                    self.state.set_target_temp(SpaState::decode_temp(raw_temp, scale));
                                 } else {
                                     let latency = self.command_latency_ticks;
                                     self.pending_commands.push((
                                         latency,
                                         Box::new(move |state: &mut SpaState| {
-                                            state.set_temp = SpaState::decode_temp(raw_temp, scale);
+                                            state.set_target_temp(SpaState::decode_temp(raw_temp, scale));
                                         }),
                                     ));
                                 }

@@ -9,3 +9,5 @@ app/target/
 launa.toml
 launa.key
 *.toml.bak
+web/node_modules/
+web/dist/

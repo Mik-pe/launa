@@ -1,14 +1,13 @@
 //! ESP32 OTA update state machine.
 //!
 //! Implements the `OtaUpdate` trait with begin/write/finalize/rollback
-//! operations, managing partition selection, CRC verification, and
-//! HMAC-SHA256 signature checking.
+//! operations, managing partition selection and CRC-32 integrity verification.
 
 use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 use launa_ota::{OtaError, OtaUpdate};
 use log::{debug, info, warn};
 
-use crate::crypto::{crc32_update, hmac_sha256_update, truncate_signature, SigningKey};
+use crate::crypto::crc32_update;
 use crate::flash::Partition;
 use crate::flash::{
     aligned_write, detect_running_partition, erase_range, set_boot_partition, WORD_SIZE,
@@ -36,13 +35,6 @@ pub struct EspOtaFlash<S> {
     pub(crate) pending_bytes: [u8; 3],
     /// Number of valid bytes in `pending_bytes` (0..=3).
     pub(crate) pending_len: usize,
-    /// Accumulated firmware data for HMAC-SHA256 signature verification.
-    /// NOTE: This accumulates the full firmware in RAM, which will OOM on
-    /// real hardware (1.25 MiB firmware vs 32 KiB heap). Signature verification
-    /// via `verify_signature()` is therefore not usable in production until
-    /// incremental HMAC is implemented. CRC-32 verification is always safe.
-    /// Retained for desktop testing only.
-    pub(crate) firmware_data: alloc::vec::Vec<u8>,
 }
 
 impl<S> EspOtaFlash<S>
@@ -70,7 +62,6 @@ where
             first_chunk_validated: false,
             pending_bytes: [0xFF; 3],
             pending_len: 0,
-            firmware_data: alloc::vec::Vec::new(),
         }
     }
 
@@ -87,25 +78,6 @@ where
     /// Consume self and return the flash storage backend.
     pub fn into_flash(self) -> S {
         self.flash
-    }
-
-    /// Default signing key for firmware verification.
-    ///
-    /// **WARNING**: This is a placeholder key for development/testing only.
-    /// In production, this MUST be replaced with a key derived from ESP32
-    /// eFuse BLOCK3 (similar to NVS encryption in crypto.rs). Any attacker
-    /// with access to this source code can forge valid firmware signatures.
-    ///
-    /// Until a proper per-device provisioning flow is implemented, HMAC
-    /// signature verification should NOT be relied upon for production
-    /// OTA security. Use CRC-32 as a corruption check and rely on
-    /// network-level security (TLS) for OTA integrity.
-    pub fn default_signing_key() -> [u8; 32] {
-        [
-            0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54,
-            0x32, 0x10, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0xFE, 0xDC, 0xBA, 0x98,
-            0x76, 0x54, 0x32, 0x10,
-        ]
     }
 }
 
@@ -143,7 +115,6 @@ where
         self.firmware_crc = 0xFFFFFFFF;
         self.first_chunk_validated = false;
         self.pending_len = 0;
-        self.firmware_data.clear();
 
         info!("OTA: target partition erased");
         Ok(())
@@ -184,9 +155,6 @@ where
 
         // Accumulate CRC of firmware data (before any buffering)
         self.firmware_crc = crc32_update(self.firmware_crc, chunk);
-
-        // Accumulate firmware data for HMAC-SHA256 signature verification
-        self.firmware_data.extend_from_slice(chunk);
 
         // Prepend any pending partial-word bytes from the previous write.
         let combined: alloc::vec::Vec<u8>;
@@ -330,36 +298,15 @@ where
         }
         Ok(())
     }
-
-    fn verify_signature(&mut self, expected_signature: u32) -> Result<(), OtaError> {
-        // In production, the signing key would come from eFuse or compile-time constant.
-        // For verification, the caller provides the key via a separate mechanism.
-        // This method verifies against the default signing key.
-        let key = SigningKey::new(Self::default_signing_key());
-        let hmac = hmac_sha256_update(&key, &self.firmware_data);
-        let actual = truncate_signature(&hmac);
-        if actual != expected_signature {
-            warn!(
-                "OTA: signature mismatch: expected {:#010X}, actual {:#010X}",
-                expected_signature, actual
-            );
-            return Err(OtaError::SignatureMismatch {
-                expected: expected_signature,
-                actual,
-            });
-        }
-        info!("OTA: firmware signature verified: {:#010X}", actual);
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::{crc32, hmac_sha256};
+    use crate::crypto::crc32;
     use crate::flash::{
-        set_boot_partition, u32_from_be, OTADATA_OFFSET, OTA_0_SIZE, OTA_1_OFFSET, OTA_1_SIZE,
-        OTA_ENTRY_SIZE, OTA_SEQ_OFFSET, OTA_SEQ_SIZE,
+        set_boot_partition, u32_from_le, OTADATA_OFFSET, OTA_0_SIZE, OTA_1_OFFSET, OTA_1_SIZE,
+        OTA_ENTRY_SIZE, OTA_SEQ_OFFSET, OTA_SEQ_SIZE, SECTOR_SIZE,
     };
     use embedded_storage::nor_flash::{ErrorType, NorFlashError};
 
@@ -470,9 +417,9 @@ mod tests {
         assert_eq!(&inner.data[base..base + 8], firmware);
         assert_eq!(&inner.data[base + 8..base + 16], firmware);
 
-        let slot1_start = OTADATA_OFFSET as usize + OTA_ENTRY_SIZE;
+        let slot1_start = OTADATA_OFFSET as usize + SECTOR_SIZE as usize;
         let entry = &inner.data[slot1_start..slot1_start + OTA_ENTRY_SIZE];
-        let seq = u32_from_be(&entry[OTA_SEQ_OFFSET..OTA_SEQ_OFFSET + OTA_SEQ_SIZE]);
+        let seq = u32_from_le(&entry[OTA_SEQ_OFFSET..OTA_SEQ_OFFSET + OTA_SEQ_SIZE]);
         assert!(seq > 0, "OTA slot 1 sequence should be > 0, got {}", seq);
     }
 
@@ -490,9 +437,9 @@ mod tests {
         ota.rollback_and_reboot().unwrap();
 
         let inner = &ota.flash;
-        let slot_start = OTADATA_OFFSET as usize + OTA_ENTRY_SIZE;
+        let slot_start = OTADATA_OFFSET as usize + SECTOR_SIZE as usize;
         let entry = &inner.data[slot_start..slot_start + OTA_ENTRY_SIZE];
-        let seq = u32_from_be(&entry[OTA_SEQ_OFFSET..OTA_SEQ_OFFSET + OTA_SEQ_SIZE]);
+        let seq = u32_from_le(&entry[OTA_SEQ_OFFSET..OTA_SEQ_OFFSET + OTA_SEQ_SIZE]);
         assert!(seq > 0, "Rollback slot should have seq > 0, got {}", seq);
     }
 
@@ -731,7 +678,7 @@ mod tests {
 
     /// Helper: read the raw 32-byte otadata entry for a given slot index (0 or 1).
     fn read_otadata_entry(flash: &MockFlash, slot: usize) -> [u8; OTA_ENTRY_SIZE] {
-        let offset = OTADATA_OFFSET as usize + slot * OTA_ENTRY_SIZE;
+        let offset = OTADATA_OFFSET as usize + slot * SECTOR_SIZE as usize;
         let mut buf = [0u8; OTA_ENTRY_SIZE];
         buf.copy_from_slice(&flash.data[offset..offset + OTA_ENTRY_SIZE]);
         buf
@@ -739,7 +686,7 @@ mod tests {
 
     /// Helper: extract the sequence number from an otadata entry.
     fn seq_from_entry(entry: &[u8; OTA_ENTRY_SIZE]) -> u32 {
-        let raw = u32_from_be(&entry[OTA_SEQ_OFFSET..OTA_SEQ_OFFSET + OTA_SEQ_SIZE]);
+        let raw = u32_from_le(&entry[OTA_SEQ_OFFSET..OTA_SEQ_OFFSET + OTA_SEQ_SIZE]);
         if raw == 0xFFFFFFFF {
             0
         } else {
@@ -768,7 +715,7 @@ mod tests {
         set_boot_partition(&mut ota.flash, Partition::Ota1).unwrap();
         let slot1_entry = read_otadata_entry(&ota.flash, 1);
         let slot1_seq = seq_from_entry(&slot1_entry);
-        assert_eq!(slot1_seq, 1, "slot 1 seq should be 1");
+        assert_eq!(slot1_seq, 2, "slot 1 seq should be 2 (Ota1 needs even seq)");
 
         // Verify slot 0 is STILL intact (not destroyed by slot 1 erase)
         let slot0_entry_after_second = read_otadata_entry(&ota.flash, 0);
@@ -789,37 +736,37 @@ mod tests {
         let flash = MockFlash::new(total_flash_size());
         let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
 
-        // slot 0 → seq 1
+        // slot 0 → seq 1 (Ota0 needs odd)
         set_boot_partition(&mut ota.flash, Partition::Ota0).unwrap();
         assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 0)), 1);
         assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 1)), 0);
 
-        // slot 1 → seq 1
+        // slot 1 → seq 2 (Ota1 needs even)
         set_boot_partition(&mut ota.flash, Partition::Ota1).unwrap();
         assert_eq!(
             seq_from_entry(&read_otadata_entry(&ota.flash, 0)),
             1,
-            "slot 0 lost after slot 1 write"
-        );
-        assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 1)), 1);
-
-        // slot 0 → seq 2
-        set_boot_partition(&mut ota.flash, Partition::Ota0).unwrap();
-        assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 0)), 2);
-        assert_eq!(
-            seq_from_entry(&read_otadata_entry(&ota.flash, 1)),
-            1,
-            "slot 1 lost after slot 0 write"
-        );
-
-        // slot 1 → seq 2
-        set_boot_partition(&mut ota.flash, Partition::Ota1).unwrap();
-        assert_eq!(
-            seq_from_entry(&read_otadata_entry(&ota.flash, 0)),
-            2,
             "slot 0 lost after slot 1 write"
         );
         assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 1)), 2);
+
+        // slot 0 → seq 3 (next odd after 2)
+        set_boot_partition(&mut ota.flash, Partition::Ota0).unwrap();
+        assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 0)), 3);
+        assert_eq!(
+            seq_from_entry(&read_otadata_entry(&ota.flash, 1)),
+            2,
+            "slot 1 lost after slot 0 write"
+        );
+
+        // slot 1 → seq 4 (next even after 3)
+        set_boot_partition(&mut ota.flash, Partition::Ota1).unwrap();
+        assert_eq!(
+            seq_from_entry(&read_otadata_entry(&ota.flash, 0)),
+            3,
+            "slot 0 lost after slot 1 write"
+        );
+        assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 1)), 4);
     }
 
     #[test]
@@ -1064,168 +1011,20 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_signature_matches() {
-        let flash = MockFlash::new(total_flash_size());
-        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
-        ota.begin().unwrap();
-
-        let firmware: &[u8] = &[0xE9, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
-        ota.write(firmware).unwrap();
-
-        // Compute the expected signature
-        let key = SigningKey::new(EspOtaFlash::<MockFlash>::default_signing_key());
-        let hmac = hmac_sha256(&key, firmware);
-        let expected_sig = truncate_signature(&hmac);
-
-        assert!(
-            ota.verify_signature(expected_sig).is_ok(),
-            "Signature verification should succeed with correct signature"
-        );
-    }
-
-    #[test]
-    fn test_verify_signature_mismatch() {
-        let flash = MockFlash::new(total_flash_size());
-        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
-        ota.begin().unwrap();
-
-        let firmware: &[u8] = &[0xE9, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
-        ota.write(firmware).unwrap();
-
-        // Use a wrong signature
-        let result = ota.verify_signature(0xDEADBEEF);
-        assert!(
-            matches!(
-                result,
-                Err(OtaError::SignatureMismatch {
-                    expected: 0xDEADBEEF,
-                    actual: _
-                })
-            ),
-            "Expected SignatureMismatch, got {:?}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_verify_signature_tampered_firmware() {
-        // Sign original firmware, then tamper with data → verification fails
-        let flash = MockFlash::new(total_flash_size());
-        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
-        ota.begin().unwrap();
-
-        let original: &[u8] = &[0xE9, 0x01, 0x02, 0x03];
-        ota.write(original).unwrap();
-
-        // Compute expected signature for original
-        let key = SigningKey::new(EspOtaFlash::<MockFlash>::default_signing_key());
-        let hmac = hmac_sha256(&key, original);
-        let original_sig = truncate_signature(&hmac);
-
-        // Tamper: modify firmware_data in-place (simulating bit-flip attack)
-        ota.firmware_data[2] = 0xFF;
-
-        let result = ota.verify_signature(original_sig);
-        assert!(
-            matches!(result, Err(OtaError::SignatureMismatch { .. })),
-            "Tampered firmware should fail signature verification, got {:?}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_verify_signature_across_multiple_chunks() {
-        let flash = MockFlash::new(total_flash_size());
-        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
-        ota.begin().unwrap();
-
-        let chunk1: &[u8] = &[0xE9, 0x01, 0x02, 0x03];
-        let chunk2: &[u8] = &[0x04, 0x05, 0x06, 0x07];
-        let chunk3: &[u8] = &[0x08, 0x09, 0x0A, 0x0B];
-        ota.write(chunk1).unwrap();
-        ota.write(chunk2).unwrap();
-        ota.write(chunk3).unwrap();
-
-        // Compute expected signature over concatenated data
-        let all_data: alloc::vec::Vec<u8> = [chunk1, chunk2, chunk3].concat();
-        let key = SigningKey::new(EspOtaFlash::<MockFlash>::default_signing_key());
-        let hmac = hmac_sha256(&key, &all_data);
-        let expected_sig = truncate_signature(&hmac);
-
-        assert!(
-            ota.verify_signature(expected_sig).is_ok(),
-            "Signature verification should succeed across multiple chunks"
-        );
-    }
-
-    #[test]
-    fn test_signature_resets_on_begin() {
+    fn test_full_ota_with_crc_verification() {
         let flash = MockFlash::new(total_flash_size());
         let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
 
-        // First OTA session
-        ota.begin().unwrap();
-        let fw1: &[u8] = &[0xE9, 0x01, 0x02, 0x03];
-        ota.write(fw1).unwrap();
-        let key = SigningKey::new(EspOtaFlash::<MockFlash>::default_signing_key());
-        let hmac1 = hmac_sha256(&key, fw1);
-        let sig1 = truncate_signature(&hmac1);
-        assert!(ota.verify_signature(sig1).is_ok());
-
-        // Reset and new session with different firmware
-        ota.finalize().unwrap();
-        ota.begin().unwrap();
-        assert!(
-            ota.firmware_data.is_empty(),
-            "firmware_data should be cleared on begin()"
-        );
-
-        // Write different firmware
-        let fw2: &[u8] = &[0xE9, 0xAA, 0xBB, 0xCC];
-        ota.write(fw2).unwrap();
-
-        // Old signature should NOT match new firmware
-        let result = ota.verify_signature(sig1);
-        assert!(
-            matches!(result, Err(OtaError::SignatureMismatch { .. })),
-            "Old signature should not match new firmware, got {:?}",
-            result
-        );
-
-        // New correct signature should work
-        let hmac2 = hmac_sha256(&key, fw2);
-        let sig2 = truncate_signature(&hmac2);
-        assert!(ota.verify_signature(sig2).is_ok());
-    }
-
-    #[test]
-    fn test_full_ota_with_signature_verification() {
-        let flash = MockFlash::new(total_flash_size());
-        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
-
-        // Build firmware
         let mut fw = alloc::vec![0xABu8; 1024];
         fw[0] = 0xE9; // Valid ESP32 image header magic
 
-        // Compute expected signature
-        let key = SigningKey::new(EspOtaFlash::<MockFlash>::default_signing_key());
-        let hmac = hmac_sha256(&key, &fw);
-        let expected_sig = truncate_signature(&hmac);
+        let expected_crc = crc32(&fw);
 
-        // OTA flow with signature verification
         ota.begin().unwrap();
         ota.write(&fw).unwrap();
-
-        // Verify signature before finalizing
-        assert!(ota.verify_signature(expected_sig).is_ok());
-
-        // Verify CRC also
-        let expected_crc = crc32(&fw);
         assert!(ota.verify_hash(expected_crc).is_ok());
-
         ota.finalize().unwrap();
 
-        // Simulate boot from new partition and mark valid
         let mut ota2 = EspOtaFlash::new(ota.flash, Partition::Ota1);
         ota2.mark_valid().unwrap();
     }

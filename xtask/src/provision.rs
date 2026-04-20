@@ -38,8 +38,11 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         .filter(|id| !id.is_empty())
         .unwrap_or("default");
 
-    // Generate a random 16-byte AES key
-    let key: [u8; 16] = rand::thread_rng().gen();
+    // Generate a full 32-byte random block for eFuse BLOCK3 (256 bits).
+    // The firmware reads words 2, 4, 6, 7 (bytes 8-11, 16-19, 24-27, 28-31)
+    // and XOR-mixes them into a 128-bit AES key. Filling the entire block
+    // ensures all 4 sourced words contain random data.
+    let block_data: [u8; 32] = rand::thread_rng().gen();
 
     // Write key to a temporary file (cleaned up after espefuse completes)
     let temp_dir = std::env::temp_dir();
@@ -50,11 +53,11 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         .collect();
     let key_path = temp_dir.join(format!("launa-key-{}.tmp", random_suffix));
 
-    fs::write(&key_path, &key)
+    fs::write(&key_path, &block_data)
         .with_context(|| format!("Failed to write key to temp file {}", key_path.display()))?;
 
     println!(
-        "Generated 16-byte AES key in temp file: {}",
+        "Generated 32-byte random eFuse block in temp file: {}",
         key_path.display()
     );
 
@@ -68,6 +71,8 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     // Burn the key to eFuse BLOCK3
     println!("Burning key to eFuse BLOCK3 on port {}...", port_name);
 
+    // Pass the key via stdin to avoid confirmation prompts.
+    // Newer espefuse (v5+) removed --no-confirm; instead we pipe "BURN" to stdin.
     let burn_result = Command::new(&espefuse)
         .args(&[
             "--port",
@@ -75,10 +80,20 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             "burn-block-data",
             "BLOCK3",
             key_path.to_str().unwrap(),
-            "--no-confirm",
         ])
-        .status()
-        .with_context(|| format!("Failed to run {}", espefuse));
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .with_context(|| format!("Failed to run {}", espefuse))
+        .and_then(|mut child| {
+            use std::io::Write;
+            if let Some(mut stdin) = child.stdin.take() {
+                // Pipe confirmation responses — espefuse may prompt multiple times
+                let _ = stdin.write_all(b"BURN\nBURN\nBURN\nBURN\n");
+            }
+            child
+                .wait()
+                .with_context(|| format!("Failed to wait for {}", espefuse))
+        });
 
     // Always clean up the temp file
     if let Err(e) = fs::remove_file(&key_path) {
@@ -100,11 +115,11 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     println!("✓ eFuse BLOCK3 provisioned successfully!");
     println!(
         "  Key preview (first 4 bytes): {:02x}{:02x}{:02x}{:02x}",
-        key[0], key[1], key[2], key[3]
+        block_data[0], block_data[1], block_data[2], block_data[3]
     );
 
     // Store the key in the OS keychain
-    let key_hex: String = key.iter().map(|b| format!("{:02x}", b)).collect();
+    let key_hex: String = block_data.iter().map(|b| format!("{:02x}", b)).collect();
     match store_key_in_keychain(keychain_user, &key_hex) {
         Ok(()) => {
             println!(

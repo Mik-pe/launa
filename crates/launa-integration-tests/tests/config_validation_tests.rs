@@ -692,8 +692,8 @@ fn test_mqtt_reconnect_republish_discovery() {
     broker.publish_discovery("test_spa");
     let initial_discovery_count = broker.discovery_payloads().len();
     assert_eq!(
-        initial_discovery_count, 27,
-        "should publish 27 discovery configs initially"
+        initial_discovery_count, 28,
+        "should publish 28 discovery configs initially"
     );
 
     // Phase 2: Disconnect
@@ -726,8 +726,8 @@ fn test_mqtt_reconnect_republish_discovery() {
     // Should have original 27 + re-published 27 = 54 total
     assert_eq!(
         post_reconnect_discovery.len(),
-        54,
-        "should have 54 discovery configs (27 original + 27 re-published)"
+        56,
+        "should have 56 discovery configs (28 original + 28 re-published)"
     );
     assert!(
         broker.publish_count() > pre_count,
@@ -746,7 +746,7 @@ fn test_mqtt_reconnect_discovery_in_broker() {
     broker.publish_availability(true);
 
     let initial_total = broker.publish_count();
-    assert!(initial_total >= 28); // 27 discovery + 1 availability
+    assert!(initial_total >= 29); // 28 discovery + 1 availability
 
     // Disconnect
     broker.simulate_disconnect();
@@ -794,8 +794,8 @@ fn test_mqtt_reconnect_discovery_in_broker() {
     let discovery_payloads = broker.discovery_payloads();
     assert_eq!(
         discovery_payloads.len(),
-        54,
-        "should have 54 discovery configs after re-publish (27*2)"
+        56,
+        "should have 56 discovery configs after re-publish (28*2)"
     );
 
     // Verify each discovery config is valid JSON

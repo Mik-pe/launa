@@ -51,16 +51,19 @@ pub fn status_to_json(
         HeatingMode::Ready => "ready",
         HeatingMode::Rest => "rest",
         HeatingMode::ReadyInRest => "ready_in_rest",
+        _ => "unknown",
     };
 
     let temp_range = match status.temp_range {
         TempRange::High => "high",
         TempRange::Low => "low",
+        _ => "unknown",
     };
 
     let temp_scale = match status.temperature_scale {
         TemperatureScale::Fahrenheit => "fahrenheit",
         TemperatureScale::Celsius => "celsius",
+        _ => "unknown",
     };
 
     let firmware_ver = match firmware_version {

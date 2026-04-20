@@ -182,6 +182,7 @@ impl CommandTracker {
                 let divisor: f32 = match status.temperature_scale {
                     TemperatureScale::Celsius => 2.0,
                     TemperatureScale::Fahrenheit => 1.0,
+                    _ => 1.0,
                 };
                 ((status.set_temp * divisor) as u8) == *temp
             }

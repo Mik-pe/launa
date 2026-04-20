@@ -54,11 +54,11 @@ fn test_mqtt_command_unknown_subtopic() {
 }
 
 #[test]
-fn test_invalid_toggle_payload() {
+fn test_empty_toggle_payload() {
     let cmd = launa_mqtt::command_parser::parse_command_ok(
         "launa/test_spa/command",
         "launa/test_spa/command/pump1",
-        b"on",
+        b"",
     );
     assert_eq!(cmd, None);
 }

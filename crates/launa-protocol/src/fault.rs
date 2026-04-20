@@ -26,6 +26,7 @@ pub struct FaultLogEntry {
 
 /// Known Balboa fault codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FaultCode {
     Sync,
     LowFlow,

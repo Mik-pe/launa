@@ -96,7 +96,7 @@ pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8]) -> P
             // "pump<N>_timer" → parse N and delegate
             let num_str = &s[4..s.len() - 6]; // strip "pump" prefix and "_timer" suffix
             let idx: u8 = match num_str.parse() {
-                Ok(n) if n >= 1 && n <= 6 => n,
+                Ok(n) if (1..=6).contains(&n) => n,
                 _ => return ParseResult::UnknownSubtopic(subtopic.to_string()),
             };
             parse_pump_timer(payload_str, idx)
@@ -105,7 +105,7 @@ pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8]) -> P
             // "pump<N>" → parse N and map to ToggleItem via from_pump_index
             let num_str = &s[4..];
             let idx: usize = match num_str.parse() {
-                Ok(n) if n >= 1 && n <= 6 => n,
+                Ok(n) if (1..=6).contains(&n) => n,
                 _ => return ParseResult::UnknownSubtopic(subtopic.to_string()),
             };
             if let Some(item) = ToggleItem::from_pump_index(idx - 1) {
@@ -118,7 +118,7 @@ pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8]) -> P
             // "light<N>" → parse N and map to ToggleItem via from_light_index
             let num_str = &s[5..];
             let idx: usize = match num_str.parse() {
-                Ok(n) if n >= 1 && n <= 4 => n,
+                Ok(n) if (1..=4).contains(&n) => n,
                 _ => return ParseResult::UnknownSubtopic(subtopic.to_string()),
             };
             if let Some(item) = ToggleItem::from_light_index(idx - 1) {
@@ -160,8 +160,8 @@ pub fn parse_command_ok(command_topic_base: &str, topic: &str, payload: &[u8]) -
 /// prevent accidental `SetTemperature(255)` being sent to the spa.
 /// Zero is rejected as an invalid temperature (no spa supports 0°F / 0°C).
 fn parse_set_temperature(payload: &str) -> ParseResult {
-    let temp: u8 = match payload.parse() {
-        Ok(t) => t,
+    let temp: u8 = match payload.parse::<f32>() {
+        Ok(t) => (t + 0.5) as u8,
         Err(_) => return ParseResult::InvalidPayload(format!("not a number: {:?}", payload)),
     };
 
@@ -203,9 +203,13 @@ pub fn parse_set_temperature_validated(
 }
 
 fn parse_toggle(payload: &str, item: ToggleItem) -> ParseResult {
-    match payload {
-        "true" | "false" => ParseResult::Valid(Command::ToggleItem(item)),
-        _ => ParseResult::InvalidPayload(format!("expected 'true' or 'false', got: {:?}", payload)),
+    // Accept any non-empty payload — the toggle command always toggles
+    // regardless of the value. HA sends "true"/"false", the web GUI may
+    // send select values like "rest" or "low" for heat_mode/temp_range.
+    if payload.is_empty() {
+        ParseResult::InvalidPayload("empty payload".to_string())
+    } else {
+        ParseResult::Valid(Command::ToggleItem(item))
     }
 }
 
@@ -370,6 +374,26 @@ mod tests {
         );
     }
 
+    /// Float temperature payloads are rounded to nearest integer.
+    #[test]
+    fn test_set_temperature_float_rounding() {
+        let cases: &[(&str, u8)] = &[
+            ("37.5", 38),
+            ("37.4", 37),
+            ("100.9", 101),
+            ("38.0", 38),
+        ];
+        for (i, (payload, expected)) in cases.iter().enumerate() {
+            let topic = format!("{}/set_temperature", CMD_BASE);
+            let result = parse_command(CMD_BASE, &topic, payload.as_bytes());
+            assert_eq!(
+                result,
+                ParseResult::Valid(Command::SetTemperature(*expected)),
+                "case {i}: set_temperature={payload}"
+            );
+        }
+    }
+
     /// Temperature validation with scale and range context via parse_set_temperature_validated.
     #[test]
     fn test_set_temperature_validated() {
@@ -470,7 +494,7 @@ mod tests {
         }
     }
 
-    /// Invalid payload edge cases: non-UTF8, invalid toggle payloads.
+    /// Invalid payload edge cases: non-UTF8, empty payloads.
     #[test]
     fn test_invalid_payload_errors() {
         // Non-UTF8 payload
@@ -481,7 +505,7 @@ mod tests {
             result
         );
 
-        // Invalid toggle payload (not "true" or "false")
+        // Empty payloads are rejected for toggle commands
         let toggle_subtopics: &[&str] = &[
             "pump1",
             "light1",
@@ -492,10 +516,31 @@ mod tests {
         ];
         for subtopic in toggle_subtopics {
             let topic = format!("{}/{}", CMD_BASE, subtopic);
-            let result = parse_command(CMD_BASE, &topic, b"on");
+            let result = parse_command(CMD_BASE, &topic, b"");
             assert!(
                 matches!(result, ParseResult::InvalidPayload(_)),
-                "invalid toggle payload for {subtopic}: expected InvalidPayload, got {:?}",
+                "empty toggle payload for {subtopic}: expected InvalidPayload, got {:?}",
+                result
+            );
+        }
+    }
+
+    /// Toggle commands accept arbitrary non-empty payloads (e.g. "on", "rest", "low").
+    #[test]
+    fn test_toggle_accepts_non_bool_payloads() {
+        let cases: &[(&str, &[u8])] = &[
+            ("pump1", b"on"),
+            ("heat_mode", b"rest"),
+            ("temp_range", b"low"),
+            ("blower", b"1"),
+        ];
+        for (subtopic, payload) in cases {
+            let topic = format!("{}/{}", CMD_BASE, subtopic);
+            let result = parse_command(CMD_BASE, &topic, *payload);
+            assert!(
+                matches!(result, ParseResult::Valid(Command::ToggleItem(_))),
+                "toggle {subtopic} with payload '{}': expected Valid(ToggleItem), got {:?}",
+                std::str::from_utf8(payload).unwrap(),
                 result
             );
         }
@@ -513,7 +558,7 @@ mod tests {
             None,
         );
         assert_eq!(
-            parse_command_ok(CMD_BASE, "launa/test_spa_001/command/pump1", b"garbage"),
+            parse_command_ok(CMD_BASE, "launa/test_spa_001/command/pump1", b""),
             None,
         );
     }

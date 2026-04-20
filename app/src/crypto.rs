@@ -12,7 +12,6 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use esp_hal::aes::{Aes, Key};
-use esp_hal::efuse::Efuse;
 use esp_hal::rng::Rng;
 use log::warn;
 
@@ -42,10 +41,10 @@ fn read_key() -> [u8; 16] {
     let mut key = [0u8; 16];
 
     // Read 4 words (each 32 bits = 4 bytes) from BLOCK3
-    let word2: [u8; 4] = Efuse::read_field_le(BLK3_RESERVED_2);
-    let word4: [u8; 4] = Efuse::read_field_le(SECURE_VERSION);
-    let word6: [u8; 4] = Efuse::read_field_le(BLK3_RESERVED_6);
-    let word7: [u8; 4] = Efuse::read_field_le(BLK3_RESERVED_7);
+    let word2: [u8; 4] = esp_hal::efuse::read_field_le(BLK3_RESERVED_2);
+    let word4: [u8; 4] = esp_hal::efuse::read_field_le(SECURE_VERSION);
+    let word6: [u8; 4] = esp_hal::efuse::read_field_le(BLK3_RESERVED_6);
+    let word7: [u8; 4] = esp_hal::efuse::read_field_le(BLK3_RESERVED_7);
 
     // Interleave the 4 words into a 16-byte key with mixing
     // to avoid simple patterns when only some words differ.

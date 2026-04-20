@@ -279,6 +279,7 @@ impl<'a> SpaApp<'a> {
             | IncomingMessage::PreferencesResponse { .. }
             | IncomingMessage::SetupParametersResponse { .. } => {}
             IncomingMessage::Unknown { .. } => {}
+            _ => {}
         }
 
         actions

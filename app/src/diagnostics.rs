@@ -7,6 +7,7 @@
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
+use launa_mqtt::escape::escape_json_string;
 use log::debug;
 
 use crate::*;
@@ -32,7 +33,7 @@ pub(crate) fn publish_diagnostics(
 
     let json = alloc::format!(
         r#"{{"device_id":"{}","uptime_secs":{},"mqtt_reconnect_count":{},"mqtt_loss_count":{},"command_retry_count":{},"command_drop_count":{},"frames_received":{},"heap_free":{},"fw_version":"{}"}}"#,
-        device_id,
+        escape_json_string(device_id),
         uptime_secs,
         mqtt_reconnects,
         mqtt_losses,
@@ -40,7 +41,7 @@ pub(crate) fn publish_diagnostics(
         command_drops,
         frames_received,
         heap_free,
-        FIRMWARE_VERSION,
+        escape_json_string(FIRMWARE_VERSION),
     );
 
     debug!("Diagnostics: {}", json);
@@ -63,7 +64,9 @@ pub(crate) fn send_alert(level: &str, message: &str) {
 
     let json = alloc::format!(
         r#"{{"level":"{}","message":"{}","timestamp":{}}}"#,
-        level, message, uptime_secs
+        escape_json_string(level),
+        escape_json_string(message),
+        uptime_secs
     );
 
     // Try to send non-blocking; if the channel is full, the alert is dropped

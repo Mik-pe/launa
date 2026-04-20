@@ -1,0 +1,25 @@
+{
+  "name": "web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "serve": "serve dist -l 8080",
+    "sim": "vite build && cargo run -p launa-server",
+    "dev:sim": "concurrently \"cargo watch -x 'run -p launa-server'\" \"vite\"",
+    "start": "vite build && cargo run -p launa-server"
+  },
+  "dependencies": {
+    "vue": "^3.5.32"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.2.2",
+    "@vitejs/plugin-vue": "^6.0.5",
+    "mqtt": "^5.15.1",
+    "tailwindcss": "^4.2.2",
+    "vite": "^8.0.4"
+  }
+}

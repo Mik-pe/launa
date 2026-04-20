@@ -57,7 +57,7 @@ pub fn parse_ota_url(payload: &[u8]) -> Option<String> {
                 if scheme != "http" {
                     return None;
                 }
-            } else if url.find(':').map_or(false, |i| i < 8) {
+            } else if url.find(':').is_some_and(|i| i < 8) {
                 // Matches patterns like "data:..." without "://"
                 return None;
             } else {

@@ -14,7 +14,7 @@ use core::sync::atomic::Ordering;
 
 use embassy_time::{Duration, Instant, Timer};
 use launa_protocol::status::StatusUpdate;
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 
 use crate::types::FaultBuf;
 use crate::*;
@@ -191,7 +191,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
         // Check for incoming MQTT messages
         match mqtt.recv().await {
             Some((topic, payload)) => {
-                debug!("MQTT received: {} ({} bytes)", topic, payload.len());
+                info!("MQTT received: {} ({} bytes)", topic, payload.len());
 
                 // Handle OTA commands
                 if mqtt.is_ota_topic(&topic) {
@@ -210,6 +210,12 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                         Timer::after(Duration::from_millis(50)).await;
                         info!("OTA: shutdown complete, sending URL to main loop");
                         ota_tx.send(url).await;
+                        // Do NOT reconnect — the main loop needs the TCP socket for OTA download.
+                        // The device will reset after OTA completes (or the main loop handles failure).
+                        info!("OTA: MQTT task idle, waiting for device reset");
+                        loop {
+                            Timer::after(Duration::from_secs(60)).await;
+                        }
                     } else {
                         warn!("Invalid OTA payload");
                     }
@@ -268,6 +274,9 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                             // Handled above before parse_command; unreachable here
                         }
                     }
+                } else {
+                    let payload_str = core::str::from_utf8(&payload).unwrap_or("<non-utf8>");
+                    warn!("MQTT command not recognized: topic={} payload={}", topic, payload_str);
                 }
             }
             None => {

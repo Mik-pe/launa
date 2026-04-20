@@ -11,6 +11,7 @@ use crate::status::StatusUpdate;
 
 /// Typed representation of an incoming Balboa protocol message.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum IncomingMessage {
     StatusUpdate(StatusUpdate),
     ConfigurationResponse(SpaConfig),

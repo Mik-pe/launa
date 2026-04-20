@@ -14,8 +14,12 @@ use launa_protocol::status::{HeatingMode, PumpState, TempRange, TemperatureScale
 pub struct SpaState {
     /// Current water temperature in real units (°F or °C).
     pub current_temp: f32,
-    /// Target temperature in real units.
+    /// Target temperature in real units (active range's value).
     pub set_temp: f32,
+    /// Saved set temperature for the High range (independent of Low).
+    pub set_temp_high: f32,
+    /// Saved set temperature for the Low range (independent of High).
+    pub set_temp_low: f32,
     /// Active heating mode.
     pub heating_mode: HeatingMode,
     /// Temperature scale (affects wire encoding).
@@ -49,6 +53,8 @@ impl Default for SpaState {
         SpaState {
             current_temp: 100.0,
             set_temp: 104.0,
+            set_temp_high: 104.0,
+            set_temp_low: 80.0,
             heating_mode: HeatingMode::Ready,
             temp_scale: TemperatureScale::Fahrenheit,
             is_heating: true,
@@ -73,6 +79,7 @@ impl SpaState {
         let raw = match scale {
             TemperatureScale::Fahrenheit => temp,
             TemperatureScale::Celsius => temp * 2.0,
+            _ => temp,
         };
         raw.round() as u8
     }
@@ -82,6 +89,17 @@ impl SpaState {
         match scale {
             TemperatureScale::Fahrenheit => raw as f32,
             TemperatureScale::Celsius => raw as f32 / 2.0,
+            _ => raw as f32,
+        }
+    }
+
+    /// Set the target temperature and persist to the active range's saved value.
+    pub(crate) fn set_target_temp(&mut self, temp: f32) {
+        self.set_temp = temp;
+        match self.temp_range {
+            TempRange::High => self.set_temp_high = temp,
+            TempRange::Low => self.set_temp_low = temp,
+            _ => {}
         }
     }
 }

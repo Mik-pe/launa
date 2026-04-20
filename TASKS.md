@@ -31,7 +31,7 @@
 
 **DO NOT skip.** Protocol docs are reverse-engineered -- verify against real BP6013G1 before sending commands.
 
-Remote workflow: ESP32 at the spa publishes raw frames to MQTT. Run sniff-decode.py from your desk.
+Remote workflow: ESP32 at the spa publishes raw frames to MQTT. Run `cargo xtask sniff-decode` from your desk.
 
 - [ ] **First field session: passive sniff**: Flash sniffer FW, take ESP32 + RS-485 module to spa, connect A/B to controller bus. Collect 30+ seconds of frames. Verify 0x7E-delimited frames, ~1s status updates, byte offsets match parser, message types correct.
 - [ ] **Validate parser against real frames**: Feed sniffed hex through StatusUpdate::parse(), verify parsed values match spa display.
@@ -43,7 +43,7 @@ PC -> USB cable -> [USB-to-RS485 adapter] -> A/B wires -> [auto-dir RS-485 modul
 
 - [ ] **Order USB-to-RS485 adapter**: ~-10 on Amazon.
 - [ ] **Wire bench setup**: 6 wires (TX, RX, VCC, GND, A, B).
-- [ ] **Build scripts/spa-sim.py**: Python script sending real Balboa frames via USB-RS485.
+- [ ] **Build xtask spa-sim**: Rust tool sending real Balboa frames via USB-RS485 (`cargo xtask spa-sim`).
 - [ ] **RS-485 loopback test**: Flash -> spa-sim -> MQTT publish -> validate payload.
 
 ### Active Field Testing

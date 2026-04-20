@@ -15,11 +15,15 @@ pub trait TcpSocket {
     fn close(&mut self) -> Result<(), NetworkError>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum NetworkError {
+    #[error("connection failed")]
     ConnectionFailed,
+    #[error("timeout")]
     Timeout,
+    #[error("DNS resolution failed")]
     DnsFailed,
+    #[error("I/O error")]
     Io,
 }
 

@@ -124,13 +124,23 @@ pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8], scal
     match command_parser::parse_command(command_topic_base, topic, payload) {
         ParseResult::Valid(Command::SetTemperature(temp)) => {
             if let (Some(s), Some(r)) = (scale, range) {
+                // Validate the display value first
                 match validate_set_temperature(temp, s, r) {
                     Ok(_) => {
-                        // Convert display value to protocol wire value.
-                        // In Celsius mode, wire value = display * 2 (e.g. 38°C → 76).
-                        // Fahrenheit display values ARE wire values (no conversion).
+                        // Convert display value to wire value.
+                        // In Celsius mode, re-parse the raw float to preserve
+                        // 0.5°C precision (e.g. 38.5°C → wire 77).
+                        // Fahrenheit display values ARE wire values.
                         let wire_value = match s {
-                            TemperatureScale::Celsius => temp.saturating_mul(2),
+                            TemperatureScale::Celsius => {
+                                // Re-parse raw float to preserve 0.5°C precision.
+                                // Display value * 2 = wire value (e.g. 38.5 → 77).
+                                let raw_float: f32 = core::str::from_utf8(payload)
+                                    .ok()
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(temp as f32);
+                                (raw_float * 2.0 + 0.5) as u8
+                            }
                             _ => temp,
                         };
                         Some(MqttAction::Command(Command::SetTemperature(wire_value)))

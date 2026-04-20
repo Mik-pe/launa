@@ -265,10 +265,12 @@ mod tests {
 
     #[test]
     fn test_empty_args_spa_sim_no_panic() {
-        let empty: Vec<String> = vec![];
-        // spa_sim tries to open a serial port, which will fail immediately
-        let result = spa_sim::run(&empty);
-        assert!(result.is_err());
+        // Use a non-existent port to avoid opening a real serial device
+        // when the ESP32 is plugged in (e.g. COM5). This keeps the test
+        // fast (< 1s) and verifies spa_sim doesn't panic on error.
+        let args = vec!["--port".to_string(), "COM_NONEXISTENT_9999".to_string()];
+        let result = spa_sim::run(&args);
+        assert!(result.is_err(), "Should fail on non-existent port");
     }
 
     // --- Unknown argument handling ---

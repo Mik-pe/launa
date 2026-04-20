@@ -11,6 +11,7 @@
 # WiFi credentials (override at build time or use a sdkconfig.defaults)
 # LAUNA_WIFI_SSID = "your-ssid"
 # LAUNA_WIFI_PASSWORD = "your-password"
+ESP_LOG = "info"
 
 [build]
 target = "xtensa-esp32-none-elf"

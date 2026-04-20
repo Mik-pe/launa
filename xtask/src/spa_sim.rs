@@ -100,6 +100,7 @@ fn print_state(tick: u64, state: &SpaState) {
         PumpState::Off => "off",
         PumpState::Low => "low",
         PumpState::High => "high",
+        _ => "?",
     };
     println!(
         "[tick {:>4}] temp={:.1} set={:.1} heating={} pump1={} pump2={} pump3={} circ={} blower={} light={} mister={} hold={}",

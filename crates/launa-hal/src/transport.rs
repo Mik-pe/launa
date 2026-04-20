@@ -16,10 +16,13 @@ pub trait Transport {
     async fn flush(&mut self) -> Result<(), TransportError>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum TransportError {
+    #[error("I/O error")]
     Io,
+    #[error("timeout")]
     Timeout,
+    #[error("buffer too small")]
     BufferTooSmall,
 }
 
