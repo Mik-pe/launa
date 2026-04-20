@@ -251,6 +251,38 @@ impl Database {
             .unwrap();
         rows.filter_map(|r| r.ok()).collect()
     }
+
+    pub fn clear_logs(&self, device_id: &str) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "DELETE FROM device_logs WHERE device_id = ?1",
+            params![device_id],
+        );
+    }
+
+    pub fn clear_alerts(&self, device_id: &str) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "DELETE FROM alerts WHERE device_id = ?1",
+            params![device_id],
+        );
+    }
+
+    pub fn clear_diagnostics(&self, device_id: &str) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "DELETE FROM diagnostics WHERE device_id = ?1",
+            params![device_id],
+        );
+    }
+
+    pub fn clear_sniff_frames(&self, device_id: &str) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "DELETE FROM sniff_frames WHERE device_id = ?1",
+            params![device_id],
+        );
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

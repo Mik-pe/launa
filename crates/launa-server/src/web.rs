@@ -47,12 +47,12 @@ pub fn start(config: &Config, db: Arc<Database>) -> Result<(), Box<dyn std::erro
 
 pub fn build_router(state: AppState) -> Router {
     let device_routes = Router::new()
-        .route("/logs", axum::routing::get(get_logs))
+        .route("/logs", axum::routing::get(get_logs).delete(clear_logs))
         .route("/status", axum::routing::get(get_status))
         .route("/status/latest", axum::routing::get(get_latest_status))
-        .route("/diagnostics", axum::routing::get(get_diagnostics))
-        .route("/alerts", axum::routing::get(get_alerts))
-        .route("/sniff", axum::routing::get(get_sniff));
+        .route("/diagnostics", axum::routing::get(get_diagnostics).delete(clear_diagnostics))
+        .route("/alerts", axum::routing::get(get_alerts).delete(clear_alerts))
+        .route("/sniff", axum::routing::get(get_sniff).delete(clear_sniff));
 
     Router::new()
         .route("/api/config", axum::routing::get(get_config).put(set_config))
@@ -156,4 +156,36 @@ async fn get_sniff(
     Query(query): Query<LimitQuery>,
 ) -> Json<Vec<crate::db::TimestampedEntry>> {
     Json(state.db.get_sniff_frames(&device_id, query.limit))
+}
+
+async fn clear_logs(
+    State(state): State<AppState>,
+    Path(device_id): Path<String>,
+) -> &'static str {
+    state.db.clear_logs(&device_id);
+    "ok"
+}
+
+async fn clear_alerts(
+    State(state): State<AppState>,
+    Path(device_id): Path<String>,
+) -> &'static str {
+    state.db.clear_alerts(&device_id);
+    "ok"
+}
+
+async fn clear_diagnostics(
+    State(state): State<AppState>,
+    Path(device_id): Path<String>,
+) -> &'static str {
+    state.db.clear_diagnostics(&device_id);
+    "ok"
+}
+
+async fn clear_sniff(
+    State(state): State<AppState>,
+    Path(device_id): Path<String>,
+) -> &'static str {
+    state.db.clear_sniff_frames(&device_id);
+    "ok"
 }

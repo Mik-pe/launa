@@ -1,8 +1,20 @@
 <script setup>
-import { computed } from 'vue'
-import { useAlerts } from '../composables/useApi'
+import { computed, ref } from 'vue'
+import { useAlerts, clearAlerts } from '../composables/useApi'
 
-const { data: alerts, loading, error } = useAlerts(100, 8000)
+const { data: alerts, loading, error, refresh } = useAlerts(100, 8000)
+const clearing = ref(false)
+
+async function handleClear() {
+  if (clearing.value) return
+  clearing.value = true
+  try {
+    await clearAlerts()
+    await refresh()
+  } catch { /* ignore */ } finally {
+    clearing.value = false
+  }
+}
 
 function timeAgo(iso) {
   if (!iso) return ''
@@ -27,7 +39,17 @@ function parsePayload(entry) {
   <div class="space-y-4">
     <div class="flex items-center justify-between">
       <h2 class="text-lg font-semibold text-white">Alerts</h2>
-      <span class="text-xs text-neutral-500">{{ alerts?.length || 0 }} entries</span>
+      <div class="flex items-center gap-3">
+        <span class="text-xs text-neutral-500">{{ alerts?.length || 0 }} entries</span>
+        <button
+          v-if="alerts?.length"
+          @click="handleClear"
+          :disabled="clearing"
+          class="text-xs text-neutral-500 hover:text-red-400 transition-colors cursor-pointer disabled:opacity-50"
+        >
+          {{ clearing ? 'Clearing...' : 'Clear all' }}
+        </button>
+      </div>
     </div>
 
     <div v-if="loading && !alerts?.length" class="flex flex-col items-center justify-center py-20 text-neutral-500">

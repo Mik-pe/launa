@@ -21,7 +21,6 @@ const {
   retryCount,
   spaState,
   availability,
-  diagnostics,
   alert: alertMsg,
   settings,
   saveSettings,
@@ -192,12 +191,6 @@ function handleTempRange(val) {
             />
           </div>
 
-          <!-- Diagnostics -->
-          <div v-if="diagnostics" class="bg-neutral-900 rounded-2xl ring-1 ring-neutral-800 p-4">
-            <h3 class="text-xs font-semibold text-neutral-500 uppercase tracking-widest mb-3 px-1">Diagnostics</h3>
-            <pre class="text-xs text-neutral-400 bg-neutral-950 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap">{{ typeof diagnostics === 'string' ? diagnostics : JSON.stringify(diagnostics, null, 2) }}</pre>
-          </div>
-
           <!-- Last Fault -->
           <div v-if="spaState?.last_fault"
             class="bg-red-950/50 border border-red-900/50 rounded-xl px-4 py-3 text-sm text-red-400 flex items-center gap-2">
@@ -214,7 +207,7 @@ function handleTempRange(val) {
         </template>
 
         <!-- Status tab -->
-        <StatusDashboard v-else-if="activeTab === 'status'" />
+        <StatusDashboard v-else-if="activeTab === 'status'" :spa-state="spaState" :connected="connected && availability === 'online'" />
 
         <!-- Temperature chart tab -->
         <TemperatureChart v-else-if="activeTab === 'temperature'" />

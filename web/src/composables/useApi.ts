@@ -85,3 +85,24 @@ export function useSniffFrames(limit = 100, intervalMs = 10000) {
   const url = `${BASE}/${getDeviceId()}/sniff?limit=${limit}`
   return useFetch<TimestampedEntry[]>(url, intervalMs, [])
 }
+
+async function deleteResource(path: string): Promise<void> {
+  const res = await fetch(`${BASE}/${getDeviceId()}${path}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+}
+
+export function clearLogs() {
+  return deleteResource('/logs')
+}
+
+export function clearAlerts() {
+  return deleteResource('/alerts')
+}
+
+export function clearDiagnostics() {
+  return deleteResource('/diagnostics')
+}
+
+export function clearSniffFrames() {
+  return deleteResource('/sniff')
+}

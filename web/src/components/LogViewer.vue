@@ -1,8 +1,20 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { useLogs } from '../composables/useApi'
+import { useLogs, clearLogs } from '../composables/useApi'
 
-const { data: logs, loading, error } = useLogs(200, 5000)
+const { data: logs, loading, error, refresh } = useLogs(200, 5000)
+const clearing = ref(false)
+
+async function handleClear() {
+  if (clearing.value) return
+  clearing.value = true
+  try {
+    await clearLogs()
+    await refresh()
+  } catch { /* ignore */ } finally {
+    clearing.value = false
+  }
+}
 
 const activeFilters = ref(new Set())
 
@@ -62,7 +74,17 @@ const countByLevel = computed(() => {
   <div class="space-y-4">
     <div class="flex items-center justify-between">
       <h2 class="text-lg font-semibold text-white">Device Logs</h2>
-      <span class="text-xs text-neutral-500">{{ filteredLogs.length }} / {{ logs?.length || 0 }}</span>
+      <div class="flex items-center gap-3">
+        <span class="text-xs text-neutral-500">{{ filteredLogs.length }} / {{ logs?.length || 0 }}</span>
+        <button
+          v-if="logs?.length"
+          @click="handleClear"
+          :disabled="clearing"
+          class="text-xs text-neutral-500 hover:text-red-400 transition-colors cursor-pointer disabled:opacity-50"
+        >
+          {{ clearing ? 'Clearing...' : 'Clear all' }}
+        </button>
+      </div>
     </div>
 
     <!-- Filter bar -->
