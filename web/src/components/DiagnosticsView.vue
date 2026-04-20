@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { useDiagnostics } from '../composables/useApi.js'
+import { useDiagnostics } from '../composables/useApi'
 
 const { data: diagnostics, loading, error } = useDiagnostics(50, 8000)
 

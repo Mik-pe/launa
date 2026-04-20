@@ -8,20 +8,29 @@ const props = defineProps({
   brokerUrl: String,
   deviceId: String,
   connectionError: String,
+  initialConnect: Boolean,
 })
 
 const emit = defineEmits(['open-settings'])
 
 const statusColor = computed(() => {
-  if (props.connecting) return 'bg-blue-400'
+  if (props.connecting) {
+    return props.initialConnect ? 'bg-amber-400' : 'bg-blue-400'
+  }
   if (!props.connected) return 'bg-neutral-600'
-  return props.availability === 'online' ? 'bg-emerald-400' : 'bg-amber-400'
+  if (props.availability === 'online') return 'bg-emerald-400'
+  if (props.availability === 'reconnecting') return 'bg-amber-400'
+  return 'bg-amber-400'
 })
 
 const statusText = computed(() => {
-  if (props.connecting) return 'Connecting...'
+  if (props.connecting) {
+    return props.initialConnect ? 'Reconnecting...' : 'Connecting...'
+  }
   if (!props.connected) return 'Disconnected'
-  return props.availability === 'online' ? 'Online' : 'Offline'
+  if (props.availability === 'online') return 'Online'
+  if (props.availability === 'reconnecting') return 'Reconnecting...'
+  return 'Offline'
 })
 </script>
 

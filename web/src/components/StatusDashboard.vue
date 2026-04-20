@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { useLatestStatus } from '../composables/useApi.js'
+import { useLatestStatus } from '../composables/useApi'
 
 const { data: latest, loading, error, refresh } = useLatestStatus(5000)
 

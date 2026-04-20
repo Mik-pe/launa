@@ -16,13 +16,7 @@ pub struct Config {
 }
 
 /// JSON-serializable accessory visibility config served to the web UI.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct AccessoryConfig {
-    pub pumps: u8,
-    pub lights: u8,
-    pub blower: bool,
-    pub mister: bool,
-}
+pub use web::AccessoryConfig;
 
 pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let database = Arc::new(db::Database::open(&config.db_path)?);

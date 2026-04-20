@@ -1,6 +1,6 @@
 <script setup>
 import { ref } from 'vue'
-import { useMqtt } from './composables/useMqtt.js'
+import { useMqtt } from './composables/useMqtt'
 import ConnectionBar from './components/ConnectionBar.vue'
 import TemperatureCard from './components/TemperatureCard.vue'
 import SelectControl from './components/SelectControl.vue'
@@ -17,6 +17,7 @@ const {
   connected,
   connecting,
   connectionError,
+  initialConnect,
   retryCount,
   spaState,
   availability,
@@ -87,6 +88,7 @@ function handleTempRange(val) {
       :broker-url="settings.brokerUrl"
       :device-id="settings.deviceId"
       :connection-error="connectionError"
+      :initial-connect="initialConnect"
       @open-settings="showSettings = true"
     />
 

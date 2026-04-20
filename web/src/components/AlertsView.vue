@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { useAlerts } from '../composables/useApi.js'
+import { useAlerts } from '../composables/useApi'
 
 const { data: alerts, loading, error } = useAlerts(100, 8000)
 

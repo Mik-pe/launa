@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { useStatusHistory } from '../composables/useApi.js'
+import { useStatusHistory } from '../composables/useApi'
 
 const { data: history, loading, error } = useStatusHistory(200, 10000)
 

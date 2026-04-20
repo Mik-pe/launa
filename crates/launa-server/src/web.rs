@@ -4,13 +4,14 @@ use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::response::Json;
 use serde::Deserialize;
-use tower_http::services::ServeDir;
 use tracing::info;
 
 use crate::Config;
 use crate::db::Database;
 
 pub fn start(config: &Config, db: Arc<Database>) -> Result<(), Box<dyn std::error::Error>> {
+    use tower_http::services::{ServeDir, ServeFile};
+
     let web_dir = config.web_dir.join("dist");
 
     if !web_dir.exists() {
@@ -26,27 +27,9 @@ pub fn start(config: &Config, db: Arc<Database>) -> Result<(), Box<dyn std::erro
         db,
     };
 
-    let app = Router::new()
-        .route("/api/config", axum::routing::get(get_config).put(set_config))
-        .route("/api/devices/{device_id}/logs", axum::routing::get(get_logs))
-        .route("/api/devices/{device_id}/status", axum::routing::get(get_status))
-        .route(
-            "/api/devices/{device_id}/status/latest",
-            axum::routing::get(get_latest_status),
-        )
-        .route(
-            "/api/devices/{device_id}/diagnostics",
-            axum::routing::get(get_diagnostics),
-        )
-        .route("/api/devices/{device_id}/alerts", axum::routing::get(get_alerts))
-        .route(
-            "/api/devices/{device_id}/sniff",
-            axum::routing::get(get_sniff),
-        )
-        .with_state(app_state)
-        .fallback_service(ServeDir::new(&web_dir).fallback(
-            ServeDir::new(web_dir.join("index.html")),
-        ));
+    let app = build_router(app_state).fallback_service(
+        ServeDir::new(&web_dir).fallback(ServeFile::new(web_dir.join("index.html"))),
+    );
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], config.http_port));
     info!("Web server listening on http://{}", addr);
@@ -62,7 +45,22 @@ pub fn start(config: &Config, db: Arc<Database>) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub fn build_router(state: AppState) -> Router {
+    let device_routes = Router::new()
+        .route("/logs", axum::routing::get(get_logs))
+        .route("/status", axum::routing::get(get_status))
+        .route("/status/latest", axum::routing::get(get_latest_status))
+        .route("/diagnostics", axum::routing::get(get_diagnostics))
+        .route("/alerts", axum::routing::get(get_alerts))
+        .route("/sniff", axum::routing::get(get_sniff));
+
+    Router::new()
+        .route("/api/config", axum::routing::get(get_config).put(set_config))
+        .nest("/api/devices/{device_id}", device_routes)
+        .with_state(state)
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AccessoryConfig {
     pub pumps: u8,
     pub lights: u8,
@@ -82,9 +80,9 @@ impl Default for AccessoryConfig {
 }
 
 #[derive(Clone)]
-struct AppState {
-    accessory_config: Arc<Mutex<AccessoryConfig>>,
-    db: Arc<Database>,
+pub struct AppState {
+    pub accessory_config: Arc<Mutex<AccessoryConfig>>,
+    pub db: Arc<Database>,
 }
 
 #[derive(Deserialize)]

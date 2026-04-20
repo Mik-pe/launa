@@ -4,8 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "typecheck": "vue-tsc --noEmit",
     "dev": "vite",
-    "build": "vite build",
+    "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "serve": "serve dist -l 8080",
     "sim": "vite build && cargo run -p launa-server",
@@ -13,13 +14,15 @@
     "start": "vite build && cargo run -p launa-server"
   },
   "dependencies": {
+    "mqtt": "^5.15.1",
     "vue": "^3.5.32"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.2",
     "@vitejs/plugin-vue": "^6.0.5",
-    "mqtt": "^5.15.1",
     "tailwindcss": "^4.2.2",
-    "vite": "^8.0.4"
+    "typescript": "^6.0.3",
+    "vite": "^8.0.4",
+    "vue-tsc": "^3.2.7"
   }
 }

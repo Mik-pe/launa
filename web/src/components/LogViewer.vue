@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { useLogs } from '../composables/useApi.js'
+import { useLogs } from '../composables/useApi'
 
 const { data: logs, loading, error } = useLogs(200, 5000)
 

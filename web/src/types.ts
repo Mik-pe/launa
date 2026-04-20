@@ -1,0 +1,61 @@
+export interface SpaState {
+  current_temp?: number | null
+  set_temp?: number | null
+  temp_scale?: 'celsius' | 'fahrenheit'
+  temp_range?: 'high' | 'low'
+  heating_mode?: 'ready' | 'rest' | 'ready_in_rest'
+  is_heating?: boolean
+  pump1_on?: boolean
+  pump2_on?: boolean
+  pump3_on?: boolean
+  pump4_on?: boolean
+  pump5_on?: boolean
+  pump6_on?: boolean
+  light1?: boolean
+  light2?: boolean
+  light3?: boolean
+  light4?: boolean
+  blower?: boolean
+  circ_pump?: boolean
+  mister?: boolean
+  hold_mode?: boolean
+  panel_locked?: boolean
+  hour?: number
+  minute?: number
+  firmware_version?: string
+  last_fault?: string
+  self_test?: boolean
+  sniff_mode?: boolean
+  [key: string]: unknown
+}
+
+export interface MqttSettings {
+  brokerUrl: string
+  deviceId: string
+  username: string
+  password: string
+}
+
+export interface AccessoryConfig {
+  pumps: number
+  lights: number
+  blower: boolean
+  mister: boolean
+}
+
+export interface LogEntry {
+  level: string
+  message: string
+  timestamp_ms: number
+  received_at: string
+}
+
+export interface StatusEntry {
+  payload: string
+  received_at: string
+}
+
+export interface TimestampedEntry {
+  payload: string
+  received_at: string
+}

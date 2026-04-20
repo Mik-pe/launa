@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { useSniffFrames } from '../composables/useApi.js'
+import { useSniffFrames } from '../composables/useApi'
 
 const { data: frames, loading, error } = useSniffFrames(100, 8000)
 

@@ -1,41 +1,54 @@
 import { ref, shallowRef, computed, onMounted, onUnmounted } from 'vue'
 import mqtt from 'mqtt'
+import type { IClientOptions, MqttClient } from 'mqtt'
+import type { SpaState, MqttSettings, AccessoryConfig } from '../types'
+
+const RECONNECTING_TIMEOUT_MS = 30_000
+
+const _stateKeyMap: Record<string, string> = {
+  pump1: 'pump1_on', pump2: 'pump2_on', pump3: 'pump3_on',
+  pump4: 'pump4_on', pump5: 'pump5_on', pump6: 'pump6_on',
+  light1: 'light1', light2: 'light2', light3: 'light3', light4: 'light4',
+  blower: 'blower', circulation_pump: 'circ_pump', mister: 'mister',
+  hold_mode: 'hold_mode',
+  heat_mode: 'heating_mode',
+  temp_range: 'temp_range',
+}
+
+function loadSettings(): MqttSettings {
+  try {
+    const saved = localStorage.getItem('launa-settings')
+    if (saved) return JSON.parse(saved) as MqttSettings
+  } catch { /* ignore */ }
+  return {
+    brokerUrl: `ws://${window.location.hostname}:9001`,
+    deviceId: 'launa_spa',
+    username: '',
+    password: '',
+  }
+}
 
 export function useMqtt() {
-  const client = shallowRef(null)
+  const client = shallowRef<MqttClient | null>(null)
   const connected = ref(false)
   const connecting = ref(false)
-  const connectionError = ref(null)
-  const spaState = ref(null)
+  const connectionError = ref<string | null>(null)
+  const initialConnect = ref(true)
+  const spaState = ref<SpaState | null>(null)
   const availability = ref('offline')
-  const diagnostics = ref(null)
-  const alert_ = ref(null)
+  const diagnostics = ref<Record<string, unknown> | string | null>(null)
+  const alert_ = ref<string | null>(null)
   const retryCount = ref(0)
   const selfTestEnabled = ref(false)
   const sniffEnabled = ref(false)
+  let reconnectingTimer: ReturnType<typeof setTimeout> | null = null
 
-  const settings = ref(loadSettings())
-  const serverConfig = ref(null)
+  const settings = ref<MqttSettings>(loadSettings())
+  const serverConfig = ref<AccessoryConfig | null>(null)
 
-  // Pending commands: Set<string> of state keys that have a pending command.
-  // e.g. 'pump1_on', 'set_temp', 'heating_mode' — cleared when the real
-  // state update arrives confirming the change.
-  const pendingKeys = ref(new Set())
+  const pendingKeys = ref(new Set<string>())
 
-  function loadSettings() {
-    try {
-      const saved = localStorage.getItem('launa-settings')
-      if (saved) return JSON.parse(saved)
-    } catch {}
-    return {
-      brokerUrl: `ws://${window.location.hostname}:9001`,
-      deviceId: 'launa_spa',
-      username: '',
-      password: '',
-    }
-  }
-
-  function saveSettings(s) {
+  function saveSettings(s: MqttSettings) {
     settings.value = { ...s }
     localStorage.setItem('launa-settings', JSON.stringify(s))
     connectionError.value = null
@@ -47,12 +60,14 @@ export function useMqtt() {
 
     connecting.value = true
     connectionError.value = null
+    initialConnect.value = true
 
-    const opts = {}
+    const opts: IClientOptions = {
+      clean: true,
+      reconnectPeriod: 5000,
+    }
     if (settings.value.username) opts.username = settings.value.username
     if (settings.value.password) opts.password = settings.value.password
-    opts.clean = true
-    opts.reconnectPeriod = 5000
 
     const c = mqtt.connect(settings.value.brokerUrl, opts)
 
@@ -60,7 +75,15 @@ export function useMqtt() {
       connected.value = true
       connecting.value = false
       connectionError.value = null
+      initialConnect.value = false
       retryCount.value = 0
+      availability.value = 'reconnecting'
+      clearTimeout(reconnectingTimer!)
+      reconnectingTimer = setTimeout(() => {
+        if (availability.value === 'reconnecting') {
+          availability.value = 'offline'
+        }
+      }, RECONNECTING_TIMEOUT_MS)
       const base = `launa/${settings.value.deviceId}`
       c.subscribe(`${base}/state`)
       c.subscribe(`${base}/availability`)
@@ -68,26 +91,26 @@ export function useMqtt() {
       c.subscribe(`${base}/alert`)
     })
 
-    c.on('message', (topic, message) => {
+    c.on('message', (topic: string, message: Buffer) => {
       const payload = message.toString()
       const base = `launa/${settings.value.deviceId}`
 
       if (topic === `${base}/state`) {
         try {
-          spaState.value = JSON.parse(payload)
-          // Sync mode flags from device state
-          if (typeof spaState.value.self_test === 'boolean') {
-            selfTestEnabled.value = spaState.value.self_test
+          const state = JSON.parse(payload) as SpaState
+          spaState.value = state
+          if (typeof state.self_test === 'boolean') {
+            selfTestEnabled.value = state.self_test
           }
-          if (typeof spaState.value.sniff_mode === 'boolean') {
-            sniffEnabled.value = spaState.value.sniff_mode
+          if (typeof state.sniff_mode === 'boolean') {
+            sniffEnabled.value = state.sniff_mode
           }
-          // Clear all pending keys on every state update — the real state has arrived
           if (pendingKeys.value.size > 0) {
             pendingKeys.value = new Set()
           }
-        } catch {}
+        } catch { /* ignore */ }
       } else if (topic === `${base}/availability`) {
+        clearTimeout(reconnectingTimer!)
         availability.value = payload
       } else if (topic === `${base}/diagnostics`) {
         try {
@@ -100,14 +123,18 @@ export function useMqtt() {
       }
     })
 
-    c.on('error', (err) => {
+    c.on('error', (err: Error) => {
       connectionError.value = err.message
-      connecting.value = false
+      if (!initialConnect.value) {
+        connecting.value = false
+      }
     })
 
     c.on('close', () => {
       connected.value = false
       connecting.value = false
+      clearTimeout(reconnectingTimer!)
+      availability.value = 'offline'
     })
 
     c.on('offline', () => {
@@ -123,6 +150,7 @@ export function useMqtt() {
   }
 
   function disconnect() {
+    clearTimeout(reconnectingTimer!)
     if (client.value) {
       client.value.end(true)
       client.value = null
@@ -131,24 +159,13 @@ export function useMqtt() {
     }
   }
 
-  function publish(subtopic, payload) {
+  function publish(subtopic: string, payload: string | number | boolean) {
     if (!client.value || !connected.value) return
     const topic = `launa/${settings.value.deviceId}/command/${subtopic}`
     client.value.publish(topic, String(payload), { qos: 1 })
   }
 
-  // Map command subtopics to the state key they affect
-  const _stateKeyMap = {
-    pump1: 'pump1_on', pump2: 'pump2_on', pump3: 'pump3_on',
-    pump4: 'pump4_on', pump5: 'pump5_on', pump6: 'pump6_on',
-    light1: 'light1', light2: 'light2', light3: 'light3', light4: 'light4',
-    blower: 'blower', circulation_pump: 'circ_pump', mister: 'mister',
-    hold_mode: 'hold_mode',
-    heat_mode: 'heating_mode',
-    temp_range: 'temp_range',
-  }
-
-  function toggle(subtopic) {
+  function toggle(subtopic: string) {
     const key = _stateKeyMap[subtopic]
     if (key) {
       const next = new Set(pendingKeys.value)
@@ -158,23 +175,23 @@ export function useMqtt() {
     publish(subtopic, true)
   }
 
-  function setTemperature(temp) {
+  function setTemperature(temp: number) {
     const next = new Set(pendingKeys.value)
     next.add('set_temp')
     pendingKeys.value = next
     publish('set_temperature', String(temp))
   }
 
-  function isPending(key) {
+  function isPending(key: string): boolean {
     return pendingKeys.value.has(key)
   }
 
-  function setSelfTest(enabled) {
+  function setSelfTest(enabled: boolean) {
     selfTestEnabled.value = enabled
     publish('self_test', enabled ? 'ON' : 'OFF')
   }
 
-  function setSniff(enabled) {
+  function setSniff(enabled: boolean) {
     sniffEnabled.value = enabled
     publish('sniff', enabled ? 'ON' : 'OFF')
   }
@@ -185,6 +202,7 @@ export function useMqtt() {
   })
 
   onUnmounted(() => {
+    clearTimeout(reconnectingTimer!)
     disconnect()
   })
 
@@ -192,12 +210,12 @@ export function useMqtt() {
     try {
       const res = await fetch('/api/config')
       if (res.ok) {
-        serverConfig.value = await res.json()
+        serverConfig.value = await res.json() as AccessoryConfig
       }
-    } catch {}
+    } catch { /* ignore */ }
   }
 
-  async function saveAccessoryConfig(newCfg) {
+  async function saveAccessoryConfig(newCfg: AccessoryConfig) {
     try {
       const res = await fetch('/api/config', {
         method: 'PUT',
@@ -205,15 +223,15 @@ export function useMqtt() {
         body: JSON.stringify(newCfg),
       })
       if (res.ok) {
-        serverConfig.value = await res.json()
+        serverConfig.value = await res.json() as AccessoryConfig
       }
-    } catch {}
+    } catch { /* ignore */ }
   }
 
-  const visibleControls = computed(() => {
+  const visibleControls = computed<Record<string, boolean>>(() => {
     const cfg = serverConfig.value
     if (!cfg) return {}
-    const vc = {}
+    const vc: Record<string, boolean> = {}
     for (let i = 1; i <= 6; i++) vc['pump' + i] = i <= cfg.pumps
     for (let i = 1; i <= 4; i++) vc['light' + i] = i <= cfg.lights
     vc.blower = cfg.blower
@@ -225,6 +243,7 @@ export function useMqtt() {
     connected,
     connecting,
     connectionError,
+    initialConnect,
     retryCount,
     spaState,
     availability,
