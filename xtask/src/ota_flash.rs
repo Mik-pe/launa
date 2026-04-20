@@ -1,9 +1,7 @@
 use anyhow::{bail, Context};
 use serde::Deserialize;
-use std::io::{Read as _, Write as _};
+use std::io::Write as _;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
 /// Offset of the factory/app partition in the merged flash image (from partitions.csv).
@@ -241,54 +239,8 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         .context("Failed to publish OTA command")?;
     println!("OTA command published to {}", topic);
 
-    // Step 5: Wait for device to come back online (with serial monitor)
+    // Step 5: Wait for device to come back online via MQTT
     println!("\n[5/7] Waiting for device to come back online (timeout 120s)...");
-
-    // Start serial monitor thread to show device output during OTA
-    let monitor_running = Arc::new(AtomicBool::new(true));
-    let monitor_port = config.device.serial_port.clone();
-    let ota_partition_info: Arc<std::sync::Mutex<String>> = Arc::new(std::sync::Mutex::new(String::new()));
-    let ota_partition_info_clone = ota_partition_info.clone();
-    let monitor_handle = {
-        let running = monitor_running.clone();
-        std::thread::spawn(move || {
-            let Ok(mut port) = serialport::new(&monitor_port, 115200)
-                .timeout(Duration::from_millis(100))
-                .open()
-            else {
-                return;
-            };
-            let mut buf = [0u8; 256];
-            let mut line_buf = String::new();
-            while running.load(Ordering::SeqCst) {
-                match port.read(&mut buf) {
-                    Ok(n) if n > 0 => {
-                        let text = String::from_utf8_lossy(&buf[..n]);
-                        print!("{}", text);
-                        // Capture OTA partition info from serial log
-                        line_buf.push_str(&text);
-                        for pattern in &["OTA: beginning update to", "Loaded app from partition at offset"] {
-                            if let Some(pos) = line_buf.find(pattern) {
-                                let line_end = line_buf[pos..].find('\n').unwrap_or(line_buf[pos..].len());
-                                let line = line_buf[pos..pos + line_end].trim().to_string();
-                                if let Ok(mut info) = ota_partition_info_clone.lock() {
-                                    *info = line;
-                                }
-                            }
-                        }
-                        // Keep line_buf bounded
-                        if line_buf.len() > 4096 {
-                            line_buf = line_buf[line_buf.len() - 2048..].to_string();
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {}
-                    Err(_) => break,
-                }
-            }
-        })
-    };
-    println!("Serial monitor active on {}", config.device.serial_port);
 
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
     let mut came_online = false;
@@ -320,16 +272,6 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             Err(e) => {
                 eprintln!("MQTT error: {}", e);
             }
-        }
-    }
-
-    monitor_running.store(false, Ordering::SeqCst);
-    let _ = monitor_handle.join();
-
-    // Report OTA partition info captured from serial output
-    if let Ok(info) = ota_partition_info.lock() {
-        if !info.is_empty() {
-            println!("\nOTA target: {}", *info);
         }
     }
 

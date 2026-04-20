@@ -21,6 +21,7 @@ use launa_mqtt::command_parser::{self, ParseResult};
 use launa_mqtt::discovery::DiscoveryBuilder;
 use launa_mqtt::state::status_to_json;
 use launa_mqtt::packet::{decode_remaining_length, try_extract_packet};
+use embassy_futures::select::{select, Either};
 use launa_mqtt::v5_codec::{
     encode_connect, encode_disconnect, encode_pingreq, encode_pingresp, encode_puback,
     encode_publish, encode_subscribe, parse_connack, parse_suback, ConnectConfig,
@@ -195,10 +196,9 @@ impl MqttClient {
         let rx: &'static mut [u8] = unsafe { &mut *socket_rx_buf.get() };
         let tx: &'static mut [u8] = unsafe { &mut *socket_tx_buf.get() };
         let mut socket = TcpSocket::new(*stack, rx, tx);
-        // Socket timeout must be longer than the keepalive interval (30s)
-        // so the socket doesn't error during idle periods. maybe_ping()
-        // sends PINGREQ every 15s to keep the broker happy. The timeout
-        // only fires if the broker is truly unresponsive.
+        // Socket timeout for detecting truly dead connections (broker unreachable,
+        // network partition). Keep-alive pings are handled by racing transport.read()
+        // against a timer in recv(), so this timeout only fires in catastrophic cases.
         socket.set_timeout(Some(Duration::from_secs(60)));
 
         let addr = match net_util::resolve_host(stack, &config.mqtt_host).await {
@@ -524,6 +524,10 @@ impl MqttClient {
                 }
             }
 
+            // Race the socket read against a keep-alive timer. This ensures
+            // we return to maybe_ping() at least every keep_alive/2 seconds
+            // even when no data arrives, without relying on socket timeouts
+            // (which can leave the socket in a bad state for writes).
             let mut buf = [0u8; 512];
             let transport = match self.transport.as_mut() {
                 Some(t) => t,
@@ -532,34 +536,39 @@ impl MqttClient {
                     return None;
                 }
             };
-            let n = match transport.read(&mut buf).await {
-                Ok(0) => {
-                    self.last_disconnect = Some(alloc::format!("FIN retries={}", read_retries));
-                    return None;
-                }
-                Ok(n) => n,
-                Err(_) => {
-                    read_retries += 1;
-                    if read_retries > 100 {
-                        self.last_disconnect = Some(alloc::format!("STUCK retries={}", read_retries));
-                        return None;
+            let read_fut = transport.read(&mut buf);
+            let ping_deadline = Duration::from_secs(self.keep_alive as u64 / 2);
+            match select(read_fut, Timer::after(ping_deadline)).await {
+                Either::First(read_result) => {
+                    match read_result {
+                        Ok(0) => {
+                            self.last_disconnect = Some(alloc::format!("FIN retries={}", read_retries));
+                            return None;
+                        }
+                        Ok(n) => {
+                            read_retries = 0;
+                            if self.rx_buffer.len() + n > RX_BUFFER_MAX_SIZE {
+                                self.last_disconnect = Some(String::from("BUF OVERFLOW"));
+                                self.rx_buffer.clear();
+                                return None;
+                            }
+                            self.rx_buffer.extend_from_slice(&buf[..n]);
+                        }
+                        Err(_) => {
+                            read_retries += 1;
+                            if read_retries > 100 {
+                                self.last_disconnect = Some(alloc::format!("STUCK retries={}", read_retries));
+                                return None;
+                            }
+                            Timer::after(Duration::from_secs(1)).await;
+                        }
                     }
-                    // Yield to executor and wait before retrying — the socket
-                    // may return errors immediately after a timeout, without
-                    // blocking. Without this delay, we'd loop 100+ times
-                    // instantly and hit the STUCK limit.
-                    Timer::after(Duration::from_secs(1)).await;
+                }
+                Either::Second(_) => {
+                    // Timer expired before data arrived — loop back to maybe_ping()
                     continue;
                 }
-            };
-
-            read_retries = 0;
-            if self.rx_buffer.len() + n > RX_BUFFER_MAX_SIZE {
-                self.last_disconnect = Some(String::from("BUF OVERFLOW"));
-                self.rx_buffer.clear();
-                return None;
             }
-            self.rx_buffer.extend_from_slice(&buf[..n]);
         }
     }
 
