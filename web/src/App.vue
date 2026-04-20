@@ -90,66 +90,50 @@ function handleTempRange(val) {
       @open-settings="showSettings = true"
     />
 
-    <!-- Connecting / error screen -->
-    <div v-if="!connected" class="flex items-center justify-center py-32">
-      <div class="text-center space-y-6 px-4">
-        <div class="w-20 h-20 mx-auto rounded-2xl bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center text-3xl font-bold text-white shadow-lg shadow-blue-500/25">
-          <svg v-if="connecting" class="animate-spin h-8 w-8 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
-          <span v-else>L</span>
-        </div>
-        <div>
-          <h2 class="text-2xl font-semibold text-white">Launa Spa Control</h2>
-          <p class="text-neutral-400 mt-1">
-            <template v-if="connecting">Connecting{{ retryCount > 0 ? ` (retry ${retryCount})` : '' }}...</template>
-            <template v-else-if="connectionError">Connection failed</template>
-            <template v-else>Connecting to broker...</template>
-          </p>
-          <p v-if="connectionError" class="text-red-400 text-sm mt-2">{{ connectionError }}</p>
-        </div>
-        <div class="flex gap-3 justify-center">
-          <button @click="showSettings = true"
-            class="px-6 py-2.5 bg-neutral-800 text-neutral-300 rounded-xl text-sm font-medium hover:bg-neutral-700 transition-colors ring-1 ring-neutral-700 cursor-pointer">
-            Settings
+    <!-- Tab bar (always visible) -->
+    <div class="bg-neutral-900/80 backdrop-blur-xl border-b border-neutral-800/60 sticky top-0 z-30">
+      <div class="max-w-3xl mx-auto px-2">
+        <nav class="flex overflow-x-auto gap-1 py-2 scrollbar-hide">
+          <button
+            v-for="tab in tabs"
+            :key="tab.id"
+            @click="activeTab = tab.id"
+            :class="[
+              'flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium whitespace-nowrap transition-all duration-200 cursor-pointer shrink-0',
+              activeTab === tab.id
+                ? 'bg-blue-500/15 text-blue-400 ring-1 ring-blue-500/30 shadow-sm shadow-blue-500/10'
+                : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800'
+            ]"
+          >
+            <span class="text-base">{{ tab.icon }}</span>
+            <span>{{ tab.label }}</span>
           </button>
-        </div>
-        <p class="text-xs text-neutral-600">
-          {{ settings.brokerUrl }} &middot; {{ settings.deviceId }}
-        </p>
+        </nav>
       </div>
     </div>
 
-    <!-- Connected: tabbed dashboard -->
-    <div v-else>
-      <!-- Tab bar -->
-      <div class="bg-neutral-900/80 backdrop-blur-xl border-b border-neutral-800/60 sticky top-0 z-30">
-        <div class="max-w-3xl mx-auto px-2">
-          <nav class="flex overflow-x-auto gap-1 py-2 scrollbar-hide">
-            <button
-              v-for="tab in tabs"
-              :key="tab.id"
-              @click="activeTab = tab.id"
-              :class="[
-                'flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium whitespace-nowrap transition-all duration-200 cursor-pointer shrink-0',
-                activeTab === tab.id
-                  ? 'bg-blue-500/15 text-blue-400 ring-1 ring-blue-500/30 shadow-sm shadow-blue-500/10'
-                  : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800'
-              ]"
-            >
-              <span class="text-base">{{ tab.icon }}</span>
-              <span>{{ tab.label }}</span>
-            </button>
-          </nav>
-        </div>
-      </div>
-
-      <!-- Tab content -->
-      <div class="max-w-3xl mx-auto px-4 py-4 sm:py-6 space-y-4 sm:space-y-6">
+    <!-- Tab content -->
+    <div class="max-w-3xl mx-auto px-4 py-4 sm:py-6 space-y-4 sm:space-y-6">
 
         <!-- Control tab (original dashboard) -->
         <template v-if="activeTab === 'control'">
+          <!-- Not connected: show connecting state inline -->
+          <template v-if="!connected">
+            <div class="flex flex-col items-center justify-center py-20">
+              <svg class="animate-spin h-10 w-10 text-blue-400 mb-4" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              <p class="text-neutral-400 text-sm">
+                <template v-if="connecting">Connecting to MQTT broker{{ retryCount > 0 ? ` (retry ${retryCount})` : '' }}...</template>
+                <template v-else-if="connectionError">Connection failed: {{ connectionError }}</template>
+                <template v-else>Not connected</template>
+              </p>
+            </div>
+          </template>
+
+          <!-- Connected: show controls -->
+          <template v-else>
           <!-- Alert banner -->
           <div v-if="alertMsg"
             class="bg-amber-950/50 border border-amber-800/50 text-amber-300 rounded-xl px-4 py-3 text-sm flex items-center gap-2">
@@ -224,6 +208,7 @@ function handleTempRange(val) {
             class="text-center text-xs text-neutral-600 pb-4">
             Firmware {{ spaState.firmware_version }}
           </div>
+          </template>
         </template>
 
         <!-- Status tab -->
@@ -245,11 +230,9 @@ function handleTempRange(val) {
         <SniffFramesView v-else-if="activeTab === 'sniff'" />
 
       </div>
-    </div>
 
     <!-- Settings button (floating) -->
     <button
-      v-if="connected"
       @click="showSettings = true"
       class="fixed bottom-6 right-6 w-12 h-12 bg-neutral-800 rounded-full shadow-lg ring-1 ring-neutral-700 flex items-center justify-center text-neutral-400 hover:text-neutral-200 hover:bg-neutral-700 transition-colors cursor-pointer z-40"
       title="Settings"
