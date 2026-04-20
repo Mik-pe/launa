@@ -45,7 +45,7 @@ const activeTab = ref('control')
 const tabs = [
   { id: 'control', label: 'Control', icon: '🎛️' },
   { id: 'status', label: 'Status', icon: '📊' },
-  { id: 'temperature', label: 'Temp Chart', icon: '🌡️' },
+  { id: 'temperature', label: 'History', icon: '🌡️' },
   { id: 'logs', label: 'Logs', icon: '📋' },
   { id: 'alerts', label: 'Alerts', icon: '⚠️' },
   { id: 'diagnostics', label: 'Diagnostics', icon: '🔧' },
@@ -124,21 +124,21 @@ function handleTempRange(val) {
     <!-- Connected: tabbed dashboard -->
     <div v-else>
       <!-- Tab bar -->
-      <div class="bg-neutral-900 border-b border-neutral-800 sticky top-0 z-30">
-        <div class="max-w-2xl mx-auto px-2">
-          <nav class="flex overflow-x-auto gap-0.5 -mb-px scrollbar-hide">
+      <div class="bg-neutral-900/80 backdrop-blur-xl border-b border-neutral-800/60 sticky top-0 z-30">
+        <div class="max-w-3xl mx-auto px-2">
+          <nav class="flex overflow-x-auto gap-1 py-2 scrollbar-hide">
             <button
               v-for="tab in tabs"
               :key="tab.id"
               @click="activeTab = tab.id"
               :class="[
-                'flex items-center gap-1.5 px-3 py-3 text-xs font-medium whitespace-nowrap transition-colors border-b-2 cursor-pointer shrink-0',
+                'flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium whitespace-nowrap transition-all duration-200 cursor-pointer shrink-0',
                 activeTab === tab.id
-                  ? 'text-blue-400 border-blue-400'
-                  : 'text-neutral-500 border-transparent hover:text-neutral-300 hover:border-neutral-600'
+                  ? 'bg-blue-500/15 text-blue-400 ring-1 ring-blue-500/30 shadow-sm shadow-blue-500/10'
+                  : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800'
               ]"
             >
-              <span>{{ tab.icon }}</span>
+              <span class="text-base">{{ tab.icon }}</span>
               <span>{{ tab.label }}</span>
             </button>
           </nav>
@@ -146,7 +146,7 @@ function handleTempRange(val) {
       </div>
 
       <!-- Tab content -->
-      <div class="max-w-2xl mx-auto px-4 py-4 sm:py-6 space-y-4 sm:space-y-6">
+      <div class="max-w-3xl mx-auto px-4 py-4 sm:py-6 space-y-4 sm:space-y-6">
 
         <!-- Control tab (original dashboard) -->
         <template v-if="activeTab === 'control'">
