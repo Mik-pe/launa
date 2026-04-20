@@ -4,6 +4,7 @@
 //! - State updates from the main loop (via STATE_CHANNEL)
 //! - Diagnostics payloads (via DIAGNOSTICS_CHANNEL)
 //! - Alert payloads (via ALERT_CHANNEL)
+//! - Remote log entries (drained from the global log buffer)
 //! - Incoming MQTT commands and OTA requests
 //!
 //! It handles automatic reconnection with exponential backoff and
@@ -25,17 +26,22 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
     let state_rx = STATE_CHANNEL.receiver();
     let diag_rx = DIAGNOSTICS_CHANNEL.receiver();
     let alert_rx = ALERT_CHANNEL.receiver();
+    let sniff_rx = SNIFF_CHANNEL.receiver();
     let ota_tx = OTA_CHANNEL.sender();
     let topics = launa_mqtt::topics::TopicBuilder::new(&mqtt.device_id);
     let diag_topic = topics.diagnostics_topic();
     let cmd_base = topics.command_topic();
     let alert_topic = topics.alert_topic();
+    let log_topic = topics.log_topic();
+    let sniff_topic = topics.sniff_topic();
     let mut last_scale_range: Option<
         (
             launa_protocol::status::TemperatureScale,
             launa_protocol::status::TempRange,
         ),
     > = None;
+    let mut last_self_test: bool = false;
+    let mut last_sniff_mode: bool = false;
     let mut last_published_status: Option<StatusUpdate> = None;
     let mut last_published_fault: Option<FaultBuf> = None;
 
@@ -69,7 +75,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                         if let Some(ref status) = last_published_status {
                             let fault_str =
                                 last_published_fault.as_ref().and_then(|f| f.as_str());
-                            if let Err(e) = mqtt.publish_state(status, fault_str).await {
+                            if let Err(e) = mqtt.publish_state(status, fault_str, last_self_test, last_sniff_mode).await {
                                 warn!("WiFi-reconnect: publish state failed: {:?}", e);
                             }
                         }
@@ -149,10 +155,47 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
             }
         }
 
+        // Check for sniff frame payloads to publish (non-blocking)
+        if non_cmd_count < MAX_NON_CMD_RECEIVES {
+            if let Ok(sniff_payload) = sniff_rx.try_receive() {
+                if let Err(e) = mqtt.publish(&sniff_topic, &sniff_payload, 0, false).await {
+                    warn!("MQTT sniff publish failed: {:?}", e);
+                }
+                non_cmd_count += 1;
+                continue;
+            }
+        }
+
+        // Drain remote log buffer and publish entries (non-blocking)
+        if non_cmd_count < MAX_NON_CMD_RECEIVES {
+            if let Some(log_buf) = crate::remote_log::remote_log_buffer() {
+                if !log_buf.is_empty() {
+                    let entries = log_buf.drain();
+                    for entry in &entries {
+                        let log_entry = launa_mqtt::RemoteLogEntry {
+                            level: entry.level,
+                            message: entry.message.clone(),
+                            timestamp_ms: entry.timestamp_ms,
+                        };
+                        let json = launa_mqtt::log_entry_to_json(&log_entry);
+                        let payload = json.as_bytes();
+                        if let Err(e) = mqtt.publish(&log_topic, payload, 0, false).await {
+                            warn!("MQTT log publish failed: {:?}", e);
+                            break;
+                        }
+                    }
+                    non_cmd_count += 1;
+                    continue;
+                }
+            }
+        }
+
         // Check for state updates to publish (non-blocking)
         if non_cmd_count < MAX_NON_CMD_RECEIVES {
-            if let Ok((status, fault, is_stale)) = state_rx.try_receive() {
+            if let Ok((status, fault, is_stale, self_test, sniff_mode)) = state_rx.try_receive() {
                 last_scale_range = Some((status.temperature_scale, status.temp_range));
+                last_self_test = self_test;
+                last_sniff_mode = sniff_mode;
                 // Change detection: skip publish if state is identical to last
                 let changed = last_published_status.as_ref().map_or(true, |prev| {
                     prev.current_temp != status.current_temp
@@ -171,7 +214,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 if is_stale || changed {
                     last_published_status = Some(status.clone());
                     last_published_fault = Some(fault);
-                    if let Err(e) = mqtt.publish_state(&status, fault.as_str()).await {
+                    if let Err(e) = mqtt.publish_state(&status, fault.as_str(), self_test, sniff_mode).await {
                         warn!("MQTT state publish failed: {:?}", e);
                     }
                 }
@@ -250,6 +293,16 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                     continue;
                 }
 
+                // Handle sniff mode toggle command
+                let sniff_subtopic = alloc::format!("{}/sniff", cmd_base);
+                if topic == sniff_subtopic {
+                    let payload_str = core::str::from_utf8(&payload).unwrap_or("");
+                    let enable = matches!(payload_str, "ON" | "on" | "1" | "true" | "TRUE");
+                    info!("MQTT sniff mode command: {}", if enable { "ON" } else { "OFF" });
+                    cmd_sender.send(Command::Sniff(enable)).await;
+                    continue;
+                }
+
                 // Handle commands and pump timers (with rate limiting)
                 let (scale, range) = match last_scale_range {
                     Some((s, r)) => (Some(s), Some(r)),
@@ -307,7 +360,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                             if let Some(ref status) = last_published_status {
                                 let fault_str =
                                     last_published_fault.as_ref().and_then(|f| f.as_str());
-                                if let Err(e) = mqtt.publish_state(status, fault_str).await {
+                                if let Err(e) = mqtt.publish_state(status, fault_str, last_self_test, last_sniff_mode).await {
                                     warn!("MQTT reconnect: publish state failed: {:?}", e);
                                 }
                             }

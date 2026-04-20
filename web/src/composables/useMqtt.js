@@ -12,6 +12,7 @@ export function useMqtt() {
   const alert_ = ref(null)
   const retryCount = ref(0)
   const selfTestEnabled = ref(false)
+  const sniffEnabled = ref(false)
 
   const settings = ref(loadSettings())
   const serverConfig = ref(null)
@@ -74,6 +75,13 @@ export function useMqtt() {
       if (topic === `${base}/state`) {
         try {
           spaState.value = JSON.parse(payload)
+          // Sync mode flags from device state
+          if (typeof spaState.value.self_test === 'boolean') {
+            selfTestEnabled.value = spaState.value.self_test
+          }
+          if (typeof spaState.value.sniff_mode === 'boolean') {
+            sniffEnabled.value = spaState.value.sniff_mode
+          }
           // Clear all pending keys on every state update — the real state has arrived
           if (pendingKeys.value.size > 0) {
             pendingKeys.value = new Set()
@@ -166,6 +174,11 @@ export function useMqtt() {
     publish('self_test', enabled ? 'ON' : 'OFF')
   }
 
+  function setSniff(enabled) {
+    sniffEnabled.value = enabled
+    publish('sniff', enabled ? 'ON' : 'OFF')
+  }
+
   onMounted(() => {
     fetchServerConfig()
     connect()
@@ -230,5 +243,7 @@ export function useMqtt() {
     saveAccessoryConfig,
     selfTestEnabled,
     setSelfTest,
+    sniffEnabled,
+    setSniff,
   }
 }

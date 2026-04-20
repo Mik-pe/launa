@@ -129,6 +129,11 @@ impl log::Log for Logger {
             return;
         }
 
+        // Capture warn/error to remote log buffer for MQTT publishing
+        if record.level() <= Level::Warn {
+            crate::remote_log::capture_log(record.level(), &alloc::format!("{}", record.args()));
+        }
+
         let core_id = match Cpu::current() {
             Cpu::ProCpu => 0,
             Cpu::AppCpu => 1,

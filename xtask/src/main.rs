@@ -2,6 +2,7 @@ mod config;
 mod config_flash;
 mod flash;
 mod flash_monitor;
+mod listen;
 mod monitor;
 mod ota_flash;
 mod ota_serve;
@@ -34,6 +35,9 @@ fn usage() {
     eprintln!(
         "  provision [--port <COMx>] [--no-confirm]          Burn AES key to ESP32 eFuse BLOCK3"
     );
+    eprintln!(
+        "  listen [--host <host>] [--port <1883>] [-t <topic>]  Subscribe to MQTT topics"
+    );
 }
 
 fn main() -> anyhow::Result<()> {
@@ -59,6 +63,7 @@ fn main() -> anyhow::Result<()> {
         "self-test" | "self_test" => self_test::run(sub_args),
         "config-flash" | "config_flash" => config_flash::run(sub_args),
         "provision" => provision::run(sub_args),
+        "listen" => listen::run(sub_args),
         other => {
             usage();
             bail!("Unknown command: {}", other);

@@ -200,7 +200,7 @@ impl SimBroker {
     pub fn publish_state(&mut self, status: &launa_protocol::status::StatusUpdate) {
         let topics = TopicBuilder::new(&self.device_id);
         let topic = topics.state_topic();
-        let json = launa_mqtt::state::status_to_json(status, None, None);
+        let json = launa_mqtt::state::status_to_json(status, None, None, false, false);
         // State bypasses subscription/loss/disconnect (internal operation)
         self.published.push((topic, json));
     }
@@ -302,7 +302,7 @@ mod tests {
         broker.publish_discovery("test_spa");
 
         let discoveries = broker.discovery_payloads();
-        assert_eq!(discoveries.len(), 28);
+        assert_eq!(discoveries.len(), 29);
     }
 
     #[test]

@@ -6,9 +6,10 @@ const props = defineProps({
   settings: Object,
   accessoryConfig: Object,
   selfTestEnabled: { type: Boolean, default: false },
+  sniffEnabled: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['update:modelValue', 'save', 'saveAccessoryConfig', 'toggleSelfTest'])
+const emit = defineEmits(['update:modelValue', 'save', 'saveAccessoryConfig', 'toggleSelfTest', 'toggleSniff'])
 
 const form = ref({ ...props.settings })
 const accForm = ref({ ...props.accessoryConfig })
@@ -33,6 +34,10 @@ function close() {
 
 function toggleSelfTest() {
   emit('toggleSelfTest', !props.selfTestEnabled)
+}
+
+function toggleSniff() {
+  emit('toggleSniff', !props.sniffEnabled)
 }
 </script>
 
@@ -100,6 +105,26 @@ function toggleSelfTest() {
                 <span :class="[
                   'inline-block h-4 w-4 transform rounded-full bg-white transition-transform shadow',
                   selfTestEnabled ? 'translate-x-6' : 'translate-x-1'
+                ]" />
+              </button>
+            </div>
+          </div>
+
+          <!-- Sniff Mode -->
+          <div class="pt-2 border-t border-neutral-700">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="text-sm font-semibold text-neutral-300">Sniff Mode</h3>
+                <p class="text-xs text-neutral-500 mt-0.5">Capture raw RS-485 frames to MQTT</p>
+              </div>
+              <button @click="toggleSniff"
+                :class="[
+                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer',
+                  sniffEnabled ? 'bg-cyan-500' : 'bg-neutral-700'
+                ]">
+                <span :class="[
+                  'inline-block h-4 w-4 transform rounded-full bg-white transition-transform shadow',
+                  sniffEnabled ? 'translate-x-6' : 'translate-x-1'
                 ]" />
               </button>
             </div>

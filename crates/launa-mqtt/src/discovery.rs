@@ -375,6 +375,18 @@ impl DiscoveryBuilder {
             &format!("{}/self_test", cmd_topic),
         ));
 
+        // Sniff mode switch (passive RS-485 frame capture to MQTT)
+        configs.push(Self::make_switch_optimistic(
+            &topics,
+            &self.device_id,
+            &device_info,
+            &origin,
+            &avail_topic,
+            "sniff",
+            "Sniff Mode",
+            &format!("{}/sniff", cmd_topic),
+        ));
+
         configs
     }
 

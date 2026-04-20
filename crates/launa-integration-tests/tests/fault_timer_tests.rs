@@ -78,7 +78,7 @@ fn test_fault_appears_and_clears_lifecycle() {
     // The MQTT state published via broker should also reflect the fault
     // Publish with fault attached
     let status_with_fault = h.app.last_status().unwrap().clone();
-    let json = launa_mqtt::state::status_to_json(&status_with_fault, h.app.last_fault(), None);
+    let json = launa_mqtt::state::status_to_json(&status_with_fault, h.app.last_fault(), None, false, false);
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert!(
         parsed["last_fault"].is_string(),
@@ -809,7 +809,7 @@ fn test_rapid_temperature_race_last_wins() {
 
     // Verify MQTT state reflects the final temperature
     if let Some(status) = h.app.last_status() {
-        let json = launa_mqtt::state::status_to_json(status, None, None);
+        let json = launa_mqtt::state::status_to_json(status, None, None, false, false);
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(
             parsed["set_temp"], 102.0,

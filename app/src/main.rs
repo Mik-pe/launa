@@ -47,16 +47,12 @@ mod macros;
 mod mqtt_client;
 mod net_util;
 mod ota;
+mod remote_log;
 mod transport;
 mod types;
 mod wifi;
 
-#[cfg(feature = "remote-log")]
-mod remote_log;
 mod self_test;
-
-#[cfg(feature = "sniff")]
-mod sniff;
 
 /// Custom panic handler: logs panic location, waits 500ms for log flush,
 /// then triggers a software reset. Replaces esp-backtrace's default infinite
@@ -154,7 +150,7 @@ fn uptime_secs() -> u64 {
 static FRAME_CHANNEL: Channel<CriticalSectionRawMutex, Frame, 4> = Channel::new();
 static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
 static UART_TX_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
-static STATE_CHANNEL: Channel<CriticalSectionRawMutex, (StatusUpdate, FaultBuf, bool), 4> = Channel::new();
+static STATE_CHANNEL: Channel<CriticalSectionRawMutex, (StatusUpdate, FaultBuf, bool, bool, bool), 4> = Channel::new();
 static PUMP_TIMER_CHANNEL: Channel<CriticalSectionRawMutex, (u8, u32), 4> = Channel::new();
 static DIAGNOSTICS_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 2> = Channel::new();
 static OTA_CHANNEL: Channel<CriticalSectionRawMutex, alloc::string::String, 1> = Channel::new();
@@ -165,6 +161,9 @@ pub static WIFI_RECONNECT_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::
 
 /// Channel for sending alert payloads from the main loop to the MQTT task.
 static ALERT_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
+
+/// Channel for sending raw sniff frame JSON from main loop to MQTT task.
+static SNIFF_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
 
 #[embassy_executor::task]
 async fn uart_task(mut transport: transport::Rs485Transport) {
@@ -208,7 +207,7 @@ mod mqtt_task;
 /// Execute a batch of `AppAction` side effects from `SpaApp`.
 ///
 /// Maps each action to the corresponding IO operation (UART send, MQTT publish, etc.).
-async fn execute_actions(actions: &[AppAction], device_id: &str) {
+async fn execute_actions(actions: &[AppAction], device_id: &str, self_test: bool, sniff_mode: bool) {
     for action in actions {
         match action {
             AppAction::SendFrame(bytes) => {
@@ -220,7 +219,7 @@ async fn execute_actions(actions: &[AppAction], device_id: &str) {
                 recovering_from_stale,
             } => {
                 let fb = fault.as_ref().map_or(FaultBuf::EMPTY, |s| FaultBuf::from_str(s));
-                if STATE_CHANNEL.try_send((status.clone(), fb, *recovering_from_stale)).is_err() {
+                if STATE_CHANNEL.try_send((status.clone(), fb, *recovering_from_stale, self_test, sniff_mode)).is_err() {
                     warn!("STATE_CHANNEL full, dropping state update (capacity 4)");
                 }
             }
@@ -252,11 +251,51 @@ async fn execute_actions(actions: &[AppAction], device_id: &str) {
     }
 }
 
+/// Publish a raw frame to the sniff channel for MQTT delivery.
+///
+/// Formats the frame as JSON matching the sniffer protocol:
+/// `{"raw":"<hex>","type":"<MT>","len":<N>,"crc_ok":<bool>}`
+fn publish_sniff_frame(frame: &Frame) {
+    // Stack-based hex formatting (same approach as sniff.rs HexBuf)
+    let mut hex_buf = [0u8; 512];
+    let mut hex_len = 0;
+    for &b in &frame.payload {
+        if hex_len + 2 > hex_buf.len() {
+            break;
+        }
+        let hi = b >> 4;
+        let lo = b & 0x0F;
+        hex_buf[hex_len] = if hi < 10 { b'0' + hi } else { b'A' + hi - 10 };
+        hex_buf[hex_len + 1] = if lo < 10 { b'0' + lo } else { b'A' + lo - 10 };
+        hex_len += 2;
+    }
+    let hex_str = unsafe { core::str::from_utf8_unchecked(&hex_buf[..hex_len]) };
+
+    let mt = alloc::format!(
+        "{:02X}{:02X}",
+        frame.message_type[0], frame.message_type[1]
+    );
+    let crc_ok = Frame::parse(&frame.payload).is_ok();
+
+    let json = alloc::format!(
+        r#"{{"raw":"{}","type":"{}","len":{},"crc_ok":{}}}"#,
+        hex_str,
+        mt,
+        frame.payload.len(),
+        crc_ok
+    );
+
+    if SNIFF_CHANNEL.try_send(Vec::from(json.as_bytes())).is_err() {
+        warn!("SNIFF_CHANNEL full, dropping frame");
+    }
+}
+
 /// Handle an incoming MQTT command, routing through self-test or SpaApp.
 async fn handle_mqtt_command(
     cmd: Command,
     app: &mut SpaApp<'_>,
     self_test_state: &mut Option<self_test::SelfTestState>,
+    sniff_mode: &mut bool,
     device_id: &str,
 ) -> bool {
     // Returns true if self-test state changed and should be published immediately
@@ -276,12 +315,22 @@ async fn handle_mqtt_command(
             }
             false
         }
+        Command::Sniff(enable) => {
+            if enable && !*sniff_mode {
+                info!("Sniff mode enabled — publishing raw RS-485 frames");
+                *sniff_mode = true;
+            } else if !enable && *sniff_mode {
+                info!("Sniff mode disabled — resuming normal operation");
+                *sniff_mode = false;
+            }
+            false
+        }
         _ => {
             if let Some(ref mut st) = self_test_state {
                 st.apply_command(&cmd)
             } else {
                 let actions = app.on_mqtt_command(cmd);
-                execute_actions(&actions, device_id).await;
+                execute_actions(&actions, device_id, self_test_state.is_some(), *sniff_mode).await;
                 false
             }
         }
@@ -479,7 +528,7 @@ async fn main(_spawner: Spawner) {
     }
 }
 
-#[cfg(not(any(feature = "sniff", feature = "hw-test")))]
+#[cfg(not(feature = "hw-test"))]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
     use launa_ota::OtaUpdate;
@@ -492,6 +541,9 @@ async fn main(spawner: Spawner) {
 
     // Initialize logger (uses raw UART0 registers, bypasses buggy ROM function)
     logger::init();
+
+    // Initialize remote log capture (captures warn/error into ring buffer for MQTT)
+    remote_log::init_remote_log();
 
     // Record boot timestamp for diagnostics uptime calculation
     DIAGNOSTICS_START_SECS.store((Instant::now().as_millis() / 1000) as u32, Ordering::Relaxed);
@@ -617,6 +669,7 @@ async fn main(spawner: Spawner) {
     let mut app = SpaApp::new(&clock);
     let device_id_str: &str = &app_config.device_id;
     let mut self_test_state: Option<self_test::SelfTestState> = None;
+    let mut sniff_mode: bool = false;
     let mut self_test_last_publish: Option<Instant> = None;
     const SELF_TEST_PUBLISH_INTERVAL_SECS: u64 = 5;
 
@@ -635,14 +688,20 @@ async fn main(spawner: Spawner) {
         match select(frame_rx.receive(), select(cmd_rx.receive(), Timer::after(tick_interval))).await {
             // UART frame received
             Either::First(frame) => {
-                if !skip_uart {
+                if sniff_mode {
+                    // Sniff mode: publish raw frame to sniff topic
+                    publish_sniff_frame(&frame);
+                    while let Ok(f) = frame_rx.try_receive() {
+                        publish_sniff_frame(&f);
+                    }
+                } else if !skip_uart {
                     let actions = app.process_frame(&frame);
-                    execute_actions(&actions, device_id_str).await;
+                    execute_actions(&actions, device_id_str, self_test_state.is_some(), sniff_mode).await;
 
                     // Drain all available frames
                     while let Ok(frame) = frame_rx.try_receive() {
                         let actions = app.process_frame(&frame);
-                        execute_actions(&actions, device_id_str).await;
+                        execute_actions(&actions, device_id_str, self_test_state.is_some(), sniff_mode).await;
                     }
                 }
                 // When in self-test mode, drain and discard UART frames
@@ -650,14 +709,14 @@ async fn main(spawner: Spawner) {
             }
             // MQTT command received
             Either::Second(Either::First(cmd)) => {
-                let changed = handle_mqtt_command(cmd, &mut app, &mut self_test_state, device_id_str).await;
+                let changed = handle_mqtt_command(cmd, &mut app, &mut self_test_state, &mut sniff_mode, device_id_str).await;
                 if changed {
                     if let Some(ref st) = self_test_state {
                         execute_actions(&[AppAction::PublishState {
                             status: st.status().clone(),
                             fault: None,
                             recovering_from_stale: false,
-                        }], device_id_str).await;
+                        }], device_id_str, true, sniff_mode).await;
                         self_test_last_publish = Some(Instant::now());
                     }
                 }
@@ -668,14 +727,14 @@ async fn main(spawner: Spawner) {
 
         // Drain MQTT commands (non-blocking)
         while let Ok(cmd) = cmd_rx.try_receive() {
-            let changed = handle_mqtt_command(cmd, &mut app, &mut self_test_state, device_id_str).await;
+            let changed = handle_mqtt_command(cmd, &mut app, &mut self_test_state, &mut sniff_mode, device_id_str).await;
             if changed {
                 if let Some(ref st) = self_test_state {
                     execute_actions(&[AppAction::PublishState {
                         status: st.status().clone(),
                         fault: None,
                         recovering_from_stale: false,
-                    }], device_id_str).await;
+                    }], device_id_str, true, sniff_mode).await;
                     self_test_last_publish = Some(Instant::now());
                 }
             }
@@ -691,19 +750,19 @@ async fn main(spawner: Spawner) {
                     status: st.status().clone(),
                     fault: None,
                     recovering_from_stale: false,
-                }], device_id_str).await;
+                }], device_id_str, true, sniff_mode).await;
                 self_test_last_publish = Some(now);
             }
         } else {
             self_test_last_publish = None;
             // Periodic tick: stale detection, registration timeout, diagnostics
             let tick_actions = app.tick();
-            execute_actions(&tick_actions, device_id_str).await;
+            execute_actions(&tick_actions, device_id_str, false, sniff_mode).await;
         }
 
         // Heap check (uses actual ESP32 free heap)
         let heap_actions = app.check_heap(esp_alloc::HEAP.free());
-        execute_actions(&heap_actions, device_id_str).await;
+        execute_actions(&heap_actions, device_id_str, self_test_state.is_some(), sniff_mode).await;
 
         if let Ok(firmware_url) = ota_rx.try_receive() {
             // If URL contains "?test=1", run TCP connectivity test instead of OTA
@@ -749,7 +808,7 @@ async fn main(spawner: Spawner) {
         // Drain pump timer commands
         while let Ok((pump_index, minutes)) = pump_timer_rx.try_receive() {
             let actions = app.start_pump_timer(pump_index, minutes);
-            execute_actions(&actions, device_id_str).await;
+            execute_actions(&actions, device_id_str, self_test_state.is_some(), sniff_mode).await;
             info!("Started pump {} timer for {} min", pump_index, minutes);
         }
     }

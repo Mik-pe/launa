@@ -29,6 +29,8 @@ const {
   saveAccessoryConfig,
   selfTestEnabled,
   setSelfTest,
+  sniffEnabled,
+  setSniff,
 } = useMqtt()
 
 const showSettings = ref(false)
@@ -195,9 +197,11 @@ function handleTempRange(val) {
       :settings="settings"
       :accessory-config="serverConfig"
       :self-test-enabled="selfTestEnabled"
+      :sniff-enabled="sniffEnabled"
       @save="handleSave"
       @save-accessory-config="saveAccessoryConfig"
       @toggle-self-test="setSelfTest"
+      @toggle-sniff="setSniff"
     />
   </div>
 </template>

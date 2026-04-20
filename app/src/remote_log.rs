@@ -1,13 +1,13 @@
-//! Optional remote logging via MQTT.
+//! Remote logging via MQTT.
 //!
-//! When the `remote-log` feature is enabled, warn and error level log messages
-//! are captured and forwarded to a dedicated MQTT topic as JSON payloads.
+//! Warn and error level log messages are captured into a ring buffer and
+//! forwarded to a dedicated MQTT topic (`launa/{device_id}/log`) as JSON payloads.
 //! This allows remote diagnostics of the ESP32 firmware without a serial
 //! connection.
 //!
-//! # Feature flag
-//!
-//! Enabled by `cargo +esp check --features remote-log`.
+//! Capture is wired into the UART logger in `logger.rs` — no separate
+//! log::Log implementation is needed. The MQTT task drains the buffer
+//! periodically and publishes entries.
 //!
 //! # Log format
 //!
@@ -31,7 +31,6 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 // Re-export extracted types from workspace crates
 pub use launa_core::{LogEntry, MAX_LOG_MESSAGE_LEN, REMOTE_LOG_BUF_SIZE};
-pub use launa_mqtt::log_entry_to_json;
 
 /// Ring buffer state for captured log messages.
 ///
@@ -198,21 +197,4 @@ pub fn capture_log(level: log::Level, message: &str) {
             buf.push(level_str, message, ts);
         }
     }
-}
-
-/// Custom log implementation that forwards warn/error to the remote log buffer.
-pub struct RemoteLogger;
-
-impl log::Log for RemoteLogger {
-    fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Warn
-    }
-
-    fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
-            capture_log(record.level(), &alloc::format!("{}", record.args()));
-        }
-    }
-
-    fn flush(&self) {}
 }

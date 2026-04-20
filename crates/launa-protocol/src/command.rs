@@ -71,6 +71,7 @@ pub enum Command {
     FaultLogRequest { entry: u8 },
     NothingToSend { client_id: u8 },
     SelfTest(bool),
+    Sniff(bool),
 }
 
 /// Toggleable spa component — used in toggle commands and pump timers.
@@ -224,6 +225,7 @@ impl Command {
             Command::FaultLogRequest { entry } => ([0x0A, 0xBF], vec![0x22, 0x20, *entry, 0x00]),
             Command::NothingToSend { client_id } => ([*client_id, 0xBF], vec![0x07]),
             Command::SelfTest(_) => ([0x00, 0x00], Vec::new()), // not sent to spa
+            Command::Sniff(_) => ([0x00, 0x00], Vec::new()), // not sent to spa
         }
     }
 }
