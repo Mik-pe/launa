@@ -89,15 +89,17 @@ pub(crate) async fn main(spawner: Spawner) {
 
     info!("Launa ESP32 sniffer mode starting...");
 
-    let app_config = match config::AppConfig::open_nvs(peripherals.FLASH) {
+    let (app_config, mut ota, mut ota_buffers) = match config::AppConfig::open_nvs(peripherals.FLASH) {
         Some(mut nvs) => {
             let mut aes = esp_hal::aes::Aes::new(peripherals.AES);
             let mut rng = esp_hal::rng::Rng::new();
-            config::AppConfig::load(&mut nvs, &mut aes, &mut rng)
+            let cfg = config::AppConfig::load(&mut nvs, &mut aes, &mut rng);
+            let flash = nvs.into_inner();
+            (cfg, Some(ota::create_ota(flash)), Some(ota::OtaBuffers::new()))
         }
         None => {
-            warn!("NVS unavailable — using default config");
-            config::AppConfig::default()
+            warn!("NVS unavailable — using default config, OTA disabled");
+            (config::AppConfig::default(), None, None)
         }
     };
     let device_id = app_config.device_id.clone();
@@ -156,6 +158,7 @@ pub(crate) async fn main(spawner: Spawner) {
 
     let topics = TopicBuilder::new(&device_id);
     let sniff_topic = topics.sniff_topic();
+    let ota_topic = topics.ota_topic();
 
     info!("Sniffer mode active - listening passively on RS-485");
 
@@ -164,6 +167,47 @@ pub(crate) async fn main(spawner: Spawner) {
     let mut hex_buf = HexBuf::new();
 
     loop {
+        // Poll for incoming MQTT messages (OTA commands, etc.)
+        if let Some((topic, payload)) = mqtt.recv().await {
+            if topic == ota_topic {
+                if let Some(url) = mqtt_client::MqttClient::parse_ota_url(&payload) {
+                    info!("OTA firmware URL: {}", url);
+
+                    // Graceful MQTT shutdown — same pattern as the main app.
+                    // perform_ota_update needs the TCP socket, so we must
+                    // disconnect MQTT first to free the transport.
+                    info!("OTA: publishing offline...");
+                    let _ = mqtt.publish_availability(false).await;
+                    info!("OTA: disconnecting MQTT...");
+                    mqtt.disconnect().await;
+                    Timer::after(Duration::from_millis(50)).await;
+
+                    match (ota.as_mut(), ota_buffers.as_mut()) {
+                        (Some(o), Some(b)) => {
+                            info!("OTA: starting firmware download");
+                            match ota::perform_ota_update(wifi_stack.stack, o, &url, b, || {}).await {
+                                Ok(()) => {
+                                    info!("OTA update successful, resetting");
+                                    esp_hal::system::software_reset();
+                                }
+                                Err(()) => {
+                                    error!("OTA update failed, resetting");
+                                    esp_hal::system::software_reset();
+                                }
+                            }
+                        }
+                        _ => {
+                            warn!("OTA requested but flash unavailable");
+                        }
+                    }
+                } else {
+                    warn!("OTA: invalid payload, ignoring");
+                }
+                continue;
+            }
+        }
+
+        // Read RS-485
         match transport.read(&mut buf).await {
             Ok(n) if n > 0 => {
                 let frames = decoder.feed_slice(&buf[..n]);
