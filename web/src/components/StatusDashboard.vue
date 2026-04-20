@@ -93,14 +93,14 @@ const infoRows = computed(() => {
     </div>
 
     <template v-else>
-      <!-- Temperature hero card -->
-      <div class="relative overflow-hidden rounded-2xl ring-1 ring-neutral-800">
+      <!-- Temperature hero card (only shown when spa is reporting a temperature) -->
+      <div v-if="status.current_temp != null" class="relative overflow-hidden rounded-2xl ring-1 ring-neutral-800">
         <div class="absolute inset-0 bg-gradient-to-br from-blue-600/10 via-transparent to-orange-500/10" />
         <div class="relative bg-neutral-900/80 backdrop-blur px-6 py-8 text-center">
           <p class="text-[11px] text-neutral-500 uppercase tracking-[0.2em] font-semibold mb-3">Water Temperature</p>
           <div class="flex items-baseline justify-center gap-1.5">
             <span class="text-6xl sm:text-7xl font-extralight text-white tabular-nums tracking-tight">
-              {{ status.current_temp ?? '--' }}
+              {{ status.current_temp }}
             </span>
             <span class="text-2xl text-neutral-500 font-light">°{{ scale }}</span>
           </div>

@@ -8,6 +8,11 @@ const props = defineProps({
 
 const emit = defineEmits(['set-temperature'])
 
+const hasTemp = computed(() => {
+  const t = props.state?.current_temp
+  return t !== null && t !== undefined
+})
+
 const currentTemp = computed(() => props.state?.current_temp)
 const setTemp = computed(() => props.state?.set_temp)
 const tempScale = computed(() => props.state?.temp_scale === 'celsius' ? 'C' : 'F')
@@ -38,7 +43,7 @@ function adjustTemp(delta) {
 </script>
 
 <template>
-  <div class="bg-neutral-900 rounded-2xl p-4 sm:p-6 text-white ring-1 ring-neutral-800">
+  <div v-if="hasTemp" class="bg-neutral-900 rounded-2xl p-4 sm:p-6 text-white ring-1 ring-neutral-800">
     <div class="flex items-start justify-between mb-4">
       <div>
         <p class="text-xs text-neutral-500 uppercase tracking-widest font-medium">Water Temperature</p>
@@ -85,5 +90,9 @@ function adjustTemp(delta) {
         <span>Range: <span class="text-neutral-300">{{ tempRange }}</span></span>
       </div>
     </div>
+  </div>
+  <div v-else class="bg-neutral-900 rounded-2xl p-4 sm:p-6 text-white ring-1 ring-neutral-800 text-center">
+    <p class="text-xs text-neutral-500 uppercase tracking-widest font-medium mb-2">Water Temperature</p>
+    <p class="text-neutral-600 text-sm">Waiting for spa connection...</p>
   </div>
 </template>
