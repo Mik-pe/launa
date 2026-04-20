@@ -1,35 +1,53 @@
-//! Custom logger using raw ESP32 UART0 registers.
+//! Custom logger with optional serial and remote outputs.
 //!
-//! Bypasses esp-println's ROM function `uart_tx_one_char` which has known
-//! issues with character interleaving on ESP32. Writes directly to UART0
-//! FIFO with proper spin-waiting and cross-core locking.
+//! Two Cargo features control output:
+//! - `serial-log` — writes to UART0 using raw ESP32 registers (off by default)
+//! - `remote-log` — forwards to MQTT via the remote_log module (on by default)
+//!
+//! When serial-log is disabled, the UART register code and spinlock are not
+//! compiled, saving code space and eliminating UART overhead in production.
 
 extern crate alloc;
 
-use core::sync::atomic::{AtomicBool, Ordering};
-use esp_hal::system::Cpu;
 use log::{Level, LevelFilter, Metadata, Record};
 
+// ---------------------------------------------------------------------------
+// Serial UART output (feature-gated)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "serial-log")]
+use core::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(feature = "serial-log")]
+use esp_hal::system::Cpu;
+
 /// ESP32 UART0 register base address.
+#[cfg(feature = "serial-log")]
 const UART0_BASE: usize = 0x60000000;
 
 /// FIFO register (write-only, writes go to TX FIFO).
+#[cfg(feature = "serial-log")]
 const UART_FIFO_REG: usize = UART0_BASE;
 
 /// Status register - bits 16-22 contain TX FIFO count.
+#[cfg(feature = "serial-log")]
 const UART_STATUS_REG: usize = UART0_BASE + 0x1C;
 
 /// TX FIFO size for ESP32.
+#[cfg(feature = "serial-log")]
 const UART_FIFO_SIZE: u16 = 128;
 
 /// Mask for TX FIFO count in status register.
+#[cfg(feature = "serial-log")]
 const TX_FIFO_CNT_MASK: u32 = 0x7F << 16;
 
 /// Spinlock for cross-core UART synchronization.
+#[cfg(feature = "serial-log")]
 struct Spinlock {
     locked: AtomicBool,
 }
 
+#[cfg(feature = "serial-log")]
 impl Spinlock {
     const fn new() -> Self {
         Spinlock {
@@ -54,9 +72,10 @@ impl Spinlock {
     }
 }
 
+#[cfg(feature = "serial-log")]
 static UART_LOCK: Spinlock = Spinlock::new();
 
-/// Read TX FIFO count from status register.
+#[cfg(feature = "serial-log")]
 #[inline]
 fn tx_fifo_count() -> u16 {
     unsafe {
@@ -65,35 +84,53 @@ fn tx_fifo_count() -> u16 {
     }
 }
 
-/// Write a single byte to UART0 TX FIFO, waiting if full.
+#[cfg(feature = "serial-log")]
 #[inline]
 fn write_byte(b: u8) {
-    // Spin until there's space in the FIFO
     while tx_fifo_count() >= UART_FIFO_SIZE {
         core::hint::spin_loop();
     }
-    // Write byte to FIFO
     unsafe {
         (UART_FIFO_REG as *mut u8).write_volatile(b);
     }
 }
 
-/// Write bytes to UART0 with proper FIFO management.
+#[cfg(feature = "serial-log")]
 fn write_bytes(data: &[u8]) {
     for &b in data {
         write_byte(b);
     }
 }
 
-/// Wait for TX FIFO to drain completely.
+#[cfg(feature = "serial-log")]
 fn flush_uart() {
     while tx_fifo_count() > 0 {
         core::hint::spin_loop();
     }
-    // Small delay to ensure last byte is fully transmitted
-    // (ESP32 UART FSM has a brief idle state after FIFO drains)
     esp_hal::rom::ets_delay_us(10);
 }
+
+#[cfg(feature = "serial-log")]
+fn color_for_level(level: Level) -> (&'static str, &'static str) {
+    const RESET: &str = "\u{001B}[0m";
+    const RED: &str = "\u{001B}[31m";
+    const GREEN: &str = "\u{001B}[32m";
+    const YELLOW: &str = "\u{001B}[33m";
+    const BLUE: &str = "\u{001B}[34m";
+    const CYAN: &str = "\u{001B}[35m";
+
+    match level {
+        Level::Error => (RED, RESET),
+        Level::Warn => (YELLOW, RESET),
+        Level::Debug => (BLUE, RESET),
+        Level::Info => (GREEN, RESET),
+        Level::Trace => (CYAN, RESET),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Level filter and init
+// ---------------------------------------------------------------------------
 
 fn level_from_env() -> LevelFilter {
     match option_env!("ESP_LOG") {
@@ -108,8 +145,7 @@ fn level_from_env() -> LevelFilter {
 
 /// Initialize the logger.
 ///
-/// Call this after `esp_hal::init()`. The UART0 TX pin (GPIO1) should
-/// be configured by the bootloader, so no additional pin setup is needed.
+/// Call this after `esp_hal::init()`.
 pub fn init() {
     unsafe {
         log::set_logger_racy(&Logger).unwrap();
@@ -129,52 +165,44 @@ impl log::Log for Logger {
             return;
         }
 
-        // Capture warn/error to remote log buffer for MQTT publishing
-        if record.level() <= Level::Warn {
+        // Capture info/warn/error to remote log buffer for MQTT publishing
+        #[cfg(feature = "remote-log")]
+        if record.level() <= Level::Info {
             crate::remote_log::capture_log(record.level(), &alloc::format!("{}", record.args()));
         }
 
-        let core_id = match Cpu::current() {
-            Cpu::ProCpu => 0,
-            Cpu::AppCpu => 1,
-        };
+        // Write to UART0 serial output
+        #[cfg(feature = "serial-log")]
+        {
+            let core_id = match Cpu::current() {
+                Cpu::ProCpu => 0,
+                Cpu::AppCpu => 1,
+            };
 
-        let (color, reset) = color_for_level(record.level());
-        let msg = alloc::format!(
-            "{}[C{}] {} - {}{}",
-            color,
-            core_id,
-            record.level(),
-            record.args(),
-            reset,
-        );
+            let (color, reset) = color_for_level(record.level());
+            let msg = alloc::format!(
+                "{}[C{}] {} - {}{}",
+                color,
+                core_id,
+                record.level(),
+                record.args(),
+                reset,
+            );
 
-        UART_LOCK.lock();
-        write_bytes(msg.as_bytes());
-        write_byte(b'\n');
-        UART_LOCK.unlock();
+            UART_LOCK.lock();
+            write_bytes(msg.as_bytes());
+            write_byte(b'\n');
+            UART_LOCK.unlock();
+        }
     }
 
+    #[cfg(feature = "serial-log")]
     fn flush(&self) {
         UART_LOCK.lock();
         flush_uart();
         UART_LOCK.unlock();
     }
-}
 
-fn color_for_level(level: Level) -> (&'static str, &'static str) {
-    const RESET: &str = "\u{001B}[0m";
-    const RED: &str = "\u{001B}[31m";
-    const GREEN: &str = "\u{001B}[32m";
-    const YELLOW: &str = "\u{001B}[33m";
-    const BLUE: &str = "\u{001B}[34m";
-    const CYAN: &str = "\u{001B}[35m";
-
-    match level {
-        Level::Error => (RED, RESET),
-        Level::Warn => (YELLOW, RESET),
-        Level::Debug => (BLUE, RESET),
-        Level::Info => (GREEN, RESET),
-        Level::Trace => (CYAN, RESET),
-    }
+    #[cfg(not(feature = "serial-log"))]
+    fn flush(&self) {}
 }

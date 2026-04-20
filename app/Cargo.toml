@@ -5,7 +5,9 @@ edition = "2021"
 build = "build.rs"
 
 [features]
-default = []
+default = ["remote-log"]
+serial-log = []
+remote-log = []
 hw-test = []
 
 [profile.release]

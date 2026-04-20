@@ -32,6 +32,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
     let diag_topic = topics.diagnostics_topic();
     let cmd_base = topics.command_topic();
     let alert_topic = topics.alert_topic();
+    #[cfg(feature = "remote-log")]
     let log_topic = topics.log_topic();
     let sniff_topic = topics.sniff_topic();
     let mut last_scale_range: Option<
@@ -167,6 +168,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
         }
 
         // Drain remote log buffer and publish entries (non-blocking)
+        #[cfg(feature = "remote-log")]
         if non_cmd_count < MAX_NON_CMD_RECEIVES {
             if let Some(log_buf) = crate::remote_log::remote_log_buffer() {
                 if !log_buf.is_empty() {

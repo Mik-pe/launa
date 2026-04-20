@@ -1,6 +1,6 @@
 //! Remote logging via MQTT.
 //!
-//! Warn and error level log messages are captured into a ring buffer and
+//! Warn, error, and info level log messages are captured into a ring buffer and
 //! forwarded to a dedicated MQTT topic (`launa/{device_id}/log`) as JSON payloads.
 //! This allows remote diagnostics of the ESP32 firmware without a serial
 //! connection.

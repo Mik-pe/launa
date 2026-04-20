@@ -80,10 +80,10 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         device_id, feature, ota_port
     );
 
-    // Step 1: Run cargo test
+    // Step 1: Run cargo test (exclude launa-server — it may be running and lock the binary)
     println!("\n[1/7] Running cargo test...");
     let test_status = Command::new("cargo")
-        .arg("test")
+        .args(["test", "--workspace", "--exclude", "launa-server"])
         .current_dir(crate::util::project_root())
         .status()
         .context("Failed to run cargo test")?;

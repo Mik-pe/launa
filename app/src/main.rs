@@ -33,7 +33,7 @@ use launa_core::{AppAction, SpaApp};
 use launa_protocol::command::Command;
 use launa_protocol::frame::{Frame, FrameDecoder};
 use launa_protocol::status::StatusUpdate;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 
 use diagnostics::{publish_diagnostics, send_alert};
 use types::FaultBuf;
@@ -47,6 +47,7 @@ mod macros;
 mod mqtt_client;
 mod net_util;
 mod ota;
+#[cfg(feature = "remote-log")]
 mod remote_log;
 mod transport;
 mod types;
@@ -220,7 +221,7 @@ async fn execute_actions(actions: &[AppAction], device_id: &str, self_test: bool
             } => {
                 let fb = fault.as_ref().map_or(FaultBuf::EMPTY, |s| FaultBuf::from_str(s));
                 if STATE_CHANNEL.try_send((status.clone(), fb, *recovering_from_stale, self_test, sniff_mode)).is_err() {
-                    warn!("STATE_CHANNEL full, dropping state update (capacity 4)");
+                    debug!("STATE_CHANNEL full, dropping stale state update");
                 }
             }
             AppAction::PublishStaleAvailability => {
@@ -542,7 +543,8 @@ async fn main(spawner: Spawner) {
     // Initialize logger (uses raw UART0 registers, bypasses buggy ROM function)
     logger::init();
 
-    // Initialize remote log capture (captures warn/error into ring buffer for MQTT)
+    // Initialize remote log capture (captures info/warn/error into ring buffer for MQTT)
+    #[cfg(feature = "remote-log")]
     remote_log::init_remote_log();
 
     // Record boot timestamp for diagnostics uptime calculation
