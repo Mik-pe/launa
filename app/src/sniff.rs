@@ -113,14 +113,21 @@ pub(crate) async fn main(spawner: Spawner) {
     let mut transport = transport::Rs485Transport::new(uart, Some(peripherals.GPIO4.into()));
     info!("RS-485 UART initialized");
 
-    let wifi_stack = wifi::WifiStack::connect(
+    let wifi_stack = match wifi::WifiStack::connect(
         spawner,
         peripherals.WIFI,
         esp_hal::rng::Rng::new(),
         &app_config.wifi_ssid,
         &app_config.wifi_password,
     )
-    .await;
+    .await
+    {
+        Ok(ws) => ws,
+        Err(e) => {
+            error!("WiFi connect failed: {:?}", e);
+            esp_hal::system::software_reset();
+        }
+    };
 
     let mut mqtt = {
         let mut attempt: u32 = 0;
