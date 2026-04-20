@@ -1,10 +1,11 @@
-<script setup>
+<script setup lang="ts">
 import { computed } from 'vue'
 import { useSniffFrames } from '../composables/useApi'
+import type { TimestampedEntry } from '../types'
 
 const { data: frames, loading, error } = useSniffFrames(100, 8000)
 
-function timeAgo(iso) {
+function timeAgo(iso: string): string {
   if (!iso) return ''
   const diff = (Date.now() - new Date(iso).getTime()) / 1000
   if (diff < 5) return 'just now'
@@ -14,7 +15,7 @@ function timeAgo(iso) {
   return new Date(iso).toLocaleDateString()
 }
 
-function parsePayload(entry) {
+function parsePayload(entry: TimestampedEntry): any {
   try {
     return typeof entry.payload === 'string' ? JSON.parse(entry.payload) : entry.payload
   } catch {

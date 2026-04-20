@@ -1,6 +1,7 @@
-<script setup>
+<script setup lang="ts">
 import { ref } from 'vue'
 import { useMqtt } from './composables/useMqtt'
+import type { MqttSettings, AccessoryConfig } from './types'
 import ConnectionBar from './components/ConnectionBar.vue'
 import TemperatureCard from './components/TemperatureCard.vue'
 import SelectControl from './components/SelectControl.vue'
@@ -42,7 +43,7 @@ const {
 const showSettings = ref(false)
 const activeTab = ref('control')
 
-const tabs = [
+const tabs: { id: string; label: string; icon: string }[] = [
   { id: 'control', label: 'Control', icon: '🎛️' },
   { id: 'status', label: 'Status', icon: '📊' },
   { id: 'temperature', label: 'History', icon: '🌡️' },
@@ -52,28 +53,26 @@ const tabs = [
   { id: 'sniff', label: 'Sniff', icon: '📡' },
 ]
 
-const heatModeLabels = {
+const heatModeLabels: Record<string, string> = {
   ready: 'Ready',
   rest: 'Rest',
   ready_in_rest: 'Ready in Rest',
 }
 
-const heatModeCycle = ['ready', 'rest', 'ready_in_rest']
-
-const tempRangeOptions = [
+const tempRangeOptions: { value: string; label: string }[] = [
   { value: 'high', label: 'High' },
   { value: 'low', label: 'Low' },
 ]
 
-function handleSave(s) {
+function handleSave(s: MqttSettings): void {
   saveSettings(s)
 }
 
-function cycleHeatMode() {
+function cycleHeatMode(): void {
   toggle('heat_mode')
 }
 
-function handleTempRange(val) {
+function handleTempRange(val: string): void {
   publish('temp_range', val)
 }
 </script>
@@ -167,12 +166,12 @@ function handleTempRange(val) {
                 class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-neutral-800 text-white ring-1 ring-neutral-700 hover:bg-neutral-700 hover:ring-neutral-600 active:bg-neutral-800 transition-colors cursor-pointer select-none"
               >
                 <svg class="w-3 h-3 text-neutral-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                <span>{{ heatModeLabels[spaState?.heating_mode] || '--' }}</span>
+                <span>{{ heatModeLabels[spaState?.heating_mode ?? ''] || '--' }}</span>
               </button>
             </div>
             <SelectControl
               label="Temperature Range"
-              :model-value="spaState?.temp_range"
+              :model-value="spaState?.temp_range ?? ''"
               :options="tempRangeOptions"
               :pending="isPending('temp_range')"
               :disabled="availability !== 'online'"
@@ -238,7 +237,7 @@ function handleTempRange(val) {
     <SettingsModal
       v-model="showSettings"
       :settings="settings"
-      :accessory-config="serverConfig"
+      :accessory-config="serverConfig ?? { pumps: 2, lights: 1, blower: true, mister: false }"
       :self-test-enabled="selfTestEnabled"
       :sniff-enabled="sniffEnabled"
       @save="handleSave"

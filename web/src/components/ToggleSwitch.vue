@@ -1,16 +1,22 @@
-<script setup>
-const props = defineProps({
-  label: String,
-  modelValue: Boolean,
-  disabled: Boolean,
-  pending: Boolean,
-  readOnly: { type: Boolean, default: false },
-  icon: { type: String, default: '' },
+<script setup lang="ts">
+const props = withDefaults(defineProps<{
+  label: string
+  modelValue: boolean
+  disabled: boolean
+  pending?: boolean
+  readOnly?: boolean
+  icon?: string
+}>(), {
+  pending: false,
+  readOnly: false,
+  icon: '',
 })
 
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits<{
+  'update:modelValue': [value: boolean]
+}>()
 
-function toggle() {
+function toggle(): void {
   if (props.disabled || props.readOnly) return
   emit('update:modelValue', !props.modelValue)
 }

@@ -1,10 +1,11 @@
-<script setup>
+<script setup lang="ts">
 import { computed } from 'vue'
 import { useDiagnostics } from '../composables/useApi'
+import type { TimestampedEntry } from '../types'
 
 const { data: diagnostics, loading, error } = useDiagnostics(50, 8000)
 
-function timeAgo(iso) {
+function timeAgo(iso: string): string {
   if (!iso) return ''
   const diff = (Date.now() - new Date(iso).getTime()) / 1000
   if (diff < 5) return 'just now'
@@ -14,7 +15,7 @@ function timeAgo(iso) {
   return new Date(iso).toLocaleDateString()
 }
 
-function parsePayload(entry) {
+function parsePayload(entry: TimestampedEntry): any {
   try {
     return typeof entry.payload === 'string' ? JSON.parse(entry.payload) : entry.payload
   } catch {
@@ -22,11 +23,11 @@ function parsePayload(entry) {
   }
 }
 
-const latest = computed(() => diagnostics.value?.[0] || null)
+const latest = computed<TimestampedEntry | null>(() => diagnostics.value?.[0] || null)
 const latestParsed = computed(() => latest.value ? parsePayload(latest.value) : null)
 
-function isObject(v) {
-  return v && typeof v === 'object' && !Array.isArray(v)
+function isObject(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object' && !Array.isArray(v)
 }
 </script>
 
@@ -55,7 +56,7 @@ function isObject(v) {
       <div v-if="latestParsed && isObject(latestParsed)" class="bg-neutral-900 rounded-2xl ring-1 ring-neutral-800 overflow-hidden">
         <div class="px-5 py-3 border-b border-neutral-800 flex items-center justify-between">
           <p class="text-[11px] text-neutral-500 uppercase tracking-wider font-semibold">Latest Snapshot</p>
-          <p class="text-[11px] text-neutral-600">{{ timeAgo(latest.received_at) }}</p>
+          <p class="text-[11px] text-neutral-600">{{ timeAgo(latest?.received_at ?? '') }}</p>
         </div>
         <div class="divide-y divide-neutral-800/50">
           <div

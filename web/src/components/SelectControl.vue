@@ -1,13 +1,17 @@
-<script setup>
-const props = defineProps({
-  label: String,
-  modelValue: String,
-  options: { type: Array, default: () => [] },
-  disabled: Boolean,
-  pending: Boolean,
+<script setup lang="ts">
+const props = withDefaults(defineProps<{
+  label: string
+  modelValue: string
+  options?: { value: string; label: string }[]
+  disabled: boolean
+  pending: boolean
+}>(), {
+  options: () => [],
 })
 
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits<{
+  'update:modelValue': [value: string]
+}>()
 </script>
 
 <template>

@@ -1,17 +1,19 @@
-<script setup>
+<script setup lang="ts">
 import { computed } from 'vue'
 
-const props = defineProps({
-  connected: Boolean,
-  connecting: Boolean,
-  availability: String,
-  brokerUrl: String,
-  deviceId: String,
-  connectionError: String,
-  initialConnect: Boolean,
-})
+const props = defineProps<{
+  connected: boolean
+  connecting: boolean
+  availability: string
+  brokerUrl: string
+  deviceId: string
+  connectionError: string | null
+  initialConnect: boolean
+}>()
 
-const emit = defineEmits(['open-settings'])
+const emit = defineEmits<{
+  'open-settings': []
+}>()
 
 const statusColor = computed(() => {
   if (props.connecting) {

@@ -1,42 +1,53 @@
-<script setup>
+<script setup lang="ts">
 import { ref, watch } from 'vue'
+import type { MqttSettings, AccessoryConfig } from '../types'
 
-const props = defineProps({
-  modelValue: { type: Boolean, default: false },
-  settings: Object,
-  accessoryConfig: Object,
-  selfTestEnabled: { type: Boolean, default: false },
-  sniffEnabled: { type: Boolean, default: false },
+const props = withDefaults(defineProps<{
+  modelValue?: boolean
+  settings: MqttSettings
+  accessoryConfig: AccessoryConfig
+  selfTestEnabled?: boolean
+  sniffEnabled?: boolean
+}>(), {
+  modelValue: false,
+  selfTestEnabled: false,
+  sniffEnabled: false,
 })
 
-const emit = defineEmits(['update:modelValue', 'save', 'saveAccessoryConfig', 'toggleSelfTest', 'toggleSniff'])
+const emit = defineEmits<{
+  'update:modelValue': [value: boolean]
+  'save': [settings: MqttSettings]
+  'saveAccessoryConfig': [config: AccessoryConfig]
+  'toggleSelfTest': [enabled: boolean]
+  'toggleSniff': [enabled: boolean]
+}>()
 
-const form = ref({ ...props.settings })
-const accForm = ref({ ...props.accessoryConfig })
+const form = ref<MqttSettings>({ ...props.settings })
+const accForm = ref<AccessoryConfig>({ ...props.accessoryConfig })
 
 watch(() => props.settings, (s) => { form.value = { ...s } }, { deep: true })
-watch(() => props.modelValue, (open) => {
+watch(() => props.modelValue, (open: boolean) => {
   if (open) {
     form.value = { ...props.settings }
     accForm.value = { ...props.accessoryConfig }
   }
 })
 
-function save() {
+function save(): void {
   emit('save', { ...form.value })
   emit('saveAccessoryConfig', { ...accForm.value })
   emit('update:modelValue', false)
 }
 
-function close() {
+function close(): void {
   emit('update:modelValue', false)
 }
 
-function toggleSelfTest() {
+function toggleSelfTest(): void {
   emit('toggleSelfTest', !props.selfTestEnabled)
 }
 
-function toggleSniff() {
+function toggleSniff(): void {
   emit('toggleSniff', !props.sniffEnabled)
 }
 </script>

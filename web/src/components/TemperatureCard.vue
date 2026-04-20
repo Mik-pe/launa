@@ -1,12 +1,15 @@
-<script setup>
+<script setup lang="ts">
 import { computed } from 'vue'
+import type { SpaState } from '../types'
 
-const props = defineProps({
-  state: Object,
-  pending: Boolean,
-})
+const props = defineProps<{
+  state: SpaState | null
+  pending: boolean
+}>()
 
-const emit = defineEmits(['set-temperature'])
+const emit = defineEmits<{
+  'set-temperature': [temp: number]
+}>()
 
 const hasTemp = computed(() => {
   const t = props.state?.current_temp
@@ -31,7 +34,7 @@ const tempRange = computed(() => {
   return r || '--'
 })
 
-function adjustTemp(delta) {
+function adjustTemp(delta: number): void {
   const isCelsius = tempScale.value === 'C'
   const isLow = props.state?.temp_range === 'low'
   const min = isCelsius ? (isLow ? 10 : 26) : (isLow ? 50 : 80)

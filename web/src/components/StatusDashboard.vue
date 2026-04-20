@@ -1,9 +1,13 @@
-<script setup>
+<script setup lang="ts">
 import { computed } from 'vue'
+import type { SpaState } from '../types'
 
-const props = defineProps({
-  spaState: { type: Object, default: null },
-  connected: { type: Boolean, default: false },
+const props = withDefaults(defineProps<{
+  spaState: SpaState | null
+  connected?: boolean
+}>(), {
+  spaState: null,
+  connected: false,
 })
 
 const status = computed(() => props.spaState)
@@ -88,9 +92,6 @@ const infoRows = computed(() => {
               <span>Idle</span>
             </div>
           </div>
-          <p class="text-[11px] text-neutral-600 mt-4">
-            Updated {{ timeAgo(receivedAt) }}
-          </p>
         </div>
       </div>
 

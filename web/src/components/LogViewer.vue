@@ -1,11 +1,12 @@
-<script setup>
+<script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useLogs, clearLogs } from '../composables/useApi'
+import type { LogEntry } from '../types'
 
 const { data: logs, loading, error, refresh } = useLogs(200, 5000)
 const clearing = ref(false)
 
-async function handleClear() {
+async function handleClear(): Promise<void> {
   if (clearing.value) return
   clearing.value = true
   try {
@@ -16,11 +17,13 @@ async function handleClear() {
   }
 }
 
-const activeFilters = ref(new Set())
+const activeFilters = ref(new Set<string>())
 
-const levels = ['error', 'warn', 'info', 'debug']
+const levels = ['error', 'warn', 'info', 'debug'] as const
 
-const levelStyles = {
+type LogLevel = 'error' | 'warn' | 'warning' | 'info' | 'debug'
+
+const levelStyles: Record<LogLevel, { border: string; bg: string; text: string; dot: string }> = {
   error: { border: 'border-l-red-500', bg: 'bg-red-500/10', text: 'text-red-400', dot: 'bg-red-500' },
   warn: { border: 'border-l-amber-500', bg: 'bg-amber-500/10', text: 'text-amber-400', dot: 'bg-amber-500' },
   warning: { border: 'border-l-amber-500', bg: 'bg-amber-500/10', text: 'text-amber-400', dot: 'bg-amber-500' },
@@ -28,24 +31,24 @@ const levelStyles = {
   debug: { border: 'border-l-neutral-500', bg: 'bg-neutral-500/10', text: 'text-neutral-400', dot: 'bg-neutral-500' },
 }
 
-function getStyle(level) {
-  return levelStyles[level?.toLowerCase()] || levelStyles.info
+function getStyle(level: string): { border: string; bg: string; text: string; dot: string } {
+  return levelStyles[level.toLowerCase() as LogLevel] || levelStyles.info
 }
 
-function toggleFilter(level) {
+function toggleFilter(level: string): void {
   const s = new Set(activeFilters.value)
   if (s.has(level)) s.delete(level)
   else s.add(level)
   activeFilters.value = s
 }
 
-const filteredLogs = computed(() => {
+const filteredLogs = computed<LogEntry[]>(() => {
   const filters = activeFilters.value
   if (filters.size === 0) return logs.value || []
   return (logs.value || []).filter(l => filters.has((l.level || 'info').toLowerCase()))
 })
 
-function timeAgo(iso) {
+function timeAgo(iso: string): string {
   if (!iso) return ''
   const diff = (Date.now() - new Date(iso).getTime()) / 1000
   if (diff < 5) return 'just now'
@@ -55,13 +58,13 @@ function timeAgo(iso) {
   return new Date(iso).toLocaleDateString()
 }
 
-function fmtTimestamp(ms) {
+function fmtTimestamp(ms: number): string {
   if (!ms) return ''
   try { return new Date(ms).toLocaleTimeString() } catch { return String(ms) }
 }
 
-const countByLevel = computed(() => {
-  const counts = {}
+const countByLevel = computed<Record<string, number>>(() => {
+  const counts: Record<string, number> = {}
   for (const log of (logs.value || [])) {
     const l = (log.level || 'info').toLowerCase()
     counts[l] = (counts[l] || 0) + 1

@@ -1,16 +1,21 @@
-<script setup>
+<script setup lang="ts">
 import ToggleSwitch from './ToggleSwitch.vue'
+import type { SpaState } from '../types'
 
-const props = defineProps({
-  state: Object,
-  connected: Boolean,
-  isPending: Function,
-  visibleControls: { type: Object, default: () => ({}) },
+const props = withDefaults(defineProps<{
+  state: SpaState | null
+  connected: boolean
+  isPending: (key: string) => boolean
+  visibleControls?: Record<string, boolean>
+}>(), {
+  visibleControls: () => ({}),
 })
 
-const emit = defineEmits(['toggle'])
+const emit = defineEmits<{
+  toggle: [subtopic: string, value: boolean]
+}>()
 
-function toggleItem(subtopic, currentVal) {
+function toggleItem(subtopic: string, currentVal: unknown): void {
   emit('toggle', subtopic, !currentVal)
 }
 </script>

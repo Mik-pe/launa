@@ -1,14 +1,55 @@
-<script setup>
+<script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useStatusHistory } from '../composables/useApi'
+import type { TimestampedEntry } from '../types'
+
+interface ChartPoint {
+  time: Date
+  current_temp: number | null
+  set_temp: number | null
+  is_heating: boolean
+  pump1_on: boolean
+  pump2_on: boolean
+  pump3_on: boolean
+  pump4_on: boolean
+  pump5_on: boolean
+  pump6_on: boolean
+  circ_pump: boolean
+  blower: boolean
+  light1: boolean
+  light2: boolean
+  mister: boolean
+}
+
+interface TooltipData {
+  time: string
+  current_temp: number | null
+  set_temp: number | null
+}
+
+interface CompTooltipState {
+  label: string
+  color: string
+  on: boolean
+}
+
+interface CompTooltipData {
+  time: string
+  states: CompTooltipState[]
+}
+
+interface Coord {
+  x: number
+  y: number
+}
 
 const { data: history, loading, error } = useStatusHistory(200, 10000)
 
-const canvasRef = ref(null)
-const tooltipData = ref(null)
+const canvasRef = ref<HTMLCanvasElement | null>(null)
+const tooltipData = ref<TooltipData | null>(null)
 const mouseX = ref(-1)
 
-const points = computed(() => {
+const points = computed<ChartPoint[]>(() => {
   if (!history.value?.length) return []
   const reversed = [...history.value].reverse()
   return reversed.map(entry => {
@@ -34,10 +75,16 @@ const points = computed(() => {
     } catch {
       return null
     }
-  }).filter(p => p != null)
+  }).filter((p): p is ChartPoint => p != null)
 })
 
-const componentDefs = [
+interface ComponentDef {
+  key: keyof ChartPoint & string
+  label: string
+  color: string
+}
+
+const componentDefs: ComponentDef[] = [
   { key: 'is_heating', label: 'Heater', color: '#f97316' },
   { key: 'circ_pump', label: 'Circ Pump', color: '#22d3ee' },
   { key: 'pump1_on', label: 'Pump 1', color: '#3b82f6' },
@@ -52,22 +99,22 @@ const componentDefs = [
   { key: 'mister', label: 'Mister', color: '#06b6d4' },
 ]
 
-const activeComponents = computed(() => {
+const activeComponents = computed<ComponentDef[]>(() => {
   return componentDefs.filter(comp =>
     points.value.some(p => p[comp.key])
   )
 })
 
-const compCanvasRef = ref(null)
-const compTooltipData = ref(null)
+const compCanvasRef = ref<HTMLCanvasElement | null>(null)
+const compTooltipData = ref<CompTooltipData | null>(null)
 const compMouseX = ref(-1)
 
 const chartPad = { top: 24, right: 24, bottom: 44, left: 52 }
 
-function drawChart() {
+function drawChart(): void {
   const canvas = canvasRef.value
   if (!canvas) return
-  const ctx = canvas.getContext('2d')
+  const ctx = canvas.getContext('2d')!
   const dpr = window.devicePixelRatio || 1
   const rect = canvas.getBoundingClientRect()
   canvas.width = rect.width * dpr
@@ -106,8 +153,8 @@ function drawChart() {
   const tMax = pts[pts.length - 1].time.getTime()
   const tRange = tMax - tMin || 1
 
-  const xOf = t => pad.left + ((t - tMin) / tRange) * cw
-  const yOf = v => pad.top + ch - ((v - minT) / (maxT - minT)) * ch
+  const xOf = (t: number) => pad.left + ((t - tMin) / tRange) * cw
+  const yOf = (v: number) => pad.top + ch - ((v - minT) / (maxT - minT)) * ch
 
   // Grid
   ctx.strokeStyle = '#1c1c1c'
@@ -137,12 +184,13 @@ function drawChart() {
   }
 
   // Split points into contiguous segments (break at null values)
-  function buildSegments(key) {
-    const segments = []
-    let current = []
+  function buildSegments(key: keyof ChartPoint): Coord[][] {
+    const segments: Coord[][] = []
+    let current: Coord[] = []
     for (const p of pts) {
-      if (p[key] != null) {
-        current.push({ x: xOf(p.time.getTime()), y: yOf(p[key]) })
+      const val = p[key]
+      if (val != null && typeof val === 'number') {
+        current.push({ x: xOf(p.time.getTime()), y: yOf(val) })
       } else {
         if (current.length > 0) {
           segments.push(current)
@@ -155,7 +203,7 @@ function drawChart() {
   }
 
   // Draw gap indicators (dashed lines between segments)
-  function drawGaps(segments) {
+  function drawGaps(segments: Coord[][]): void {
     if (segments.length < 2) return
     ctx.strokeStyle = 'rgba(255,255,255,0.06)'
     ctx.lineWidth = 1
@@ -172,7 +220,7 @@ function drawChart() {
   }
 
   // Bezier line helper with gradient fill
-  function drawSmoothLine(coords, strokeColor, fillColorTop, fillColorBottom) {
+  function drawSmoothLine(coords: Coord[], strokeColor: string, fillColorTop: string | null, fillColorBottom: string | null): void {
     if (coords.length < 2) return
     ctx.beginPath()
     ctx.moveTo(coords[0].x, coords[0].y)
@@ -260,7 +308,7 @@ function drawChart() {
     }
     if (nearest) {
       const nx = xOf(nearest.time.getTime())
-      const ny = yOf(nearest.current_temp)
+      const ny = yOf(nearest.current_temp ?? 0)
       // Vertical line
       ctx.strokeStyle = 'rgba(255,255,255,0.1)'
       ctx.lineWidth = 1
@@ -298,7 +346,7 @@ function drawChart() {
   ctx.fillText('Target', pad.left + 102, ly - 2)
 }
 
-function handleMouseMove(e) {
+function handleMouseMove(e: MouseEvent): void {
   const canvas = canvasRef.value
   if (!canvas || points.value.length < 2) return
   const rect = canvas.getBoundingClientRect()
@@ -325,7 +373,7 @@ function handleMouseMove(e) {
   }
 }
 
-function handleMouseLeave() {
+function handleMouseLeave(): void {
   mouseX.value = -1
   tooltipData.value = null
 }
@@ -333,10 +381,10 @@ function handleMouseLeave() {
 // Component activity chart
 const compPad = { top: 8, right: 24, bottom: 28, left: 80 }
 
-function drawCompChart() {
+function drawCompChart(): void {
   const canvas = compCanvasRef.value
   if (!canvas) return
-  const ctx = canvas.getContext('2d')
+  const ctx = canvas.getContext('2d')!
   const dpr = window.devicePixelRatio || 1
   const rect = canvas.getBoundingClientRect()
   canvas.width = rect.width * dpr
@@ -368,7 +416,7 @@ function drawCompChart() {
   const tMin = pts[0].time.getTime()
   const tMax = pts[pts.length - 1].time.getTime()
   const tRange = tMax - tMin || 1
-  const xOf = t => pad.left + ((t - tMin) / tRange) * cw
+  const xOf = (t: number) => pad.left + ((t - tMin) / tRange) * cw
 
   // Time labels
   const nLabels = Math.min(6, pts.length)
@@ -429,7 +477,7 @@ function drawCompChart() {
   }
 }
 
-function drawCompBar(ctx, pts, startIdx, endIdx, xOf, yTop, barH, color) {
+function drawCompBar(ctx: CanvasRenderingContext2D, pts: ChartPoint[], startIdx: number, endIdx: number, xOf: (t: number) => number, yTop: number, barH: number, color: string): void {
   const x1 = xOf(pts[startIdx].time.getTime())
   const x2 = xOf(pts[endIdx].time.getTime())
   const barW = Math.max(x2 - x1, 2)
@@ -442,7 +490,7 @@ function drawCompBar(ctx, pts, startIdx, endIdx, xOf, yTop, barH, color) {
   ctx.stroke()
 }
 
-function handleCompMouseMove(e) {
+function handleCompMouseMove(e: MouseEvent): void {
   const canvas = compCanvasRef.value
   if (!canvas || points.value.length < 2 || !activeComponents.value.length) return
   const rect = canvas.getBoundingClientRect()
@@ -471,7 +519,7 @@ function handleCompMouseMove(e) {
   }
 }
 
-function handleCompMouseLeave() {
+function handleCompMouseLeave(): void {
   compMouseX.value = -1
   compTooltipData.value = null
 }
@@ -486,7 +534,7 @@ onUnmounted(() => {
   window.removeEventListener('resize', drawChartAndComp)
 })
 
-function drawChartAndComp() {
+function drawChartAndComp(): void {
   drawChart()
   drawCompChart()
 }
