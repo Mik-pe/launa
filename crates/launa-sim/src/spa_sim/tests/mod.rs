@@ -6,6 +6,9 @@ mod frame_gen_tests;
 mod physics_tests;
 mod state_tests;
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 use launa_protocol::frame::{FrameDecoder, FrameEncoder};
 
 use super::*;

@@ -298,15 +298,13 @@ async fn handle_mqtt_command(
     self_test_state: &mut Option<self_test::SelfTestState>,
     sniff_mode: &mut bool,
     device_id: &str,
-) -> bool {
-    // Returns true if self-test state changed and should be published immediately
+) {
     match cmd {
         Command::SelfTest(enable) => {
             if enable {
                 if self_test_state.is_none() {
                     info!("Self-test mode enabled");
                     *self_test_state = Some(self_test::SelfTestState::new());
-                    return true;
                 }
             } else {
                 if self_test_state.is_some() {
@@ -314,7 +312,6 @@ async fn handle_mqtt_command(
                     *self_test_state = None;
                 }
             }
-            false
         }
         Command::Sniff(enable) => {
             if enable && !*sniff_mode {
@@ -324,15 +321,13 @@ async fn handle_mqtt_command(
                 info!("Sniff mode disabled — resuming normal operation");
                 *sniff_mode = false;
             }
-            false
         }
         _ => {
             if let Some(ref mut st) = self_test_state {
-                st.apply_command(&cmd)
+                st.apply_command(&cmd);
             } else {
                 let actions = app.on_mqtt_command(cmd);
                 execute_actions(&actions, device_id, self_test_state.is_some(), *sniff_mode).await;
-                false
             }
         }
     }
@@ -711,17 +706,7 @@ async fn main(spawner: Spawner) {
             }
             // MQTT command received
             Either::Second(Either::First(cmd)) => {
-                let changed = handle_mqtt_command(cmd, &mut app, &mut self_test_state, &mut sniff_mode, device_id_str).await;
-                if changed {
-                    if let Some(ref st) = self_test_state {
-                        execute_actions(&[AppAction::PublishState {
-                            status: st.status().clone(),
-                            fault: None,
-                            recovering_from_stale: false,
-                        }], device_id_str, true, sniff_mode).await;
-                        self_test_last_publish = Some(Instant::now());
-                    }
-                }
+                handle_mqtt_command(cmd, &mut app, &mut self_test_state, &mut sniff_mode, device_id_str).await;
             }
             // Tick timer expired
             Either::Second(Either::Second(_)) => {}
@@ -729,21 +714,12 @@ async fn main(spawner: Spawner) {
 
         // Drain MQTT commands (non-blocking)
         while let Ok(cmd) = cmd_rx.try_receive() {
-            let changed = handle_mqtt_command(cmd, &mut app, &mut self_test_state, &mut sniff_mode, device_id_str).await;
-            if changed {
-                if let Some(ref st) = self_test_state {
-                    execute_actions(&[AppAction::PublishState {
-                        status: st.status().clone(),
-                        fault: None,
-                        recovering_from_stale: false,
-                    }], device_id_str, true, sniff_mode).await;
-                    self_test_last_publish = Some(Instant::now());
-                }
-            }
+            handle_mqtt_command(cmd, &mut app, &mut self_test_state, &mut sniff_mode, device_id_str).await;
         }
 
-        // In self-test mode, publish simulated status periodically
-        if let Some(ref st) = self_test_state {
+        // In self-test mode, tick the simulator and publish status periodically
+        if let Some(ref mut st) = self_test_state {
+            st.tick();
             let now = Instant::now();
             let should_publish = self_test_last_publish
                 .map_or(true, |t| t.elapsed().as_secs() >= SELF_TEST_PUBLISH_INTERVAL_SECS);

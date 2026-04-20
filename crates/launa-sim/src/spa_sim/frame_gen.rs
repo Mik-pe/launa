@@ -4,6 +4,9 @@
 //! bytes for status updates, configuration, fault logs, filter cycles,
 //! and information responses.
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 use launa_protocol::frame::FrameEncoder;
 use launa_protocol::status::{HeatingMode, PumpState, TempRange, TemperatureScale};
 

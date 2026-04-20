@@ -1251,6 +1251,7 @@ dependencies = [
  "launa-mqtt",
  "launa-ota",
  "launa-protocol",
+ "launa-sim",
  "log",
  "static_cell",
 ]
@@ -1306,6 +1307,16 @@ dependencies = [
  "crc",
  "log",
  "thiserror",
+]
+
+[[package]]
+name = "launa-sim"
+version = "0.1.0"
+dependencies = [
+ "launa-hal",
+ "launa-mqtt",
+ "launa-protocol",
+ "log",
 ]
 
 [[package]]

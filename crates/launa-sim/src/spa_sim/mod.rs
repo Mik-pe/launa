@@ -12,6 +12,9 @@ pub mod frame_gen;
 pub mod physics;
 pub mod state;
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 use launa_protocol::fault::FaultCode;
 use launa_protocol::frame::{Frame, FrameDecoder};
 use launa_protocol::status::PumpState;
@@ -733,13 +736,16 @@ impl SpaSim {
                                 let raw_temp = frame.payload[1];
                                 let scale = self.state.temp_scale;
                                 if self.command_latency_ticks == 0 {
-                                    self.state.set_target_temp(SpaState::decode_temp(raw_temp, scale));
+                                    self.state
+                                        .set_target_temp(SpaState::decode_temp(raw_temp, scale));
                                 } else {
                                     let latency = self.command_latency_ticks;
                                     self.pending_commands.push((
                                         latency,
                                         Box::new(move |state: &mut SpaState| {
-                                            state.set_target_temp(SpaState::decode_temp(raw_temp, scale));
+                                            state.set_target_temp(SpaState::decode_temp(
+                                                raw_temp, scale,
+                                            ));
                                         }),
                                     ));
                                 }

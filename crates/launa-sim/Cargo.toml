@@ -3,8 +3,12 @@ name = "launa-sim"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = ["std"]
+std = ["launa-hal/std", "launa-mqtt/std"]
+
 [dependencies]
 launa-protocol = { path = "../launa-protocol" }
-launa-hal = { path = "../launa-hal", features = ["std"] }
-launa-mqtt = { path = "../launa-mqtt", features = ["std"] }
+launa-hal = { path = "../launa-hal", default-features = false }
+launa-mqtt = { path = "../launa-mqtt", default-features = false }
 log.workspace = true

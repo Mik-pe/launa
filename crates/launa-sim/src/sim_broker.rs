@@ -16,6 +16,9 @@
 //! - **Connection loss**: `simulate_disconnect()` drops all publishes. `simulate_reconnect()`
 //!   restores. `dropped_count()` tracks messages lost during disconnect.
 
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
 use launa_mqtt::topics::TopicBuilder;
 use std::collections::{HashMap, HashSet};
 

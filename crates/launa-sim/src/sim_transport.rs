@@ -4,6 +4,8 @@
 //! to `SpaApp` from `launa-core` (the real firmware logic). Bytes written by the
 //! spa appear as readable data for the controller, and vice versa.
 
+use alloc::vec::Vec;
+
 use launa_hal::transport::{Transport, TransportError};
 use std::collections::VecDeque;
 
@@ -72,6 +74,7 @@ impl Transport for SimTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
     use launa_hal::Transport;
 
     /// Helper: poll an async future to completion synchronously.

@@ -20,13 +20,26 @@
 //!
 //! The real firmware logic lives in the `launa-core` crate (`SpaApp`).
 
+#![no_std]
+
+#[cfg(feature = "std")]
+extern crate std;
+
+extern crate alloc;
+
+#[cfg(feature = "std")]
 pub mod clock;
+#[cfg(feature = "std")]
 pub mod sim_broker;
+#[cfg(feature = "std")]
 pub mod sim_transport;
 pub mod spa_sim;
 
+#[cfg(feature = "std")]
 pub use clock::VirtualClock;
+#[cfg(feature = "std")]
 pub use sim_broker::SimBroker;
+#[cfg(feature = "std")]
 pub use sim_transport::SimTransport;
 pub use spa_sim::{
     FaultLogConfig, FilterCycleConfig, FilterCyclesConfig, InformationConfig, SpaConfigConfig,

@@ -53,3 +53,4 @@ launa-mqtt = { path = "../crates/launa-mqtt", default-features = false }
 launa-ota = { path = "../crates/launa-ota" }
 launa-esp-ota = { path = "../crates/launa-esp-ota" }
 launa-core = { path = "../crates/launa-core" }
+launa-sim = { path = "../crates/launa-sim", default-features = false }

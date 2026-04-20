@@ -81,7 +81,7 @@ impl SpaState {
             TemperatureScale::Celsius => temp * 2.0,
             _ => temp,
         };
-        raw.round() as u8
+        (raw + 0.5) as u8
     }
 
     /// Decode a raw wire temperature to real units.
