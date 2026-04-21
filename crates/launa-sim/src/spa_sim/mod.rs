@@ -8,7 +8,10 @@
 //! bytes at the frame generation boundary.
 
 pub mod config;
+pub mod error_injection;
+pub mod fault_manager;
 pub mod frame_gen;
+pub mod frame_splitter;
 pub mod physics;
 pub mod state;
 
@@ -22,6 +25,9 @@ use launa_protocol::status::PumpState;
 pub use config::{
     FaultLogConfig, FilterCycleConfig, FilterCyclesConfig, InformationConfig, SpaConfigConfig,
 };
+pub use error_injection::ErrorInjection;
+pub use fault_manager::FaultManager;
+pub use frame_splitter::FrameSplitter;
 pub use state::{SpaEvent, SpaEventType, SpaState};
 
 use frame_gen::{
@@ -61,13 +67,12 @@ pub struct SpaSim {
     tick_count: u64,
     registered: bool,
 
-    // Error injection fields
-    command_success_rate: f32,
-    command_counter: u64,
-    bus_silence_remaining: u64,
+    // Subsystems
+    error_injection: ErrorInjection,
+    fault_manager: FaultManager,
+    frame_splitter: FrameSplitter,
+
     pending_events: Vec<SpaEvent>,
-    inject_corrupt_next: bool,
-    duplicate_next: bool,
 
     // Simulation realism fields
     /// Maximum random padding bytes before status frame (0 = no jitter).
@@ -84,19 +89,7 @@ pub struct SpaSim {
     /// PRNG state for ready interval randomization.
     ready_rng_state: u64,
 
-    // Partial frame injection
-    /// If set, the next tick() will emit only the first N bytes of the status frame,
-    /// and the tick after that will emit the remainder + Ready frame. One-shot: resets after firing.
-    partial_frame_split: Option<usize>,
-    /// If set, contains the remainder bytes from a partial frame split that should be
-    /// emitted at the beginning of the next tick() output, followed by a Ready frame.
-    partial_frame_remainder: Option<Vec<u8>>,
-
-    // Fault injection: fault state
-    /// If set, the status frame reports init_mode=0x02 (fault active).
-    fault_active: bool,
-    /// If > 0, the fault will auto-clear after this many ticks.
-    transient_fault_remaining_ticks: u64,
+    // Temperature simulation
     /// If set, the status frame reports 0xFF for current_temp (unknown temperature).
     report_unknown_temp: bool,
     /// If > 0.0, each status frame adds ±jitter to current_temp using deterministic PRNG.
@@ -133,15 +126,7 @@ pub struct SpaSim {
     /// When it reaches 0, priming mode exits (init_mode returns to 0x00).
     priming_remaining_ticks: u64,
 
-    // Multi-entry fault log
-    /// Ordered list of fault log entries. Each entry is a FaultLogConfig.
-    /// When walking entries, index 0 in this vec corresponds to entry_number 1.
-    /// Empty by default (backward compatible — uses single fault_log_config).
-    fault_log_entries: Vec<FaultLogConfig>,
-
     // Configurable response data
-    /// Custom fault log configuration. Defaults to the hardcoded fault log data.
-    fault_log_config: FaultLogConfig,
     /// Custom filter cycles configuration. Defaults to the hardcoded filter data.
     filter_cycles_config: FilterCyclesConfig,
     /// Custom information response configuration. Defaults to the hardcoded info data.
@@ -159,12 +144,11 @@ impl SpaSim {
             tick_count: 0,
             registered: false,
 
-            command_success_rate: 1.0,
-            command_counter: 0,
-            bus_silence_remaining: 0,
+            error_injection: ErrorInjection::new(),
+            fault_manager: FaultManager::new(),
+            frame_splitter: FrameSplitter::new(),
+
             pending_events: Vec::new(),
-            inject_corrupt_next: false,
-            duplicate_next: false,
 
             frame_jitter_ticks: 0,
             command_latency_ticks: 0,
@@ -173,11 +157,6 @@ impl SpaSim {
             ready_countdown: 1,
             ready_rng_state: 0,
 
-            partial_frame_split: None,
-            partial_frame_remainder: None,
-
-            fault_active: false,
-            transient_fault_remaining_ticks: 0,
             report_unknown_temp: false,
             sensor_noise_jitter: 0.0,
 
@@ -191,9 +170,7 @@ impl SpaSim {
             heating_overshot: false,
 
             priming_remaining_ticks: 0,
-            fault_log_entries: Vec::new(),
 
-            fault_log_config: FaultLogConfig::default(),
             filter_cycles_config: FilterCyclesConfig::default(),
             information_config: InformationConfig::default(),
             spa_config_config: SpaConfigConfig::default(),
@@ -204,12 +181,12 @@ impl SpaSim {
     ///
     /// Uses a deterministic PRNG seeded by a per-command counter for reproducibility.
     pub fn set_command_success_rate(&mut self, rate: f32) {
-        self.command_success_rate = rate.clamp(0.0, 1.0);
+        self.error_injection.set_command_success_rate(rate);
     }
 
     /// Simulate bus silence: suppress all output for `duration_ticks` ticks.
     pub fn simulate_bus_silence(&mut self, duration_ticks: u64) {
-        self.bus_silence_remaining = duration_ticks;
+        self.error_injection.simulate_bus_silence(duration_ticks);
     }
 
     /// Schedule a spontaneous event to fire at the given tick.
@@ -229,14 +206,14 @@ impl SpaSim {
     ///
     /// The payload's last byte is XOR'd with 0xFF, producing a bad CRC.
     pub fn inject_corrupt_frame(&mut self) {
-        self.inject_corrupt_next = true;
+        self.error_injection.inject_corrupt_frame();
     }
 
     /// Inject a duplicate status frame on the next `tick()` call.
     ///
     /// The status frame bytes will be emitted twice in a single tick.
     pub fn inject_duplicate_frame(&mut self) {
-        self.duplicate_next = true;
+        self.error_injection.inject_duplicate_frame();
     }
 
     /// Simulate a spa reboot.
@@ -256,17 +233,14 @@ impl SpaSim {
     /// Sets the internal fault flag so status frames report init_mode=0x02 (fault active).
     /// The fault log response will carry the given `FaultCode`.
     pub fn simulate_fault_state(&mut self, code: FaultCode) {
-        self.fault_active = true;
-        self.fault_log_config.message_code = code;
-        self.transient_fault_remaining_ticks = 0; // not transient
+        self.fault_manager.simulate_fault_state(code);
     }
 
     /// Clear the active fault state.
     ///
     /// Restores init_mode to 0x00 in subsequent status frames.
     pub fn clear_fault_state(&mut self) {
-        self.fault_active = false;
-        self.transient_fault_remaining_ticks = 0;
+        self.fault_manager.clear_fault_state();
     }
 
     /// Simulate a transient fault that auto-clears after `ticks` ticks.
@@ -275,14 +249,7 @@ impl SpaSim {
     /// After `ticks` ticks, the fault is automatically cleared and init_mode returns to 0x00.
     /// If `ticks` is 0, no fault is set (immediately cleared).
     pub fn simulate_transient_fault(&mut self, code: FaultCode, ticks: u64) {
-        if ticks == 0 {
-            self.fault_active = false;
-            self.transient_fault_remaining_ticks = 0;
-            return;
-        }
-        self.fault_active = true;
-        self.fault_log_config.message_code = code;
-        self.transient_fault_remaining_ticks = ticks;
+        self.fault_manager.simulate_transient_fault(code, ticks);
     }
 
     /// Simulate priming mode.
@@ -388,8 +355,7 @@ impl SpaSim {
     /// If `split_point` is 0, the first tick emits the full status frame and the
     /// second tick emits just the Ready frame.
     pub fn inject_partial_frame_at(&mut self, split_point: usize) {
-        self.partial_frame_split = Some(split_point);
-        self.partial_frame_remainder = None;
+        self.frame_splitter.inject_partial_frame_at(split_point);
     }
 
     /// Set the maximum number of random padding bytes to add before the status frame.
@@ -423,7 +389,7 @@ impl SpaSim {
     /// When set, `generate_fault_log_response()` will produce frames encoding
     /// the configured values. Default behavior is preserved when this is not called.
     pub fn set_fault_log_config(&mut self, config: FaultLogConfig) {
-        self.fault_log_config = config;
+        self.fault_manager.set_fault_log_config(config);
     }
 
     /// Set a multi-entry fault log.
@@ -434,7 +400,7 @@ impl SpaSim {
     ///
     /// Entry 0 and entries past the end return a sentinel response (fault_count = 0).
     pub fn set_fault_log_entries(&mut self, entries: Vec<FaultLogConfig>) {
-        self.fault_log_entries = entries;
+        self.fault_manager.set_fault_log_entries(entries);
     }
 
     /// Set a custom filter cycles configuration.
@@ -468,22 +434,7 @@ impl SpaSim {
     ///
     /// Returns `true` if the command should be accepted based on the success rate.
     fn should_accept_command(&mut self) -> bool {
-        let rate = self.command_success_rate;
-        if rate >= 1.0 {
-            return true;
-        }
-        if rate <= 0.0 {
-            return false;
-        }
-        // Simple LCG-based deterministic "random"
-        let rand_val = (self
-            .command_counter
-            .wrapping_mul(1103515245)
-            .wrapping_add(12345)
-            >> 16) as u8;
-        self.command_counter += 1;
-        let threshold = (rate * 256.0) as u8;
-        rand_val < threshold
+        self.error_injection.should_accept_command()
     }
 
     /// Generate a deterministic pseudo-random u64 using the ready RNG state.
@@ -512,12 +463,7 @@ impl SpaSim {
 
     /// Decrement the transient fault countdown, clearing the fault when it reaches zero.
     fn tick_transient_fault_countdown(&mut self) {
-        if self.transient_fault_remaining_ticks > 0 {
-            self.transient_fault_remaining_ticks -= 1;
-            if self.transient_fault_remaining_ticks == 0 {
-                self.fault_active = false;
-            }
-        }
+        self.fault_manager.tick_transient_fault_countdown();
     }
 
     /// Decrement the priming mode countdown.
@@ -560,9 +506,7 @@ impl SpaSim {
         self.process_pending_commands();
 
         // Bus silence: suppress all output
-        if self.bus_silence_remaining > 0 {
-            self.bus_silence_remaining -= 1;
-
+        if self.error_injection.tick_bus_silence() {
             // Still decrement transient fault and priming counters even during silence
             self.tick_transient_fault_countdown();
             self.tick_priming_countdown();
@@ -571,8 +515,8 @@ impl SpaSim {
         }
 
         // Partial frame injection — second tick: emit remainder + Ready
-        if let Some(remainder) = self.partial_frame_remainder.take() {
-            let mut output = remainder;
+        if let Some(remainder) = self.frame_splitter.take_remainder() {
+            let mut output: Vec<u8> = remainder;
 
             // Always include Ready frame on the remainder tick
             output.extend_from_slice(&self.generate_ready_frame());
@@ -606,17 +550,15 @@ impl SpaSim {
 
         // Send status update (this reads fault_active and priming_remaining_ticks)
         let status_bytes = self.generate_status_frame();
-
-        // NOW decrement transient fault and priming counters AFTER status frame is generated
         self.tick_transient_fault_countdown();
         self.tick_priming_countdown();
 
         // Partial frame injection — first tick: split the status frame
-        if let Some(split_point) = self.partial_frame_split.take() {
+        if let Some(split_point) = self.frame_splitter.take_split_point() {
             if split_point == 0 {
                 // Split at 0: emit full status frame now, remainder (empty) next tick + Ready
                 output.extend_from_slice(&status_bytes);
-                self.partial_frame_remainder = Some(Vec::new());
+                self.frame_splitter.set_remainder(Vec::new());
             } else if split_point >= status_bytes.len() {
                 // Split point past end: emit full frame normally (edge case)
                 output.extend_from_slice(&status_bytes);
@@ -632,11 +574,11 @@ impl SpaSim {
             } else {
                 // Split in the middle: emit first N bytes now, store remainder for next tick
                 output.extend_from_slice(&status_bytes[..split_point]);
-                self.partial_frame_remainder = Some(status_bytes[split_point..].to_vec());
+                self.frame_splitter
+                    .set_remainder(status_bytes[split_point..].to_vec());
             }
-        } else if self.duplicate_next {
+        } else if self.error_injection.take_duplicate_next() {
             // Duplicate frame injection: send status frame twice
-            self.duplicate_next = false;
             output.extend_from_slice(&status_bytes);
             output.extend_from_slice(&status_bytes);
 
@@ -840,10 +782,12 @@ impl SpaSim {
             0.0
         };
 
+        let inject_corrupt = self.error_injection.take_corrupt_next();
+
         let result = generate_status_frame(
             &self.state,
             self.priming_remaining_ticks,
-            self.fault_active,
+            self.fault_manager.fault_active,
             self.report_unknown_temp,
             self.sensor_noise_jitter,
             self.physics_unknown_temp_ticks,
@@ -851,13 +795,8 @@ impl SpaSim {
             self.physics_noise_amplitude,
             physics_noise_value,
             ready_rand_value,
-            self.inject_corrupt_next,
+            inject_corrupt,
         );
-
-        // Corrupt frame injection is one-shot
-        if self.inject_corrupt_next {
-            self.inject_corrupt_next = false;
-        }
 
         result
     }
@@ -889,7 +828,7 @@ impl SpaSim {
 
     /// Generate a fault log response.
     pub fn generate_fault_log_response(&self) -> Vec<u8> {
-        generate_fault_log_response(&self.fault_log_config)
+        generate_fault_log_response(&self.fault_manager.fault_log_config)
     }
 
     /// Generate a fault log response for a specific entry number.
@@ -900,8 +839,8 @@ impl SpaSim {
     /// fault_log_config for entry 1.
     pub fn generate_fault_log_response_for_entry(&self, entry_number: u8) -> Vec<u8> {
         generate_fault_log_response_for_entry(
-            &self.fault_log_config,
-            &self.fault_log_entries,
+            &self.fault_manager.fault_log_config,
+            &self.fault_manager.fault_log_entries,
             entry_number,
         )
     }
