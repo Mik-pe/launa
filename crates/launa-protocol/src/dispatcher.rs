@@ -40,303 +40,286 @@ pub enum IncomingMessage {
     },
 }
 
-/// Dispatch a parsed frame into a typed `IncomingMessage`.
-pub fn dispatch_frame(frame: &Frame) -> IncomingMessage {
-    match frame.message_type {
-        // Status update: FF AF
-        [0xFF, 0xAF] => match StatusUpdate::parse(&frame.payload) {
-            Ok(status) => IncomingMessage::StatusUpdate(status),
-            Err(_) => {
-                log::warn!(
-                    "dispatch: failed to parse StatusUpdate from [{:#04X}, {:#04X}] with {} byte payload",
-                    frame.message_type[0],
-                    frame.message_type[1],
-                    frame.payload.len()
-                );
-                IncomingMessage::Unknown {
-                    message_type: frame.message_type,
-                    payload: frame.payload.clone(),
-                }
+// ---------------------------------------------------------------------------
+// Helper: construct Unknown variant
+// ---------------------------------------------------------------------------
+
+#[inline]
+fn unknown_msg(msg_type: [u8; 2], payload: &[u8]) -> IncomingMessage {
+    IncomingMessage::Unknown {
+        message_type: msg_type,
+        payload: payload.to_vec(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-message-type handlers
+// ---------------------------------------------------------------------------
+
+/// Handle status update frames (message type `FF AF`).
+fn handle_status(msg_type: [u8; 2], payload: &[u8]) -> IncomingMessage {
+    match StatusUpdate::parse(payload) {
+        Ok(status) => IncomingMessage::StatusUpdate(status),
+        Err(_) => {
+            log::warn!(
+                "dispatch: failed to parse StatusUpdate from [{:#04X}, {:#04X}] with {} byte payload",
+                msg_type[0],
+                msg_type[1],
+                payload.len()
+            );
+            unknown_msg(msg_type, payload)
+        }
+    }
+}
+
+/// Handle registration frames (message type `FE BF`).
+fn handle_registration(msg_type: [u8; 2], payload: &[u8]) -> IncomingMessage {
+    if payload.is_empty() {
+        return unknown_msg(msg_type, payload);
+    }
+    match payload[0] {
+        0x00 => IncomingMessage::NewClientQuery,
+        0x02 => {
+            if payload.len() >= 2 {
+                IncomingMessage::ClientIdAssignment { id: payload[1] }
+            } else {
+                unknown_msg(msg_type, payload)
             }
+        }
+        _ => unknown_msg(msg_type, payload),
+    }
+}
+
+/// Handle `0x0A 0xBF` settings sub-type `0x22` (nested second-byte dispatch).
+fn handle_settings_0x22(msg_type: [u8; 2], payload: &[u8]) -> IncomingMessage {
+    if payload.len() < 2 {
+        return unknown_msg(msg_type, payload);
+    }
+    match payload[1] {
+        // Panel settings response — not a dedicated parser
+        0x00 => unknown_msg(msg_type, payload),
+
+        // Filter cycles response
+        0x01 => {
+            if payload.len() > 3 {
+                let filter_data = &payload[3..];
+                match FilterCycles::parse(filter_data) {
+                    Ok(fc) => IncomingMessage::FilterCyclesResponse(fc),
+                    Err(_) => {
+                        log::warn!(
+                            "dispatch: failed to parse FilterCycles from [{:#04X}, {:#04X}] sub-type 0x22/0x01 with {} byte payload",
+                            msg_type[0],
+                            msg_type[1],
+                            payload.len()
+                        );
+                        unknown_msg(msg_type, payload)
+                    }
+                }
+            } else {
+                unknown_msg(msg_type, payload)
+            }
+        }
+
+        // Information response
+        0x02 => {
+            if payload.len() > 3 {
+                let info_data = &payload[3..];
+                match InformationResponse::parse(info_data) {
+                    Ok(info) => IncomingMessage::InformationResponse(info),
+                    Err(_) => {
+                        log::warn!(
+                            "dispatch: failed to parse InformationResponse from [{:#04X}, {:#04X}] sub-type 0x22/0x02 with {} byte payload",
+                            msg_type[0],
+                            msg_type[1],
+                            payload.len()
+                        );
+                        unknown_msg(msg_type, payload)
+                    }
+                }
+            } else {
+                unknown_msg(msg_type, payload)
+            }
+        }
+
+        // Fault log response
+        0x20 => {
+            if payload.len() > 3 {
+                let fault_data = &payload[3..];
+                match FaultLogEntry::parse(fault_data) {
+                    Ok(fault) => IncomingMessage::FaultLogResponse(fault),
+                    Err(_) => {
+                        log::warn!(
+                            "dispatch: failed to parse FaultLogEntry from [{:#04X}, {:#04X}] sub-type 0x22/0x20 with {} byte payload",
+                            msg_type[0],
+                            msg_type[1],
+                            payload.len()
+                        );
+                        unknown_msg(msg_type, payload)
+                    }
+                }
+            } else {
+                unknown_msg(msg_type, payload)
+            }
+        }
+
+        // Other settings sub-types
+        _ => unknown_msg(msg_type, payload),
+    }
+}
+
+/// Handle `0x0A 0xBF` sub-type `0x23` — direct filter cycles response.
+fn handle_filter_cycles_direct(msg_type: [u8; 2], payload: &[u8]) -> IncomingMessage {
+    let filter_data = &payload[1..];
+    match FilterCycles::parse(filter_data) {
+        Ok(fc) => IncomingMessage::FilterCyclesResponse(fc),
+        Err(_) => {
+            log::warn!(
+                "dispatch: failed to parse FilterCycles from [{:#04X}, {:#04X}] sub-type 0x23 with {} byte payload",
+                msg_type[0],
+                msg_type[1],
+                payload.len()
+            );
+            unknown_msg(msg_type, payload)
+        }
+    }
+}
+
+/// Handle `0x0A 0xBF` sub-type `0x24` — direct information response.
+fn handle_information_direct(msg_type: [u8; 2], payload: &[u8]) -> IncomingMessage {
+    let info_data = &payload[1..];
+    match InformationResponse::parse(info_data) {
+        Ok(info) => IncomingMessage::InformationResponse(info),
+        Err(_) => {
+            log::warn!(
+                "dispatch: failed to parse InformationResponse from [{:#04X}, {:#04X}] sub-type 0x24 with {} byte payload",
+                msg_type[0],
+                msg_type[1],
+                payload.len()
+            );
+            unknown_msg(msg_type, payload)
+        }
+    }
+}
+
+/// Handle `0x0A 0xBF` sub-type `0x28` — direct fault log response.
+fn handle_fault_log_direct(msg_type: [u8; 2], payload: &[u8]) -> IncomingMessage {
+    let fault_data = &payload[1..];
+    match FaultLogEntry::parse(fault_data) {
+        Ok(fault) => IncomingMessage::FaultLogResponse(fault),
+        Err(_) => {
+            log::warn!(
+                "dispatch: failed to parse FaultLogEntry from [{:#04X}, {:#04X}] sub-type 0x28 with {} byte payload",
+                msg_type[0],
+                msg_type[1],
+                payload.len()
+            );
+            unknown_msg(msg_type, payload)
+        }
+    }
+}
+
+/// Handle `0x0A 0xBF` sub-type `0x2E` — control configuration.
+fn handle_control_configuration(msg_type: [u8; 2], payload: &[u8]) -> IncomingMessage {
+    match SpaConfig::parse(&payload[1..]) {
+        Ok(config) => IncomingMessage::ControlConfiguration(config),
+        Err(_) => {
+            log::warn!(
+                "dispatch: failed to parse SpaConfig from [{:#04X}, {:#04X}] sub-type 0x2E with {} byte payload",
+                msg_type[0],
+                msg_type[1],
+                payload.len()
+            );
+            unknown_msg(msg_type, payload)
+        }
+    }
+}
+
+/// Handle `0x0A 0xBF` sub-type `0x94` — configuration response.
+fn handle_configuration_response(msg_type: [u8; 2], payload: &[u8]) -> IncomingMessage {
+    match SpaConfig::parse(&payload[1..]) {
+        Ok(config) => IncomingMessage::ConfigurationResponse(config),
+        Err(_) => {
+            log::warn!(
+                "dispatch: failed to parse SpaConfig from [{:#04X}, {:#04X}] sub-type 0x94 with {} byte payload",
+                msg_type[0],
+                msg_type[1],
+                payload.len()
+            );
+            unknown_msg(msg_type, payload)
+        }
+    }
+}
+
+/// Handle `0x0A 0xBF` frames — dispatch by first payload byte (sub-type).
+fn handle_0abf(msg_type: [u8; 2], payload: &[u8]) -> IncomingMessage {
+    if payload.is_empty() {
+        return unknown_msg(msg_type, payload);
+    }
+
+    match payload[0] {
+        // 0x04 → Configuration Request (outgoing, shouldn't appear as incoming)
+        0x04 => unknown_msg(msg_type, payload),
+
+        // 0x07 → Nothing to send (ack)
+        0x07 => unknown_msg(msg_type, payload),
+
+        // 0x11 → Toggle item response
+        0x11 => unknown_msg(msg_type, payload),
+
+        // 0x20 → Set temperature response
+        0x20 => unknown_msg(msg_type, payload),
+
+        // 0x22 → Settings sub-type: look at second byte
+        0x22 => handle_settings_0x22(msg_type, payload),
+
+        // 0x23 → Filter cycles response (direct)
+        0x23 => handle_filter_cycles_direct(msg_type, payload),
+
+        // 0x24 → Information response (direct)
+        0x24 => handle_information_direct(msg_type, payload),
+
+        // 0x25 → Setup Parameters response
+        0x25 => IncomingMessage::SetupParametersResponse {
+            payload: payload[1..].to_vec(),
         },
 
+        // 0x26 → Preferences response
+        0x26 => IncomingMessage::PreferencesResponse {
+            payload: payload[1..].to_vec(),
+        },
+
+        // 0x28 → Fault log response (direct)
+        0x28 => handle_fault_log_direct(msg_type, payload),
+
+        // 0x2E → Control configuration
+        0x2E => handle_control_configuration(msg_type, payload),
+
+        // 0x94 → Configuration response
+        0x94 => handle_configuration_response(msg_type, payload),
+
+        // Unknown 0A BF sub-type
+        _ => unknown_msg(msg_type, payload),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Main dispatcher — thin router
+// ---------------------------------------------------------------------------
+
+/// Dispatch a parsed frame into a typed `IncomingMessage`.
+pub fn dispatch_frame(frame: &Frame) -> IncomingMessage {
+    let msg_type = frame.message_type;
+    let payload = &frame.payload;
+
+    match msg_type {
+        // Status update: FF AF
+        [0xFF, 0xAF] => handle_status(msg_type, payload),
+
         // Registration messages: FE BF
-        [0xFE, 0xBF] => {
-            if frame.payload.is_empty() {
-                return IncomingMessage::Unknown {
-                    message_type: frame.message_type,
-                    payload: frame.payload.clone(),
-                };
-            }
-            match frame.payload[0] {
-                0x00 => IncomingMessage::NewClientQuery,
-                0x02 => {
-                    if frame.payload.len() >= 2 {
-                        IncomingMessage::ClientIdAssignment {
-                            id: frame.payload[1],
-                        }
-                    } else {
-                        IncomingMessage::Unknown {
-                            message_type: frame.message_type,
-                            payload: frame.payload.clone(),
-                        }
-                    }
-                }
-                _ => IncomingMessage::Unknown {
-                    message_type: frame.message_type,
-                    payload: frame.payload.clone(),
-                },
-            }
-        }
+        [0xFE, 0xBF] => handle_registration(msg_type, payload),
 
         // 0A BF messages: disambiguate by first payload byte
-        [0x0A, 0xBF] => {
-            if frame.payload.is_empty() {
-                return IncomingMessage::Unknown {
-                    message_type: frame.message_type,
-                    payload: frame.payload.clone(),
-                };
-            }
-
-            match frame.payload[0] {
-                // 0x04 → Configuration Request (outgoing, shouldn't appear as incoming)
-                0x04 => IncomingMessage::Unknown {
-                    message_type: frame.message_type,
-                    payload: frame.payload.clone(),
-                },
-
-                // 0x07 → Nothing to send (ack)
-                0x07 => IncomingMessage::Unknown {
-                    message_type: frame.message_type,
-                    payload: frame.payload.clone(),
-                },
-
-                // 0x11 → Toggle item response
-                0x11 => IncomingMessage::Unknown {
-                    message_type: frame.message_type,
-                    payload: frame.payload.clone(),
-                },
-
-                // 0x20 → Set temperature response
-                0x20 => IncomingMessage::Unknown {
-                    message_type: frame.message_type,
-                    payload: frame.payload.clone(),
-                },
-
-                // 0x22 → Settings sub-type: look at second byte
-                0x22 => {
-                    if frame.payload.len() < 2 {
-                        return IncomingMessage::Unknown {
-                            message_type: frame.message_type,
-                            payload: frame.payload.clone(),
-                        };
-                    }
-                    match frame.payload[1] {
-                        // Panel settings response — not a dedicated parser
-                        0x00 => IncomingMessage::Unknown {
-                            message_type: frame.message_type,
-                            payload: frame.payload.clone(),
-                        },
-                        // Filter cycles response
-                        0x01 => {
-                            // The actual filter data starts after the 2 sub-type bytes
-                            // and 1 more byte (total 3-byte header for settings response)
-                            if frame.payload.len() > 3 {
-                                let filter_data = &frame.payload[3..];
-                                match FilterCycles::parse(filter_data) {
-                                    Ok(fc) => IncomingMessage::FilterCyclesResponse(fc),
-                                    Err(_) => {
-                                        log::warn!(
-                                            "dispatch: failed to parse FilterCycles from [{:#04X}, {:#04X}] sub-type 0x22/0x01 with {} byte payload",
-                                            frame.message_type[0],
-                                            frame.message_type[1],
-                                            frame.payload.len()
-                                        );
-                                        IncomingMessage::Unknown {
-                                            message_type: frame.message_type,
-                                            payload: frame.payload.clone(),
-                                        }
-                                    }
-                                }
-                            } else {
-                                IncomingMessage::Unknown {
-                                    message_type: frame.message_type,
-                                    payload: frame.payload.clone(),
-                                }
-                            }
-                        }
-                        // Information response
-                        0x02 => {
-                            if frame.payload.len() > 3 {
-                                let info_data = &frame.payload[3..];
-                                match InformationResponse::parse(info_data) {
-                                    Ok(info) => IncomingMessage::InformationResponse(info),
-                                    Err(_) => {
-                                        log::warn!(
-                                            "dispatch: failed to parse InformationResponse from [{:#04X}, {:#04X}] sub-type 0x22/0x02 with {} byte payload",
-                                            frame.message_type[0],
-                                            frame.message_type[1],
-                                            frame.payload.len()
-                                        );
-                                        IncomingMessage::Unknown {
-                                            message_type: frame.message_type,
-                                            payload: frame.payload.clone(),
-                                        }
-                                    }
-                                }
-                            } else {
-                                IncomingMessage::Unknown {
-                                    message_type: frame.message_type,
-                                    payload: frame.payload.clone(),
-                                }
-                            }
-                        }
-                        // Fault log response
-                        0x20 => {
-                            if frame.payload.len() > 3 {
-                                let fault_data = &frame.payload[3..];
-                                match FaultLogEntry::parse(fault_data) {
-                                    Ok(fault) => IncomingMessage::FaultLogResponse(fault),
-                                    Err(_) => {
-                                        log::warn!(
-                                            "dispatch: failed to parse FaultLogEntry from [{:#04X}, {:#04X}] sub-type 0x22/0x20 with {} byte payload",
-                                            frame.message_type[0],
-                                            frame.message_type[1],
-                                            frame.payload.len()
-                                        );
-                                        IncomingMessage::Unknown {
-                                            message_type: frame.message_type,
-                                            payload: frame.payload.clone(),
-                                        }
-                                    }
-                                }
-                            } else {
-                                IncomingMessage::Unknown {
-                                    message_type: frame.message_type,
-                                    payload: frame.payload.clone(),
-                                }
-                            }
-                        }
-                        // Preferences or other
-                        _ => IncomingMessage::Unknown {
-                            message_type: frame.message_type,
-                            payload: frame.payload.clone(),
-                        },
-                    }
-                }
-
-                // 0x23 → Filter cycles response (direct)
-                0x23 => {
-                    // Data starts after the sub-type byte
-                    let filter_data = &frame.payload[1..];
-                    match FilterCycles::parse(filter_data) {
-                        Ok(fc) => IncomingMessage::FilterCyclesResponse(fc),
-                        Err(_) => {
-                            log::warn!(
-                                "dispatch: failed to parse FilterCycles from [{:#04X}, {:#04X}] sub-type 0x23 with {} byte payload",
-                                frame.message_type[0],
-                                frame.message_type[1],
-                                frame.payload.len()
-                            );
-                            IncomingMessage::Unknown {
-                                message_type: frame.message_type,
-                                payload: frame.payload.clone(),
-                            }
-                        }
-                    }
-                }
-
-                // 0x24 → Information response (direct)
-                0x24 => {
-                    let info_data = &frame.payload[1..];
-                    match InformationResponse::parse(info_data) {
-                        Ok(info) => IncomingMessage::InformationResponse(info),
-                        Err(_) => {
-                            log::warn!(
-                                "dispatch: failed to parse InformationResponse from [{:#04X}, {:#04X}] sub-type 0x24 with {} byte payload",
-                                frame.message_type[0],
-                                frame.message_type[1],
-                                frame.payload.len()
-                            );
-                            IncomingMessage::Unknown {
-                                message_type: frame.message_type,
-                                payload: frame.payload.clone(),
-                            }
-                        }
-                    }
-                }
-
-                // 0x25 → Setup Parameters response
-                0x25 => IncomingMessage::SetupParametersResponse {
-                    payload: frame.payload[1..].to_vec(),
-                },
-
-                // 0x26 → Preferences response
-                0x26 => IncomingMessage::PreferencesResponse {
-                    payload: frame.payload[1..].to_vec(),
-                },
-
-                // 0x28 → Fault log response (direct)
-                0x28 => {
-                    let fault_data = &frame.payload[1..];
-                    match FaultLogEntry::parse(fault_data) {
-                        Ok(fault) => IncomingMessage::FaultLogResponse(fault),
-                        Err(_) => {
-                            log::warn!(
-                                "dispatch: failed to parse FaultLogEntry from [{:#04X}, {:#04X}] sub-type 0x28 with {} byte payload",
-                                frame.message_type[0],
-                                frame.message_type[1],
-                                frame.payload.len()
-                            );
-                            IncomingMessage::Unknown {
-                                message_type: frame.message_type,
-                                payload: frame.payload.clone(),
-                            }
-                        }
-                    }
-                }
-
-                // 0x2E → Control configuration
-                0x2E => match SpaConfig::parse(&frame.payload[1..]) {
-                    Ok(config) => IncomingMessage::ControlConfiguration(config),
-                    Err(_) => {
-                        log::warn!(
-                            "dispatch: failed to parse SpaConfig from [{:#04X}, {:#04X}] sub-type 0x2E with {} byte payload",
-                            frame.message_type[0],
-                            frame.message_type[1],
-                            frame.payload.len()
-                        );
-                        IncomingMessage::Unknown {
-                            message_type: frame.message_type,
-                            payload: frame.payload.clone(),
-                        }
-                    }
-                },
-
-                // 0x94 → Configuration response
-                0x94 => match SpaConfig::parse(&frame.payload[1..]) {
-                    Ok(config) => IncomingMessage::ConfigurationResponse(config),
-                    Err(_) => {
-                        log::warn!(
-                            "dispatch: failed to parse SpaConfig from [{:#04X}, {:#04X}] sub-type 0x94 with {} byte payload",
-                            frame.message_type[0],
-                            frame.message_type[1],
-                            frame.payload.len()
-                        );
-                        IncomingMessage::Unknown {
-                            message_type: frame.message_type,
-                            payload: frame.payload.clone(),
-                        }
-                    }
-                },
-
-                // Unknown 0A BF sub-type
-                _ => IncomingMessage::Unknown {
-                    message_type: frame.message_type,
-                    payload: frame.payload.clone(),
-                },
-            }
-        }
+        [0x0A, 0xBF] => handle_0abf(msg_type, payload),
 
         // Ready indicator: any XX BF where XX is not a known message type.
         // Protocol: "10 BF 06" for unregistered clients, "<ID> BF 06" for registered.
@@ -346,10 +329,7 @@ pub fn dispatch_frame(frame: &Frame) -> IncomingMessage {
         [_, 0xBF] => IncomingMessage::Ready,
 
         // Any other message type
-        _ => IncomingMessage::Unknown {
-            message_type: frame.message_type,
-            payload: frame.payload.clone(),
-        },
+        _ => unknown_msg(msg_type, payload),
     }
 }
 
