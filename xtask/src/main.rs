@@ -35,9 +35,7 @@ fn usage() {
     eprintln!(
         "  provision [--port <COMx>] [--no-confirm]          Burn AES key to ESP32 eFuse BLOCK3"
     );
-    eprintln!(
-        "  listen [--host <host>] [--port <1883>] [-t <topic>]  Subscribe to MQTT topics"
-    );
+    eprintln!("  listen [--host <host>] [--port <1883>] [-t <topic>]  Subscribe to MQTT topics");
 }
 
 fn main() -> anyhow::Result<()> {

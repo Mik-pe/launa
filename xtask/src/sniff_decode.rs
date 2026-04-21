@@ -1,5 +1,5 @@
 use anyhow::Context;
-use launa_protocol::FrameDecoder;
+use launa_protocol::{dispatch_frame, FrameDecoder, IncomingMessage};
 use std::time::Duration;
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
@@ -122,7 +122,8 @@ fn handle_json_sniff(
             frame.message_type[0], frame.message_type[1]
         );
         let crc_ok = true; // FrameDecoder already validated CRC
-        let parsed = describe_frame(frame);
+        let msg = dispatch_frame(frame);
+        let parsed = describe_message(&msg);
         let entry = SniffEntry {
             device_id: device_id.to_string(),
             timestamp,
@@ -156,7 +157,8 @@ fn handle_raw_sniff(decoder: &mut FrameDecoder, device_id: &str, text: &str) -> 
             "{:02X} {:02X}",
             frame.message_type[0], frame.message_type[1]
         );
-        let parsed = describe_frame(frame);
+        let msg = dispatch_frame(frame);
+        let parsed = describe_message(&msg);
         let entry = SniffEntry {
             device_id: device_id.to_string(),
             timestamp: None,
@@ -181,64 +183,134 @@ fn handle_raw_sniff(decoder: &mut FrameDecoder, device_id: &str, text: &str) -> 
     }
 }
 
-fn describe_frame(frame: &launa_protocol::Frame) -> String {
-    match frame.message_type {
-        [0xFF, 0xAF] => {
-            // Status update - try to extract key fields
-            if frame.payload.len() >= 21 {
-                let current_temp = frame.payload[2];
-                let set_temp = frame.payload[20];
-                let hour = frame.payload[3];
-                let minute = frame.payload[4];
-                let pump_flags = frame.payload.get(11).copied().unwrap_or(0);
-                let pump1 = pump_flags & 0x03;
-                let pump2 = (pump_flags >> 2) & 0x03;
+/// Produce a human-readable description using the protocol's typed message.
+fn describe_message(msg: &IncomingMessage) -> String {
+    match msg {
+        IncomingMessage::StatusUpdate(s) => {
+            let temp_str = match s.current_temp {
+                Some(t) => format!("{:.0}", t),
+                None => "--".to_string(),
+            };
+            let scale = match s.temperature_scale {
+                launa_protocol::status::TemperatureScale::Fahrenheit => "F",
+                launa_protocol::status::TemperatureScale::Celsius => "C",
+                _ => "?",
+            };
+            format!(
+                "Status: temp={}{} set={:.0}{} time={:02}:{:02} heating={} pump1={:?} pump2={:?}",
+                temp_str,
+                scale,
+                s.set_temp,
+                scale,
+                s.hour,
+                s.minute,
+                s.is_heating,
+                s.pumps[0],
+                s.pumps[1],
+            )
+        }
+
+        IncomingMessage::Ready => "Ready (bus free)".to_string(),
+
+        IncomingMessage::NewClientQuery => "Registration query".to_string(),
+
+        IncomingMessage::ClientIdAssignment { id } => format!("Client ID assigned: {}", id),
+
+        IncomingMessage::ConfigurationResponse(config)
+        | IncomingMessage::ControlConfiguration(config) => {
+            let label = match msg {
+                IncomingMessage::ConfigurationResponse(_) => "Configuration response",
+                IncomingMessage::ControlConfiguration(_) => "Control configuration",
+                _ => unreachable!(),
+            };
+            let pump_desc: Vec<String> = config
+                .pump_configs
+                .iter()
+                .enumerate()
+                .filter(|(_, &p)| p != launa_protocol::config::PumpConfig::None)
+                .map(|(i, p)| format!("pump{}={:?}", i + 1, p))
+                .collect();
+            let scale = if config.temperature_scale_celsius {
+                "C"
+            } else {
+                "F"
+            };
+            if pump_desc.is_empty() {
+                format!("{}: scale={}", label, scale)
+            } else {
+                format!("{}: {} scale={}", label, pump_desc.join(" "), scale)
+            }
+        }
+
+        IncomingMessage::InformationResponse(info) => {
+            format!(
+                "Information: model={} sw={} setup={:#04X}",
+                info.system_model, info.software_id, info.current_setup,
+            )
+        }
+
+        IncomingMessage::FaultLogResponse(entry) => {
+            format!(
+                "Fault #{}: {:?} ({} days ago, {:02}:{:02}, set={}{})",
+                entry.entry_number,
+                entry.message_code,
+                entry.days_ago,
+                entry.hour,
+                entry.minute,
+                entry.set_temperature,
+                if entry.flags & 0x01 != 0 { "C" } else { "F" },
+            )
+        }
+
+        IncomingMessage::FilterCyclesResponse(fc) => {
+            let f1 = &fc.filter1;
+            let f2 = &fc.filter2;
+            let f2_status = if f2.enabled { "enabled" } else { "disabled" };
+            format!(
+                "Filter cycles: #1 {:02}:{:02}+{}h{:02}m | #2 {:02}:{:02}+{}h{:02}m ({})",
+                f1.start_hour,
+                f1.start_minute,
+                f1.duration_hours,
+                f1.duration_minutes,
+                f2.start_hour,
+                f2.start_minute,
+                f2.duration_hours,
+                f2.duration_minutes,
+                f2_status,
+            )
+        }
+
+        IncomingMessage::PreferencesResponse { payload } => {
+            format!("Preferences ({} bytes): {:02X?}", payload.len(), payload)
+        }
+
+        IncomingMessage::SetupParametersResponse { payload } => {
+            format!(
+                "Setup parameters ({} bytes): {:02X?}",
+                payload.len(),
+                payload
+            )
+        }
+
+        IncomingMessage::Unknown {
+            message_type,
+            payload,
+        } => {
+            if payload.is_empty() {
                 format!(
-                    "Status: temp={}F set={}F time={:02}:{:02} pump1={} pump2={}",
-                    current_temp, set_temp, hour, minute, pump1, pump2
+                    "Unknown type {:02X} {:02X}",
+                    message_type[0], message_type[1]
                 )
             } else {
-                "Status update (payload too short)".to_string()
+                format!(
+                    "Unknown type {:02X} {:02X} sub={:02X}",
+                    message_type[0], message_type[1], payload[0],
+                )
             }
         }
-        [0x0A, 0xBF] => {
-            if frame.payload.is_empty() {
-                return "Command (empty payload)".to_string();
-            }
-            match frame.payload[0] {
-                0x04 => "Config request".to_string(),
-                0x11 if frame.payload.len() >= 2 => {
-                    format!("Toggle item 0x{:02X}", frame.payload[1])
-                }
-                0x20 if frame.payload.len() >= 2 => format!("Set temperature {}", frame.payload[1]),
-                0x22 => "Settings request".to_string(),
-                0x23 => "Filter cycles request".to_string(),
-                0x24 => "Information request".to_string(),
-                0x27 => "Temperature scale".to_string(),
-                0x28 => "Fault log request".to_string(),
-                0x2E => "Control configuration".to_string(),
-                0x94 => "Configuration response".to_string(),
-                other => format!("0A BF sub-type 0x{:02X}", other),
-            }
-        }
-        [0xFE, 0xBF] => {
-            if frame.payload.is_empty() {
-                return "Registration (empty)".to_string();
-            }
-            match frame.payload[0] {
-                0x00 => "Registration query".to_string(),
-                0x01 => "Registration request".to_string(),
-                0x02 if frame.payload.len() >= 2 => {
-                    format!("Client ID assigned: {}", frame.payload[1])
-                }
-                other => format!("Registration sub-type 0x{:02X}", other),
-            }
-        }
-        [0x10, 0xBF] => "Ready (bus free)".to_string(),
-        _ => format!(
-            "Unknown type {:02X} {:02X}",
-            frame.message_type[0], frame.message_type[1]
-        ),
+
+        // Catch-all for future variants added to the non-exhaustive enum
+        _ => format!("{:?}", msg),
     }
 }
 

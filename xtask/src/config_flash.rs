@@ -1,5 +1,14 @@
 use anyhow::{bail, Context};
+use std::path::PathBuf;
 use std::process::Command;
+
+/// Locate the `scripts/config_flash.py` bundled alongside this crate.
+fn script_path() -> PathBuf {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
+    PathBuf::from(manifest_dir)
+        .join("scripts")
+        .join("config_flash.py")
+}
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut port_name = None;
@@ -36,84 +45,14 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let payload: String = lines.join("\n");
     std::fs::write(&config_file, &payload).context("Failed to write temp config file")?;
 
-    // Write Python script to a temp file
-    let script_file = temp_dir.join("launa_config_flash.py");
-    let python_script = format!(
-        r#"
-import serial, time, sys
-
-port_name = sys.argv[1]
-config_file = sys.argv[2]
-
-with open(config_file, 'r') as f:
-    config_lines = f.read()
-
-print(f'Opening {{port_name}}...', file=sys.stderr)
-port = serial.Serial(port_name, 115200, timeout=1)
-
-# Wait for ESP32 ready signal
-start = time.time()
-ready = False
-all_output = ''
-while time.time() - start < 35:
-    data = port.read(4096)
-    if data:
-        text = data.decode('utf-8', errors='replace')
-        all_output += text
-        sys.stderr.write(text)
-        sys.stderr.flush()
-        if 'Waiting for serial config' in all_output:
-            ready = True
-            break
-
-if not ready:
-    print(f'ERROR: ESP32 not ready within 35s. Output so far: {{all_output}}', file=sys.stderr)
-    port.close()
-    sys.exit(1)
-
-print('ESP32 ready, sending config...', file=sys.stderr)
-time.sleep(0.1)
-
-# Send each config line with CRLF line endings
-for line in config_lines.strip().split('\n'):
-    port.write((line + '\r\n').encode('utf-8'))
-    print(f'  Sent: {{line}}', file=sys.stderr)
-port.flush()
-
-# Wait for response
-start = time.time()
-response = b''
-while time.time() - start < 10:
-    data = port.read(4096)
-    if data:
-        response += data
-        sys.stderr.write(data.decode('utf-8', errors='replace'))
-        sys.stderr.flush()
-        if b'CONFIG_OK' in response or b'CONFIG_ERROR' in response:
-            break
-
-port.close()
-
-if b'CONFIG_OK' in response:
-    print('CONFIG_OK')
-elif b'CONFIG_ERROR' in response:
-    idx = response.find(b'CONFIG_ERROR:')
-    error = response[idx+len(b'CONFIG_ERROR:'):].decode('utf-8', errors='replace').strip()
-    print(f'CONFIG_ERROR: {{error}}')
-else:
-    decoded = response.decode('utf-8', errors='replace').strip()
-    print(f'NO_RESPONSE: {{decoded}}')
-"#
-    );
-    std::fs::write(&script_file, &python_script).context("Failed to write temp Python script")?;
-
+    let script = script_path();
     println!(
         "Writing config to ESP32 via {} (using Python/pyserial)...",
         port_name
     );
 
     let output = Command::new("python")
-        .arg(&script_file)
+        .arg(&script)
         .arg(&port_name)
         .arg(&config_file)
         .output()
@@ -128,9 +67,8 @@ else:
         eprintln!("Python stderr: {}", stderr);
     }
 
-    // Clean up temp files
+    // Clean up temp config file
     let _ = std::fs::remove_file(&config_file);
-    let _ = std::fs::remove_file(&script_file);
 
     if !output.status.success() {
         bail!("Python config-flash script failed: {}", stderr);
