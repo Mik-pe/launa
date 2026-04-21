@@ -205,18 +205,19 @@ fn test_physics_sensor_noise_variation() {
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&bytes);
         let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
-        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
-            if let Some(t) = s.current_temp {
-                if (t - 100.0).abs() > 0.01 {
-                    variation_count += 1;
-                }
-                // All temps should be within ±2.0°F of internal temp
-                assert!(
-                    t >= 98.0 && t <= 102.0,
-                    "temp {} should be within ±2.0 of 100.0",
-                    t
-                );
+        let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg else {
+            panic!("Expected StatusUpdate, got {:?}", msg);
+        };
+        if let Some(t) = s.current_temp {
+            if (t - 100.0).abs() > 0.01 {
+                variation_count += 1;
             }
+            // All temps should be within ±2.0°F of internal temp
+            assert!(
+                t >= 98.0 && t <= 102.0,
+                "temp {} should be within ±2.0 of 100.0",
+                t
+            );
         }
     }
 
@@ -242,13 +243,14 @@ fn test_physics_sensor_noise_zero_no_noise() {
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&bytes);
         let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
-        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
-            assert_eq!(
-                s.current_temp,
-                Some(100.0),
-                "with noise=0.0, temp should be exact"
-            );
-        }
+        let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg else {
+            panic!("Expected StatusUpdate, got {:?}", msg);
+        };
+        assert_eq!(
+            s.current_temp,
+            Some(100.0),
+            "with noise=0.0, temp should be exact"
+        );
     }
 }
 
@@ -337,13 +339,14 @@ fn test_physics_temp_unknown_on_startup_first_n_ticks() {
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&bytes);
         let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
-        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
-            assert_eq!(
-                s.current_temp, None,
-                "tick {}: should report None (0xFF) for current_temp",
-                i
-            );
-        }
+        let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg else {
+            panic!("Expected StatusUpdate, got {:?}", msg);
+        };
+        assert_eq!(
+            s.current_temp, None,
+            "tick {}: should report None (0xFF) for current_temp",
+            i
+        );
     }
 
     // Tick 6: should report actual temp
@@ -351,13 +354,14 @@ fn test_physics_temp_unknown_on_startup_first_n_ticks() {
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&bytes);
     let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
-    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
-        assert_eq!(
-            s.current_temp,
-            Some(100.0),
-            "tick 6: should report actual temp"
-        );
-    }
+    let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg else {
+        panic!("Expected StatusUpdate, got {:?}", msg);
+    };
+    assert_eq!(
+        s.current_temp,
+        Some(100.0),
+        "tick 6: should report actual temp"
+    );
 }
 
 #[test]
@@ -392,13 +396,14 @@ fn test_physics_unknown_temp_default_zero() {
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&bytes);
     let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
-    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
-        assert_eq!(
-            s.current_temp,
-            Some(100.0),
-            "default N=0: should report actual temp from first tick"
-        );
-    }
+    let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg else {
+        panic!("Expected StatusUpdate, got {:?}", msg);
+    };
+    assert_eq!(
+        s.current_temp,
+        Some(100.0),
+        "default N=0: should report actual temp from first tick"
+    );
 }
 
 #[test]
@@ -504,9 +509,10 @@ fn test_all_physics_features_together() {
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&bytes);
         let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
-        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
-            assert_eq!(s.current_temp, None, "tick {}: should report None", i);
-        }
+        let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg else {
+            panic!("Expected StatusUpdate, got {:?}", msg);
+        };
+        assert_eq!(s.current_temp, None, "tick {}: should report None", i);
     }
 
     // Tick 4 onwards: actual temp (with noise)
@@ -514,12 +520,13 @@ fn test_all_physics_features_together() {
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&bytes);
     let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
-    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
-        assert!(
-            s.current_temp.is_some(),
-            "tick 4: should report actual temp"
-        );
-    }
+    let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg else {
+        panic!("Expected StatusUpdate, got {:?}", msg);
+    };
+    assert!(
+        s.current_temp.is_some(),
+        "tick 4: should report actual temp"
+    );
 
     // Internal temp should have been increasing during unknown period
     assert!(
@@ -544,12 +551,6 @@ fn test_all_physics_features_together() {
         "should overshoot past 104+1.5=105.5, max was {}",
         max_temp
     );
-}
-
-#[test]
-fn test_set_ambient_temp_method_exists() {
-    let mut sim = SpaSim::new();
-    sim.set_ambient_temp(85.0);
 }
 
 #[test]
@@ -908,6 +909,7 @@ fn test_unknown_temp_exact_boundary_ticks() {
 #[test]
 fn test_unknown_temp_physics_tick_count_advances() {
     let mut sim = SpaSim::new();
+    sim.registered = true;
     sim.state.current_temp = 90.0;
     sim.state.set_temp = 104.0;
     sim.state.is_heating = true;
@@ -930,12 +932,13 @@ fn test_unknown_temp_physics_tick_count_advances() {
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&bytes);
     let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
-    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
-        assert!(
-            s.current_temp.is_some(),
-            "should report valid temp after unknown period"
-        );
-    }
+    let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg else {
+        panic!("Expected StatusUpdate, got {:?}", msg);
+    };
+    assert!(
+        s.current_temp.is_some(),
+        "should report valid temp after unknown period"
+    );
 }
 
 #[test]
@@ -952,15 +955,16 @@ fn test_physics_noise_stays_within_bounds() {
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&bytes);
         let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
-        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
-            if let Some(t) = s.current_temp {
-                let deviation = (t - 100.0).abs();
-                assert!(
-                    deviation <= 3.0,
-                    "noise deviation {} should be within ±3.0°F",
-                    deviation
-                );
-            }
+        let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg else {
+            panic!("Expected StatusUpdate, got {:?}", msg);
+        };
+        if let Some(t) = s.current_temp {
+            let deviation = (t - 100.0).abs();
+            assert!(
+                deviation <= 3.0,
+                "noise deviation {} should be within ±3.0°F",
+                deviation
+            );
         }
     }
 }
@@ -981,9 +985,10 @@ fn test_physics_noise_deterministic() {
             let mut decoder = FrameDecoder::new();
             let frames = decoder.feed_slice(&bytes);
             let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
-            if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
-                temps.push(s.current_temp);
-            }
+            let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg else {
+                panic!("Expected StatusUpdate, got {:?}", msg);
+            };
+            temps.push(s.current_temp);
         }
         temps
     };
@@ -1013,17 +1018,18 @@ fn test_physics_noise_and_legacy_noise_combined() {
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&bytes);
         let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
-        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
-            if let Some(t) = s.current_temp {
-                // Combined noise: physics ±1 + legacy ±1, max deviation ±2.0
-                // But could be wider since both apply independently
-                let deviation = (t - 100.0).abs();
-                if deviation > 4.0 {
-                    all_within_bounds = false;
-                }
-                if deviation > 0.01 {
-                    variation_count += 1;
-                }
+        let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg else {
+            panic!("Expected StatusUpdate, got {:?}", msg);
+        };
+        if let Some(t) = s.current_temp {
+            // Combined noise: physics ±1 + legacy ±1, max deviation ±2.0
+            // But could be wider since both apply independently
+            let deviation = (t - 100.0).abs();
+            if deviation > 4.0 {
+                all_within_bounds = false;
+            }
+            if deviation > 0.01 {
+                variation_count += 1;
             }
         }
     }

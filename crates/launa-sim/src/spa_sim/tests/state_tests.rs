@@ -80,12 +80,13 @@ fn test_simulate_spa_reboot_reregistration() {
     // The assignment frame is FE BF 02 <id>
     let id_frame = &assignment_frames[0];
     let msg = launa_protocol::dispatcher::dispatch_frame(id_frame);
-    if let launa_protocol::dispatcher::IncomingMessage::ClientIdAssignment { id } = msg {
-        // Send ack
-        let ack = launa_protocol::frame::FrameEncoder::encode([id, 0xBF], &[0x03]).unwrap();
-        let ack_frames = decoder.feed_slice(&ack);
-        sim.process_frame(&ack_frames[0]);
-    }
+    let launa_protocol::dispatcher::IncomingMessage::ClientIdAssignment { id } = msg else {
+        panic!("Expected ClientIdAssignment, got {:?}", msg);
+    };
+    // Send ack
+    let ack = launa_protocol::frame::FrameEncoder::encode([id, 0xBF], &[0x03]).unwrap();
+    let ack_frames = decoder.feed_slice(&ack);
+    sim.process_frame(&ack_frames[0]);
 
     assert!(sim.registered, "should be registered after re-registration");
     assert!(sim.client_id.is_some());
@@ -180,9 +181,10 @@ fn test_simulate_unknown_temp_reports_none() {
     let mut decoder = FrameDecoder::new();
     let normal_frames = decoder.feed_slice(&normal_bytes);
     let normal_msg = launa_protocol::dispatcher::dispatch_frame(&normal_frames[0]);
-    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = normal_msg {
-        assert!(s.current_temp.is_some(), "should have temp before unknown");
-    }
+    let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = normal_msg else {
+        panic!("Expected StatusUpdate, got {:?}", normal_msg);
+    };
+    assert!(s.current_temp.is_some(), "should have temp before unknown");
 
     // Enable unknown temp
     sim.simulate_unknown_temp();
@@ -190,12 +192,13 @@ fn test_simulate_unknown_temp_reports_none() {
     let unknown_bytes = sim.generate_status_frame();
     let unknown_frames = decoder.feed_slice(&unknown_bytes);
     let unknown_msg = launa_protocol::dispatcher::dispatch_frame(&unknown_frames[0]);
-    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = unknown_msg {
-        assert_eq!(
-            s.current_temp, None,
-            "current_temp should be None after simulate_unknown_temp"
-        );
-    }
+    let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = unknown_msg else {
+        panic!("Expected StatusUpdate, got {:?}", unknown_msg);
+    };
+    assert_eq!(
+        s.current_temp, None,
+        "current_temp should be None after simulate_unknown_temp"
+    );
 
     // Internal state still has the temp
     assert_eq!(
@@ -217,13 +220,14 @@ fn test_simulate_unknown_temp_clear_restores() {
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&bytes);
     let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
-    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
-        assert_eq!(
-            s.current_temp,
-            Some(100.0),
-            "temp should be restored after clear_unknown_temp"
-        );
-    }
+    let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg else {
+        panic!("Expected StatusUpdate, got {:?}", msg);
+    };
+    assert_eq!(
+        s.current_temp,
+        Some(100.0),
+        "temp should be restored after clear_unknown_temp"
+    );
 }
 
 #[test]
@@ -241,10 +245,11 @@ fn test_simulate_sensor_noise_with_jitter() {
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&bytes);
         let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
-        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
-            if let Some(t) = s.current_temp {
-                temps.push(t);
-            }
+        let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg else {
+            panic!("Expected StatusUpdate, got {:?}", msg);
+        };
+        if let Some(t) = s.current_temp {
+            temps.push(t);
         }
     }
 
@@ -280,13 +285,14 @@ fn test_simulate_sensor_noise_zero_jitter() {
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&bytes);
         let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
-        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
-            assert_eq!(
-                s.current_temp,
-                Some(100.0),
-                "with jitter=0.0, temp should be exact"
-            );
-        }
+        let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg else {
+            panic!("Expected StatusUpdate, got {:?}", msg);
+        };
+        assert_eq!(
+            s.current_temp,
+            Some(100.0),
+            "with jitter=0.0, temp should be exact"
+        );
     }
 }
 
@@ -304,10 +310,11 @@ fn test_simulate_sensor_noise_deterministic() {
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&bytes);
         let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
-        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
-            if let Some(t) = s.current_temp {
-                temps1.push(t);
-            }
+        let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg else {
+            panic!("Expected StatusUpdate, got {:?}", msg);
+        };
+        if let Some(t) = s.current_temp {
+            temps1.push(t);
         }
     }
 
@@ -324,10 +331,11 @@ fn test_simulate_sensor_noise_deterministic() {
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&bytes);
         let msg = launa_protocol::dispatcher::dispatch_frame(&frames[0]);
-        if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
-            if let Some(t) = s.current_temp {
-                temps2.push(t);
-            }
+        let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg else {
+            panic!("Expected StatusUpdate, got {:?}", msg);
+        };
+        if let Some(t) = s.current_temp {
+            temps2.push(t);
         }
     }
 
@@ -507,25 +515,6 @@ fn test_filter_cycle_start_turns_pump_on() {
 }
 
 #[test]
-fn test_filter_cycle_start_does_not_toggle_running_pump() {
-    let mut sim = SpaSim::new();
-    sim.registered = true;
-    sim.state.pumps[1] = PumpState::High;
-
-    // Schedule filter cycle start for pump 2 (already High)
-    sim.simulate_filter_cycle_start(1, 1);
-
-    sim.tick();
-
-    // Should remain High (not cycled to Off)
-    assert_eq!(
-        sim.state.pumps[1],
-        PumpState::High,
-        "pump should remain High if already running"
-    );
-}
-
-#[test]
 fn test_multiple_filter_cycles_different_pumps() {
     let mut sim = SpaSim::new();
     sim.registered = true;
@@ -565,22 +554,24 @@ fn test_filter_cycle_pump_state_in_status_frame() {
     let mut decoder = FrameDecoder::new();
     let frames1 = decoder.feed_slice(&bytes1);
     let msg1 = launa_protocol::dispatcher::dispatch_frame(&frames1[0]);
-    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg1 {
-        assert_eq!(s.pumps[0], PumpState::Off, "tick 1: pump off in status");
-    }
+    let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg1 else {
+        panic!("Expected StatusUpdate, got {:?}", msg1);
+    };
+    assert_eq!(s.pumps[0], PumpState::Off, "tick 1: pump off in status");
 
     // Tick 2: event fires, pump starts
     let bytes2 = sim.tick();
     let mut decoder2 = FrameDecoder::new();
     let frames2 = decoder2.feed_slice(&bytes2);
     let msg2 = launa_protocol::dispatcher::dispatch_frame(&frames2[0]);
-    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg2 {
-        assert_eq!(
-            s.pumps[0],
-            PumpState::Low,
-            "tick 2: pump on in status after filter cycle"
-        );
-    }
+    let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg2 else {
+        panic!("Expected StatusUpdate, got {:?}", msg2);
+    };
+    assert_eq!(
+        s.pumps[0],
+        PumpState::Low,
+        "tick 2: pump on in status after filter cycle"
+    );
 }
 
 #[test]

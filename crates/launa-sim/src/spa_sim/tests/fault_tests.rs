@@ -13,9 +13,10 @@ fn test_simulate_fault_state_sets_fault_flag() {
     let mut decoder = FrameDecoder::new();
     let normal_frames = decoder.feed_slice(&normal_bytes);
     let normal_msg = launa_protocol::dispatcher::dispatch_frame(&normal_frames[0]);
-    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = normal_msg {
-        assert!(!s.is_priming, "should not be in fault initially");
-    }
+    let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = normal_msg else {
+        panic!("Expected StatusUpdate, got {:?}", normal_msg);
+    };
+    assert!(!s.is_priming, "should not be in fault initially");
 
     // Simulate fault
     sim.simulate_fault_state(FaultCode::HeaterDry);
@@ -74,7 +75,7 @@ fn test_simulate_fault_state_different_codes() {
                 code
             );
         } else {
-            panic!("Expected FaultLogResponse for code {:?}", code);
+            panic!("Expected FaultLogResponse, got {:?}", msg);
         }
     }
 }

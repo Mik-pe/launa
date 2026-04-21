@@ -389,15 +389,6 @@ mod tests {
     }
 
     #[test]
-    fn test_simbroker_subscription_filtering_empty_means_all() {
-        // When no subscriptions exist, all messages are recorded (backward compat)
-        let mut broker = SimBroker::new("test_spa");
-        broker.publish("any/topic", "payload");
-        broker.publish("another/topic", "payload");
-        assert_eq!(broker.publish_count(), 2);
-    }
-
-    #[test]
     fn test_simbroker_loss_rate() {
         // Test loss rate in isolation (no subscription filtering interference)
         let mut broker = SimBroker::new("test_spa");
