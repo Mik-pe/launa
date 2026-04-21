@@ -287,6 +287,17 @@ impl<'a> SpaApp<'a> {
 
     /// Handle an incoming MQTT command.
     pub fn on_mqtt_command(&mut self, cmd: Command) -> Vec<AppAction> {
+        // For SetTemperature, replace any existing queued SetTemperature
+        // so rapid presses only send the latest desired value.
+        if let Command::SetTemperature(temp) = cmd {
+            for entry in self.command_queue.iter_mut() {
+                if matches!(entry, Command::SetTemperature(_)) {
+                    *entry = Command::SetTemperature(temp);
+                    return Vec::new();
+                }
+            }
+        }
+
         if self.command_queue.len() >= MAX_COMMAND_QUEUE {
             // Queue full — drop the command and increment the dropped counter
             self.cmd_tracker.record_dropped();

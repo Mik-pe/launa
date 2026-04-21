@@ -764,14 +764,15 @@ fn test_rapid_temperature_race_last_wins() {
     assert_eq!(initial_set_temp, 104.0, "default set_temp should be 104");
 
     // Queue 3 rapid set_temperature commands: 100 → 104 → 102
+    // SetTemperature deduplication replaces in-place, so only 1 remains (102).
     h.send_command(Command::SetTemperature(100));
     h.send_command(Command::SetTemperature(104));
     h.send_command(Command::SetTemperature(102));
 
     assert_eq!(
         h.app.queued_command_count(),
-        3,
-        "should have 3 queued temperature commands"
+        1,
+        "should have 1 queued temperature command (deduplicated, latest value wins)"
     );
 
     // Tick through enough Ready windows to drain all commands + handle retries

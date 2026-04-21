@@ -280,7 +280,10 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                         {
                             match action {
                                 mqtt_client::MqttAction::Command(cmd) => {
-                                    if mqtt.check_rate_limit() {
+                                    // Temperature commands are idempotent — skip rate
+                                    // limiting so rapid +/- presses always reach the queue.
+                                    let is_temp = matches!(cmd, Command::SetTemperature(_));
+                                    if is_temp || mqtt.check_rate_limit() {
                                         info!("MQTT command: {:?}", cmd);
                                         cmd_sender.send(cmd).await;
                                     }
