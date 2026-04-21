@@ -4,13 +4,13 @@ use std::io::{Read, Write};
 use std::time::{Duration, Instant};
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
-    let mut port_name = "COM5".to_string();
+    let mut cli_port = None;
     let mut duration_secs = 60u64;
     let mut respond = false;
     let mut parser = crate::util::Args::new(args);
     while parser.has_more() {
         match parser.peek().unwrap() {
-            "--port" => port_name = parser.value("--port")?.to_string(),
+            "--port" => cli_port = Some(parser.value("--port")?.to_string()),
             "--duration" => {
                 duration_secs = parser.optional_parsed::<u64>("--duration")?.unwrap();
             }
@@ -21,6 +21,9 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             _ => return Err(parser.unknown_arg()),
         }
     }
+
+    let config = crate::config::load().ok();
+    let port_name = crate::util::resolve_port_or(cli_port.as_deref(), config.as_ref(), "COM3");
 
     let port = serialport::new(&port_name, 115200)
         .timeout(Duration::from_millis(100))

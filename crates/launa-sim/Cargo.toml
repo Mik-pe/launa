@@ -12,3 +12,6 @@ launa-protocol = { path = "../launa-protocol" }
 launa-hal = { path = "../launa-hal", default-features = false }
 launa-mqtt = { path = "../launa-mqtt", default-features = false }
 log.workspace = true
+
+[dev-dependencies]
+futures = { version = "0.3", default-features = false, features = ["executor"] }
