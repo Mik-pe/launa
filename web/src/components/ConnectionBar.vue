@@ -53,8 +53,9 @@ const statusText = computed(() => {
     </div>
 
     <div class="flex items-center gap-3 sm:gap-4 shrink-0">
-      <div v-if="connectionError" class="text-xs text-red-400 max-w-[100px] sm:max-w-48 truncate hidden sm:block" :title="connectionError">
-        {{ connectionError }}
+      <div v-if="connectionError" class="flex items-center gap-1 text-xs text-red-400 max-w-[200px]">
+        <svg class="w-4 h-4 shrink-0 sm:hidden" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" /></svg>
+        <span class="truncate hidden sm:inline max-w-[200px]" :title="connectionError">{{ connectionError }}</span>
       </div>
       <div class="flex items-center gap-2 text-sm">
         <span class="relative flex h-2.5 w-2.5">

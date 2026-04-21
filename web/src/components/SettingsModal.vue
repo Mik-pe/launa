@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import ToggleSwitch from './ToggleSwitch.vue'
 import type { MqttSettings, AccessoryConfig } from '../types'
 
@@ -34,7 +34,33 @@ watch(() => props.modelValue, (open: boolean) => {
   }
 })
 
+// --- Validation ---
+const DEVICE_ID_RE = /^[a-zA-Z0-9_-]+$/
+
+const brokerUrlError = computed(() => {
+  const v = form.value.brokerUrl?.trim() ?? ''
+  if (!v) return 'Broker URL is required'
+  try {
+    const u = new URL(v)
+    if (u.protocol !== 'ws:' && u.protocol !== 'wss:') return 'URL must start with ws:// or wss://'
+    if (!u.hostname) return 'Invalid hostname'
+  } catch {
+    return 'Invalid URL'
+  }
+  return ''
+})
+
+const deviceIdError = computed(() => {
+  const v = form.value.deviceId?.trim() ?? ''
+  if (!v) return 'Device ID is required'
+  if (!DEVICE_ID_RE.test(v)) return 'Only letters, numbers, hyphens, underscores'
+  return ''
+})
+
+const hasErrors = computed(() => !!brokerUrlError.value || !!deviceIdError.value)
+
 function save(): void {
+  if (hasErrors.value) return
   emit('save', { ...form.value })
   emit('saveAccessoryConfig', { ...accForm.value })
   emit('update:modelValue', false)
@@ -73,7 +99,8 @@ function toggleSniff(val: boolean): void {
               <input v-model="form.brokerUrl"
                 type="text"
                 placeholder="ws://192.168.1.100:9001"
-                class="w-full px-3 py-2 bg-neutral-800 border border-neutral-700 rounded-lg text-sm text-white placeholder-neutral-600 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                :class="['w-full px-3 py-2 bg-neutral-800 border rounded-lg text-sm text-white placeholder-neutral-600 focus:ring-2 focus:border-blue-500 outline-none', brokerUrlError ? 'border-red-500 focus:ring-red-500' : 'border-neutral-700 focus:ring-blue-500']" />
+              <p v-if="brokerUrlError" class="text-xs text-red-400 mt-1">{{ brokerUrlError }}</p>
             </div>
 
             <div>
@@ -81,7 +108,8 @@ function toggleSniff(val: boolean): void {
               <input v-model="form.deviceId"
                 type="text"
                 placeholder="launa_spa"
-                class="w-full px-3 py-2 bg-neutral-800 border border-neutral-700 rounded-lg text-sm text-white placeholder-neutral-600 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                :class="['w-full px-3 py-2 bg-neutral-800 border rounded-lg text-sm text-white placeholder-neutral-600 focus:ring-2 focus:border-blue-500 outline-none', deviceIdError ? 'border-red-500 focus:ring-red-500' : 'border-neutral-700 focus:ring-blue-500']" />
+              <p v-if="deviceIdError" class="text-xs text-red-400 mt-1">{{ deviceIdError }}</p>
             </div>
 
             <div class="grid grid-cols-2 gap-3">
@@ -165,7 +193,8 @@ function toggleSniff(val: boolean): void {
               Cancel
             </button>
             <button @click="save"
-              class="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-500 transition-colors cursor-pointer">
+              :disabled="hasErrors"
+              class="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-500 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
               Save &amp; Reconnect
             </button>
           </div>

@@ -3,13 +3,28 @@ import { useMqttConnection } from './useMqttConnection'
 import { useSpaState } from './useSpaState'
 import { useAccessoryConfig } from './useAccessoryConfig'
 
+/** Shared reactive toast state — consumed by App.vue */
+export const connectionErrorToast = { value: '' }
+
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+
+function showDisconnectedToast() {
+  connectionErrorToast.value = 'Command dropped — not connected to broker'
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { connectionErrorToast.value = '' }, 3000)
+  console.warn('[MQTT] Command dropped — not connected')
+}
+
 export function useMqtt() {
   const conn = useMqttConnection()
   const spa = useSpaState()
   const accessory = useAccessoryConfig()
 
   function publish(subtopic: string, payload: string | number | boolean) {
-    if (!conn.client.value || !conn.connected.value) return
+    if (!conn.client.value || !conn.connected.value) {
+      showDisconnectedToast()
+      return
+    }
     const topic = `launa/${conn.settings.value.deviceId}/command/${subtopic}`
     conn.client.value.publish(topic, String(payload), { qos: 1 })
   }

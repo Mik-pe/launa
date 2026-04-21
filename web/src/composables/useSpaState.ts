@@ -2,6 +2,7 @@ import { ref, computed } from 'vue'
 import type { SpaState } from '../types'
 
 const RECONNECTING_TIMEOUT_MS = 30_000
+const PENDING_TIMEOUT_MS = 5_000
 
 const _stateKeyMap: Record<string, string> = {
   pump1: 'pump1_on', pump2: 'pump2_on', pump3: 'pump3_on',
@@ -22,6 +23,23 @@ export function useSpaState() {
   const selfTestEnabled = ref(false)
   const sniffEnabled = ref(false)
   let reconnectingTimer: ReturnType<typeof setTimeout> | null = null
+  const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+  function addPending(key: string): void {
+    const next = new Set(pendingKeys.value)
+    next.add(key)
+    pendingKeys.value = next
+    // Clear any existing timer for this key
+    const existing = pendingTimers.get(key)
+    if (existing !== undefined) clearTimeout(existing)
+    // Auto-clear after timeout
+    pendingTimers.set(key, setTimeout(() => {
+      const n = new Set(pendingKeys.value)
+      n.delete(key)
+      pendingKeys.value = n
+      pendingTimers.delete(key)
+    }, PENDING_TIMEOUT_MS))
+  }
 
   function onConnect() {
     availability.value = 'reconnecting'
@@ -48,6 +66,8 @@ export function useSpaState() {
         }
         if (pendingKeys.value.size > 0) {
           pendingKeys.value = new Set()
+          for (const t of pendingTimers.values()) clearTimeout(t)
+          pendingTimers.clear()
         }
       } catch { /* ignore */ }
     } else if (topic === `${base}/availability`) {
@@ -69,11 +89,7 @@ export function useSpaState() {
     publish: (subtopic: string, payload: string | number | boolean) => void,
   ) {
     const key = _stateKeyMap[subtopic]
-    if (key) {
-      const next = new Set(pendingKeys.value)
-      next.add(key)
-      pendingKeys.value = next
-    }
+    if (key) addPending(key)
     publish(subtopic, true)
   }
 
@@ -81,9 +97,7 @@ export function useSpaState() {
     temp: number,
     publish: (subtopic: string, payload: string | number | boolean) => void,
   ) {
-    const next = new Set(pendingKeys.value)
-    next.add('set_temp')
-    pendingKeys.value = next
+    addPending('set_temp')
     publish('set_temperature', String(temp))
   }
 
@@ -109,6 +123,8 @@ export function useSpaState() {
 
   function cleanup() {
     clearTimeout(reconnectingTimer!)
+    for (const t of pendingTimers.values()) clearTimeout(t)
+    pendingTimers.clear()
   }
 
   return {

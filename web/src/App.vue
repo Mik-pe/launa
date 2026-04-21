@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useMqtt } from './composables/useMqtt'
+import { ref, watch } from 'vue'
+import { useMqtt, connectionErrorToast } from './composables/useMqtt'
 import PendingDot from './components/PendingDot.vue'
 import type { MqttSettings, AccessoryConfig } from './types'
 import LoadingSpinner from './components/LoadingSpinner.vue'
@@ -44,6 +44,24 @@ const {
 
 const showSettings = ref(false)
 const activeTab = ref('control')
+const showToast = ref(false)
+const hasNewAlerts = ref(false)
+
+// Mirror the connectionErrorToast into a local ref so the template can react
+watch(() => connectionErrorToast.value, (msg) => {
+  showToast.value = !!msg
+})
+
+// Track new MQTT alerts for tab badge
+watch(alertMsg, (msg) => {
+  if (msg && activeTab.value !== 'alerts') {
+    hasNewAlerts.value = true
+  }
+})
+
+watch(activeTab, (tab) => {
+  if (tab === 'alerts') hasNewAlerts.value = false
+})
 
 const tabs: { id: string; label: string; icon: string }[] = [
   { id: 'control', label: 'Control', icon: '🎛️' },
@@ -101,7 +119,7 @@ function handleTempRange(val: string): void {
             :key="tab.id"
             @click="activeTab = tab.id"
             :class="[
-              'flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium whitespace-nowrap transition-all duration-200 cursor-pointer shrink-0',
+              'relative flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium whitespace-nowrap transition-all duration-200 cursor-pointer shrink-0',
               activeTab === tab.id
                 ? 'bg-blue-500/15 text-blue-400 ring-1 ring-blue-500/30 shadow-sm shadow-blue-500/10'
                 : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800'
@@ -109,6 +127,8 @@ function handleTempRange(val: string): void {
           >
             <span class="text-base">{{ tab.icon }}</span>
             <span>{{ tab.label }}</span>
+            <span v-if="tab.id === 'alerts' && hasNewAlerts"
+              class="absolute -top-1 -right-1 w-2.5 h-2.5 bg-amber-400 rounded-full ring-2 ring-neutral-900/80" />
           </button>
         </nav>
       </div>
@@ -221,6 +241,14 @@ function handleTempRange(val: string): void {
 
       </div>
 
+    <!-- Disconnect command toast -->
+    <Transition name="toast">
+      <div v-if="showToast"
+        class="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 bg-red-900/90 text-red-200 text-sm px-4 py-2.5 rounded-xl shadow-lg ring-1 ring-red-800/50 backdrop-blur-sm">
+        {{ connectionErrorToast }}
+      </div>
+    </Transition>
+
     <!-- Settings button (floating) -->
     <button
       @click="showSettings = true"
@@ -251,5 +279,14 @@ function handleTempRange(val: string): void {
 }
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
+}
+.toast-enter-active,
+.toast-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translate(-50%, 10px);
 }
 </style>
