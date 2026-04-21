@@ -5,25 +5,16 @@ use std::time::{Duration, Instant};
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut port_name = None;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--port" => {
-                i += 1;
-                if i >= args.len() {
-                    bail!("--port requires a value");
-                }
-                port_name = Some(args[i].clone());
-            }
-            other => bail!("Unknown argument: {}", other),
+    let mut parser = crate::util::Args::new(args);
+    while parser.has_more() {
+        match parser.peek().unwrap() {
+            "--port" => port_name = Some(parser.value("--port")?.to_string()),
+            _ => return Err(parser.unknown_arg()),
         }
-        i += 1;
     }
 
     let config = crate::config::load().ok();
-    let port_name = port_name
-        .or_else(|| config.map(|c| c.device.serial_port.clone()))
-        .context("No serial port specified. Use --port or set device.serial_port in launa.toml")?;
+    let port_name = crate::util::resolve_port(port_name.as_deref(), config.as_ref())?;
 
     // Step 1: Flash with hw-test feature
     println!("Building and flashing self-test firmware...");

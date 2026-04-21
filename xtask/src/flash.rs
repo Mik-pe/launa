@@ -4,31 +4,22 @@ use std::process::Command;
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut feature = None;
     let mut port = None;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--feature" => {
-                i += 1;
-                if i >= args.len() {
-                    bail!("--feature requires a value");
-                }
-                feature = Some(args[i].clone());
-            }
-            "--port" => {
-                i += 1;
-                if i >= args.len() {
-                    bail!("--port requires a value");
-                }
-                port = Some(args[i].clone());
-            }
-            other => bail!("Unknown argument: {}", other),
+    let mut parser = crate::util::Args::new(args);
+    while parser.has_more() {
+        match parser.peek().unwrap() {
+            "--feature" => feature = Some(parser.value("--feature")?.to_string()),
+            "--port" => port = Some(parser.value("--port")?.to_string()),
+            _ => return Err(parser.unknown_arg()),
         }
-        i += 1;
     }
 
     let app_dir = crate::util::project_root().join("app");
     let mut cmd = Command::new("cargo");
-    cmd.arg("+esp").arg("espflash").arg("flash").arg("--chip").arg("esp32");
+    cmd.arg("+esp")
+        .arg("espflash")
+        .arg("flash")
+        .arg("--chip")
+        .arg("esp32");
     cmd.arg("--partition-table").arg("partitions.csv");
 
     if let Some(ref f) = feature {

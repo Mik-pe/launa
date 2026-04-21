@@ -1,4 +1,4 @@
-use anyhow::{bail, Context};
+use anyhow::Context;
 use launa_protocol::FrameDecoder;
 use std::time::Duration;
 
@@ -6,33 +6,16 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut host = "localhost".to_string();
     let mut port = 1883u16;
     let mut output_file = None;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--host" => {
-                i += 1;
-                if i >= args.len() {
-                    bail!("--host requires a value");
-                }
-                host = args[i].clone();
-            }
+    let mut parser = crate::util::Args::new(args);
+    while parser.has_more() {
+        match parser.peek().unwrap() {
+            "--host" => host = parser.value("--host")?.to_string(),
             "--port" => {
-                i += 1;
-                if i >= args.len() {
-                    bail!("--port requires a value");
-                }
-                port = args[i].parse().context("Invalid port")?;
+                port = parser.optional_parsed::<u16>("--port")?.unwrap();
             }
-            "--output" | "-o" => {
-                i += 1;
-                if i >= args.len() {
-                    bail!("--output requires a value");
-                }
-                output_file = Some(args[i].clone());
-            }
-            other => bail!("Unknown argument: {}", other),
+            "--output" | "-o" => output_file = Some(parser.value("--output")?.to_string()),
+            _ => return Err(parser.unknown_arg()),
         }
-        i += 1;
     }
 
     let mut mqttoptions = rumqttc::MqttOptions::new("xtask-sniff-decode", &host, port);

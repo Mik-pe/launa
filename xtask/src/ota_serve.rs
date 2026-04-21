@@ -9,26 +9,15 @@ use std::time::Duration;
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut firmware_path = None;
     let mut port = 8080u16;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--firmware" => {
-                i += 1;
-                if i >= args.len() {
-                    bail!("--firmware requires a value");
-                }
-                firmware_path = Some(PathBuf::from(&args[i]));
-            }
+    let mut parser = crate::util::Args::new(args);
+    while parser.has_more() {
+        match parser.peek().unwrap() {
+            "--firmware" => firmware_path = Some(PathBuf::from(parser.value("--firmware")?)),
             "--port" => {
-                i += 1;
-                if i >= args.len() {
-                    bail!("--port requires a value");
-                }
-                port = args[i].parse().context("Invalid port")?;
+                port = parser.optional_parsed::<u16>("--port")?.unwrap();
             }
-            other => bail!("Unknown argument: {}", other),
+            _ => return Err(parser.unknown_arg()),
         }
-        i += 1;
     }
 
     let firmware_path = firmware_path.context("--firmware <path> is required")?;
@@ -64,9 +53,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     });
 
     // Set accept timeout so we can check the running flag periodically
-    listener
-        .set_nonblocking(false)
-        .ok();
+    listener.set_nonblocking(false).ok();
     // Use a short timeout on accept to allow graceful shutdown
     let accept_timeout = Duration::from_millis(500);
 
@@ -106,15 +93,24 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                                     let mut ok = true;
                                     while offset < firmware_data.len() {
                                         let end = (offset + chunk_size).min(firmware_data.len());
-                                        if let Err(e) = stream.write_all(&firmware_data[offset..end]) {
-                                            eprintln!("[{}] write error at {} bytes: {}", peer_str, offset, e);
+                                        if let Err(e) =
+                                            stream.write_all(&firmware_data[offset..end])
+                                        {
+                                            eprintln!(
+                                                "[{}] write error at {} bytes: {}",
+                                                peer_str, offset, e
+                                            );
                                             ok = false;
                                             break;
                                         }
                                         offset = end;
                                     }
                                     if ok {
-                                        println!("[{}] GET -> 200 ({} bytes sent)", peer_str, firmware_data.len());
+                                        println!(
+                                            "[{}] GET -> 200 ({} bytes sent)",
+                                            peer_str,
+                                            firmware_data.len()
+                                        );
                                     }
                                 }
                                 Err(e) => {

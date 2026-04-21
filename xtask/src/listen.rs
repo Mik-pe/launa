@@ -11,36 +11,20 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut topic_filter = "launa/#".to_string();
     let mut verbose = false;
 
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--host" => {
-                i += 1;
-                if i >= args.len() {
-                    bail!("--host requires a value");
-                }
-                host = args[i].clone();
-            }
+    let mut parser = crate::util::Args::new(args);
+    while parser.has_more() {
+        match parser.peek().unwrap() {
+            "--host" => host = parser.value("--host")?.to_string(),
             "--port" => {
-                i += 1;
-                if i >= args.len() {
-                    bail!("--port requires a value");
-                }
-                port = args[i].parse().context("Invalid port")?;
+                port = parser.optional_parsed::<u16>("--port")?.unwrap();
             }
-            "--topic" | "-t" => {
-                i += 1;
-                if i >= args.len() {
-                    bail!("--topic requires a value");
-                }
-                topic_filter = args[i].clone();
-            }
+            "--topic" | "-t" => topic_filter = parser.value("--topic")?.to_string(),
             "--verbose" | "-v" => {
+                parser.skip();
                 verbose = true;
             }
-            other => bail!("Unknown argument: {}", other),
+            _ => return Err(parser.unknown_arg()),
         }
-        i += 1;
     }
 
     // Fall back to launa.toml config if --host not given

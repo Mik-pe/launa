@@ -7,29 +7,19 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut port_name = "COM5".to_string();
     let mut duration_secs = 60u64;
     let mut respond = false;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--port" => {
-                i += 1;
-                if i >= args.len() {
-                    bail!("--port requires a value");
-                }
-                port_name = args[i].clone();
-            }
+    let mut parser = crate::util::Args::new(args);
+    while parser.has_more() {
+        match parser.peek().unwrap() {
+            "--port" => port_name = parser.value("--port")?.to_string(),
             "--duration" => {
-                i += 1;
-                if i >= args.len() {
-                    bail!("--duration requires a value");
-                }
-                duration_secs = args[i].parse().context("Invalid duration")?;
+                duration_secs = parser.optional_parsed::<u64>("--duration")?.unwrap();
             }
             "--respond" => {
+                parser.skip();
                 respond = true;
             }
-            other => bail!("Unknown argument: {}", other),
+            _ => return Err(parser.unknown_arg()),
         }
-        i += 1;
     }
 
     let port = serialport::new(&port_name, 115200)

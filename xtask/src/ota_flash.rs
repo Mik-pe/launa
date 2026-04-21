@@ -39,26 +39,13 @@ pub fn extract_firmware_version(state_json: &str) -> Option<String> {
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut feature = "default".to_string();
     let mut device_id_override = None;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--feature" => {
-                i += 1;
-                if i >= args.len() {
-                    bail!("--feature requires a value");
-                }
-                feature = args[i].clone();
-            }
-            "--device-id" => {
-                i += 1;
-                if i >= args.len() {
-                    bail!("--device-id requires a value");
-                }
-                device_id_override = Some(args[i].clone());
-            }
-            other => bail!("Unknown argument: {}", other),
+    let mut parser = crate::util::Args::new(args);
+    while parser.has_more() {
+        match parser.peek().unwrap() {
+            "--feature" => feature = parser.value("--feature")?.to_string(),
+            "--device-id" => device_id_override = Some(parser.value("--device-id")?.to_string()),
+            _ => return Err(parser.unknown_arg()),
         }
-        i += 1;
     }
 
     let config = crate::config::load()?;

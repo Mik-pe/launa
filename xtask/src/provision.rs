@@ -6,30 +6,22 @@ use std::process::Command;
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     // Parse arguments
     let mut port_name = None;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--port" => {
-                i += 1;
-                if i >= args.len() {
-                    bail!("--port requires a value");
-                }
-                port_name = Some(args[i].clone());
-            }
+    let mut parser = crate::util::Args::new(args);
+    while parser.has_more() {
+        match parser.peek().unwrap() {
+            "--port" => port_name = Some(parser.value("--port")?.to_string()),
             "--no-confirm" => {
                 // Accepted for backward compat but ignored — espefuse is always
                 // called with --no-confirm since the user already confirmed via xtask.
+                parser.skip();
             }
-            other => bail!("Unknown argument: {}", other),
+            _ => return Err(parser.unknown_arg()),
         }
-        i += 1;
     }
 
     // Resolve serial port from config if not provided via CLI
     let config = crate::config::load().ok();
-    let port_name = port_name
-        .or_else(|| config.as_ref().map(|c| c.device.serial_port.clone()))
-        .context("No serial port specified. Use --port or set device.serial_port in launa.toml")?;
+    let port_name = crate::util::resolve_port(port_name.as_deref(), config.as_ref())?;
 
     // Determine keychain username from config device ID
     let keychain_user = config

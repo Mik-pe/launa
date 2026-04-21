@@ -3,19 +3,12 @@ use std::process::Command;
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut port_name = None;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--port" => {
-                i += 1;
-                if i >= args.len() {
-                    bail!("--port requires a value");
-                }
-                port_name = Some(args[i].clone());
-            }
-            other => bail!("Unknown argument: {}", other),
+    let mut parser = crate::util::Args::new(args);
+    while parser.has_more() {
+        match parser.peek().unwrap() {
+            "--port" => port_name = Some(parser.value("--port")?.to_string()),
+            _ => return Err(parser.unknown_arg()),
         }
-        i += 1;
     }
 
     let config = crate::config::load()?;
@@ -114,14 +107,19 @@ else:
     );
     std::fs::write(&script_file, &python_script).context("Failed to write temp Python script")?;
 
-    println!("Writing config to ESP32 via {} (using Python/pyserial)...", port_name);
+    println!(
+        "Writing config to ESP32 via {} (using Python/pyserial)...",
+        port_name
+    );
 
     let output = Command::new("python")
         .arg(&script_file)
         .arg(&port_name)
         .arg(&config_file)
         .output()
-        .context("Failed to run Python. Is Python with pyserial installed? (pip install pyserial)")?;
+        .context(
+            "Failed to run Python. Is Python with pyserial installed? (pip install pyserial)",
+        )?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -144,7 +142,10 @@ else:
     } else if stdout.starts_with("CONFIG_ERROR:") {
         bail!("ESP32 config error: {}", &stdout["CONFIG_ERROR:".len()..]);
     } else if stdout.starts_with("NO_RESPONSE:") {
-        bail!("No acknowledgment from ESP32: {}", &stdout["NO_RESPONSE:".len()..]);
+        bail!(
+            "No acknowledgment from ESP32: {}",
+            &stdout["NO_RESPONSE:".len()..]
+        );
     } else {
         bail!("Unexpected response: {}", stdout);
     }
