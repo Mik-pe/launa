@@ -7,27 +7,16 @@
 
 mod common;
 
-use common::{make_ready_frame, make_spaapp, make_status_frame};
+use common::{
+    decode_first_frame, make_new_client_query_frame, make_ready_frame, make_spaapp,
+    make_status_frame,
+};
 
 use launa_core::AppAction;
 use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::frame::{Frame, FrameDecoder, FrameEncoder};
 use launa_protocol::status::{HeatingMode, PumpState};
 use launa_sim::SpaSim;
-
-fn make_new_client_query_frame() -> Frame {
-    Frame {
-        message_type: [0xFE, 0xBF],
-        payload: vec![0x00],
-    }
-}
-
-fn decode_first_frame(bytes: &[u8]) -> Frame {
-    let mut decoder = FrameDecoder::new();
-    let frames = decoder.feed_slice(bytes);
-    assert!(!frames.is_empty(), "expected at least one frame");
-    frames.into_iter().next().unwrap()
-}
 
 #[test]
 fn test_spaapp_command_ack_and_confirmation() {

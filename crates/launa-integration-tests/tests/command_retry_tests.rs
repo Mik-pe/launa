@@ -7,63 +7,15 @@
 
 mod common;
 
-use common::{make_ready_frame, make_spaapp, make_status_frame};
+use common::{
+    decode_first_frame, full_registration, make_ready_frame, make_spaapp, make_status_frame,
+};
 
-use launa_core::{AppAction, SpaApp};
+use launa_core::AppAction;
 use launa_protocol::command::{Command, ToggleItem};
-use launa_protocol::frame::{Frame, FrameDecoder};
+use launa_protocol::frame::Frame;
 use launa_protocol::status::PumpState;
 use launa_sim::SpaSim;
-
-fn decode_first_frame(bytes: &[u8]) -> Frame {
-    let mut decoder = FrameDecoder::new();
-    let frames = decoder.feed_slice(bytes);
-    assert!(!frames.is_empty(), "expected at least one frame");
-    frames.into_iter().next().unwrap()
-}
-
-fn sim_tick_to_app(sim: &mut SpaSim, app: &mut SpaApp) -> Vec<AppAction> {
-    let raw_bytes = sim.tick();
-    let mut decoder = FrameDecoder::new();
-    let frames = decoder.feed_slice(&raw_bytes);
-    let mut all_actions = Vec::new();
-    for frame in &frames {
-        let actions = app.process_frame(frame);
-        all_actions.extend(actions);
-    }
-    all_actions
-}
-
-fn full_registration(sim: &mut SpaSim, app: &mut SpaApp) {
-    let actions1 = sim_tick_to_app(sim, app);
-    let id_request_bytes = actions1
-        .iter()
-        .find_map(|a| match a {
-            AppAction::SendFrame(data) => Some(data.clone()),
-            _ => None,
-        })
-        .expect("should have SendFrame for ID request");
-
-    let assignment_bytes = sim.process_incoming_bytes(&id_request_bytes);
-    assert!(!assignment_bytes.is_empty());
-
-    let mut decoder = FrameDecoder::new();
-    let assignment_frames = decoder.feed_slice(&assignment_bytes);
-    assert_eq!(assignment_frames.len(), 1);
-
-    let actions2 = app.process_frame(&assignment_frames[0]);
-    assert!(app.is_registered());
-
-    let ack_bytes = actions2
-        .iter()
-        .find_map(|a| match a {
-            AppAction::SendFrame(data) => Some(data.clone()),
-            _ => None,
-        })
-        .expect("should have SendFrame for ACK");
-
-    sim.process_incoming_bytes(&ack_bytes);
-}
 
 #[test]
 fn test_spaapp_command_retry_and_drop_lifecycle() {

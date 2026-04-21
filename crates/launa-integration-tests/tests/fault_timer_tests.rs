@@ -78,7 +78,13 @@ fn test_fault_appears_and_clears_lifecycle() {
     // The MQTT state published via broker should also reflect the fault
     // Publish with fault attached
     let status_with_fault = h.app.last_status().unwrap().clone();
-    let json = launa_mqtt::state::status_to_json(&status_with_fault, h.app.last_fault(), None, false, false);
+    let json = launa_mqtt::state::status_to_json(
+        &status_with_fault,
+        h.app.last_fault(),
+        None,
+        false,
+        false,
+    );
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert!(
         parsed["last_fault"].is_string(),

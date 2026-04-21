@@ -9,9 +9,12 @@
 
 mod common;
 
-use common::{make_spaapp, make_status_frame};
+use common::{
+    full_registration, make_client_id_assignment_frame, make_new_client_query_frame, make_spaapp,
+    make_status_frame,
+};
 
-use launa_core::{AppAction, SpaApp};
+use launa_core::AppAction;
 use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
 use launa_protocol::frame::{Frame, FrameDecoder, FrameEncoder};
@@ -19,83 +22,6 @@ use launa_protocol::registration::{
     RegistrationAction, RegistrationState, RegistrationStateMachine,
 };
 use launa_sim::SpaSim;
-
-fn make_new_client_query_frame() -> Frame {
-    Frame {
-        message_type: [0xFE, 0xBF],
-        payload: vec![0x00],
-    }
-}
-
-fn make_client_id_assignment_frame(id: u8) -> Frame {
-    Frame {
-        message_type: [0xFE, 0xBF],
-        payload: vec![0x02, id],
-    }
-}
-
-fn sim_tick_to_app(sim: &mut SpaSim, app: &mut SpaApp) -> Vec<AppAction> {
-    let raw_bytes = sim.tick();
-    let mut decoder = FrameDecoder::new();
-    let frames = decoder.feed_slice(&raw_bytes);
-    let mut all_actions = Vec::new();
-    for frame in &frames {
-        let actions = app.process_frame(frame);
-        all_actions.extend(actions);
-    }
-    all_actions
-}
-
-fn full_registration(sim: &mut SpaSim, app: &mut SpaApp) {
-    let actions1 = sim_tick_to_app(sim, app);
-    let has_send = actions1
-        .iter()
-        .any(|a| matches!(a, AppAction::SendFrame(_)));
-    assert!(has_send, "should send ID request on registration query");
-
-    let id_request_bytes = actions1
-        .iter()
-        .find_map(|a| match a {
-            AppAction::SendFrame(data) => Some(data.clone()),
-            _ => None,
-        })
-        .expect("should have SendFrame for ID request");
-
-    let assignment_bytes = sim.process_incoming_bytes(&id_request_bytes);
-    assert!(
-        !assignment_bytes.is_empty(),
-        "should return client ID assignment bytes"
-    );
-
-    let mut decoder = FrameDecoder::new();
-    let assignment_frames = decoder.feed_slice(&assignment_bytes);
-    assert_eq!(
-        assignment_frames.len(),
-        1,
-        "should produce one assignment frame"
-    );
-
-    let actions2 = app.process_frame(&assignment_frames[0]);
-    let has_ack = actions2
-        .iter()
-        .any(|a| matches!(a, AppAction::SendFrame(_)));
-    assert!(has_ack, "should send ID ack after assignment");
-    assert!(app.is_registered(), "should be registered after assignment");
-
-    let ack_bytes = actions2
-        .iter()
-        .find_map(|a| match a {
-            AppAction::SendFrame(data) => Some(data.clone()),
-            _ => None,
-        })
-        .expect("should have SendFrame for ACK");
-
-    sim.process_incoming_bytes(&ack_bytes);
-    assert!(
-        sim.client_id.is_some(),
-        "sim should have client_id after ACK"
-    );
-}
 
 #[test]
 fn test_full_registration_flow() {
