@@ -43,6 +43,14 @@ pub enum MqttAction {
     SelfTest(bool),
 }
 
+/// Parameters for re-publishing last known state after reconnect.
+pub struct LastState<'a> {
+    pub status: &'a StatusUpdate,
+    pub fault: Option<&'a str>,
+    pub self_test: bool,
+    pub sniff_mode: bool,
+}
+
 pub struct TcpTransport {
     socket: TcpSocket<'static>,
 }
@@ -360,6 +368,43 @@ impl MqttClient {
         self.send_connect(&client_id, &avail_topic, username, password).await?;
 
         info!("MQTT reconnected to {}:{}", self.config_host, self.config_port);
+        Ok(())
+    }
+
+    /// Reconnect to the broker and re-publish the full post-connect sequence:
+    /// availability (online), discovery entities, command subscriptions,
+    /// and optionally the last known state.
+    pub async fn reconnect_and_sync(
+        &mut self,
+        celsius: bool,
+        last_state: Option<&LastState<'_>>,
+    ) -> Result<(), MqttError> {
+        self.reconnect().await?;
+        self.post_connect_publish(celsius).await?;
+        if let Some(state) = last_state {
+            if let Err(e) = self
+                .publish_state(state.status, state.fault, state.self_test, state.sniff_mode, state.self_test)
+                .await
+            {
+                warn!("Reconnect: publish state failed: {:?}", e);
+            }
+        }
+        Ok(())
+    }
+
+    /// Publish availability, discovery entities, and subscribe to command topics.
+    ///
+    /// Used after initial connect and after reconnect (before state re-publish).
+    pub async fn post_connect_publish(&mut self, celsius: bool) -> Result<(), MqttError> {
+        if let Err(e) = self.publish_availability(true).await {
+            warn!("Post-connect: publish availability failed: {:?}", e);
+        }
+        if let Err(e) = self.publish_discovery(celsius).await {
+            warn!("Post-connect: publish discovery failed: {:?}", e);
+        }
+        if let Err(e) = self.subscribe_commands().await {
+            warn!("Post-connect: subscribe commands failed: {:?}", e);
+        }
         Ok(())
     }
 

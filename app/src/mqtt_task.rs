@@ -10,13 +10,12 @@
 //! It handles automatic reconnection with exponential backoff and
 //! re-publishes discovery/state after reconnect.
 
-use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
 use embassy_futures::select::{select, Either};
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{Duration, Timer};
 use launa_protocol::status::StatusUpdate;
-use log::{error, info, warn};
+use log::{info, warn};
 
 use crate::types::FaultBuf;
 use crate::*;
@@ -54,73 +53,26 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
         if WIFI_RECONNECT_SIGNAL.try_take().is_some() {
             warn!("WiFi reconnect detected, forcing MQTT reconnect");
             MQTT_RECONNECT_COUNT.fetch_add(1, Ordering::Relaxed);
-            let mut wifi_attempt: u32 = 0;
-            let mut last_wifi_alert: Option<Instant> = None;
-            loop {
-                wifi_attempt += 1;
-                match mqtt.reconnect().await {
-                    Ok(()) => {
-                        let celsius = last_scale_range
-                            .map_or(false, |(s, _)| {
-                                matches!(s, launa_protocol::status::TemperatureScale::Celsius)
-                            });
-                        if let Err(e) = mqtt.publish_availability(true).await {
-                            warn!("WiFi-reconnect: publish availability failed: {:?}", e);
-                        }
-                        if let Err(e) = mqtt.publish_discovery(celsius).await {
-                            warn!("WiFi-reconnect: publish discovery failed: {:?}", e);
-                        }
-                        if let Err(e) = mqtt.subscribe_commands().await {
-                            warn!("WiFi-reconnect: subscribe commands failed: {:?}", e);
-                        }
-                        // Re-publish last known state
-                        if let Some(ref status) = last_published_status {
-                            let fault_str =
-                                last_published_fault.as_ref().and_then(|f| f.as_str());
-                            if let Err(e) = mqtt.publish_state(status, fault_str, last_self_test, last_sniff_mode, last_self_test).await {
-                                warn!("WiFi-reconnect: publish state failed: {:?}", e);
-                            }
-                        }
-                        break;
-                    }
-                    Err(e) => {
-                        // Exponential backoff: 5s, 10s, 20s, 40s, 60s, 60s, ...
-                        let backoff_secs = if wifi_attempt > 10 {
-                            60
-                        } else {
-                            crate::net_util::backoff_secs(wifi_attempt)
-                        };
-                        error!(
-                            "WiFi-reconnect MQTT attempt {} failed: {:?}, retrying in {}s",
-                            wifi_attempt, e, backoff_secs
-                        );
-                        // Publish alert after 3 attempts, throttled to once per 60s
-                        if wifi_attempt > 3 {
-                            let now = Instant::now();
-                            let should_alert = last_wifi_alert
-                                .map(|t| t.elapsed() >= Duration::from_secs(60))
-                                .unwrap_or(true);
-                            if should_alert {
-                                let json = alloc::format!(
-                                    r#"{{"level":"error","message":"wifi_reconnect_loop","attempts":{},"timestamp":{}}}"#,
-                                    wifi_attempt,
-                                    uptime_secs()
-                                );
-                                let payload = Vec::from(json.as_bytes());
-                                let _ = ALERT_CHANNEL.try_send(payload);
-                                last_wifi_alert = Some(now);
-                            }
-                        }
-                        if wifi_attempt >= 30 {
-                            error!(
-                                "WiFi reconnect exceeded 30 attempts, resetting device"
-                            );
-                            esp_hal::system::software_reset();
-                        }
-                        Timer::after(Duration::from_secs(backoff_secs)).await;
-                    }
+            let celsius = last_scale_range.map_or(false, |(s, _)| {
+                matches!(s, launa_protocol::status::TemperatureScale::Celsius)
+            });
+            let last_state = last_published_status.as_ref().map(|status| {
+                let fault_str = last_published_fault.as_ref().and_then(|f| f.as_str());
+                mqtt_client::LastState {
+                    status,
+                    fault: fault_str,
+                    self_test: last_self_test,
+                    sniff_mode: last_sniff_mode,
                 }
-            }
+            });
+            crate::net_util::reconnect_with_backoff(
+                &mut mqtt,
+                celsius,
+                last_state.as_ref(),
+                "wifi_reconnect_loop",
+                "WiFi reconnect exceeded 30 attempts, resetting device",
+            )
+            .await;
         }
 
         // Drain non-command channels with a bounding counter to prevent
@@ -352,70 +304,26 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                         warn!("MQTT connection lost ({}), attempting reconnect...", reason);
                         MQTT_RECONNECT_COUNT.fetch_add(1, Ordering::Relaxed);
                         MQTT_LOSS_COUNT.fetch_add(1, Ordering::Relaxed);
-                        let mut attempt: u32 = 0;
-                        let mut last_alert_time: Option<Instant> = None;
-                        loop {
-                            attempt += 1;
-                            match mqtt.reconnect().await {
-                                Ok(()) => {
-                                    info!("MQTT reconnected, re-publishing...");
-                                    let celsius = last_scale_range.map_or(false, |(s, _)| {
-                                        matches!(s, launa_protocol::status::TemperatureScale::Celsius)
-                                    });
-                                    if let Err(e) = mqtt.publish_availability(true).await {
-                                        warn!("MQTT reconnect: publish availability failed: {:?}", e);
-                                    }
-                                    if let Err(e) = mqtt.publish_discovery(celsius).await {
-                                        warn!("MQTT reconnect: publish discovery failed: {:?}", e);
-                                    }
-                                    if let Err(e) = mqtt.subscribe_commands().await {
-                                        warn!("MQTT reconnect: subscribe commands failed: {:?}", e);
-                                    }
-                                    // Re-publish last known state after reconnect
-                                    if let Some(ref status) = last_published_status {
-                                        let fault_str =
-                                            last_published_fault.as_ref().and_then(|f| f.as_str());
-                                        if let Err(e) = mqtt.publish_state(status, fault_str, last_self_test, last_sniff_mode, last_self_test).await {
-                                            warn!("MQTT reconnect: publish state failed: {:?}", e);
-                                        }
-                                    }
-                                    break;
-                                }
-                                Err(e) => {
-                                    // Exponential backoff: 5s, 10s, 20s, 40s, 60s, 60s, ...
-                                    let backoff_secs =
-                                        crate::net_util::backoff_secs(attempt);
-                                    error!(
-                                        "MQTT reconnect attempt {} failed: {:?}, retrying in {}s",
-                                        attempt, e, backoff_secs
-                                    );
-                                    // Publish alert after 3 attempts, throttled to once per 60s
-                                    if attempt > 3 {
-                                        let now = Instant::now();
-                                        let should_alert = last_alert_time
-                                            .map(|t| t.elapsed() >= Duration::from_secs(60))
-                                            .unwrap_or(true);
-                                        if should_alert {
-                                            let json = alloc::format!(
-                                                r#"{{"level":"error","message":"mqtt_reconnect_loop","attempts":{},"timestamp":{}}}"#,
-                                                attempt,
-                                                uptime_secs()
-                                            );
-                                            let payload = Vec::from(json.as_bytes());
-                                            let _ = ALERT_CHANNEL.try_send(payload);
-                                            last_alert_time = Some(now);
-                                        }
-                                    }
-                                    if attempt >= 30 {
-                                        error!(
-                                            "MQTT reconnect exceeded 30 attempts, resetting device"
-                                        );
-                                        esp_hal::system::software_reset();
-                                    }
-                                    Timer::after(Duration::from_secs(backoff_secs)).await;
-                                }
+                        let celsius = last_scale_range.map_or(false, |(s, _)| {
+                            matches!(s, launa_protocol::status::TemperatureScale::Celsius)
+                        });
+                        let last_state = last_published_status.as_ref().map(|status| {
+                            let fault_str = last_published_fault.as_ref().and_then(|f| f.as_str());
+                            mqtt_client::LastState {
+                                status,
+                                fault: fault_str,
+                                self_test: last_self_test,
+                                sniff_mode: last_sniff_mode,
                             }
-                        }
+                        });
+                        crate::net_util::reconnect_with_backoff(
+                            &mut mqtt,
+                            celsius,
+                            last_state.as_ref(),
+                            "mqtt_reconnect_loop",
+                            "MQTT reconnect exceeded 30 attempts, resetting device",
+                        )
+                        .await;
                     }
                 }
             }

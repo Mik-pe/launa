@@ -674,13 +674,6 @@ async fn connect_mqtt(
     }
 }
 
-/// Publish availability, discovery entities, and subscribe to command topics.
-async fn post_connect_setup(mqtt: &mut mqtt_client::MqttClient) {
-    let _ = mqtt.publish_availability(true).await;
-    let _ = mqtt.publish_discovery(false).await;
-    let _ = mqtt.subscribe_commands().await;
-}
-
 /// Mark firmware as valid (boot validation passed: WiFi + MQTT connected).
 fn validate_firmware(ota: &mut Option<ota::EspOta>) {
     use launa_ota::OtaUpdate;
@@ -799,7 +792,7 @@ async fn main(spawner: Spawner) {
     let mut mqtt = connect_mqtt(wifi_stack.stack, &app_config).await;
 
     // Fahrenheit default; mqtt_task will re-publish with correct scale after first status
-    post_connect_setup(&mut mqtt).await;
+    let _ = mqtt.post_connect_publish(false).await;
 
     validate_firmware(&mut ota);
 
