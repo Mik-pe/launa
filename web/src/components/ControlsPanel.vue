@@ -18,6 +18,12 @@ const emit = defineEmits<{
 function toggleItem(subtopic: string, currentVal: unknown): void {
   emit('toggle', subtopic, !currentVal)
 }
+
+/** Type-safe lookup for dynamically indexed SpaState properties. */
+function getSpaProp(s: SpaState | null | undefined, key: string): unknown {
+  if (!s) return undefined
+  return (s as Record<string, unknown>)[key]
+}
 </script>
 
 <template>
@@ -30,10 +36,10 @@ function toggleItem(subtopic: string, currentVal: unknown): void {
           v-for="i in 6" :key="'pump'+i"
           v-show="visibleControls['pump'+i] !== false"
           :label="'Pump ' + i"
-          :model-value="!!state?.['pump'+i+'_on']"
+          :model-value="!!getSpaProp(state, 'pump'+i+'_on')"
           :disabled="!connected"
           :pending="isPending('pump'+i+'_on')"
-          @update:model-value="toggleItem('pump'+i, state?.['pump'+i+'_on'])"
+          @update:model-value="toggleItem('pump'+i, getSpaProp(state, 'pump'+i+'_on'))"
           :icon="i <= 2 ? '🌀' : '⚙️'"
         />
       </div>
@@ -47,10 +53,10 @@ function toggleItem(subtopic: string, currentVal: unknown): void {
           v-for="i in 4" :key="'light'+i"
           v-show="visibleControls['light'+i] !== false"
           :label="'Light ' + i"
-          :model-value="!!state?.['light'+i]"
+          :model-value="!!getSpaProp(state, 'light'+i)"
           :disabled="!connected"
           :pending="isPending('light'+i)"
-          @update:model-value="toggleItem('light'+i, state?.['light'+i])"
+          @update:model-value="toggleItem('light'+i, getSpaProp(state, 'light'+i))"
           icon="💡"
         />
       </div>

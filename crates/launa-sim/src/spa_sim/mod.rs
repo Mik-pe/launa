@@ -76,7 +76,7 @@ pub struct SpaSim {
 
     // Simulation realism fields
     /// Maximum random padding bytes before status frame (0 = no jitter).
-    frame_jitter_ticks: u64,
+    jitter_padding_bytes: u64,
     /// Number of ticks to defer command state changes (0 = immediate).
     command_latency_ticks: u64,
     /// Pending commands waiting for their latency to expire.
@@ -150,7 +150,7 @@ impl SpaSim {
 
             pending_events: Vec::new(),
 
-            frame_jitter_ticks: 0,
+            jitter_padding_bytes: 0,
             command_latency_ticks: 0,
             pending_commands: Vec::new(),
             ready_interval_range: (1, 1),
@@ -360,11 +360,11 @@ impl SpaSim {
 
     /// Set the maximum number of random padding bytes to add before the status frame.
     ///
-    /// With `frame_jitter_ticks > 0`, each `tick()` adds 0..N random padding bytes
+    /// With `jitter_padding_bytes > 0`, each `tick()` adds 0..N random padding bytes
     /// before the status frame, simulating bus noise. Uses the existing LCG PRNG.
     /// Default: 0 (no jitter, identical to original behavior).
-    pub fn set_frame_jitter_ticks(&mut self, ticks: u64) {
-        self.frame_jitter_ticks = ticks;
+    pub fn set_jitter_padding_bytes(&mut self, max_bytes: u64) {
+        self.jitter_padding_bytes = max_bytes;
     }
 
     /// Set the number of ticks to defer command state changes.
@@ -444,11 +444,11 @@ impl SpaSim {
 
     /// Generate a random padding length in 0..max using the LCG PRNG.
     fn jitter_padding_len(&mut self) -> usize {
-        if self.frame_jitter_ticks == 0 {
+        if self.jitter_padding_bytes == 0 {
             return 0;
         }
         let rand_val = self.next_ready_rand();
-        (rand_val % self.frame_jitter_ticks) as usize
+        (rand_val % self.jitter_padding_bytes) as usize
     }
 
     /// Compute the next ready countdown value from the interval range.

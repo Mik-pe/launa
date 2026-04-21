@@ -101,11 +101,25 @@ impl Write for TcpTransport {
 const DEFAULT_KEEP_ALIVE_SECS: u16 = 30;
 const RX_BUFFER_MAX_SIZE: usize = 2048; // 2 KiB cap
 
+/// MQTT packet type constants (upper nibble of fixed header byte 1).
+const PACKET_PUBLISH: u8 = 3;
+const PACKET_PUBACK: u8 = 4;
+const PACKET_SUBACK: u8 = 9;
+const PACKET_PINGREQ: u8 = 12;
+const PACKET_PINGRESP: u8 = 13;
+const PACKET_DISCONNECT: u8 = 14;
+
+/// TCP socket buffer sizes for MQTT connections.
+const MQTT_SOCKET_BUF_SIZE: usize = 1024;
+
+/// Size of the stack-allocated read buffer used in the MQTT recv loop.
+const MQTT_RECV_BUF_SIZE: usize = 512;
+
 pub struct MqttClient {
     transport: Option<TcpTransport>,
     stack: &'static Stack<'static>,
-    socket_rx_buf: &'static UnsafeCell<[u8; 1024]>,
-    socket_tx_buf: &'static UnsafeCell<[u8; 1024]>,
+    socket_rx_buf: &'static UnsafeCell<[u8; MQTT_SOCKET_BUF_SIZE]>,
+    socket_tx_buf: &'static UnsafeCell<[u8; MQTT_SOCKET_BUF_SIZE]>,
     pub device_id: String,
     keep_alive: u16,
     config_host: String,
@@ -191,8 +205,8 @@ impl MqttClient {
     ) -> Result<Self, MqttError> {
         // Allocate socket buffers once — wrapped in UnsafeCell so we can safely
         // reborrow across reconnects without raw-pointer aliasing UB.
-        let socket_rx_buf = mk_static!(UnsafeCell<[u8; 1024]>, UnsafeCell::new([0u8; 1024]));
-        let socket_tx_buf = mk_static!(UnsafeCell<[u8; 1024]>, UnsafeCell::new([0u8; 1024]));
+        let socket_rx_buf = mk_static!(UnsafeCell<[u8; MQTT_SOCKET_BUF_SIZE]>, UnsafeCell::new([0u8; MQTT_SOCKET_BUF_SIZE]));
+        let socket_tx_buf = mk_static!(UnsafeCell<[u8; MQTT_SOCKET_BUF_SIZE]>, UnsafeCell::new([0u8; MQTT_SOCKET_BUF_SIZE]));
 
         // SAFETY: This is the first and only borrow of these newly-allocated
         // buffers. No other task or code path has access to them yet. The
@@ -549,8 +563,8 @@ impl MqttClient {
                 packet_type, remaining_len
             );
 
-            // Handle PINGREQ from broker (packet type 12) by sending PINGRESP
-            if packet_type == 12 {
+            // Handle PINGREQ from broker by sending PINGRESP
+            if packet_type == PACKET_PINGREQ {
                 let _ = self.send_bytes(&encode_pingresp()).await;
             }
         }
@@ -588,7 +602,7 @@ impl MqttClient {
             // we return to maybe_ping() at least every keep_alive/2 seconds
             // even when no data arrives, without relying on socket timeouts
             // (which can leave the socket in a bad state for writes).
-            let mut buf = [0u8; 512];
+            let mut buf = [0u8; MQTT_RECV_BUF_SIZE];
             let transport = match self.transport.as_mut() {
                 Some(t) => t,
                 None => {
@@ -648,7 +662,7 @@ impl MqttClient {
         let packet_type = packet[0] >> 4;
 
         match packet_type {
-            3 => {
+            PACKET_PUBLISH => {
                 let first_byte = packet[0];
                 let qos = (first_byte >> 1) & 0x03;
                 let (_remaining, header_size) = decode_remaining_length(packet)?;
@@ -683,14 +697,14 @@ impl MqttClient {
 
                 Some(Some((topic, payload)))
             }
-            4 => { debug!("MQTT PUBACK received"); Some(None) }
-            9 => { debug!("MQTT SUBACK received"); Some(None) }
-            13 => { debug!("MQTT PINGRESP"); Some(None) }
-            12 => {
+            PACKET_PUBACK => { debug!("MQTT PUBACK received"); Some(None) }
+            PACKET_SUBACK => { debug!("MQTT SUBACK received"); Some(None) }
+            PACKET_PINGRESP => { debug!("MQTT PINGRESP"); Some(None) }
+            PACKET_PINGREQ => {
                 let _ = self.send_bytes(&encode_pingresp()).await;
                 Some(None)
             }
-            14 => {
+            PACKET_DISCONNECT => {
                 // Broker-initiated DISCONNECT. Returning None (outer) causes
                 // recv() to signal connection loss, triggering the reconnect
                 // loop in mqtt_task.rs.

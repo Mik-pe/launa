@@ -193,7 +193,8 @@ pub(crate) fn generate_status_frame(
     // Offset 20: Set Temperature
     payload[20] = SpaState::encode_temp(state.set_temp, state.temp_scale);
 
-    let mut frame = FrameEncoder::encode([0xFF, 0xAF], &payload).unwrap();
+    let mut frame = FrameEncoder::encode([0xFF, 0xAF], &payload)
+        .expect("status frame encoding should never fail: payload is fixed 24 bytes");
 
     // Corrupt frame injection: flip a byte in the middle of the encoded frame
     // to guarantee a CRC mismatch on decode. Corrupting the end marker doesn't
@@ -212,17 +213,20 @@ pub(crate) fn generate_status_frame(
 
 /// Generate a `Ready` frame (`10 BF 06`).
 pub(crate) fn generate_ready_frame() -> Vec<u8> {
-    FrameEncoder::encode([0x10, 0xBF], &[0x06]).unwrap()
+    FrameEncoder::encode([0x10, 0xBF], &[0x06])
+        .expect("ready frame encoding should never fail: payload is 1 byte")
 }
 
 /// Generate a registration query (`FE BF 00`).
 pub(crate) fn generate_registration_query() -> Vec<u8> {
-    FrameEncoder::encode([0xFE, 0xBF], &[0x00]).unwrap()
+    FrameEncoder::encode([0xFE, 0xBF], &[0x00])
+        .expect("registration query encoding should never fail: payload is 1 byte")
 }
 
 /// Generate a client ID assignment (`FE BF 02 <ID>`).
 pub(crate) fn generate_client_id_assignment(id: u8) -> Vec<u8> {
-    FrameEncoder::encode([0xFE, 0xBF], &[0x02, id]).unwrap()
+    FrameEncoder::encode([0xFE, 0xBF], &[0x02, id])
+        .expect("client ID assignment encoding should never fail: payload is 2 bytes")
 }
 
 /// Generate a configuration response.
@@ -241,7 +245,8 @@ pub(crate) fn generate_config_response(
 
     let mut full_payload = vec![0x2E];
     full_payload.extend_from_slice(&config_payload);
-    FrameEncoder::encode([0x0A, 0xBF], &full_payload).unwrap()
+    FrameEncoder::encode([0x0A, 0xBF], &full_payload)
+        .expect("config response encoding should never fail")
 }
 
 /// Generate an information response.
@@ -265,7 +270,8 @@ pub(crate) fn generate_information_response(information_config: &InformationConf
 
     let mut full_payload = vec![0x24];
     full_payload.extend_from_slice(&info_data);
-    FrameEncoder::encode([0x0A, 0xBF], &full_payload).unwrap()
+    FrameEncoder::encode([0x0A, 0xBF], &full_payload)
+        .expect("information response encoding should never fail")
 }
 
 /// Convert a [`FaultLogConfig`] to the 10-byte wire representation.
@@ -307,20 +313,23 @@ pub(crate) fn generate_fault_log_response_for_entry(
             let sentinel_data: [u8; 10] = [0; 10];
             let mut full_payload = vec![0x28];
             full_payload.extend_from_slice(&sentinel_data);
-            return FrameEncoder::encode([0x0A, 0xBF], &full_payload).unwrap();
+            return FrameEncoder::encode([0x0A, 0xBF], &full_payload)
+                .expect("fault log sentinel encoding should never fail");
         }
         let cfg = &fault_log_entries[entry_number as usize - 1];
         let fault_data = fault_log_config_to_bytes(cfg);
         let mut full_payload = vec![0x28];
         full_payload.extend_from_slice(&fault_data);
-        return FrameEncoder::encode([0x0A, 0xBF], &full_payload).unwrap();
+        return FrameEncoder::encode([0x0A, 0xBF], &full_payload)
+            .expect("fault log entry encoding should never fail");
     }
     // Legacy single-entry mode
     let cfg = fault_log_config;
     let fault_data = fault_log_config_to_bytes(cfg);
     let mut full_payload = vec![0x28];
     full_payload.extend_from_slice(&fault_data);
-    FrameEncoder::encode([0x0A, 0xBF], &full_payload).unwrap()
+    FrameEncoder::encode([0x0A, 0xBF], &full_payload)
+        .expect("fault log legacy encoding should never fail")
 }
 
 /// Generate a filter cycles response.
@@ -347,5 +356,6 @@ pub(crate) fn generate_filter_cycles_response(
     ];
     let mut full_payload = vec![0x23];
     full_payload.extend_from_slice(&filter_data);
-    FrameEncoder::encode([0x0A, 0xBF], &full_payload).unwrap()
+    FrameEncoder::encode([0x0A, 0xBF], &full_payload)
+        .expect("filter cycles response encoding should never fail")
 }

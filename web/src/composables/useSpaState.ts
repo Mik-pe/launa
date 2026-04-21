@@ -17,8 +17,7 @@ const _stateKeyMap: Record<string, string> = {
 export function useSpaState() {
   const spaState = ref<SpaState | null>(null)
   const availability = ref('offline')
-  const diagnostics = ref<Record<string, unknown> | string | null>(null)
-  const alert_ = ref<string | null>(null)
+  const alertMessage = ref<string | null>(null)
   const pendingKeys = ref(new Set<string>())
   const selfTestEnabled = ref(false)
   const sniffEnabled = ref(false)
@@ -73,14 +72,8 @@ export function useSpaState() {
     } else if (topic === `${base}/availability`) {
       clearTimeout(reconnectingTimer!)
       availability.value = payload
-    } else if (topic === `${base}/diagnostics`) {
-      try {
-        diagnostics.value = JSON.parse(payload)
-      } catch {
-        diagnostics.value = payload
-      }
     } else if (topic === `${base}/alert`) {
-      alert_.value = payload
+      alertMessage.value = payload
     }
   }
 
@@ -130,8 +123,7 @@ export function useSpaState() {
   return {
     spaState,
     availability,
-    diagnostics,
-    alert: alert_,
+    alert: alertMessage,
     pendingKeys,
     selfTestEnabled,
     sniffEnabled,

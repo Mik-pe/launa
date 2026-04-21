@@ -93,7 +93,7 @@ fn test_frame_jitter_50_ticks_zero_frame_errors() {
     let mut harness = TestHarness::new();
 
     // Set frame jitter: add random padding bytes before each frame
-    harness.sim.set_frame_jitter_ticks(10);
+    harness.sim.set_jitter_padding_bytes(10);
 
     // Complete registration
     harness.complete_registration(5);
@@ -382,7 +382,7 @@ fn test_degraded_bus_100_ticks_stable() {
     let mut harness = TestHarness::new();
 
     // Configure combined degradation
-    harness.sim.set_frame_jitter_ticks(5);
+    harness.sim.set_jitter_padding_bytes(5);
     harness.sim.set_command_latency_ticks(2);
     harness.sim.set_ready_interval_range(3, 8);
     harness.sim.set_command_success_rate(0.7);
@@ -470,7 +470,7 @@ fn test_long_degraded_bus_200_ticks_with_recovery() {
     let mut harness = TestHarness::new();
 
     // Phase 1: Configure degraded conditions
-    harness.sim.set_frame_jitter_ticks(3);
+    harness.sim.set_jitter_padding_bytes(3);
     harness.sim.set_command_latency_ticks(2);
     harness.sim.set_ready_interval_range(1, 2);
     harness.sim.set_command_success_rate(0.7);
@@ -527,7 +527,7 @@ fn test_long_degraded_bus_200_ticks_with_recovery() {
     );
 
     // Phase 2: Normalize conditions — remove all degradation
-    harness.sim.set_frame_jitter_ticks(0);
+    harness.sim.set_jitter_padding_bytes(0);
     harness.sim.set_command_latency_ticks(0);
     harness.sim.set_ready_interval_range(1, 1);
     harness.sim.set_command_success_rate(1.0);
@@ -666,7 +666,7 @@ fn test_degraded_bus_500_ticks_stability() {
     let mut harness = TestHarness::new();
 
     // Configure heavy degradation
-    harness.sim.set_frame_jitter_ticks(3);
+    harness.sim.set_jitter_padding_bytes(3);
     harness.sim.set_command_latency_ticks(1);
     harness.sim.set_ready_interval_range(1, 3);
     harness.sim.set_command_success_rate(0.7);

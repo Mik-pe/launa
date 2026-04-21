@@ -125,7 +125,7 @@ fn test_frame_jitter_default_unchanged() {
     let mut sim = SpaSim::new();
     sim.registered = true;
 
-    // With default frame_jitter_ticks=0, both ticks produce the same structure
+    // With default jitter_padding_bytes=0, both ticks produce the same structure
     // (status frame + ready frame). Physics causes minor byte differences (clock),
     // so we verify structural equivalence: same number of decoded frames with same types.
     let bytes1 = sim.tick();
@@ -157,7 +157,7 @@ fn test_frame_jitter_default_unchanged() {
 fn test_frame_jitter_variable_padding() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.set_frame_jitter_ticks(10);
+    sim.set_jitter_padding_bytes(10);
 
     // Collect output from 50 ticks, verify at least 3 distinct lengths
     let mut lengths = std::collections::BTreeSet::new();
@@ -188,7 +188,7 @@ fn test_frame_jitter_variable_padding() {
 fn test_frame_jitter_no_decode_errors_over_50_ticks() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.set_frame_jitter_ticks(10);
+    sim.set_jitter_padding_bytes(10);
 
     let mut status_count = 0;
     let mut ready_count = 0;

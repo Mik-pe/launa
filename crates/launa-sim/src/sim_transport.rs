@@ -21,6 +21,8 @@ use std::collections::VecDeque;
 pub struct SimTransport {
     spa_to_controller: VecDeque<u8>,
     controller_to_spa: VecDeque<u8>,
+    /// When set, the next `read()` returns this error instead of data.
+    read_error: Option<TransportError>,
 }
 
 impl SimTransport {
@@ -28,6 +30,7 @@ impl SimTransport {
         SimTransport {
             spa_to_controller: VecDeque::new(),
             controller_to_spa: VecDeque::new(),
+            read_error: None,
         }
     }
 
@@ -50,10 +53,21 @@ impl SimTransport {
     pub fn has_outgoing(&self) -> bool {
         !self.controller_to_spa.is_empty()
     }
+
+    /// Inject a read error that will be returned on the next `read()` call.
+    ///
+    /// After the error is returned, subsequent reads resume normally.
+    /// This mirrors `MockTransport::set_read_error()` for integration testing.
+    pub fn set_read_error(&mut self) {
+        self.read_error = Some(TransportError::Io);
+    }
 }
 
 impl Transport for SimTransport {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, TransportError> {
+        if let Some(err) = self.read_error.take() {
+            return Err(err);
+        }
         let n = self.spa_to_controller.len().min(buf.len());
         for byte in buf.iter_mut().take(n) {
             *byte = self.spa_to_controller.pop_front().unwrap();
@@ -144,5 +158,22 @@ mod tests {
         let n = block_on(transport.read(&mut buf)).unwrap();
         assert_eq!(n, 2);
         assert_eq!(&buf[..2], &[4, 5]);
+    }
+
+    #[test]
+    fn test_read_error_injection() {
+        let mut transport = SimTransport::new();
+        transport.inject_from_spa(&[1, 2, 3]);
+
+        // Inject error — next read should fail
+        transport.set_read_error();
+        let mut buf = [0u8; 16];
+        let result = block_on(transport.read(&mut buf));
+        assert!(result.is_err(), "injected read error should return Err");
+
+        // Subsequent reads should work normally (error is one-shot)
+        let n = block_on(transport.read(&mut buf)).unwrap();
+        assert_eq!(n, 3, "should recover after one-shot error");
+        assert_eq!(&buf[..3], &[1, 2, 3]);
     }
 }

@@ -222,7 +222,7 @@ function handleTempRange(val: string): void {
         </template>
 
         <!-- Status tab -->
-        <StatusDashboard v-else-if="activeTab === 'status'" :spa-state="spaState" :connected="connected && availability === 'online'" />
+        <StatusDashboard v-else-if="activeTab === 'status'" :spa-state="spaState" :connected="connected && availability === 'online'" :visible-controls="visibleControls" />
 
         <!-- Temperature chart tab -->
         <TemperatureChart v-else-if="activeTab === 'temperature'" />

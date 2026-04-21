@@ -6,9 +6,11 @@ import LoadingSpinner from './LoadingSpinner.vue'
 const props = withDefaults(defineProps<{
   spaState: SpaState | null
   connected?: boolean
+  visibleControls?: Record<string, boolean>
 }>(), {
   spaState: null,
   connected: false,
+  visibleControls: () => ({}),
 })
 
 const status = computed(() => props.spaState)
@@ -18,20 +20,20 @@ const scale = computed(() => status.value?.temp_scale === 'celsius' ? 'C' : 'F')
 const components = computed(() => {
   if (!status.value) return []
   const s = status.value
-  return [
-    { label: 'Pump 1', on: !!s.pump1_on, icon: 'pump' },
-    { label: 'Pump 2', on: !!s.pump2_on, icon: 'pump' },
-    { label: 'Pump 3', on: !!s.pump3_on, icon: 'pump' },
-    { label: 'Pump 4', on: !!s.pump4_on, icon: 'pump' },
-    { label: 'Pump 5', on: !!s.pump5_on, icon: 'pump' },
-    { label: 'Pump 6', on: !!s.pump6_on, icon: 'pump' },
-    { label: 'Light 1', on: !!s.light1, icon: 'light' },
-    { label: 'Light 2', on: !!s.light2, icon: 'light' },
-    { label: 'Blower', on: !!s.blower, icon: 'blower' },
-    { label: 'Circ Pump', on: !!s.circ_pump, icon: 'pump' },
-    { label: 'Mister', on: !!s.mister, icon: 'mister' },
-    { label: 'Hold Mode', on: !!s.hold_mode, icon: 'hold' },
-  ]
+  const vc = props.visibleControls
+  const items: { label: string; on: boolean; icon: string }[] = []
+  for (let i = 1; i <= 6; i++) {
+    if (vc['pump' + i] !== false) {
+      items.push({ label: `Pump ${i}`, on: !!s[`pump${i}_on` as keyof SpaState], icon: 'pump' })
+    }
+  }
+  if (vc['light1'] !== false) items.push({ label: 'Light 1', on: !!s.light1, icon: 'light' })
+  if (vc['light2'] !== false) items.push({ label: 'Light 2', on: !!s.light2, icon: 'light' })
+  if (vc['blower'] !== false) items.push({ label: 'Blower', on: !!s.blower, icon: 'blower' })
+  items.push({ label: 'Circ Pump', on: !!s.circ_pump, icon: 'pump' })
+  if (vc['mister'] !== false) items.push({ label: 'Mister', on: !!s.mister, icon: 'mister' })
+  items.push({ label: 'Hold Mode', on: !!s.hold_mode, icon: 'hold' })
+  return items
 })
 
 const infoRows = computed(() => {

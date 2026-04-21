@@ -1,4 +1,7 @@
 /// Network abstraction for WiFi + TCP connectivity.
+///
+/// Only available with the `std` feature (for desktop testing).
+/// The ESP32 app uses `embassy-net` directly instead of this trait.
 pub trait Network {
     fn connect_wifi(&mut self, ssid: &str, password: &str) -> Result<(), NetworkError>;
     fn is_connected(&self) -> bool;

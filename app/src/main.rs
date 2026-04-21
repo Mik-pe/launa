@@ -72,9 +72,10 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     uart_raw::flush();
 
     // Busy-wait ~500ms to allow UART TX to fully transmit.
+    /// Approximate iterations for ~500ms delay at 240 MHz with loop overhead.
+    const PANIC_DELAY_ITERATIONS: u32 = 5_000_000;
     let mut counter: u32 = 0;
-    let iterations = 5_000_000; // ~500ms at 240 MHz with overhead
-    while counter < iterations {
+    while counter < PANIC_DELAY_ITERATIONS {
         counter += 1;
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     }

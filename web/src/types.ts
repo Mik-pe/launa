@@ -26,7 +26,6 @@ export interface SpaState {
   last_fault?: string
   self_test?: boolean
   sniff_mode?: boolean
-  [key: string]: unknown
 }
 
 export interface MqttSettings {

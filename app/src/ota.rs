@@ -44,21 +44,31 @@ pub fn create_ota(flash: esp_storage::FlashStorage<'static>) -> EspOta {
 /// Maximum size for HTTP response headers. Prevents OOM from malicious servers.
 const MAX_HEADER_SIZE: usize = 4096;
 
+/// TCP socket buffer sizes for OTA connections.
+const OTA_SOCKET_RX_BUF_SIZE: usize = 4096;
+const OTA_SOCKET_TX_BUF_SIZE: usize = 1024;
+
+/// HTTP response body read buffer size.
+const HTTP_READ_BUF_SIZE: usize = 1024;
+
+/// OTA partition size in bytes (matches partitions.csv).
+const APP_PARTITION_SIZE: u32 = 0x140000;
+
 /// TCP socket buffers for OTA, allocated once and reused across attempts.
 ///
 /// Without this, every `perform_ota_update` call would allocate 5 KiB via
 /// `mk_static!` that is never reclaimed on failure (the device doesn't reboot),
 /// permanently shrinking the 32 KiB heap.
 pub struct OtaBuffers {
-    rx_buf: &'static mut [u8; 4096],
-    tx_buf: &'static mut [u8; 1024],
+    rx_buf: &'static mut [u8; OTA_SOCKET_RX_BUF_SIZE],
+    tx_buf: &'static mut [u8; OTA_SOCKET_TX_BUF_SIZE],
 }
 
 impl OtaBuffers {
     /// Allocate the OTA TCP socket buffers. Call once at startup.
     pub fn new() -> Self {
-        let rx_buf = mk_static!([u8; 4096], [0u8; 4096]);
-        let tx_buf = mk_static!([u8; 1024], [0u8; 1024]);
+        let rx_buf = mk_static!([u8; OTA_SOCKET_RX_BUF_SIZE], [0u8; OTA_SOCKET_RX_BUF_SIZE]);
+        let tx_buf = mk_static!([u8; OTA_SOCKET_TX_BUF_SIZE], [0u8; OTA_SOCKET_TX_BUF_SIZE]);
         Self { rx_buf, tx_buf }
     }
 }
@@ -101,9 +111,9 @@ pub async fn perform_ota_update(
     // SAFETY: We are the only task accessing these buffers. The previous
     // TcpSocket (if any) was dropped at the end of the last call.
     let rx: &'static mut [u8] =
-        unsafe { &mut *(buffers.rx_buf as *mut [u8; 4096] as *mut [u8]) };
+        unsafe { &mut *(buffers.rx_buf as *mut [u8; OTA_SOCKET_RX_BUF_SIZE] as *mut [u8]) };
     let tx: &'static mut [u8] =
-        unsafe { &mut *(buffers.tx_buf as *mut [u8; 1024] as *mut [u8]) };
+        unsafe { &mut *(buffers.tx_buf as *mut [u8; OTA_SOCKET_TX_BUF_SIZE] as *mut [u8]) };
     let mut socket = TcpSocket::new(*stack, rx, tx);
     socket.set_timeout(Some(Duration::from_secs(30)));
 
@@ -140,7 +150,7 @@ pub async fn perform_ota_update(
     }
 
     // Read response headers and validate HTTP status before erasing partition
-    let mut buf = [0u8; 1024];
+    let mut buf = [0u8; HTTP_READ_BUF_SIZE];
     // Fixed-size stack buffer for HTTP headers (up to MAX_HEADER_SIZE = 4096 bytes).
     // Replaces Vec::new() to avoid a 4 KiB heap allocation on the 32 KiB ESP32 heap.
     let mut header_buf = [0u8; MAX_HEADER_SIZE];
@@ -189,8 +199,7 @@ pub async fn perform_ota_update(
 
             // Validate Content-Length against partition size
             if let Some(content_length) = parse_content_length(&header_buf[..header_len]) {
-                let partition_size = 0x140000u32; // OTA partition size (matches partitions.csv)
-                if content_length > partition_size {
+                if content_length > APP_PARTITION_SIZE {
                     error!(
                         "OTA: Content-Length {} exceeds partition size {}",
                         content_length, partition_size
@@ -200,7 +209,7 @@ pub async fn perform_ota_update(
                 }
                 info!(
                     "OTA: Content-Length {} bytes (partition size {})",
-                    content_length, partition_size
+                    content_length, APP_PARTITION_SIZE
                 );
             } else {
                 info!("OTA: no Content-Length header, skipping size validation");
@@ -291,9 +300,9 @@ pub async fn tcp_test(
 
     // Reuse pre-allocated TCP socket buffers (same pattern as perform_ota_update)
     let rx: &'static mut [u8] =
-        unsafe { &mut *(buffers.rx_buf as *mut [u8; 4096] as *mut [u8]) };
+        unsafe { &mut *(buffers.rx_buf as *mut [u8; OTA_SOCKET_RX_BUF_SIZE] as *mut [u8]) };
     let tx: &'static mut [u8] =
-        unsafe { &mut *(buffers.tx_buf as *mut [u8; 1024] as *mut [u8]) };
+        unsafe { &mut *(buffers.tx_buf as *mut [u8; OTA_SOCKET_TX_BUF_SIZE] as *mut [u8]) };
     let mut socket = TcpSocket::new(*stack, rx, tx);
     socket.set_timeout(Some(Duration::from_secs(10)));
 
@@ -333,7 +342,7 @@ pub async fn tcp_test(
     }
     info!("TCP_TEST: request sent, waiting for response");
 
-    let mut buf = [0u8; 512];
+    let mut buf = [0u8; HTTP_READ_BUF_SIZE];
     let mut total_read: usize = 0;
 
     loop {
@@ -355,7 +364,7 @@ pub async fn tcp_test(
         total_read += n;
 
         // Stop after filling the buffer or reading ~512 bytes
-        if total_read >= 512 {
+        if total_read >= HTTP_READ_BUF_SIZE {
             info!("TCP_TEST: buffer full ({} bytes), stopping read", total_read);
             break;
         }

@@ -55,7 +55,7 @@ fn test_corrupt_frame_injection() {
 fn test_jitter_and_latency_together() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.set_frame_jitter_ticks(5);
+    sim.set_jitter_padding_bytes(5);
     sim.set_command_latency_ticks(2);
 
     let (mt, payload) =
@@ -89,7 +89,7 @@ fn test_jitter_and_latency_together() {
 fn test_all_three_features_together() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.set_frame_jitter_ticks(3);
+    sim.set_jitter_padding_bytes(3);
     sim.set_command_latency_ticks(1);
     sim.set_ready_interval_range(1, 3);
 
@@ -144,7 +144,7 @@ fn test_combined_degraded_bus_500_ticks() {
     sim.state.pumps[0] = PumpState::Low;
 
     // Enable ALL degradation features
-    sim.set_frame_jitter_ticks(5);
+    sim.set_jitter_padding_bytes(5);
     sim.set_command_latency_ticks(2);
     sim.set_command_success_rate(0.7);
     sim.set_ready_interval_range(2, 4);
@@ -205,7 +205,7 @@ fn test_combined_degraded_bus_commands_eventually_deliver() {
     sim.state.pumps[0] = PumpState::Off;
     sim.set_command_latency_ticks(2);
     sim.set_command_success_rate(0.7);
-    sim.set_frame_jitter_ticks(3);
+    sim.set_jitter_padding_bytes(3);
     sim.set_ready_interval_range(1, 2);
 
     // Send toggle pump1 command

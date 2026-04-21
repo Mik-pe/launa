@@ -37,7 +37,6 @@ export function useMqtt() {
       const base = `launa/${conn.settings.value.deviceId}`
       c.subscribe(`${base}/state`)
       c.subscribe(`${base}/availability`)
-      c.subscribe(`${base}/diagnostics`)
       c.subscribe(`${base}/alert`)
     })
 
@@ -75,7 +74,6 @@ export function useMqtt() {
     retryCount: conn.retryCount,
     spaState: spa.spaState,
     availability: spa.availability,
-    diagnostics: spa.diagnostics,
     alert: spa.alert,
     settings: conn.settings,
     saveSettings,
