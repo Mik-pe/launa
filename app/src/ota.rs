@@ -202,7 +202,7 @@ pub async fn perform_ota_update(
                 if content_length > APP_PARTITION_SIZE {
                     error!(
                         "OTA: Content-Length {} exceeds partition size {}",
-                        content_length, partition_size
+                        content_length, APP_PARTITION_SIZE
                     );
                     ota_rollback(ota);
                     return Err(());
