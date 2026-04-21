@@ -473,6 +473,19 @@ impl SpaSim {
         }
     }
 
+    /// Decrement the ready-frame countdown and emit a Ready frame if the countdown reaches zero.
+    ///
+    /// After emitting, the countdown is reset to the next randomized interval.
+    fn maybe_emit_ready(&mut self, output: &mut Vec<u8>) {
+        if self.ready_countdown > 0 {
+            self.ready_countdown -= 1;
+        }
+        if self.ready_countdown == 0 {
+            output.extend_from_slice(&self.generate_ready_frame());
+            self.ready_countdown = self.next_ready_interval();
+        }
+    }
+
     /// Process pending deferred commands, decrementing timers and applying expired ones.
     fn process_pending_commands(&mut self) {
         let mut i = 0;
@@ -563,14 +576,7 @@ impl SpaSim {
                 // Split point past end: emit full frame normally (edge case)
                 output.extend_from_slice(&status_bytes);
 
-                // Send ready indicator at randomized intervals
-                if self.ready_countdown > 0 {
-                    self.ready_countdown -= 1;
-                }
-                if self.ready_countdown == 0 {
-                    output.extend_from_slice(&self.generate_ready_frame());
-                    self.ready_countdown = self.next_ready_interval();
-                }
+                self.maybe_emit_ready(&mut output);
             } else {
                 // Split in the middle: emit first N bytes now, store remainder for next tick
                 output.extend_from_slice(&status_bytes[..split_point]);
@@ -582,25 +588,11 @@ impl SpaSim {
             output.extend_from_slice(&status_bytes);
             output.extend_from_slice(&status_bytes);
 
-            // Send ready indicator at randomized intervals
-            if self.ready_countdown > 0 {
-                self.ready_countdown -= 1;
-            }
-            if self.ready_countdown == 0 {
-                output.extend_from_slice(&self.generate_ready_frame());
-                self.ready_countdown = self.next_ready_interval();
-            }
+            self.maybe_emit_ready(&mut output);
         } else {
             output.extend_from_slice(&status_bytes);
 
-            // Send ready indicator at randomized intervals
-            if self.ready_countdown > 0 {
-                self.ready_countdown -= 1;
-            }
-            if self.ready_countdown == 0 {
-                output.extend_from_slice(&self.generate_ready_frame());
-                self.ready_countdown = self.next_ready_interval();
-            }
+            self.maybe_emit_ready(&mut output);
         }
 
         output

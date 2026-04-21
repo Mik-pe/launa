@@ -27,6 +27,7 @@ pub mod fault;
 pub mod filter;
 pub mod frame;
 pub mod information;
+pub mod pump_bits;
 pub mod registration;
 pub mod status;
 

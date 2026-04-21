@@ -83,7 +83,7 @@ fn random_nonce(rng: &mut Rng) -> [u8; 12] {
 }
 
 /// Convert a byte slice to a lowercase hex string.
-fn to_hex(bytes: &[u8]) -> String {
+pub(crate) fn to_hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for &b in bytes {
         let hi = (b >> 4) & 0x0f;

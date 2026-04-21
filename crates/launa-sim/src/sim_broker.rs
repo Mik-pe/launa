@@ -22,6 +22,8 @@ use alloc::vec::Vec;
 use launa_mqtt::topics::TopicBuilder;
 use std::collections::{HashMap, HashSet};
 
+use crate::lcg::lcg_next;
+
 /// A mock MQTT broker that records all publications for test verification.
 ///
 /// All features default to off, preserving identical behavior to the original
@@ -167,11 +169,7 @@ impl SimBroker {
 
     /// Simple LCG PRNG roll for loss rate. Returns true if this message should be dropped.
     fn loss_roll(&mut self) -> bool {
-        // LCG: x = x * 6364136223846793005 + 1442695040888963407
-        self.loss_rng_state = self
-            .loss_rng_state
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(14_426_950_408_889_634_07);
+        lcg_next(&mut self.loss_rng_state);
         // Use lower 16 bits mapped to [0, 1)
         let fraction = (self.loss_rng_state as u16) as f32 / (u16::MAX as f32);
         fraction < self.loss_rate

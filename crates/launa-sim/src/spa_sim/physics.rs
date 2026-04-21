@@ -6,6 +6,7 @@
 use launa_protocol::status::PumpState;
 
 use super::state::SpaState;
+use crate::lcg::lcg_next;
 
 /// Context needed to run one physics tick.
 ///
@@ -136,9 +137,7 @@ pub(crate) fn simulate_physics(state: &mut SpaState, ctx: &mut PhysicsContext) {
 
 /// Generate a deterministic pseudo-random f32 in [-1.0, 1.0] using a PRNG state.
 pub(crate) fn next_physics_noise_rand(rng: &mut u64) -> f32 {
-    *rng = rng
-        .wrapping_mul(6364136223846793005)
-        .wrapping_add(1442695040888963407);
+    lcg_next(rng);
     // Map u64 to [-1.0, 1.0]
     let normalized = (*rng as i64 as f64 / i64::MAX as f64) as f32;
     normalized
@@ -146,8 +145,5 @@ pub(crate) fn next_physics_noise_rand(rng: &mut u64) -> f32 {
 
 /// Generate a deterministic pseudo-random u64 using a PRNG state.
 pub(crate) fn next_rand(rng: &mut u64) -> u64 {
-    *rng = rng
-        .wrapping_mul(6364136223846793005)
-        .wrapping_add(1442695040888963407);
-    *rng
+    lcg_next(rng)
 }

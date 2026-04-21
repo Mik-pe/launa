@@ -268,6 +268,22 @@ pub(crate) fn generate_information_response(information_config: &InformationConf
     FrameEncoder::encode([0x0A, 0xBF], &full_payload).unwrap()
 }
 
+/// Convert a [`FaultLogConfig`] to the 10-byte wire representation.
+fn fault_log_config_to_bytes(cfg: &FaultLogConfig) -> [u8; 10] {
+    [
+        cfg.fault_count,
+        cfg.entry_number,
+        cfg.message_code.code(),
+        cfg.days_ago,
+        cfg.hour,
+        cfg.minute,
+        cfg.flags,
+        cfg.set_temperature,
+        cfg.sensor_a_temp,
+        cfg.sensor_b_temp,
+    ]
+}
+
 /// Generate a fault log response (entry 1 by default).
 pub(crate) fn generate_fault_log_response(fault_log_config: &FaultLogConfig) -> Vec<u8> {
     generate_fault_log_response_for_entry(fault_log_config, &[], 1)
@@ -294,36 +310,14 @@ pub(crate) fn generate_fault_log_response_for_entry(
             return FrameEncoder::encode([0x0A, 0xBF], &full_payload).unwrap();
         }
         let cfg = &fault_log_entries[entry_number as usize - 1];
-        let fault_data: [u8; 10] = [
-            cfg.fault_count,
-            cfg.entry_number,
-            cfg.message_code.code(),
-            cfg.days_ago,
-            cfg.hour,
-            cfg.minute,
-            cfg.flags,
-            cfg.set_temperature,
-            cfg.sensor_a_temp,
-            cfg.sensor_b_temp,
-        ];
+        let fault_data = fault_log_config_to_bytes(cfg);
         let mut full_payload = vec![0x28];
         full_payload.extend_from_slice(&fault_data);
         return FrameEncoder::encode([0x0A, 0xBF], &full_payload).unwrap();
     }
     // Legacy single-entry mode
     let cfg = fault_log_config;
-    let fault_data: [u8; 10] = [
-        cfg.fault_count,
-        cfg.entry_number,
-        cfg.message_code.code(),
-        cfg.days_ago,
-        cfg.hour,
-        cfg.minute,
-        cfg.flags,
-        cfg.set_temperature,
-        cfg.sensor_a_temp,
-        cfg.sensor_b_temp,
-    ];
+    let fault_data = fault_log_config_to_bytes(cfg);
     let mut full_payload = vec![0x28];
     full_payload.extend_from_slice(&fault_data);
     FrameEncoder::encode([0x0A, 0xBF], &full_payload).unwrap()

@@ -265,20 +265,7 @@ async fn execute_actions(actions: &[AppAction], device_id: &str, self_test: bool
 /// Formats the frame as JSON matching the sniffer protocol:
 /// `{"raw":"<hex>","type":"<MT>","len":<N>,"crc_ok":<bool>}`
 fn publish_sniff_frame(frame: &Frame) {
-    // Stack-based hex formatting (same approach as sniff.rs HexBuf)
-    let mut hex_buf = [0u8; 512];
-    let mut hex_len = 0;
-    for &b in &frame.payload {
-        if hex_len + 2 > hex_buf.len() {
-            break;
-        }
-        let hi = b >> 4;
-        let lo = b & 0x0F;
-        hex_buf[hex_len] = if hi < 10 { b'0' + hi } else { b'A' + hi - 10 };
-        hex_buf[hex_len + 1] = if lo < 10 { b'0' + lo } else { b'A' + lo - 10 };
-        hex_len += 2;
-    }
-    let hex_str = unsafe { core::str::from_utf8_unchecked(&hex_buf[..hex_len]) };
+    let hex_str = crypto::to_hex(&frame.payload);
 
     let mt = alloc::format!(
         "{:02X}{:02X}",
