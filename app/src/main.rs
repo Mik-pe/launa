@@ -298,6 +298,7 @@ async fn handle_mqtt_command(
     self_test_state: &mut Option<self_test::SelfTestState>,
     sniff_mode: &mut bool,
     device_id: &str,
+    self_test_last_publish: &mut Option<Instant>,
 ) {
     match cmd {
         Command::SelfTest(enable) => {
@@ -305,6 +306,8 @@ async fn handle_mqtt_command(
                 if self_test_state.is_none() {
                     info!("Self-test mode enabled");
                     *self_test_state = Some(self_test::SelfTestState::new());
+                    // Reset publish timer so first status is published immediately
+                    *self_test_last_publish = None;
                 }
             } else {
                 if self_test_state.is_some() {
@@ -668,7 +671,7 @@ async fn main(spawner: Spawner) {
     let mut self_test_state: Option<self_test::SelfTestState> = None;
     let mut sniff_mode: bool = false;
     let mut self_test_last_publish: Option<Instant> = None;
-    const SELF_TEST_PUBLISH_INTERVAL_SECS: u64 = 5;
+    const SELF_TEST_PUBLISH_INTERVAL_SECS: u64 = 1;
 
     let tick_interval = Duration::from_secs(1);
 
@@ -706,7 +709,7 @@ async fn main(spawner: Spawner) {
             }
             // MQTT command received
             Either::Second(Either::First(cmd)) => {
-                handle_mqtt_command(cmd, &mut app, &mut self_test_state, &mut sniff_mode, device_id_str).await;
+                handle_mqtt_command(cmd, &mut app, &mut self_test_state, &mut sniff_mode, device_id_str, &mut self_test_last_publish).await;
             }
             // Tick timer expired
             Either::Second(Either::Second(_)) => {}
@@ -714,7 +717,7 @@ async fn main(spawner: Spawner) {
 
         // Drain MQTT commands (non-blocking)
         while let Ok(cmd) = cmd_rx.try_receive() {
-            handle_mqtt_command(cmd, &mut app, &mut self_test_state, &mut sniff_mode, device_id_str).await;
+            handle_mqtt_command(cmd, &mut app, &mut self_test_state, &mut sniff_mode, device_id_str, &mut self_test_last_publish).await;
         }
 
         // In self-test mode, tick the simulator and publish status periodically

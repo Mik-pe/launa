@@ -120,8 +120,8 @@ pub(crate) fn simulate_physics(state: &mut SpaState, ctx: &mut PhysicsContext) {
                 state.is_heating = true;
                 ctx.heating_overshot = false;
             }
-        } else if state.current_temp < overshoot_target && !state.is_heating {
-            // Normal case: heat if below target and not already heating
+        } else if state.current_temp < set_temp && !state.is_heating {
+            // Only start heating when below set point (not above it)
             state.is_heating = true;
         }
     }

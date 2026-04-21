@@ -641,11 +641,11 @@ impl MqttClient {
         }
     }
 
-    pub async fn publish_state(&mut self, status: &StatusUpdate, last_fault: Option<&str>, self_test: bool, sniff_mode: bool) -> Result<(), MqttError> {
+    pub async fn publish_state(&mut self, status: &StatusUpdate, last_fault: Option<&str>, self_test: bool, sniff_mode: bool, retain: bool) -> Result<(), MqttError> {
         let topics = TopicBuilder::new(&self.device_id);
         let state_topic = topics.state_topic();
         let json = status_to_json(status, last_fault, Some(crate::FIRMWARE_VERSION), self_test, sniff_mode);
-        self.publish(&state_topic, json.as_bytes(), 1, false).await
+        self.publish(&state_topic, json.as_bytes(), 1, retain).await
     }
 
     pub async fn publish_availability(&mut self, online: bool) -> Result<(), MqttError> {

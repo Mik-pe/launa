@@ -13,6 +13,7 @@
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
+use embassy_futures::select::{select, Either};
 use embassy_time::{Duration, Instant, Timer};
 use launa_protocol::status::StatusUpdate;
 use log::{error, info, warn};
@@ -76,7 +77,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                         if let Some(ref status) = last_published_status {
                             let fault_str =
                                 last_published_fault.as_ref().and_then(|f| f.as_str());
-                            if let Err(e) = mqtt.publish_state(status, fault_str, last_self_test, last_sniff_mode).await {
+                            if let Err(e) = mqtt.publish_state(status, fault_str, last_self_test, last_sniff_mode, last_self_test).await {
                                 warn!("WiFi-reconnect: publish state failed: {:?}", e);
                             }
                         }
@@ -216,7 +217,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 if is_stale || changed {
                     last_published_status = Some(status.clone());
                     last_published_fault = Some(fault);
-                    if let Err(e) = mqtt.publish_state(&status, fault.as_str(), self_test, sniff_mode).await {
+                    if let Err(e) = mqtt.publish_state(&status, fault.as_str(), self_test, sniff_mode, self_test).await {
                         warn!("MQTT state publish failed: {:?}", e);
                     }
                 }
@@ -233,176 +234,190 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
             }
         }
 
-        // Check for incoming MQTT messages
-        match mqtt.recv().await {
-            Some((topic, payload)) => {
-                info!("MQTT received: {} ({} bytes)", topic, payload.len());
+        // Check for incoming MQTT messages, with a 1-second timeout so we
+        // re-check the channels above even when no MQTT messages arrive.
+        // Without this timeout, self-test status updates queued in
+        // STATE_CHANNEL would never be published because recv() blocks
+        // until the next inbound MQTT packet.
+        match select(mqtt.recv(), Timer::after(Duration::from_secs(1))).await {
+            Either::First(result) => {
+                // Got an MQTT message — process it below
+                match result {
+                    Some((topic, payload)) => {
+                        info!("MQTT received: {} ({} bytes)", topic, payload.len());
 
-                // Handle OTA commands
-                if mqtt.is_ota_topic(&topic) {
-                    if let Some(url) = mqtt_client::MqttClient::parse_ota_url(&payload) {
-                        info!("OTA firmware URL: {}", url);
-                        // Graceful shutdown before OTA reboot
-                        info!("OTA: graceful shutdown — publishing offline...");
-                        let _ = mqtt.publish_availability(false).await;
-                        info!("OTA: sending MQTT DISCONNECT...");
-                        mqtt.disconnect().await;
-                        info!("OTA: draining UART TX channel...");
-                        while UART_TX_CHANNEL.try_receive().is_ok() {
-                            // Drain pending UART writes
-                        }
-                        // Allow time for in-flight UART bytes to complete
-                        Timer::after(Duration::from_millis(50)).await;
-                        info!("OTA: shutdown complete, sending URL to main loop");
-                        ota_tx.send(url).await;
-                        // Do NOT reconnect — the main loop needs the TCP socket for OTA download.
-                        // The device will reset after OTA completes (or the main loop handles failure).
-                        info!("OTA: MQTT task idle, waiting for device reset");
-                        loop {
-                            Timer::after(Duration::from_secs(60)).await;
-                        }
-                    } else {
-                        warn!("Invalid OTA payload");
-                    }
-                    continue;
-                }
-
-                // Handle HA status (re-publish discovery when HA restarts)
-                if mqtt.is_ha_status_topic(&topic) {
-                    let status = core::str::from_utf8(&payload).unwrap_or("");
-                    if status == "online" {
-                        info!("Home Assistant came online, re-publishing discovery");
-                        let celsius = last_scale_range.map_or(false, |(s, _)| {
-                            matches!(s, launa_protocol::status::TemperatureScale::Celsius)
-                        });
-                        if let Err(e) = mqtt.publish_discovery(celsius).await {
-                            warn!("HA status: publish discovery failed: {:?}", e);
-                        }
-                        if let Err(e) = mqtt.publish_availability(true).await {
-                            warn!("HA status: publish availability failed: {:?}", e);
-                        }
-                    }
-                    continue;
-                }
-
-                // Handle self-test toggle command
-                let self_test_subtopic = alloc::format!("{}/self_test", cmd_base);
-                if topic == self_test_subtopic {
-                    let payload_str = core::str::from_utf8(&payload).unwrap_or("");
-                    let enable = matches!(payload_str, "ON" | "on" | "1" | "true" | "TRUE");
-                    info!("MQTT self-test command: {}", if enable { "ON" } else { "OFF" });
-                    cmd_sender.send(Command::SelfTest(enable)).await;
-                    continue;
-                }
-
-                // Handle sniff mode toggle command
-                let sniff_subtopic = alloc::format!("{}/sniff", cmd_base);
-                if topic == sniff_subtopic {
-                    let payload_str = core::str::from_utf8(&payload).unwrap_or("");
-                    let enable = matches!(payload_str, "ON" | "on" | "1" | "true" | "TRUE");
-                    info!("MQTT sniff mode command: {}", if enable { "ON" } else { "OFF" });
-                    cmd_sender.send(Command::Sniff(enable)).await;
-                    continue;
-                }
-
-                // Handle commands and pump timers (with rate limiting)
-                let (scale, range) = match last_scale_range {
-                    Some((s, r)) => (Some(s), Some(r)),
-                    None => (None, None),
-                };
-                if let Some(action) =
-                    mqtt_client::parse_command(&cmd_base, &topic, &payload, scale, range)
-                {
-                    match action {
-                        mqtt_client::MqttAction::Command(cmd) => {
-                            if mqtt.check_rate_limit() {
-                                info!("MQTT command: {:?}", cmd);
-                                cmd_sender.send(cmd).await;
+                        // Handle OTA commands
+                        if mqtt.is_ota_topic(&topic) {
+                            if let Some(url) = mqtt_client::MqttClient::parse_ota_url(&payload) {
+                                info!("OTA firmware URL: {}", url);
+                                // Graceful shutdown before OTA reboot
+                                info!("OTA: graceful shutdown — publishing offline...");
+                                let _ = mqtt.publish_availability(false).await;
+                                info!("OTA: sending MQTT DISCONNECT...");
+                                mqtt.disconnect().await;
+                                info!("OTA: draining UART TX channel...");
+                                while UART_TX_CHANNEL.try_receive().is_ok() {
+                                    // Drain pending UART writes
+                                }
+                                // Allow time for in-flight UART bytes to complete
+                                Timer::after(Duration::from_millis(50)).await;
+                                info!("OTA: shutdown complete, sending URL to main loop");
+                                ota_tx.send(url).await;
+                                // Do NOT reconnect — the main loop needs the TCP socket for OTA download.
+                                // The device will reset after OTA completes (or the main loop handles failure).
+                                info!("OTA: MQTT task idle, waiting for device reset");
+                                loop {
+                                    Timer::after(Duration::from_secs(60)).await;
+                                }
+                            } else {
+                                warn!("Invalid OTA payload");
                             }
-                            // Rate-limited commands are silently dropped (warn logged in check_rate_limit)
+                            continue;
                         }
-                        mqtt_client::MqttAction::StartPumpTimer { pump, minutes } => {
-                            info!("MQTT pump timer: pump {} for {} min", pump, minutes);
-                            PUMP_TIMER_CHANNEL.send((pump, minutes)).await;
+
+                        // Handle HA status (re-publish discovery when HA restarts)
+                        if mqtt.is_ha_status_topic(&topic) {
+                            let status = core::str::from_utf8(&payload).unwrap_or("");
+                            if status == "online" {
+                                info!("Home Assistant came online, re-publishing discovery");
+                                let celsius = last_scale_range.map_or(false, |(s, _)| {
+                                    matches!(s, launa_protocol::status::TemperatureScale::Celsius)
+                                });
+                                if let Err(e) = mqtt.publish_discovery(celsius).await {
+                                    warn!("HA status: publish discovery failed: {:?}", e);
+                                }
+                                if let Err(e) = mqtt.publish_availability(true).await {
+                                    warn!("HA status: publish availability failed: {:?}", e);
+                                }
+                            }
+                            continue;
                         }
-                        mqtt_client::MqttAction::SelfTest(_) => {
-                            // Handled above before parse_command; unreachable here
+
+                        // Handle self-test toggle command
+                        let self_test_subtopic = alloc::format!("{}/self_test", cmd_base);
+                        if topic == self_test_subtopic {
+                            let payload_str = core::str::from_utf8(&payload).unwrap_or("");
+                            let enable = matches!(payload_str, "ON" | "on" | "1" | "true" | "TRUE");
+                            info!("MQTT self-test command: {}", if enable { "ON" } else { "OFF" });
+                            cmd_sender.send(Command::SelfTest(enable)).await;
+                            continue;
+                        }
+
+                        // Handle sniff mode toggle command
+                        let sniff_subtopic = alloc::format!("{}/sniff", cmd_base);
+                        if topic == sniff_subtopic {
+                            let payload_str = core::str::from_utf8(&payload).unwrap_or("");
+                            let enable = matches!(payload_str, "ON" | "on" | "1" | "true" | "TRUE");
+                            info!("MQTT sniff mode command: {}", if enable { "ON" } else { "OFF" });
+                            cmd_sender.send(Command::Sniff(enable)).await;
+                            continue;
+                        }
+
+                        // Handle commands and pump timers (with rate limiting)
+                        let (scale, range) = match last_scale_range {
+                            Some((s, r)) => (Some(s), Some(r)),
+                            None => (None, None),
+                        };
+                        if let Some(action) =
+                            mqtt_client::parse_command(&cmd_base, &topic, &payload, scale, range)
+                        {
+                            match action {
+                                mqtt_client::MqttAction::Command(cmd) => {
+                                    if mqtt.check_rate_limit() {
+                                        info!("MQTT command: {:?}", cmd);
+                                        cmd_sender.send(cmd).await;
+                                    }
+                                    // Rate-limited commands are silently dropped (warn logged in check_rate_limit)
+                                }
+                                mqtt_client::MqttAction::StartPumpTimer { pump, minutes } => {
+                                    info!("MQTT pump timer: pump {} for {} min", pump, minutes);
+                                    PUMP_TIMER_CHANNEL.send((pump, minutes)).await;
+                                }
+                                mqtt_client::MqttAction::SelfTest(_) => {
+                                    // Handled above before parse_command; unreachable here
+                                }
+                            }
+                        } else {
+                            let payload_str = core::str::from_utf8(&payload).unwrap_or("<non-utf8>");
+                            warn!("MQTT command not recognized: topic={} payload={}", topic, payload_str);
                         }
                     }
-                } else {
-                    let payload_str = core::str::from_utf8(&payload).unwrap_or("<non-utf8>");
-                    warn!("MQTT command not recognized: topic={} payload={}", topic, payload_str);
+                    None => {
+                        let reason = mqtt.last_disconnect.take().unwrap_or_else(|| alloc::string::String::from("unknown"));
+                        warn!("MQTT connection lost ({}), attempting reconnect...", reason);
+                        MQTT_RECONNECT_COUNT.fetch_add(1, Ordering::Relaxed);
+                        MQTT_LOSS_COUNT.fetch_add(1, Ordering::Relaxed);
+                        let mut attempt: u32 = 0;
+                        let mut last_alert_time: Option<Instant> = None;
+                        loop {
+                            attempt += 1;
+                            match mqtt.reconnect().await {
+                                Ok(()) => {
+                                    info!("MQTT reconnected, re-publishing...");
+                                    let celsius = last_scale_range.map_or(false, |(s, _)| {
+                                        matches!(s, launa_protocol::status::TemperatureScale::Celsius)
+                                    });
+                                    if let Err(e) = mqtt.publish_availability(true).await {
+                                        warn!("MQTT reconnect: publish availability failed: {:?}", e);
+                                    }
+                                    if let Err(e) = mqtt.publish_discovery(celsius).await {
+                                        warn!("MQTT reconnect: publish discovery failed: {:?}", e);
+                                    }
+                                    if let Err(e) = mqtt.subscribe_commands().await {
+                                        warn!("MQTT reconnect: subscribe commands failed: {:?}", e);
+                                    }
+                                    // Re-publish last known state after reconnect
+                                    if let Some(ref status) = last_published_status {
+                                        let fault_str =
+                                            last_published_fault.as_ref().and_then(|f| f.as_str());
+                                        if let Err(e) = mqtt.publish_state(status, fault_str, last_self_test, last_sniff_mode, last_self_test).await {
+                                            warn!("MQTT reconnect: publish state failed: {:?}", e);
+                                        }
+                                    }
+                                    break;
+                                }
+                                Err(e) => {
+                                    // Exponential backoff: 5s, 10s, 20s, 40s, 60s, 60s, ...
+                                    let backoff_secs =
+                                        crate::net_util::backoff_secs(attempt);
+                                    error!(
+                                        "MQTT reconnect attempt {} failed: {:?}, retrying in {}s",
+                                        attempt, e, backoff_secs
+                                    );
+                                    // Publish alert after 3 attempts, throttled to once per 60s
+                                    if attempt > 3 {
+                                        let now = Instant::now();
+                                        let should_alert = last_alert_time
+                                            .map(|t| t.elapsed() >= Duration::from_secs(60))
+                                            .unwrap_or(true);
+                                        if should_alert {
+                                            let json = alloc::format!(
+                                                r#"{{"level":"error","message":"mqtt_reconnect_loop","attempts":{},"timestamp":{}}}"#,
+                                                attempt,
+                                                uptime_secs()
+                                            );
+                                            let payload = Vec::from(json.as_bytes());
+                                            let _ = ALERT_CHANNEL.try_send(payload);
+                                            last_alert_time = Some(now);
+                                        }
+                                    }
+                                    if attempt >= 30 {
+                                        error!(
+                                            "MQTT reconnect exceeded 30 attempts, resetting device"
+                                        );
+                                        esp_hal::system::software_reset();
+                                    }
+                                    Timer::after(Duration::from_secs(backoff_secs)).await;
+                                }
+                            }
+                        }
+                    }
                 }
             }
-            None => {
-                let reason = mqtt.last_disconnect.take().unwrap_or_else(|| alloc::string::String::from("unknown"));
-                warn!("MQTT connection lost ({}), attempting reconnect...", reason);
-                MQTT_RECONNECT_COUNT.fetch_add(1, Ordering::Relaxed);
-                MQTT_LOSS_COUNT.fetch_add(1, Ordering::Relaxed);
-                let mut attempt: u32 = 0;
-                let mut last_alert_time: Option<Instant> = None;
-                loop {
-                    attempt += 1;
-                    match mqtt.reconnect().await {
-                        Ok(()) => {
-                            info!("MQTT reconnected, re-publishing...");
-                            let celsius = last_scale_range.map_or(false, |(s, _)| {
-                                matches!(s, launa_protocol::status::TemperatureScale::Celsius)
-                            });
-                            if let Err(e) = mqtt.publish_availability(true).await {
-                                warn!("MQTT reconnect: publish availability failed: {:?}", e);
-                            }
-                            if let Err(e) = mqtt.publish_discovery(celsius).await {
-                                warn!("MQTT reconnect: publish discovery failed: {:?}", e);
-                            }
-                            if let Err(e) = mqtt.subscribe_commands().await {
-                                warn!("MQTT reconnect: subscribe commands failed: {:?}", e);
-                            }
-                            // Re-publish last known state after reconnect
-                            if let Some(ref status) = last_published_status {
-                                let fault_str =
-                                    last_published_fault.as_ref().and_then(|f| f.as_str());
-                                if let Err(e) = mqtt.publish_state(status, fault_str, last_self_test, last_sniff_mode).await {
-                                    warn!("MQTT reconnect: publish state failed: {:?}", e);
-                                }
-                            }
-                            break;
-                        }
-                        Err(e) => {
-                            // Exponential backoff: 5s, 10s, 20s, 40s, 60s, 60s, ...
-                            let backoff_secs =
-                                crate::net_util::backoff_secs(attempt);
-                            error!(
-                                "MQTT reconnect attempt {} failed: {:?}, retrying in {}s",
-                                attempt, e, backoff_secs
-                            );
-                            // Publish alert after 3 attempts, throttled to once per 60s
-                            if attempt > 3 {
-                                let now = Instant::now();
-                                let should_alert = last_alert_time
-                                    .map(|t| t.elapsed() >= Duration::from_secs(60))
-                                    .unwrap_or(true);
-                                if should_alert {
-                                    let json = alloc::format!(
-                                        r#"{{"level":"error","message":"mqtt_reconnect_loop","attempts":{},"timestamp":{}}}"#,
-                                        attempt,
-                                        uptime_secs()
-                                    );
-                                    let payload = Vec::from(json.as_bytes());
-                                    let _ = ALERT_CHANNEL.try_send(payload);
-                                    last_alert_time = Some(now);
-                                }
-                            }
-                            if attempt >= 30 {
-                                error!(
-                                    "MQTT reconnect exceeded 30 attempts, resetting device"
-                                );
-                                esp_hal::system::software_reset();
-                            }
-                            Timer::after(Duration::from_secs(backoff_secs)).await;
-                        }
-                    }
-                }
+            Either::Second(_) => {
+                // Timer expired — loop back to check channels above.
+                // This ensures self-test status updates and other channel
+                // data are published even when no MQTT messages arrive.
             }
         }
     }
