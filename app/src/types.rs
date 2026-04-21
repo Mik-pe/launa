@@ -1,5 +1,19 @@
 //! Shared types used across app modules.
 
+use launa_protocol::status::StatusUpdate;
+
+/// State update message sent from the main loop to the MQTT task via STATE_CHANNEL.
+///
+/// Replaces the previous 5-tuple `(StatusUpdate, FaultBuf, bool, bool, bool)` with
+/// named fields for readability.
+pub(crate) struct StateMessage {
+    pub status: StatusUpdate,
+    pub fault: FaultBuf,
+    pub recovering_from_stale: bool,
+    pub self_test: bool,
+    pub sniff_mode: bool,
+}
+
 /// Fixed-size fault string buffer to avoid heap allocation in STATE_CHANNEL.
 /// Fault log messages are typically ~40 chars; 64 bytes is sufficient.
 #[derive(Debug, Clone, Copy)]

@@ -195,7 +195,12 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
 
         // Check for state updates to publish (non-blocking)
         if non_cmd_count < MAX_NON_CMD_RECEIVES {
-            if let Ok((status, fault, is_stale, self_test, sniff_mode)) = state_rx.try_receive() {
+            if let Ok(msg) = state_rx.try_receive() {
+                let status = msg.status;
+                let fault = msg.fault;
+                let is_stale = msg.recovering_from_stale;
+                let self_test = msg.self_test;
+                let sniff_mode = msg.sniff_mode;
                 last_scale_range = Some((status.temperature_scale, status.temp_range));
                 last_self_test = self_test;
                 last_sniff_mode = sniff_mode;

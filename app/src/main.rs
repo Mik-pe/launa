@@ -32,7 +32,6 @@ use launa_hal::Transport as _;
 use launa_core::{AppAction, SpaApp};
 use launa_protocol::command::Command;
 use launa_protocol::frame::{Frame, FrameDecoder};
-use launa_protocol::status::StatusUpdate;
 use log::{debug, error, info, warn};
 
 use diagnostics::{publish_diagnostics, send_alert};
@@ -151,7 +150,7 @@ fn uptime_secs() -> u64 {
 static FRAME_CHANNEL: Channel<CriticalSectionRawMutex, Frame, 4> = Channel::new();
 static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
 static UART_TX_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
-static STATE_CHANNEL: Channel<CriticalSectionRawMutex, (StatusUpdate, FaultBuf, bool, bool, bool), 4> = Channel::new();
+static STATE_CHANNEL: Channel<CriticalSectionRawMutex, types::StateMessage, 4> = Channel::new();
 static PUMP_TIMER_CHANNEL: Channel<CriticalSectionRawMutex, (u8, u32), 4> = Channel::new();
 static DIAGNOSTICS_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 2> = Channel::new();
 static OTA_CHANNEL: Channel<CriticalSectionRawMutex, alloc::string::String, 1> = Channel::new();
@@ -223,7 +222,13 @@ async fn execute_actions(actions: &[AppAction], device_id: &str, self_test: bool
                 recovering_from_stale,
             } => {
                 let fb = fault.as_ref().map_or(FaultBuf::EMPTY, |s| FaultBuf::from_str(s));
-                if STATE_CHANNEL.try_send((status.clone(), fb, *recovering_from_stale, self_test, sniff_mode)).is_err() {
+                if STATE_CHANNEL.try_send(types::StateMessage {
+                    status: status.clone(),
+                    fault: fb,
+                    recovering_from_stale: *recovering_from_stale,
+                    self_test,
+                    sniff_mode,
+                }).is_err() {
                     debug!("STATE_CHANNEL full, dropping stale state update");
                 }
             }
