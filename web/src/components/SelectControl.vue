@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import PendingDot from './PendingDot.vue'
+
 const props = withDefaults(defineProps<{
   label: string
   modelValue: string
@@ -18,10 +20,7 @@ const emit = defineEmits<{
   <div :class="['flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-0 px-4 py-3 rounded-xl transition-all', disabled ? 'opacity-40' : '']">
     <div class="flex items-center gap-2">
       <span class="text-sm font-medium text-neutral-400">{{ label }}</span>
-      <span v-if="pending" class="relative flex h-2.5 w-2.5">
-        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-        <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-400" />
-      </span>
+      <PendingDot v-if="pending" />
     </div>
     <div class="flex bg-neutral-800 rounded-lg p-0.5">
       <button

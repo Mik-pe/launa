@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useLogs, clearLogs } from '../composables/useApi'
+import { timeAgo } from '../utils/format'
 import type { LogEntry } from '../types'
 import LoadingSpinner from './LoadingSpinner.vue'
 
@@ -48,16 +49,6 @@ const filteredLogs = computed<LogEntry[]>(() => {
   if (filters.size === 0) return logs.value || []
   return (logs.value || []).filter(l => filters.has((l.level || 'info').toLowerCase()))
 })
-
-function timeAgo(iso: string): string {
-  if (!iso) return ''
-  const diff = (Date.now() - new Date(iso).getTime()) / 1000
-  if (diff < 5) return 'just now'
-  if (diff < 60) return `${Math.floor(diff)}s ago`
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-  return new Date(iso).toLocaleDateString()
-}
 
 function fmtTimestamp(ms: number): string {
   if (!ms) return ''

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useAlerts, clearAlerts } from '../composables/useApi'
+import { timeAgo, parsePayload } from '../utils/format'
 import type { TimestampedEntry } from '../types'
 import LoadingSpinner from './LoadingSpinner.vue'
 
@@ -18,23 +19,7 @@ async function handleClear(): Promise<void> {
   }
 }
 
-function timeAgo(iso: string): string {
-  if (!iso) return ''
-  const diff = (Date.now() - new Date(iso).getTime()) / 1000
-  if (diff < 5) return 'just now'
-  if (diff < 60) return `${Math.floor(diff)}s ago`
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-  return new Date(iso).toLocaleDateString()
-}
 
-function parsePayload(entry: TimestampedEntry): any {
-  try {
-    return typeof entry.payload === 'string' ? JSON.parse(entry.payload) : entry.payload
-  } catch {
-    return { raw: entry.payload }
-  }
-}
 </script>
 
 <template>

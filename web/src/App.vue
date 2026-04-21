@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useMqtt } from './composables/useMqtt'
+import PendingDot from './components/PendingDot.vue'
 import type { MqttSettings, AccessoryConfig } from './types'
 import LoadingSpinner from './components/LoadingSpinner.vue'
 import ConnectionBar from './components/ConnectionBar.vue'
@@ -152,10 +153,7 @@ function handleTempRange(val: string): void {
             <div :class="['flex items-center justify-between gap-2 px-4 py-3 rounded-xl transition-all', availability !== 'online' ? 'opacity-40' : '']">
               <div class="flex items-center gap-2">
                 <span class="text-sm font-medium text-neutral-400">Heat Mode</span>
-                <span v-if="isPending('heating_mode')" class="relative flex h-2.5 w-2.5">
-                  <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-                  <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-400" />
-                </span>
+                <PendingDot v-if="isPending('heating_mode')" />
               </div>
               <button
                 @click="availability === 'online' && cycleHeatMode()"

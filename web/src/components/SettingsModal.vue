@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import ToggleSwitch from './ToggleSwitch.vue'
 import type { MqttSettings, AccessoryConfig } from '../types'
 
 const props = withDefaults(defineProps<{
@@ -43,12 +44,12 @@ function close(): void {
   emit('update:modelValue', false)
 }
 
-function toggleSelfTest(): void {
-  emit('toggleSelfTest', !props.selfTestEnabled)
+function toggleSelfTest(val: boolean): void {
+  emit('toggleSelfTest', val)
 }
 
-function toggleSniff(): void {
-  emit('toggleSniff', !props.sniffEnabled)
+function toggleSniff(val: boolean): void {
+  emit('toggleSniff', val)
 }
 </script>
 
@@ -103,42 +104,24 @@ function toggleSniff(): void {
 
           <!-- Self-Test Mode -->
           <div class="pt-2 border-t border-neutral-700">
-            <div class="flex items-center justify-between">
-              <div>
-                <h3 class="text-sm font-semibold text-neutral-300">Self-Test Mode</h3>
-                <p class="text-xs text-neutral-500 mt-0.5">Simulate spa state without hardware</p>
-              </div>
-              <button @click="toggleSelfTest"
-                :class="[
-                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer',
-                  selfTestEnabled ? 'bg-amber-500' : 'bg-neutral-700'
-                ]">
-                <span :class="[
-                  'inline-block h-4 w-4 transform rounded-full bg-white transition-transform shadow',
-                  selfTestEnabled ? 'translate-x-6' : 'translate-x-1'
-                ]" />
-              </button>
-            </div>
+            <ToggleSwitch
+              label="Self-Test Mode"
+              :model-value="selfTestEnabled"
+              :disabled="false"
+              @update:model-value="toggleSelfTest"
+            />
+            <p class="text-xs text-neutral-500 mt-1 px-4">Simulate spa state without hardware</p>
           </div>
 
           <!-- Sniff Mode -->
           <div class="pt-2 border-t border-neutral-700">
-            <div class="flex items-center justify-between">
-              <div>
-                <h3 class="text-sm font-semibold text-neutral-300">Sniff Mode</h3>
-                <p class="text-xs text-neutral-500 mt-0.5">Capture raw RS-485 frames to MQTT</p>
-              </div>
-              <button @click="toggleSniff"
-                :class="[
-                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer',
-                  sniffEnabled ? 'bg-cyan-500' : 'bg-neutral-700'
-                ]">
-                <span :class="[
-                  'inline-block h-4 w-4 transform rounded-full bg-white transition-transform shadow',
-                  sniffEnabled ? 'translate-x-6' : 'translate-x-1'
-                ]" />
-              </button>
-            </div>
+            <ToggleSwitch
+              label="Sniff Mode"
+              :model-value="sniffEnabled"
+              :disabled="false"
+              @update:model-value="toggleSniff"
+            />
+            <p class="text-xs text-neutral-500 mt-1 px-4">Capture raw RS-485 frames to MQTT</p>
           </div>
 
           <!-- Accessory Configuration -->

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import PendingDot from './PendingDot.vue'
 import type { SpaState } from '../types'
 
 const props = defineProps<{
@@ -59,10 +60,7 @@ function adjustTemp(delta: number): void {
       </div>
       <div v-if="isHeating"
         class="flex items-center gap-1.5 bg-orange-500/20 text-orange-300 px-3 py-1.5 rounded-full text-xs font-medium">
-        <span class="relative flex h-2 w-2">
-          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75" />
-          <span class="relative inline-flex rounded-full h-2 w-2 bg-orange-400" />
-        </span>
+        <PendingDot size-class="h-2 w-2" color-class="bg-orange-400" />
         Heating
       </div>
     </div>
@@ -72,10 +70,7 @@ function adjustTemp(delta: number): void {
         <span class="text-sm text-neutral-400">Target</span>
         <div class="flex items-center gap-2">
           <span class="text-lg sm:text-xl font-semibold">{{ setTemp ?? '--' }}°{{ tempScale }}</span>
-          <span v-if="pending" class="relative flex h-3 w-3">
-            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-            <span class="relative inline-flex rounded-full h-3 w-3 bg-blue-400" />
-          </span>
+          <PendingDot v-if="pending" size-class="h-3 w-3" />
         </div>
       </div>
       <div class="flex gap-2">

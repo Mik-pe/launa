@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import PendingDot from './PendingDot.vue'
+
 const props = withDefaults(defineProps<{
   label: string
   modelValue: boolean
@@ -42,10 +44,7 @@ function toggle(): void {
       <span :class="['text-sm font-medium', modelValue ? 'text-blue-400' : 'text-neutral-400']">
         {{ label }}
       </span>
-      <span v-if="pending" class="relative flex h-2.5 w-2.5">
-        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-        <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-400" />
-      </span>
+      <PendingDot v-if="pending" />
     </div>
     <div
       v-if="!readOnly"
