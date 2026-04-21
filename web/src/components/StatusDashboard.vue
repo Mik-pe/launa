@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { SpaState } from '../types'
+import LoadingSpinner from './LoadingSpinner.vue'
 
 const props = withDefaults(defineProps<{
   spaState: SpaState | null
@@ -50,10 +51,7 @@ const infoRows = computed(() => {
   <div class="space-y-5">
     <!-- Not connected -->
     <div v-if="!connected" class="flex flex-col items-center justify-center py-20 text-neutral-500">
-      <svg class="animate-spin h-8 w-8 mb-4 text-blue-400" fill="none" viewBox="0 0 24 24">
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-      </svg>
+      <LoadingSpinner class="h-8 w-8 mb-4" />
       <p class="text-sm">Connecting...</p>
     </div>
 

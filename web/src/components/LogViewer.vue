@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { useLogs, clearLogs } from '../composables/useApi'
 import type { LogEntry } from '../types'
+import LoadingSpinner from './LoadingSpinner.vue'
 
 const { data: logs, loading, error, refresh } = useLogs(200, 5000)
 const clearing = ref(false)
@@ -111,10 +112,7 @@ const countByLevel = computed<Record<string, number>>(() => {
     </div>
 
     <div v-if="loading && !logs?.length" class="flex flex-col items-center justify-center py-20 text-neutral-500">
-      <svg class="animate-spin h-8 w-8 mb-4 text-blue-400" fill="none" viewBox="0 0 24 24">
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-      </svg>
+      <LoadingSpinner class="h-8 w-8 mb-4" />
       <p class="text-sm">Loading logs...</p>
     </div>
     <div v-else-if="error" class="bg-red-500/10 border border-red-500/20 rounded-2xl px-5 py-4 text-sm text-red-400">Error: {{ error }}</div>

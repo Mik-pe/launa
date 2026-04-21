@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useMqtt } from './composables/useMqtt'
 import type { MqttSettings, AccessoryConfig } from './types'
+import LoadingSpinner from './components/LoadingSpinner.vue'
 import ConnectionBar from './components/ConnectionBar.vue'
 import TemperatureCard from './components/TemperatureCard.vue'
 import SelectControl from './components/SelectControl.vue'
@@ -120,10 +121,7 @@ function handleTempRange(val: string): void {
           <!-- Not connected: show connecting state inline -->
           <template v-if="!connected">
             <div class="flex flex-col items-center justify-center py-20">
-              <svg class="animate-spin h-10 w-10 text-blue-400 mb-4" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
+              <LoadingSpinner class="h-10 w-10 mb-4" />
               <p class="text-neutral-400 text-sm">
                 <template v-if="connecting">Connecting to MQTT broker{{ retryCount > 0 ? ` (retry ${retryCount})` : '' }}...</template>
                 <template v-else-if="connectionError">Connection failed: {{ connectionError }}</template>
