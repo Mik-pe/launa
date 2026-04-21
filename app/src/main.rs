@@ -205,6 +205,9 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
 
 mod mqtt_task;
 
+/// Self-test status publish interval in seconds.
+const SELF_TEST_PUBLISH_INTERVAL_SECS: u64 = 1;
+
 /// Execute a batch of `AppAction` side effects from `SpaApp`.
 ///
 /// Maps each action to the corresponding IO operation (UART send, MQTT publish, etc.).
@@ -527,11 +530,194 @@ async fn main(_spawner: Spawner) {
     }
 }
 
+/// Handle an OTA firmware request from the MQTT task.
+///
+/// Checks for a pending OTA URL and either runs a TCP connectivity test
+/// (if the URL contains `?test=1`) or performs the full OTA update.
+/// On successful OTA, the device resets. On failure, rolls back and resets.
+async fn handle_ota_request<TG: esp_hal::timer::timg::TimerGroupInstance>(
+    wifi_stack: &crate::wifi::WifiStack,
+    ota: &mut Option<ota::EspOta>,
+    ota_buffers: &mut Option<ota::OtaBuffers>,
+    ota_rx: &embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, alloc::string::String, 1>,
+    wdt: &mut esp_hal::timer::timg::Wdt<TG>,
+) {
+    use launa_ota::OtaUpdate;
+
+    let Ok(firmware_url) = ota_rx.try_receive() else {
+        return;
+    };
+
+    if firmware_url.contains("?test=1") {
+        info!("OTA: TCP test requested via ?test=1 parameter");
+        match ota_buffers.as_mut() {
+            Some(b) => {
+                match ota::tcp_test(wifi_stack.stack, &firmware_url, b).await {
+                    Ok(()) => info!("OTA: TCP test PASSED"),
+                    Err(()) => {
+                        error!("OTA: TCP test FAILED");
+                        send_alert("error", "tcp_test_failed");
+                    }
+                }
+            }
+            None => {
+                warn!("TCP test requested but buffers unavailable");
+                send_alert("error", "ota_unavailable_no_flash");
+            }
+        }
+    } else {
+        match (ota.as_mut(), ota_buffers.as_mut()) {
+            (Some(o), Some(b)) => {
+                info!("OTA: starting firmware download from main loop");
+                if let Err(()) = ota::perform_ota_update(wifi_stack.stack, o, &firmware_url, b, || wdt.feed()).await {
+                    error!("OTA update failed");
+                    send_alert("error", "ota_update_failed");
+                }
+                error!("OTA: device did not reset after update, rolling back");
+                let _ = o.rollback_and_reboot();
+            }
+            _ => {
+                warn!("OTA requested but NVS/flash unavailable — cannot update");
+                send_alert("error", "ota_unavailable_no_flash");
+            }
+        }
+        esp_hal::system::software_reset();
+    }
+}
+
+/// Process UART frames received during the event loop.
+///
+/// In sniff mode, publishes raw frames to the sniff channel.
+/// In normal mode, feeds frames through SpaApp for state updates.
+/// In self-test mode, discards all UART frames.
+async fn process_uart_frames(
+    frame: Frame,
+    app: &mut SpaApp<'_>,
+    device_id: &str,
+    self_test_active: bool,
+    sniff_mode: bool,
+    frame_rx: &embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, Frame, 4>,
+) {
+    if sniff_mode {
+        publish_sniff_frame(&frame);
+        while let Ok(f) = frame_rx.try_receive() {
+            publish_sniff_frame(&f);
+        }
+    } else if !self_test_active {
+        let actions = app.process_frame(&frame);
+        execute_actions(&actions, device_id, self_test_active, sniff_mode).await;
+
+        while let Ok(frame) = frame_rx.try_receive() {
+            let actions = app.process_frame(&frame);
+            execute_actions(&actions, device_id, self_test_active, sniff_mode).await;
+        }
+    }
+    // When in self-test mode, drain and discard UART frames
+    while frame_rx.try_receive().is_ok() {}
+}
+
+/// Connect to WiFi with fatal error handling.
+///
+/// On failure, logs the error, waits 5 seconds, and triggers a software reset.
+async fn init_wifi(
+    spawner: Spawner,
+    wifi_peripheral: esp_hal::peripherals::WIFI<'static>,
+    rng: esp_hal::rng::Rng,
+    ssid: &str,
+    password: &str,
+) -> crate::wifi::WifiStack {
+    match wifi::WifiStack::connect(spawner, wifi_peripheral, rng, ssid, password).await {
+        Ok(stack) => stack,
+        Err(e) => {
+            error!(
+                "WiFi init failed: {:?} (free heap: {} bytes), resetting in 5s",
+                e,
+                esp_alloc::HEAP.free()
+            );
+            Timer::after(Duration::from_secs(5)).await;
+            esp_hal::system::software_reset();
+        }
+    }
+}
+
+/// Connect to MQTT broker with exponential backoff retries.
+///
+/// Makes up to 10 attempts with increasing backoff. Resets the device
+/// if all attempts fail.
+async fn connect_mqtt(
+    stack: &'static embassy_net::Stack<'static>,
+    config: &config::AppConfig,
+) -> mqtt_client::MqttClient {
+    let mut attempt: u32 = 0;
+    loop {
+        attempt += 1;
+        match mqtt_client::MqttClient::connect(stack, config).await {
+            Ok(m) => break m,
+            Err(e) => {
+                let backoff_secs = (5u64 << attempt.saturating_sub(1).min(4)).min(60);
+                error!(
+                    "MQTT connect attempt {} failed: {:?}, retrying in {}s",
+                    attempt, e, backoff_secs
+                );
+                Timer::after(Duration::from_secs(backoff_secs)).await;
+                if attempt >= 10 {
+                    error!("MQTT connect failed after 10 attempts, resetting");
+                    esp_hal::system::software_reset();
+                }
+            }
+        }
+    }
+}
+
+/// Publish availability, discovery entities, and subscribe to command topics.
+async fn post_connect_setup(mqtt: &mut mqtt_client::MqttClient) {
+    let _ = mqtt.publish_availability(true).await;
+    let _ = mqtt.publish_discovery(false).await;
+    let _ = mqtt.subscribe_commands().await;
+}
+
+/// Mark firmware as valid (boot validation passed: WiFi + MQTT connected).
+fn validate_firmware(ota: &mut Option<ota::EspOta>) {
+    use launa_ota::OtaUpdate;
+    if let Some(ref mut o) = ota {
+        if let Err(e) = o.mark_valid() {
+            warn!("Failed to mark firmware valid: {:?}", e);
+        } else {
+            info!("Firmware marked valid (boot validation passed)");
+        }
+    }
+}
+
+/// Run self-test tick logic: advance simulator state and publish status periodically.
+async fn tick_self_test(
+    self_test_state: &mut self_test::SelfTestState,
+    device_id: &str,
+    sniff_mode: bool,
+    self_test_last_publish: &mut Option<Instant>,
+) {
+    self_test_state.tick();
+    let now = Instant::now();
+    let should_publish = self_test_last_publish
+        .map_or(true, |t| t.elapsed().as_secs() >= SELF_TEST_PUBLISH_INTERVAL_SECS);
+    if should_publish {
+        execute_actions(
+            &[AppAction::PublishState {
+                status: self_test_state.status().clone(),
+                fault: None,
+                recovering_from_stale: false,
+            }],
+            device_id,
+            true,
+            sniff_mode,
+        )
+        .await;
+        *self_test_last_publish = Some(now);
+    }
+}
+
 #[cfg(not(feature = "hw-test"))]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
-    use launa_ota::OtaUpdate;
-
     esp_alloc::heap_allocator!(#[ram(reclaimed)] size: 64 * 1024);
     esp_alloc::heap_allocator!(size: 36 * 1024);
 
@@ -596,61 +782,21 @@ async fn main(spawner: Spawner) {
     let uart_transport = transport::Rs485Transport::new(uart, Some(peripherals.GPIO4.into()));
     info!("RS-485 UART initialized");
 
-    let wifi_stack = match wifi::WifiStack::connect(
+    let wifi_stack = init_wifi(
         spawner,
         peripherals.WIFI,
         esp_hal::rng::Rng::new(),
         &app_config.wifi_ssid,
         &app_config.wifi_password,
     )
-    .await
-    {
-        Ok(stack) => stack,
-        Err(e) => {
-            error!(
-                "WiFi init failed: {:?} (free heap: {} bytes), resetting in 5s",
-                e,
-                esp_alloc::HEAP.free()
-            );
-            Timer::after(Duration::from_secs(5)).await;
-            esp_hal::system::software_reset();
-        }
-    };
+    .await;
 
-    let mut mqtt = {
-        let mut attempt: u32 = 0;
-        loop {
-            attempt += 1;
-            match mqtt_client::MqttClient::connect(wifi_stack.stack, &app_config).await {
-                Ok(m) => break m,
-                Err(e) => {
-                    let backoff_secs = (5u64 << attempt.saturating_sub(1).min(4)).min(60);
-                    error!(
-                        "MQTT connect attempt {} failed: {:?}, retrying in {}s",
-                        attempt, e, backoff_secs
-                    );
-                    Timer::after(Duration::from_secs(backoff_secs)).await;
-                    if attempt >= 10 {
-                        error!("MQTT connect failed after 10 attempts, resetting");
-                        esp_hal::system::software_reset();
-                    }
-                }
-            }
-        }
-    };
+    let mut mqtt = connect_mqtt(wifi_stack.stack, &app_config).await;
 
-    let _ = mqtt.publish_availability(true).await;
-    let _ = mqtt.publish_discovery(false).await; // Fahrenheit default; mqtt_task will re-publish with correct scale after first status
-    let _ = mqtt.subscribe_commands().await;
+    // Fahrenheit default; mqtt_task will re-publish with correct scale after first status
+    post_connect_setup(&mut mqtt).await;
 
-    // Mark firmware as valid (boot successful: WiFi + MQTT connected).
-    if let Some(ref mut o) = ota {
-        if let Err(e) = o.mark_valid() {
-            warn!("Failed to mark firmware valid: {:?}", e);
-        } else {
-            info!("Firmware marked valid (boot validation passed)");
-        }
-    }
+    validate_firmware(&mut ota);
 
     // Spawn background tasks
     spawner
@@ -671,7 +817,6 @@ async fn main(spawner: Spawner) {
     let mut self_test_state: Option<self_test::SelfTestState> = None;
     let mut sniff_mode: bool = false;
     let mut self_test_last_publish: Option<Instant> = None;
-    const SELF_TEST_PUBLISH_INTERVAL_SECS: u64 = 1;
 
     let tick_interval = Duration::from_secs(1);
 
@@ -679,33 +824,13 @@ async fn main(spawner: Spawner) {
         // Feed the hardware watchdog each iteration
         wdt.feed();
 
-        // When self-test is active, skip UART frames entirely
-        let skip_uart = self_test_state.is_some();
-
         // Multiplex: wait for either a UART frame, an MQTT command, or a
         // 1-second tick timer. This replaces the old blocking receive() that
         // hung indefinitely when the spa was off (no OTA, no commands, no ticks).
         match select(frame_rx.receive(), select(cmd_rx.receive(), Timer::after(tick_interval))).await {
             // UART frame received
             Either::First(frame) => {
-                if sniff_mode {
-                    // Sniff mode: publish raw frame to sniff topic
-                    publish_sniff_frame(&frame);
-                    while let Ok(f) = frame_rx.try_receive() {
-                        publish_sniff_frame(&f);
-                    }
-                } else if !skip_uart {
-                    let actions = app.process_frame(&frame);
-                    execute_actions(&actions, device_id_str, self_test_state.is_some(), sniff_mode).await;
-
-                    // Drain all available frames
-                    while let Ok(frame) = frame_rx.try_receive() {
-                        let actions = app.process_frame(&frame);
-                        execute_actions(&actions, device_id_str, self_test_state.is_some(), sniff_mode).await;
-                    }
-                }
-                // When in self-test mode, drain and discard UART frames
-                while frame_rx.try_receive().is_ok() {}
+                process_uart_frames(frame, &mut app, device_id_str, self_test_state.is_some(), sniff_mode, &frame_rx).await;
             }
             // MQTT command received
             Either::Second(Either::First(cmd)) => {
@@ -722,18 +847,7 @@ async fn main(spawner: Spawner) {
 
         // In self-test mode, tick the simulator and publish status periodically
         if let Some(ref mut st) = self_test_state {
-            st.tick();
-            let now = Instant::now();
-            let should_publish = self_test_last_publish
-                .map_or(true, |t| t.elapsed().as_secs() >= SELF_TEST_PUBLISH_INTERVAL_SECS);
-            if should_publish {
-                execute_actions(&[AppAction::PublishState {
-                    status: st.status().clone(),
-                    fault: None,
-                    recovering_from_stale: false,
-                }], device_id_str, true, sniff_mode).await;
-                self_test_last_publish = Some(now);
-            }
+            tick_self_test(st, device_id_str, sniff_mode, &mut self_test_last_publish).await;
         } else {
             self_test_last_publish = None;
             // Periodic tick: stale detection, registration timeout, diagnostics
@@ -745,46 +859,7 @@ async fn main(spawner: Spawner) {
         let heap_actions = app.check_heap(esp_alloc::HEAP.free());
         execute_actions(&heap_actions, device_id_str, self_test_state.is_some(), sniff_mode).await;
 
-        if let Ok(firmware_url) = ota_rx.try_receive() {
-            // If URL contains "?test=1", run TCP connectivity test instead of OTA
-            if firmware_url.contains("?test=1") {
-                info!("OTA: TCP test requested via ?test=1 parameter");
-                match ota_buffers.as_mut() {
-                    Some(b) => {
-                        match ota::tcp_test(wifi_stack.stack, &firmware_url, b).await {
-                            Ok(()) => info!("OTA: TCP test PASSED"),
-                            Err(()) => {
-                                error!("OTA: TCP test FAILED");
-                                send_alert("error", "tcp_test_failed");
-                            }
-                        }
-                    }
-                    None => {
-                        warn!("TCP test requested but buffers unavailable");
-                        send_alert("error", "ota_unavailable_no_flash");
-                    }
-                }
-                // Do NOT reset — continue normal operation
-            } else {
-                match (ota.as_mut(), ota_buffers.as_mut()) {
-                    (Some(o), Some(b)) => {
-                        info!("OTA: starting firmware download from main loop");
-                        if let Err(()) = ota::perform_ota_update(wifi_stack.stack, o, &firmware_url, b, || wdt.feed()).await {
-                            error!("OTA update failed");
-                            send_alert("error", "ota_update_failed");
-                        }
-                        // If we get here without resetting, something went very wrong
-                        error!("OTA: device did not reset after update, rolling back");
-                        let _ = o.rollback_and_reboot();
-                    }
-                    _ => {
-                        warn!("OTA requested but NVS/flash unavailable — cannot update");
-                        send_alert("error", "ota_unavailable_no_flash");
-                    }
-                }
-                esp_hal::system::software_reset();
-            }
-        }
+        handle_ota_request(&wifi_stack, &mut ota, &mut ota_buffers, &ota_rx, &mut wdt).await;
 
         // Drain pump timer commands
         while let Ok((pump_index, minutes)) = pump_timer_rx.try_receive() {
