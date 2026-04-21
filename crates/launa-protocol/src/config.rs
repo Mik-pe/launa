@@ -113,4 +113,95 @@ mod tests {
         let config = SpaConfig::parse(&payload).unwrap();
         assert_eq!(config.pump_configs[5], PumpConfig::None);
     }
+
+    // --- Negative / malformed payload tests ---
+
+    #[test]
+    fn test_parse_config_too_short_returns_error() {
+        let payload = [0u8; 5];
+        let result = SpaConfig::parse(&payload);
+        assert!(result.is_err());
+        match result {
+            Err(ConfigError::UnexpectedLength(len)) => assert_eq!(len, 5),
+            Ok(_) => panic!("expected error for short payload"),
+        }
+    }
+
+    #[test]
+    fn test_parse_config_empty_returns_error() {
+        let payload: [u8; 0] = [];
+        let result = SpaConfig::parse(&payload);
+        assert!(result.is_err());
+        match result {
+            Err(ConfigError::UnexpectedLength(0)) => {}
+            other => panic!("expected UnexpectedLength(0), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_config_exactly_10_bytes_succeeds() {
+        let payload = vec![0u8; 10];
+        assert!(SpaConfig::parse(&payload).is_ok());
+    }
+
+    #[test]
+    fn test_parse_config_9_bytes_returns_error() {
+        let payload = vec![0u8; 9];
+        let result = SpaConfig::parse(&payload);
+        assert!(result.is_err());
+        match result {
+            Err(ConfigError::UnexpectedLength(9)) => {}
+            other => panic!("expected UnexpectedLength(9), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_config_undefined_pump_bits_fallback_to_none() {
+        // Pump config raw value 3 is undefined; should fall back to None
+        let mut payload = vec![0u8; 10];
+        // pump1 bits 0-1 = 3 (undefined)
+        payload[5] = 0x03;
+
+        let config = SpaConfig::parse(&payload).unwrap();
+        assert_eq!(config.pump_configs[0], PumpConfig::None);
+    }
+
+    #[test]
+    fn test_parse_config_all_features_off() {
+        let payload = vec![0u8; 10];
+        let config = SpaConfig::parse(&payload).unwrap();
+
+        assert_eq!(config.pump_configs, [PumpConfig::None; 6]);
+        assert!(!config.lights[0]);
+        assert!(!config.lights[1]);
+        assert!(!config.circ_pump);
+        assert!(!config.blower);
+        assert!(!config.mister);
+        assert!(!config.aux1);
+        assert!(!config.aux2);
+        assert!(!config.temperature_scale_celsius);
+    }
+
+    #[test]
+    fn test_parse_config_all_features_on() {
+        let mut payload = vec![0u8; 10];
+        // All pumps = TwoSpeed (2): 0b10_10_10_10
+        payload[5] = 0b10_10_10_10;
+        payload[6] = 0b00_00_10_10; // pump4=TwoSpeed, pump5=TwoSpeed
+        payload[7] = 0x0F; // both lights
+        payload[8] = 0x80 | 0x03; // circ pump + blower
+        payload[9] = 0x30 | 0x03; // mister + aux1 + aux2
+        payload[3] = 0x01; // celsius
+
+        let config = SpaConfig::parse(&payload).unwrap();
+        assert_eq!(config.pump_configs, [PumpConfig::TwoSpeed; 6]);
+        assert!(config.lights[0]);
+        assert!(config.lights[1]);
+        assert!(config.circ_pump);
+        assert!(config.blower);
+        assert!(config.mister);
+        assert!(config.aux1);
+        assert!(config.aux2);
+        assert!(config.temperature_scale_celsius);
+    }
 }

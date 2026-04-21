@@ -454,4 +454,211 @@ mod tests {
             "253-byte payload should fit in u8 length field"
         );
     }
+
+    // --- CRC and parse edge cases ---
+
+    #[test]
+    fn test_parse_empty_data_returns_too_short() {
+        let result = Frame::parse(&[]);
+        assert!(result.is_err());
+        match result {
+            Err(FrameError::TooShort(0)) => {}
+            other => panic!("expected TooShort(0), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_single_byte_returns_too_short() {
+        let result = Frame::parse(&[0x05]);
+        assert!(result.is_err());
+        match result {
+            Err(FrameError::TooShort(1)) => {}
+            other => panic!("expected TooShort(1), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_three_bytes_returns_too_short() {
+        // Minimum is 4 bytes: length + type_hi + type_lo + crc
+        let result = Frame::parse(&[0x03, 0x0A, 0xBF]);
+        assert!(result.is_err());
+        match result {
+            Err(FrameError::TooShort(3)) => {}
+            other => panic!("expected TooShort(3), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_incomplete_payload_returns_incomplete() {
+        // Length byte says 5 (2 type + 3 payload), so need 7 bytes total (5+2 for length+crc)
+        // But only provide 5 bytes
+        let data = [0x05, 0x0A, 0xBF, 0x01, 0x02];
+        let result = Frame::parse(&data);
+        assert!(result.is_err());
+        match result {
+            Err(FrameError::Incomplete {
+                expected: 7,
+                got: 5,
+            }) => {}
+            other => panic!("expected Incomplete(7, 5), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_bad_crc_returns_mismatch() {
+        // Build a valid frame then corrupt the CRC
+        let frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: vec![0x42],
+        };
+        let encoded = frame.encode().unwrap();
+        let inner = &encoded[1..encoded.len() - 1];
+
+        let mut corrupted = inner.to_vec();
+        // Corrupt last byte (CRC)
+        let last = corrupted.len() - 1;
+        corrupted[last] ^= 0xFF;
+
+        let result = Frame::parse(&corrupted);
+        assert!(result.is_err());
+        match result {
+            Err(FrameError::CrcMismatch { .. }) => {}
+            other => panic!("expected CrcMismatch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_round_trip_empty_payload() {
+        // Frame with no payload (empty payload)
+        let frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: vec![],
+        };
+        let encoded = frame.encode().unwrap();
+        let inner = &encoded[1..encoded.len() - 1];
+        let decoded = Frame::parse(inner).unwrap();
+        assert_eq!(decoded, frame);
+        assert!(decoded.payload.is_empty());
+    }
+
+    #[test]
+    fn test_round_trip_single_byte_payload() {
+        let frame = Frame {
+            message_type: [0xFF, 0xAF],
+            payload: vec![0x99],
+        };
+        let encoded = frame.encode().unwrap();
+        let inner = &encoded[1..encoded.len() - 1];
+        let decoded = Frame::parse(inner).unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn test_round_trip_large_payload() {
+        // 200-byte payload (near max)
+        let frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: (0u8..200).collect(),
+        };
+        let encoded = frame.encode().unwrap();
+        // Decode through the streaming decoder which handles un-stuffing
+        let mut decoder = FrameDecoder::new();
+        let decoded = decoder.feed_slice(&encoded);
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0], frame);
+    }
+
+    #[test]
+    fn test_round_trip_with_bytes_requiring_escaping() {
+        // Payload containing 0x7E (FRAME_MARKER) and 0x7D (ESCAPE_CHAR)
+        let frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: vec![0x7E, 0x7D, 0x00, 0x42],
+        };
+        let encoded = frame.encode().unwrap();
+        // Verify markers exist at start and end
+        assert_eq!(*encoded.first().unwrap(), FRAME_MARKER);
+        assert_eq!(*encoded.last().unwrap(), FRAME_MARKER);
+
+        // Decode through the streaming decoder which handles un-stuffing
+        let mut decoder = FrameDecoder::new();
+        let results = decoder.feed_slice(&encoded);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], frame);
+    }
+
+    #[test]
+    fn test_encoder_convenience_function() {
+        let encoded = FrameEncoder::encode([0x0A, 0xBF], &[0x04]).unwrap();
+        assert_eq!(*encoded.first().unwrap(), FRAME_MARKER);
+        assert_eq!(*encoded.last().unwrap(), FRAME_MARKER);
+
+        let inner = &encoded[1..encoded.len() - 1];
+        let decoded = Frame::parse(inner).unwrap();
+        assert_eq!(decoded.message_type, [0x0A, 0xBF]);
+        assert_eq!(decoded.payload, vec![0x04]);
+    }
+
+    #[test]
+    fn test_feed_slice_multiple_frames() {
+        let frame1 = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: vec![0x01],
+        };
+        let frame2 = Frame {
+            message_type: [0xFF, 0xAF],
+            payload: vec![0x02],
+        };
+        let mut combined = frame1.encode().unwrap();
+        combined.extend_from_slice(&frame2.encode().unwrap());
+
+        let mut decoder = FrameDecoder::new();
+        let results = decoder.feed_slice(&combined);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0], frame1);
+        assert_eq!(results[1], frame2);
+    }
+
+    #[test]
+    fn test_decoder_inter_byte_gap_then_new_frame() {
+        // Feed bytes between two frames — non-marker bytes outside a frame are ignored
+        let frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: vec![],
+        };
+        let encoded = frame.encode().unwrap();
+
+        let mut decoder = FrameDecoder::new();
+
+        // Feed noise bytes (not in a frame)
+        for &b in &[0x00, 0x01, 0x02] {
+            assert!(decoder.feed(b).is_none());
+        }
+
+        // Feed the frame
+        let mut results = Vec::new();
+        for &byte in &encoded {
+            if let Some(f) = decoder.feed(byte) {
+                results.push(f);
+            }
+        }
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], frame);
+    }
+
+    #[test]
+    fn test_decoder_escape_sequence_decodes_correctly() {
+        // Manually build a frame that uses escape sequences for 0x7E and 0x7D
+        // Frame: type=[0x0A,0xBF], payload=[0x7E] → body = [length=3, 0x0A, 0xBF, 0x7E, crc]
+        let frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: vec![0x7E],
+        };
+        let encoded = frame.encode().unwrap();
+
+        let mut decoder = FrameDecoder::new();
+        let results = decoder.feed_slice(&encoded);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].payload, vec![0x7E]);
+    }
 }

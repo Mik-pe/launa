@@ -224,4 +224,84 @@ mod tests {
         assert_eq!(code, FaultCode::Unknown(99));
         assert_eq!(code.code(), 99);
     }
+
+    // --- Edge case tests ---
+
+    #[test]
+    fn test_parse_unknown_fault_code_through_parse() {
+        // Code 0 is not in the known list — should map to Unknown(0)
+        let payload: &[u8] = &[
+            0x01, // fault count
+            0x01, // entry number
+            0x00, // message code: 0 → Unknown(0)
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        let entry = FaultLogEntry::parse(payload).unwrap();
+        assert_eq!(entry.message_code, FaultCode::Unknown(0));
+        assert_eq!(entry.message_code.code(), 0);
+    }
+
+    #[test]
+    fn test_parse_unknown_fault_code_high_value() {
+        // Code 255 is not in the known list
+        let payload: &[u8] = &[
+            0x01, 0x01, 0xFF, // code 255 → Unknown(255)
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        let entry = FaultLogEntry::parse(payload).unwrap();
+        assert_eq!(entry.message_code, FaultCode::Unknown(255));
+    }
+
+    #[test]
+    fn test_parse_fault_exactly_10_bytes() {
+        let payload: &[u8] = &[0x01, 0x01, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        assert!(FaultLogEntry::parse(payload).is_ok());
+    }
+
+    #[test]
+    fn test_parse_fault_longer_payload_succeeds() {
+        // Extra bytes beyond 10 should be ignored
+        let payload: &[u8] = &[
+            0x01, 0x01, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF,
+        ];
+        assert!(FaultLogEntry::parse(payload).is_ok());
+    }
+
+    #[test]
+    fn test_fault_code_roundtrip_unknown() {
+        // Unknown codes round-trip through from_code/code
+        for &unknown_val in &[0u8, 1, 14, 21, 23, 25, 33, 38, 50, 100, 200, 255] {
+            let code = FaultCode::from_code(unknown_val);
+            assert_eq!(code, FaultCode::Unknown(unknown_val));
+            assert_eq!(code.code(), unknown_val);
+        }
+    }
+
+    #[test]
+    fn test_all_known_fault_codes_from_code() {
+        // Verify each known code maps correctly
+        let known = [
+            (15, FaultCode::Sync),
+            (16, FaultCode::LowFlow),
+            (17, FaultCode::FlowFailed),
+            (18, FaultCode::SettingsReset),
+            (19, FaultCode::Priming),
+            (20, FaultCode::ClockFailed),
+            (22, FaultCode::ProgramMemory),
+            (26, FaultCode::SyncCallService),
+            (27, FaultCode::HeaterDry),
+            (28, FaultCode::HeaterMaybeDry),
+            (29, FaultCode::WaterTooHot),
+            (30, FaultCode::HeaterTooHot),
+            (31, FaultCode::SensorAFault),
+            (32, FaultCode::SensorBFault),
+            (34, FaultCode::PumpStuckOn),
+            (35, FaultCode::HotFault),
+            (36, FaultCode::GfciTestFailed),
+            (37, FaultCode::StandbyHold),
+        ];
+        for (val, expected) in &known {
+            assert_eq!(FaultCode::from_code(*val), *expected);
+        }
+    }
 }

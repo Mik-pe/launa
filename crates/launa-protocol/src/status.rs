@@ -610,4 +610,81 @@ mod tests {
         assert_eq!(status.sensor_a_temp, None);
         assert_eq!(status.sensor_b_temp, None); // not in A/B mode (0x14)
     }
+
+    // --- Edge case tests: undefined values ---
+
+    #[test]
+    fn test_undefined_heating_mode_2_falls_back_to_ready() {
+        // Heating mode value 2 is undefined (valid: 0=Ready, 1=Rest, 3=ReadyInRest)
+        // The catch-all `_` arm maps it to Ready
+        let mut payload = [0u8; 24];
+        payload[2] = 100;
+        payload[5] = 0x02; // undefined heating mode
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.heating_mode, HeatingMode::Ready);
+    }
+
+    #[test]
+    fn test_undefined_pump_state_3_falls_back_to_off() {
+        // Pump raw value 3 is undefined (valid: 0=Off, 1=Low, 2=High)
+        // decode_pump_state maps _ => Off
+        let mut payload = [0u8; 24];
+        payload[2] = 100;
+        // Pack pump1 bits 0-1 = 3 (undefined): 0b00000011
+        payload[11] = 0x03;
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.pumps[0], PumpState::Off);
+    }
+
+    #[test]
+    fn test_all_pumps_undefined_state_3() {
+        let mut payload = [0u8; 24];
+        payload[2] = 100;
+        payload[20] = 104;
+        // All 2-bit pump fields set to 3: 0b11111111 for both bytes
+        payload[11] = 0xFF; // pumps 0-3 all = 3
+        payload[12] = 0xFF; // pumps 4-5 all = 3
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        for (i, &pump) in status.pumps.iter().enumerate() {
+            assert_eq!(
+                pump,
+                PumpState::Off,
+                "pump {} should be Off for undefined state 3",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_status_too_short_returns_error() {
+        let payload = [0u8; 10];
+        let result = StatusUpdate::parse(&payload);
+        assert!(result.is_err());
+        match result {
+            Err(StatusError::UnexpectedLength(len)) => assert_eq!(len, 10),
+            Ok(_) => panic!("expected error for short payload"),
+        }
+    }
+
+    #[test]
+    fn test_parse_status_exactly_24_bytes_succeeds() {
+        let mut payload = [0u8; 24];
+        payload[2] = 100;
+        payload[20] = 104;
+        assert!(StatusUpdate::parse(&payload).is_ok());
+    }
+
+    #[test]
+    fn test_parse_status_longer_payload_succeeds() {
+        // Extra bytes beyond 24 should be ignored
+        let mut payload = [0u8; 30];
+        payload[2] = 100;
+        payload[20] = 104;
+        assert!(StatusUpdate::parse(&payload).is_ok());
+    }
 }
