@@ -566,7 +566,7 @@ async fn handle_ota_request<TG: esp_hal::timer::timg::TimerGroupInstance>(
 ///
 /// In sniff mode, publishes raw frames to the sniff channel.
 /// In normal mode, feeds frames through SpaApp for state updates.
-/// In self-test mode, discards all UART frames.
+/// In self-test mode, discards all UART frames with a one-time warning.
 async fn process_uart_frames(
     frame: Frame,
     app: &mut SpaApp<'_>,
@@ -574,6 +574,7 @@ async fn process_uart_frames(
     self_test_active: bool,
     sniff_mode: bool,
     frame_rx: &embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, Frame, 4>,
+    self_test_discard_warned: &mut bool,
 ) {
     if sniff_mode {
         publish_sniff_frame(&frame);
@@ -588,9 +589,14 @@ async fn process_uart_frames(
             let actions = app.process_frame(&frame);
             execute_actions(&actions, device_id, self_test_active, sniff_mode).await;
         }
+    } else {
+        // When in self-test mode, drain and discard UART frames with a one-time warning
+        if !*self_test_discard_warned {
+            warn!("Self-test active: discarding spa frames (self-test generates its own state)");
+            *self_test_discard_warned = true;
+        }
+        while frame_rx.try_receive().is_ok() {}
     }
-    // When in self-test mode, drain and discard UART frames
-    while frame_rx.try_receive().is_ok() {}
 }
 
 /// Connect to WiFi with fatal error handling.
@@ -787,6 +793,7 @@ async fn main(spawner: Spawner) {
     let mut self_test_state: Option<self_test::SelfTestState> = None;
     let mut sniff_mode: bool = false;
     let mut self_test_last_publish: Option<Instant> = None;
+    let mut self_test_discard_warned: bool = false;
 
     let tick_interval = Duration::from_secs(1);
 
@@ -800,7 +807,7 @@ async fn main(spawner: Spawner) {
         match select(frame_rx.receive(), select(cmd_rx.receive(), Timer::after(tick_interval))).await {
             // UART frame received
             Either::First(frame) => {
-                process_uart_frames(frame, &mut app, device_id_str, self_test_state.is_some(), sniff_mode, &frame_rx).await;
+                process_uart_frames(frame, &mut app, device_id_str, self_test_state.is_some(), sniff_mode, &frame_rx, &mut self_test_discard_warned).await;
             }
             // MQTT command received
             Either::Second(Either::First(cmd)) => {

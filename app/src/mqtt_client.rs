@@ -212,7 +212,10 @@ impl MqttClient {
         let addr = match net_util::resolve_host(stack, &config.mqtt_host).await {
             Some(a) => a,
             None => {
-                error!("MQTT: failed to resolve host '{}'", config.mqtt_host);
+                error!(
+                    "MQTT: DNS resolution failed for '{}' — check hostname and DNS config",
+                    config.mqtt_host
+                );
                 return Err(MqttError::ConnectionFailed);
             }
         };
@@ -222,7 +225,10 @@ impl MqttClient {
         };
 
         socket.connect(endpoint).await.map_err(|e| {
-            error!("MQTT TCP connect failed: {:?}", e);
+            error!(
+                "MQTT: TCP connect to {}:{} failed: {:?} — broker unreachable or firewall blocked",
+                config.mqtt_host, config.mqtt_port, e
+            );
             MqttError::ConnectionFailed
         })?;
 
@@ -338,7 +344,10 @@ impl MqttClient {
         let addr = match net_util::resolve_host(self.stack, &self.config_host).await {
             Some(a) => a,
             None => {
-                error!("MQTT: failed to resolve host '{}' during reconnect", self.config_host);
+                error!(
+                    "MQTT: DNS resolution failed for '{}' during reconnect — check hostname and DNS config",
+                    self.config_host
+                );
                 return Err(MqttError::ConnectionFailed);
             }
         };
@@ -348,7 +357,10 @@ impl MqttClient {
         };
 
         socket.connect(endpoint).await.map_err(|e| {
-            error!("MQTT reconnect TCP failed: {:?}", e);
+            error!(
+                "MQTT: TCP reconnect to {}:{} failed: {:?} — broker unreachable or firewall blocked",
+                self.config_host, self.config_port, e
+            );
             MqttError::ConnectionFailed
         })?;
 
@@ -429,7 +441,10 @@ impl MqttClient {
         let mut buf = [0u8; 64];
         let n = self.read_exact(&mut buf, 4).await.map_err(|_| MqttError::ConnectionFailed)?;
         if parse_connack(&buf[..n]).is_err() {
-            error!("MQTT CONNACK unexpected: {:?}", &buf[..n]);
+            error!(
+                "MQTT: CONNACK rejected by {}:{} — check username/password and client ID. Raw: {:?}",
+                self.config_host, self.config_port, &buf[..n]
+            );
             return Err(MqttError::ConnectionFailed);
         }
         self.last_outgoing = Instant::now();

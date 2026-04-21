@@ -5,7 +5,7 @@ extern crate alloc;
 use alloc::string::String;
 use esp_hal::aes::Aes;
 use esp_hal::rng::Rng;
-use log::{info, warn};
+use log::{error, info, warn};
 
 use crate::crypto;
 
@@ -48,6 +48,11 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Placeholder SSID that indicates no valid config has been flashed.
+    const PLACEHOLDER_SSID: &str = "YOUR_WIFI_SSID";
+    /// Placeholder WiFi password that indicates no valid config has been flashed.
+    const PLACEHOLDER_WIFI_PASS: &str = "YOUR_WIFI_PASSWORD";
+
     pub fn load(
         nvs: &mut esp_nvs::Nvs<esp_storage::FlashStorage<'static>>,
         aes: &mut Aes<'_>,
@@ -56,10 +61,10 @@ impl AppConfig {
         let ns = esp_nvs::Key::from_str(NAMESPACE);
 
         let wifi_ssid = nvs_get_str(nvs, &ns, KEY_WIFI_SSID)
-            .unwrap_or_else(|| String::from("YOUR_WIFI_SSID"));
+            .unwrap_or_else(|| String::from(Self::PLACEHOLDER_SSID));
         let wifi_password = nvs_get_str(nvs, &ns, KEY_WIFI_PASS)
             .map(|v| crypto::maybe_decrypt(&v, aes, rng))
-            .unwrap_or_else(|| String::from("YOUR_WIFI_PASSWORD"));
+            .unwrap_or_else(|| String::from(Self::PLACEHOLDER_WIFI_PASS));
         let mqtt_host = nvs_get_str(nvs, &ns, KEY_MQTT_HOST)
             .unwrap_or_else(|| String::from("192.168.1.100"));
         let mqtt_port = nvs.get::<u16>(&ns, &esp_nvs::Key::from_str(KEY_MQTT_PORT))
@@ -73,6 +78,16 @@ impl AppConfig {
             .unwrap_or_else(|| String::from("launa_spa"));
         let self_test = nvs.get::<bool>(&ns, &esp_nvs::Key::from_str(KEY_SELF_TEST))
             .unwrap_or(false);
+
+        let has_placeholder_creds = wifi_ssid == Self::PLACEHOLDER_SSID
+            || wifi_password == Self::PLACEHOLDER_WIFI_PASS;
+
+        if has_placeholder_creds {
+            error!(
+                "FATAL: No valid config found in NVS. \
+                 Use 'cargo xtask config-flash' to write configuration."
+            );
+        }
 
         info!(
             "Config loaded: ssid=<{} chars> mqtt={}:{} device={}",
