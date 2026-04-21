@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import PendingDot from './PendingDot.vue'
 import type { SpaState } from '../types'
 
@@ -35,13 +35,27 @@ const tempRange = computed(() => {
   return r || '--'
 })
 
+// Track a local target so rapid +/- presses accumulate instead of
+// re-reading the stale set_temp from the ESP (which hasn't acked yet).
+const localTarget = ref<number | null>(null)
+
+// Sync local target when the spa's reported set_temp changes (i.e. ack arrived).
+watch(setTemp, (v) => {
+  localTarget.value = v ?? null
+})
+
+// The displayed target: local if pending, otherwise the spa's reported value.
+const displayTarget = computed(() => localTarget.value ?? setTemp.value)
+
 function adjustTemp(delta: number): void {
   const isCelsius = tempScale.value === 'C'
   const isLow = props.state?.temp_range === 'low'
   const min = isCelsius ? (isLow ? 10 : 26) : (isLow ? 50 : 80)
   const max = isCelsius ? (isLow ? 26 : 40) : (isLow ? 80 : 104)
   const step = isCelsius ? 0.5 : 1
-  const newTemp = Math.min(max, Math.max(min, (setTemp.value || min) + delta * step))
+  const base = localTarget.value ?? setTemp.value ?? min
+  const newTemp = Math.min(max, Math.max(min, base + delta * step))
+  localTarget.value = newTemp
   emit('set-temperature', isCelsius ? newTemp : Math.round(newTemp))
 }
 </script>
@@ -69,7 +83,7 @@ function adjustTemp(delta: number): void {
       <div class="flex items-center justify-between mb-3">
         <span class="text-sm text-neutral-400">Target</span>
         <div class="flex items-center gap-2">
-          <span class="text-lg sm:text-xl font-semibold">{{ setTemp ?? '--' }}°{{ tempScale }}</span>
+          <span class="text-lg sm:text-xl font-semibold">{{ displayTarget ?? '--' }}°{{ tempScale }}</span>
           <PendingDot v-if="pending" size-class="h-3 w-3" />
         </div>
       </div>
