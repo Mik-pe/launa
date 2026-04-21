@@ -50,6 +50,7 @@ mod ota;
 mod remote_log;
 mod transport;
 mod types;
+mod uart_raw;
 mod wifi;
 
 mod self_test;
@@ -59,32 +60,16 @@ mod self_test;
 /// loop to allow automatic recovery from panics.
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    // Write directly to UART0 registers - don't use the logger since
+    // Write directly to UART0 registers — don't use the logger since
     // the panic might have occurred while holding the logger lock.
-    const UART_FIFO: usize = 0x60000000;
-    const UART_STATUS: usize = 0x6000001C;
-    const TX_FIFO_CNT_MASK: u32 = 0x7F << 16;
-    const FIFO_SIZE: u16 = 128;
-
     let msg = core::format_args!("PANIC: {}\n", info);
     let mut buf = [0u8; 256];
     let mut writer = SliceWrite::new(&mut buf);
     let _ = core::fmt::Write::write_fmt(&mut writer, msg);
     let written = writer.len();
 
-    unsafe {
-        for &b in &buf[..written] {
-            // Wait for FIFO space
-            while (((UART_STATUS as *const u32).read_volatile() & TX_FIFO_CNT_MASK) >> 16) as u16 >= FIFO_SIZE {
-                core::hint::spin_loop();
-            }
-            (UART_FIFO as *mut u8).write_volatile(b);
-        }
-        // Wait for FIFO to drain
-        while (((UART_STATUS as *const u32).read_volatile() & TX_FIFO_CNT_MASK) >> 16) as u16 > 0 {
-            core::hint::spin_loop();
-        }
-    }
+    uart_raw::write_bytes(&buf[..written]);
+    uart_raw::flush();
 
     // Busy-wait ~500ms to allow UART TX to fully transmit.
     let mut counter: u32 = 0;

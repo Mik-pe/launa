@@ -21,26 +21,6 @@ use core::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "serial-log")]
 use esp_hal::system::Cpu;
 
-/// ESP32 UART0 register base address.
-#[cfg(feature = "serial-log")]
-const UART0_BASE: usize = 0x60000000;
-
-/// FIFO register (write-only, writes go to TX FIFO).
-#[cfg(feature = "serial-log")]
-const UART_FIFO_REG: usize = UART0_BASE;
-
-/// Status register - bits 16-22 contain TX FIFO count.
-#[cfg(feature = "serial-log")]
-const UART_STATUS_REG: usize = UART0_BASE + 0x1C;
-
-/// TX FIFO size for ESP32.
-#[cfg(feature = "serial-log")]
-const UART_FIFO_SIZE: u16 = 128;
-
-/// Mask for TX FIFO count in status register.
-#[cfg(feature = "serial-log")]
-const TX_FIFO_CNT_MASK: u32 = 0x7F << 16;
-
 /// Spinlock for cross-core UART synchronization.
 #[cfg(feature = "serial-log")]
 struct Spinlock {
@@ -74,41 +54,6 @@ impl Spinlock {
 
 #[cfg(feature = "serial-log")]
 static UART_LOCK: Spinlock = Spinlock::new();
-
-#[cfg(feature = "serial-log")]
-#[inline]
-fn tx_fifo_count() -> u16 {
-    unsafe {
-        let status = (UART_STATUS_REG as *const u32).read_volatile();
-        ((status & TX_FIFO_CNT_MASK) >> 16) as u16
-    }
-}
-
-#[cfg(feature = "serial-log")]
-#[inline]
-fn write_byte(b: u8) {
-    while tx_fifo_count() >= UART_FIFO_SIZE {
-        core::hint::spin_loop();
-    }
-    unsafe {
-        (UART_FIFO_REG as *mut u8).write_volatile(b);
-    }
-}
-
-#[cfg(feature = "serial-log")]
-fn write_bytes(data: &[u8]) {
-    for &b in data {
-        write_byte(b);
-    }
-}
-
-#[cfg(feature = "serial-log")]
-fn flush_uart() {
-    while tx_fifo_count() > 0 {
-        core::hint::spin_loop();
-    }
-    esp_hal::rom::ets_delay_us(10);
-}
 
 #[cfg(feature = "serial-log")]
 fn color_for_level(level: Level) -> (&'static str, &'static str) {
@@ -190,8 +135,8 @@ impl log::Log for Logger {
             );
 
             UART_LOCK.lock();
-            write_bytes(msg.as_bytes());
-            write_byte(b'\n');
+            crate::uart_raw::write_bytes(msg.as_bytes());
+            crate::uart_raw::write_byte(b'\n');
             UART_LOCK.unlock();
         }
     }
@@ -199,7 +144,7 @@ impl log::Log for Logger {
     #[cfg(feature = "serial-log")]
     fn flush(&self) {
         UART_LOCK.lock();
-        flush_uart();
+        crate::uart_raw::flush();
         UART_LOCK.unlock();
     }
 
