@@ -7,6 +7,7 @@
 use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
 use launa_protocol::frame::FrameDecoder;
 use launa_protocol::status::PumpState;
+use launa_protocol::Temperature;
 use launa_sim::SpaSim;
 
 #[test]
@@ -37,8 +38,8 @@ fn test_status_to_mqtt_json() {
 #[test]
 fn test_full_pipeline_status_frame_to_mqtt_json() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 100.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(100.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.pumps[0] = PumpState::Low;
     sim.state.pumps[1] = PumpState::Off;
     sim.state.pumps[2] = PumpState::Off;

@@ -12,6 +12,7 @@ use launa_protocol::fault::FaultCode;
 use launa_protocol::frame::{Frame, FrameDecoder, FrameEncoder};
 use launa_protocol::information::{HeaterType, HeaterVoltage};
 use launa_protocol::status::{HeatingMode, PumpState, TempRange, TemperatureScale};
+use launa_protocol::Temperature;
 use launa_sim::SpaSim;
 
 #[test]
@@ -29,8 +30,8 @@ fn test_status_frame_round_trip() {
     let msg = dispatch_frame(frame);
     match msg {
         IncomingMessage::StatusUpdate(status) => {
-            assert_eq!(status.current_temp, Some(100.0));
-            assert_eq!(status.set_temp, 104.0);
+            assert_eq!(status.current_temp, Some(Temperature::fahrenheit(100.0)));
+            assert_eq!(status.set_temp, Temperature::fahrenheit(104.0));
             assert_eq!(status.hour, 14);
             assert_eq!(status.minute, 30);
             assert_eq!(status.heating_mode, HeatingMode::Ready);
@@ -259,7 +260,7 @@ fn test_set_temperature_command() {
     let status_frames = decoder.feed_slice(&status_bytes);
     let msg = dispatch_frame(&status_frames[0]);
     if let IncomingMessage::StatusUpdate(s) = msg {
-        assert_eq!(s.set_temp, 104.0);
+        assert_eq!(s.set_temp, Temperature::fahrenheit(104.0));
     } else {
         panic!("Expected StatusUpdate");
     }
@@ -277,7 +278,7 @@ fn test_set_temperature_command() {
     let msg = dispatch_frame(&status_frames[0]);
     match msg {
         IncomingMessage::StatusUpdate(s) => {
-            assert_eq!(s.set_temp, 100.0);
+            assert_eq!(s.set_temp, Temperature::fahrenheit(100.0));
         }
         _ => panic!("Expected StatusUpdate"),
     }
@@ -361,7 +362,7 @@ fn test_status_unknown_temp() {
     let mut sim = SpaSim::new();
     // Rationale: sim.state.current_temp is test input to configure unknown temp (255).
     // Verification is through the decoded status frame's current_temp being None.
-    sim.state.current_temp = 255.0;
+    sim.state.current_temp = Temperature::fahrenheit(255.0);
 
     let encoded = sim.generate_status_frame();
     let mut decoder = FrameDecoder::new();
@@ -381,8 +382,8 @@ fn test_status_max_temp() {
     let mut sim = SpaSim::new();
     // Rationale: sim.state fields are test inputs for boundary values.
     // Verification is through the decoded status frame.
-    sim.state.current_temp = 254.0;
-    sim.state.set_temp = 254.0;
+    sim.state.current_temp = Temperature::fahrenheit(254.0);
+    sim.state.set_temp = Temperature::fahrenheit(254.0);
 
     let encoded = sim.generate_status_frame();
     let mut decoder = FrameDecoder::new();
@@ -391,8 +392,8 @@ fn test_status_max_temp() {
 
     match msg {
         IncomingMessage::StatusUpdate(s) => {
-            assert_eq!(s.current_temp, Some(254.0));
-            assert_eq!(s.set_temp, 254.0);
+            assert_eq!(s.current_temp, Some(Temperature::fahrenheit(254.0)));
+            assert_eq!(s.set_temp, Temperature::fahrenheit(254.0));
         }
         _ => panic!("Expected StatusUpdate"),
     }
@@ -403,8 +404,8 @@ fn test_status_min_temp() {
     let mut sim = SpaSim::new();
     // Rationale: sim.state fields are test inputs for boundary values.
     // Verification is through the decoded status frame.
-    sim.state.current_temp = 1.0;
-    sim.state.set_temp = 1.0;
+    sim.state.current_temp = Temperature::fahrenheit(1.0);
+    sim.state.set_temp = Temperature::fahrenheit(1.0);
 
     let encoded = sim.generate_status_frame();
     let mut decoder = FrameDecoder::new();
@@ -413,8 +414,8 @@ fn test_status_min_temp() {
 
     match msg {
         IncomingMessage::StatusUpdate(s) => {
-            assert_eq!(s.current_temp, Some(1.0));
-            assert_eq!(s.set_temp, 1.0);
+            assert_eq!(s.current_temp, Some(Temperature::fahrenheit(1.0)));
+            assert_eq!(s.set_temp, Temperature::fahrenheit(1.0));
         }
         _ => panic!("Expected StatusUpdate"),
     }
@@ -426,8 +427,8 @@ fn test_celsius_status_values() {
     // Rationale: sim.state fields are test inputs for Celsius configuration.
     // Verification is through the decoded status frame.
     sim.state.temp_scale = TemperatureScale::Celsius;
-    sim.state.current_temp = 38.0;
-    sim.state.set_temp = 40.0;
+    sim.state.current_temp = Temperature::celsius(38.0);
+    sim.state.set_temp = Temperature::celsius(40.0);
 
     let encoded = sim.generate_status_frame();
     let mut decoder = FrameDecoder::new();
@@ -436,8 +437,8 @@ fn test_celsius_status_values() {
 
     match msg {
         IncomingMessage::StatusUpdate(s) => {
-            assert_eq!(s.current_temp, Some(38.0));
-            assert_eq!(s.set_temp, 40.0);
+            assert_eq!(s.current_temp, Some(Temperature::celsius(38.0)));
+            assert_eq!(s.set_temp, Temperature::celsius(40.0));
             assert_eq!(s.temperature_scale, TemperatureScale::Celsius);
         }
         _ => panic!("Expected StatusUpdate"),

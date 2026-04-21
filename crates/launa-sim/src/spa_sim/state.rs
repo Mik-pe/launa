@@ -1,25 +1,25 @@
 //! Spa state types and event definitions.
 //!
-//! `SpaState` holds the simulated spa's current state in native Rust types
-//! (f32 temperatures, proper enums). Conversion to wire format happens only
-//! at the frame generation boundary.
+//! `SpaState` holds the simulated spa's current state using the `Temperature`
+//! type for all temperature fields, eliminating scale ambiguity.
 
 use launa_protocol::status::{HeatingMode, PumpState, TempRange, TemperatureScale};
+use launa_protocol::Temperature;
 
 /// Simulated spa state using native Rust types.
 ///
-/// All values are in real units (f32 temperatures, proper enums). Conversion
-/// to the wire format happens only in `generate_status_frame()`.
+/// Temperature fields use `Temperature` which carries the scale, ensuring
+/// comparisons between temperatures are always scale-aware.
 #[derive(Debug, Clone)]
 pub struct SpaState {
-    /// Current water temperature in real units (°F or °C).
-    pub current_temp: f32,
-    /// Target temperature in real units (active range's value).
-    pub set_temp: f32,
+    /// Current water temperature.
+    pub current_temp: Temperature,
+    /// Target temperature (active range's value).
+    pub set_temp: Temperature,
     /// Saved set temperature for the High range (independent of Low).
-    pub set_temp_high: f32,
+    pub set_temp_high: Temperature,
     /// Saved set temperature for the Low range (independent of High).
-    pub set_temp_low: f32,
+    pub set_temp_low: Temperature,
     /// Active heating mode.
     pub heating_mode: HeatingMode,
     /// Temperature scale (affects wire encoding).
@@ -51,10 +51,10 @@ pub struct SpaState {
 impl Default for SpaState {
     fn default() -> Self {
         SpaState {
-            current_temp: 100.0,
-            set_temp: 104.0,
-            set_temp_high: 104.0,
-            set_temp_low: 80.0,
+            current_temp: Temperature::fahrenheit(100.0),
+            set_temp: Temperature::fahrenheit(104.0),
+            set_temp_high: Temperature::fahrenheit(104.0),
+            set_temp_low: Temperature::fahrenheit(80.0),
             heating_mode: HeatingMode::Ready,
             temp_scale: TemperatureScale::Fahrenheit,
             is_heating: true,
@@ -73,28 +73,8 @@ impl Default for SpaState {
 }
 
 impl SpaState {
-    /// Encode a temperature to the raw wire value.
-    /// Fahrenheit: direct. Celsius: multiply by 2.
-    pub(crate) fn encode_temp(temp: f32, scale: TemperatureScale) -> u8 {
-        let raw = match scale {
-            TemperatureScale::Fahrenheit => temp,
-            TemperatureScale::Celsius => temp * 2.0,
-            _ => temp,
-        };
-        (raw + 0.5) as u8
-    }
-
-    /// Decode a raw wire temperature to real units.
-    pub(crate) fn decode_temp(raw: u8, scale: TemperatureScale) -> f32 {
-        match scale {
-            TemperatureScale::Fahrenheit => raw as f32,
-            TemperatureScale::Celsius => raw as f32 / 2.0,
-            _ => raw as f32,
-        }
-    }
-
     /// Set the target temperature and persist to the active range's saved value.
-    pub(crate) fn set_target_temp(&mut self, temp: f32) {
+    pub(crate) fn set_target_temp(&mut self, temp: Temperature) {
         self.set_temp = temp;
         match self.temp_range {
             TempRange::High => self.set_temp_high = temp,

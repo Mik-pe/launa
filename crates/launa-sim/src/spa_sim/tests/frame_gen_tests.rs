@@ -1,7 +1,8 @@
 use super::*;
 use crate::spa_sim::frame_gen::{cycle_heating_mode, cycle_pump};
 use launa_protocol::frame::FrameDecoder;
-use launa_protocol::status::{HeatingMode, PumpState, TemperatureScale};
+use launa_protocol::status::{HeatingMode, PumpState};
+use launa_protocol::Temperature;
 
 #[test]
 fn test_tick_generates_frames() {
@@ -34,19 +35,19 @@ fn test_tick_after_registration_no_query() {
 #[test]
 fn test_temp_encoding_fahrenheit() {
     assert_eq!(
-        SpaState::encode_temp(100.0, TemperatureScale::Fahrenheit),
+        Temperature::fahrenheit(100.0).to_wire(),
         100
     );
     assert_eq!(
-        SpaState::encode_temp(104.0, TemperatureScale::Fahrenheit),
+        Temperature::fahrenheit(104.0).to_wire(),
         104
     );
 }
 
 #[test]
 fn test_temp_encoding_celsius() {
-    assert_eq!(SpaState::encode_temp(38.0, TemperatureScale::Celsius), 76);
-    assert_eq!(SpaState::encode_temp(40.0, TemperatureScale::Celsius), 80);
+    assert_eq!(Temperature::celsius(38.0).to_wire(), 76);
+    assert_eq!(Temperature::celsius(40.0).to_wire(), 80);
 }
 
 #[test]
@@ -368,8 +369,8 @@ fn test_partial_frame_oneshot_reset() {
 fn test_partial_frame_reassembly_content_correct() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = 100.0;
-    sim.state.set_temp = 100.0;
+    sim.state.current_temp = Temperature::fahrenheit(100.0);
+    sim.state.set_temp = Temperature::fahrenheit(100.0);
 
     // Generate a reference frame for content comparison
     let reference_bytes = sim.generate_status_frame();
@@ -382,8 +383,8 @@ fn test_partial_frame_reassembly_content_correct() {
     // Use a fresh sim to get consistent state
     let mut sim2 = SpaSim::new();
     sim2.registered = true;
-    sim2.state.current_temp = 100.0;
-    sim2.state.set_temp = 100.0;
+    sim2.state.current_temp = Temperature::fahrenheit(100.0);
+    sim2.state.set_temp = Temperature::fahrenheit(100.0);
 
     let status_bytes = sim2.generate_status_frame();
     let split_point = status_bytes.len() / 3; // Split at 1/3

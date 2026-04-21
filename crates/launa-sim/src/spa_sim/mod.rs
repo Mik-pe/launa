@@ -21,6 +21,7 @@ use alloc::vec::Vec;
 use launa_protocol::fault::FaultCode;
 use launa_protocol::frame::{Frame, FrameDecoder};
 use launa_protocol::status::PumpState;
+use launa_protocol::Temperature;
 
 pub use config::{
     FaultLogConfig, FilterCycleConfig, FilterCyclesConfig, InformationConfig, SpaConfigConfig,
@@ -96,9 +97,10 @@ pub struct SpaSim {
     sensor_noise_jitter: f32,
 
     // Physics model fields
-    /// Ambient temperature in °F used for cooling calculations.
+    /// Ambient temperature used for cooling calculations.
+    /// Always stored as Fahrenheit internally.
     /// Default: 70.0°F (backward compatible with original hardcoded value).
-    ambient_temp: f32,
+    ambient_temp: Temperature,
     /// Heat contribution per tick per running pump (in °F). Even when is_heating=false,
     /// running pumps slowly raise water temp via waste heat.
     /// Default: 0.0 (backward compatible — no pump heat contribution).
@@ -160,7 +162,7 @@ impl SpaSim {
             report_unknown_temp: false,
             sensor_noise_jitter: 0.0,
 
-            ambient_temp: 70.0,
+            ambient_temp: Temperature::fahrenheit(70.0),
             pump_heat_contribution: 0.0,
             physics_unknown_temp_ticks: 0,
             physics_tick_count: 0,
@@ -299,13 +301,14 @@ impl SpaSim {
         self.physics_unknown_temp_ticks = ticks;
     }
 
-    /// Set the heater overshoot amount in °F.
+    /// Set the heater overshoot amount.
     ///
-    /// When set > 0.0, heating continues past `set_temp` by this amount before stopping.
+    /// When set, heating continues past `set_temp` by this amount before stopping.
     /// Re-heating occurs when the temperature drops below `set_temp - overshoot/2`.
-    /// Default: 0.0 (no overshoot — backward compatible).
-    pub fn set_physics_overshoot(&mut self, overshoot: f32) {
-        self.physics_overshoot = overshoot.max(0.0);
+    /// Takes a `Temperature` so the scale is explicit: `Temperature::fahrenheit(2.0)`.
+    /// Default: `Temperature::fahrenheit(0.0)` (no overshoot).
+    pub fn set_physics_overshoot(&mut self, overshoot: Temperature) {
+        self.physics_overshoot = overshoot.to_fahrenheit().max(0.0);
     }
 
     /// Set the physics-mode temperature sensor noise amplitude (±N°F).
@@ -317,28 +320,29 @@ impl SpaSim {
         self.physics_noise_amplitude = amplitude.max(0.0);
     }
 
-    /// Set the ambient temperature in °F used for cooling calculations.
+    /// Set the ambient temperature used for cooling calculations.
     ///
-    /// Cooling rate is proportional to `(current_temp - ambient_temp)`.
-    /// Higher ambient temperatures produce slower cooling.
-    /// Default: 70.0°F (backward compatible with original hardcoded value).
-    pub fn set_ambient_temp(&mut self, temp: f32) {
+    /// Takes a `Temperature` so the scale is explicit: `Temperature::fahrenheit(70.0)`
+    /// or `Temperature::celsius(21.1)`.
+    /// Default: `Temperature::fahrenheit(70.0)`.
+    pub fn set_ambient_temp(&mut self, temp: Temperature) {
         self.ambient_temp = temp;
     }
 
-    /// Get the current ambient temperature in °F.
-    pub fn ambient_temp(&self) -> f32 {
+    /// Get the current ambient temperature.
+    pub fn ambient_temp(&self) -> Temperature {
         self.ambient_temp
     }
 
-    /// Set the pump waste heat contribution per tick per running pump (in °F).
+    /// Set the pump waste heat contribution per tick per running pump.
     ///
-    /// When set > 0.0, each running pump (non-Off) contributes this amount of waste
+    /// When set, each running pump (non-Off) contributes this amount of waste
     /// heat per physics tick, slowly raising the water temperature even without
-    /// active heating. The contribution is additive: 3 running pumps × 0.02 = 0.06°F/tick.
-    /// Default: 0.0 (no pump heat — backward compatible).
-    pub fn set_pump_heat_contribution(&mut self, contribution: f32) {
-        self.pump_heat_contribution = contribution.max(0.0);
+    /// active heating. Takes a `Temperature` so the scale is explicit.
+    /// The contribution is additive: 3 pumps × 0.02°F = 0.06°F/tick.
+    /// Default: `Temperature::fahrenheit(0.0)` (no pump heat).
+    pub fn set_pump_heat_contribution(&mut self, contribution: Temperature) {
+        self.pump_heat_contribution = contribution.to_fahrenheit().max(0.0);
     }
 
     /// Generate a deterministic pseudo-random f32 in [-1.0, 1.0] using the physics noise PRNG.
@@ -671,13 +675,13 @@ impl SpaSim {
                                 let scale = self.state.temp_scale;
                                 if self.command_latency_ticks == 0 {
                                     self.state
-                                        .set_target_temp(SpaState::decode_temp(raw_temp, scale));
+                                        .set_target_temp(Temperature::from_wire(raw_temp, scale));
                                 } else {
                                     let latency = self.command_latency_ticks;
                                     self.pending_commands.push((
                                         latency,
                                         Box::new(move |state: &mut SpaState| {
-                                            state.set_target_temp(SpaState::decode_temp(
+                                            state.set_target_temp(Temperature::from_wire(
                                                 raw_temp, scale,
                                             ));
                                         }),
@@ -847,6 +851,25 @@ impl SpaSim {
     /// This is the boundary where raw bytes → Rust type mutations.
     fn handle_toggle_by_code(&mut self, item_code: u8) {
         apply_toggle_by_code(&mut self.state, item_code);
+    }
+
+    /// Advance by one tick and return the parsed StatusUpdate from the output.
+    ///
+    /// Convenience method that combines `tick()` with frame decoding and
+    /// status parsing. Returns `None` if no valid status frame was found
+    /// in the tick output (e.g., during bus silence).
+    pub fn tick_status(&mut self) -> Option<launa_protocol::status::StatusUpdate> {
+        let output = self.tick();
+        let mut decoder = FrameDecoder::new();
+        let frames = decoder.feed_slice(&output);
+        for frame in &frames {
+            if frame.message_type == [0xFF, 0xAF] && frame.payload.len() == 24 {
+                if let Ok(status) = launa_protocol::status::StatusUpdate::parse(&frame.payload) {
+                    return Some(status);
+                }
+            }
+        }
+        None
     }
 
     /// How many ticks have elapsed.

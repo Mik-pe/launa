@@ -1,8 +1,10 @@
+use crate::temperature::Temperature;
+
 /// Parsed status update from the spa controller.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StatusUpdate {
-    pub current_temp: Option<f32>,
-    pub set_temp: f32,
+    pub current_temp: Option<Temperature>,
+    pub set_temp: Temperature,
     pub hour: u8,
     pub minute: u8,
     pub heating_mode: HeatingMode,
@@ -28,13 +30,11 @@ pub struct StatusUpdate {
     /// M8 cycle time (aux/timer) from offset 21.
     pub m8_cycle_time: u8,
     /// Sensor A temperature from offset 7.
-    /// `Some(f32)` when not in Hold mode, `None` when `is_hold == true`.
-    /// In Celsius mode, the raw value is divided by 2.
-    pub sensor_a_temp: Option<f32>,
+    /// `Some(Temperature)` when not in Hold mode, `None` when `is_hold == true`.
+    pub sensor_a_temp: Option<Temperature>,
     /// Sensor B temperature from offset 8.
-    /// `Some(f32)` when A/B temps mode is active (`payload[0] == 0x14`), `None` otherwise.
-    /// In Celsius mode, the raw value is divided by 2.
-    pub sensor_b_temp: Option<f32>,
+    /// `Some(Temperature)` when A/B temps mode is active (`payload[0] == 0x14`), `None` otherwise.
+    pub sensor_b_temp: Option<Temperature>,
     /// Hold timer remaining minutes from offset 7 when in Hold mode.
     /// `Some(u8)` when `is_hold == true`, `None` otherwise.
     /// Mutually exclusive with `sensor_a_temp` (same offset, dual interpretation).
@@ -119,18 +119,13 @@ impl StatusUpdate {
             TemperatureScale::Fahrenheit
         };
 
-        let temp_divisor: f32 = match scale {
-            TemperatureScale::Celsius => 2.0,
-            TemperatureScale::Fahrenheit => 1.0,
-        };
-
         let current_temp = if payload[2] == 0xFF {
             None
         } else {
-            Some(payload[2] as f32 / temp_divisor)
+            Some(Temperature::from_wire(payload[2], scale))
         };
 
-        let set_temp = payload[20] as f32 / temp_divisor;
+        let set_temp = Temperature::from_wire(payload[20], scale);
 
         let heating_mode = match payload[5] & 0x03 {
             0 => HeatingMode::Ready,
@@ -177,11 +172,11 @@ impl StatusUpdate {
         let (sensor_a_temp, hold_timer_minutes) = if is_hold {
             (None, Some(payload[7]))
         } else {
-            (Some(payload[7] as f32 / temp_divisor), None)
+            (Some(Temperature::from_wire(payload[7], scale)), None)
         };
 
         let sensor_b_temp = if is_ab_temps {
-            Some(payload[8] as f32 / temp_divisor)
+            Some(Temperature::from_wire(payload[8], scale))
         } else {
             None
         };
@@ -257,8 +252,8 @@ mod tests {
         payload[20] = 104; // set temp = 104°F
 
         let status = StatusUpdate::parse(&payload).unwrap();
-        assert_eq!(status.current_temp, Some(100.0));
-        assert_eq!(status.set_temp, 104.0);
+        assert_eq!(status.current_temp, Some(Temperature::fahrenheit(100.0)));
+        assert_eq!(status.set_temp, Temperature::fahrenheit(104.0));
         assert_eq!(status.hour, 14);
         assert_eq!(status.minute, 30);
         assert_eq!(status.temperature_scale, TemperatureScale::Fahrenheit);
@@ -277,7 +272,7 @@ mod tests {
 
         let status = StatusUpdate::parse(&payload).unwrap();
         assert_eq!(status.current_temp, None);
-        assert_eq!(status.set_temp, 38.0);
+        assert_eq!(status.set_temp, Temperature::celsius(38.0));
         assert_eq!(status.temperature_scale, TemperatureScale::Celsius);
     }
 
@@ -420,7 +415,7 @@ mod tests {
         payload[20] = 104;
 
         let status = StatusUpdate::parse(&payload).unwrap();
-        assert_eq!(status.sensor_a_temp, Some(98.0));
+        assert_eq!(status.sensor_a_temp, Some(Temperature::fahrenheit(98.0)));
         assert_eq!(status.hold_timer_minutes, None); // not in hold mode
     }
 
@@ -435,7 +430,7 @@ mod tests {
         payload[20] = 80;
 
         let status = StatusUpdate::parse(&payload).unwrap();
-        assert_eq!(status.sensor_a_temp, Some(37.0));
+        assert_eq!(status.sensor_a_temp, Some(Temperature::celsius(37.0)));
     }
 
     #[test]
@@ -464,8 +459,8 @@ mod tests {
         payload[20] = 104;
 
         let status = StatusUpdate::parse(&payload).unwrap();
-        assert_eq!(status.sensor_b_temp, Some(96.0));
-        assert_eq!(status.sensor_a_temp, Some(98.0)); // sensor A still present
+        assert_eq!(status.sensor_b_temp, Some(Temperature::fahrenheit(96.0)));
+        assert_eq!(status.sensor_a_temp, Some(Temperature::fahrenheit(98.0))); // sensor A still present
     }
 
     #[test]
@@ -480,8 +475,8 @@ mod tests {
         payload[20] = 80;
 
         let status = StatusUpdate::parse(&payload).unwrap();
-        assert_eq!(status.sensor_b_temp, Some(36.0));
-        assert_eq!(status.sensor_a_temp, Some(37.0));
+        assert_eq!(status.sensor_b_temp, Some(Temperature::celsius(36.0)));
+        assert_eq!(status.sensor_a_temp, Some(Temperature::celsius(37.0)));
     }
 
     #[test]
@@ -563,7 +558,7 @@ mod tests {
         payload[20] = 104;
 
         let status = StatusUpdate::parse(&payload).unwrap();
-        assert_eq!(status.sensor_a_temp, Some(98.0));
+        assert_eq!(status.sensor_a_temp, Some(Temperature::fahrenheit(98.0)));
         assert_eq!(status.hold_timer_minutes, None);
     }
 
@@ -577,7 +572,7 @@ mod tests {
         payload[20] = 104;
 
         let status = StatusUpdate::parse(&payload).unwrap();
-        assert_eq!(status.sensor_a_temp, Some(0.0));
+        assert_eq!(status.sensor_a_temp, Some(Temperature::fahrenheit(0.0)));
     }
 
     #[test]
@@ -591,7 +586,7 @@ mod tests {
         payload[20] = 104;
 
         let status = StatusUpdate::parse(&payload).unwrap();
-        assert_eq!(status.sensor_b_temp, Some(0.0));
+        assert_eq!(status.sensor_b_temp, Some(Temperature::fahrenheit(0.0)));
     }
 
     #[test]

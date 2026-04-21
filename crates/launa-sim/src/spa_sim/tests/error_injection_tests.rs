@@ -1,6 +1,7 @@
 use super::*;
 use launa_protocol::frame::FrameDecoder;
 use launa_protocol::status::PumpState;
+use launa_protocol::Temperature;
 
 #[test]
 fn test_bus_silence_produces_no_output() {
@@ -138,8 +139,8 @@ fn test_all_three_features_together() {
 fn test_combined_degraded_bus_500_ticks() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = 95.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(95.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = true;
     sim.state.pumps[0] = PumpState::Low;
 
@@ -148,7 +149,7 @@ fn test_combined_degraded_bus_500_ticks() {
     sim.set_command_latency_ticks(2);
     sim.set_command_success_rate(0.7);
     sim.set_ready_interval_range(2, 4);
-    sim.set_physics_overshoot(1.5);
+    sim.set_physics_overshoot(Temperature::fahrenheit(1.5));
     sim.set_physics_noise_amplitude(1.0);
     sim.set_physics_unknown_temp_ticks(5); // First 5 ticks unknown temp
 

@@ -377,12 +377,7 @@ mod tests {
     /// Float temperature payloads are rounded to nearest integer.
     #[test]
     fn test_set_temperature_float_rounding() {
-        let cases: &[(&str, u8)] = &[
-            ("37.5", 38),
-            ("37.4", 37),
-            ("100.9", 101),
-            ("38.0", 38),
-        ];
+        let cases: &[(&str, u8)] = &[("37.5", 38), ("37.4", 37), ("100.9", 101), ("38.0", 38)];
         for (i, (payload, expected)) in cases.iter().enumerate() {
             let topic = format!("{}/set_temperature", CMD_BASE);
             let result = parse_command(CMD_BASE, &topic, payload.as_bytes());

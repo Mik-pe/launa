@@ -30,6 +30,7 @@ pub mod information;
 pub mod pump_bits;
 pub mod registration;
 pub mod status;
+pub mod temperature;
 
 pub use command::Command;
 pub use dispatcher::{dispatch_frame, IncomingMessage};
@@ -38,3 +39,4 @@ pub use filter::FilterCycles;
 pub use frame::{Frame, FrameDecoder, FrameEncoder, FrameError};
 pub use information::InformationResponse;
 pub use status::StatusUpdate;
+pub use temperature::Temperature;

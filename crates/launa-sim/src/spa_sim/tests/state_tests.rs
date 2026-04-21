@@ -1,6 +1,7 @@
 use super::*;
 use launa_protocol::frame::FrameDecoder;
 use launa_protocol::status::PumpState;
+use launa_protocol::Temperature;
 
 #[test]
 fn test_simulate_spa_reboot_resets_registration() {
@@ -38,16 +39,16 @@ fn test_simulate_spa_reboot_resets_registration() {
 #[test]
 fn test_simulate_spa_reboot_preserves_physical_state() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 98.0;
-    sim.state.set_temp = 102.0;
+    sim.state.current_temp = Temperature::fahrenheit(98.0);
+    sim.state.set_temp = Temperature::fahrenheit(102.0);
     sim.state.pumps[0] = PumpState::Low;
     sim.state.lights[0] = true;
 
     sim.simulate_spa_reboot();
 
     // Physical state should be preserved
-    assert_eq!(sim.state.current_temp, 98.0);
-    assert_eq!(sim.state.set_temp, 102.0);
+    assert_eq!(sim.state.current_temp, Temperature::fahrenheit(98.0));
+    assert_eq!(sim.state.set_temp, Temperature::fahrenheit(102.0));
     assert_eq!(sim.state.pumps[0], PumpState::Low);
     assert!(sim.state.lights[0]);
 }
@@ -174,7 +175,7 @@ fn test_simulate_spontaneous_state_change_filter_cycle() {
 fn test_simulate_unknown_temp_reports_none() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = 100.0; // Internal temp is known
+    sim.state.current_temp = Temperature::fahrenheit(100.0); // Internal temp is known
 
     // Before: temp is known
     let normal_bytes = sim.generate_status_frame();
@@ -202,7 +203,8 @@ fn test_simulate_unknown_temp_reports_none() {
 
     // Internal state still has the temp
     assert_eq!(
-        sim.state.current_temp, 100.0,
+        sim.state.current_temp,
+        Temperature::fahrenheit(100.0),
         "internal state should still have the real temp"
     );
 }
@@ -211,7 +213,7 @@ fn test_simulate_unknown_temp_reports_none() {
 fn test_simulate_unknown_temp_clear_restores() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = 100.0;
+    sim.state.current_temp = Temperature::fahrenheit(100.0);
 
     sim.simulate_unknown_temp();
     sim.clear_unknown_temp();
@@ -225,7 +227,7 @@ fn test_simulate_unknown_temp_clear_restores() {
     };
     assert_eq!(
         s.current_temp,
-        Some(100.0),
+        Some(Temperature::fahrenheit(100.0)),
         "temp should be restored after clear_unknown_temp"
     );
 }
@@ -234,8 +236,8 @@ fn test_simulate_unknown_temp_clear_restores() {
 fn test_simulate_sensor_noise_with_jitter() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = 100.0;
-    sim.state.set_temp = 100.0;
+    sim.state.current_temp = Temperature::fahrenheit(100.0);
+    sim.state.set_temp = Temperature::fahrenheit(100.0);
     sim.simulate_sensor_noise(2.0);
 
     // Collect temps from 100 ticks
@@ -249,7 +251,7 @@ fn test_simulate_sensor_noise_with_jitter() {
             panic!("Expected StatusUpdate, got {:?}", msg);
         };
         if let Some(t) = s.current_temp {
-            temps.push(t);
+            temps.push(t.to_fahrenheit());
         }
     }
 
@@ -276,8 +278,8 @@ fn test_simulate_sensor_noise_with_jitter() {
 fn test_simulate_sensor_noise_zero_jitter() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = 100.0;
-    sim.state.set_temp = 100.0;
+    sim.state.current_temp = Temperature::fahrenheit(100.0);
+    sim.state.set_temp = Temperature::fahrenheit(100.0);
     sim.simulate_sensor_noise(0.0); // No noise
 
     for _ in 0..20 {
@@ -290,7 +292,7 @@ fn test_simulate_sensor_noise_zero_jitter() {
         };
         assert_eq!(
             s.current_temp,
-            Some(100.0),
+            Some(Temperature::fahrenheit(100.0)),
             "with jitter=0.0, temp should be exact"
         );
     }
@@ -300,8 +302,8 @@ fn test_simulate_sensor_noise_zero_jitter() {
 fn test_simulate_sensor_noise_deterministic() {
     let mut sim1 = SpaSim::new();
     sim1.registered = true;
-    sim1.state.current_temp = 100.0;
-    sim1.state.set_temp = 100.0;
+    sim1.state.current_temp = Temperature::fahrenheit(100.0);
+    sim1.state.set_temp = Temperature::fahrenheit(100.0);
     sim1.simulate_sensor_noise(1.5);
 
     let mut temps1: Vec<f32> = Vec::new();
@@ -314,15 +316,15 @@ fn test_simulate_sensor_noise_deterministic() {
             panic!("Expected StatusUpdate, got {:?}", msg);
         };
         if let Some(t) = s.current_temp {
-            temps1.push(t);
+            temps1.push(t.to_fahrenheit());
         }
     }
 
     // Create identical sim
     let mut sim2 = SpaSim::new();
     sim2.registered = true;
-    sim2.state.current_temp = 100.0;
-    sim2.state.set_temp = 100.0;
+    sim2.state.current_temp = Temperature::fahrenheit(100.0);
+    sim2.state.set_temp = Temperature::fahrenheit(100.0);
     sim2.simulate_sensor_noise(1.5);
 
     let mut temps2: Vec<f32> = Vec::new();
@@ -335,7 +337,7 @@ fn test_simulate_sensor_noise_deterministic() {
             panic!("Expected StatusUpdate, got {:?}", msg);
         };
         if let Some(t) = s.current_temp {
-            temps2.push(t);
+            temps2.push(t.to_fahrenheit());
         }
     }
 
@@ -438,8 +440,8 @@ fn test_clear_priming_mode_manual_exit() {
 #[test]
 fn test_spa_reboot_preserves_physics_state_after_running() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 80.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(80.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = true;
     sim.state.pumps[0] = PumpState::Low;
     sim.registered = true;
@@ -454,7 +456,7 @@ fn test_spa_reboot_preserves_physics_state_after_running() {
     let pump_before = sim.state.pumps[0];
     let light_before = sim.state.lights[0];
     assert!(
-        temp_before_reboot > 80.0,
+        temp_before_reboot > Temperature::fahrenheit(80.0),
         "should have heated up before reboot"
     );
 

@@ -1,6 +1,7 @@
 use super::*;
 use launa_protocol::frame::FrameEncoder;
 use launa_protocol::status::{PumpState, TemperatureScale};
+use launa_protocol::Temperature;
 
 #[test]
 fn test_process_toggle_via_bytes() {
@@ -25,7 +26,7 @@ fn test_set_temp_decoded_from_wire() {
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
 
-    assert_eq!(sim.state.set_temp, 100.0);
+    assert_eq!(sim.state.set_temp, Temperature::fahrenheit(100.0));
 }
 
 #[test]
@@ -38,7 +39,7 @@ fn test_set_temp_decoded_celsius() {
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
 
-    assert_eq!(sim.state.set_temp, 40.0);
+    assert_eq!(sim.state.set_temp, Temperature::celsius(40.0));
 }
 
 #[test]
@@ -82,7 +83,7 @@ fn test_command_success_rate_ignores_set_temp() {
     sim.process_incoming_bytes(&encoded);
 
     // Set temp should remain at default (104.0)
-    assert_eq!(sim.state.set_temp, 104.0);
+    assert_eq!(sim.state.set_temp, Temperature::fahrenheit(104.0));
 }
 
 #[test]
@@ -95,7 +96,7 @@ fn test_command_success_rate_accepts_set_temp() {
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
 
-    assert_eq!(sim.state.set_temp, 100.0);
+    assert_eq!(sim.state.set_temp, Temperature::fahrenheit(100.0));
 }
 
 #[test]
@@ -202,7 +203,7 @@ fn test_command_latency_defers_set_temperature() {
     for i in 1..=3 {
         sim.tick();
         assert_eq!(
-            sim.state.set_temp, 104.0,
+            sim.state.set_temp, Temperature::fahrenheit(104.0),
             "tick {}: set_temp should not change yet",
             i
         );
@@ -211,7 +212,7 @@ fn test_command_latency_defers_set_temperature() {
     // Tick 4: set_temp should change to 96.0
     sim.tick();
     assert_eq!(
-        sim.state.set_temp, 96.0,
+        sim.state.set_temp, Temperature::fahrenheit(96.0),
         "tick 4: deferred set_temp should be applied"
     );
 }
@@ -236,12 +237,12 @@ fn test_command_latency_set_temp_and_toggle_order() {
 
     // Tick 1: pending
     sim.tick();
-    assert_eq!(sim.state.set_temp, 104.0, "set_temp unchanged tick 1");
+    assert_eq!(sim.state.set_temp, Temperature::fahrenheit(104.0), "set_temp unchanged tick 1");
     assert_eq!(sim.state.pumps[0], PumpState::Off, "pump unchanged tick 1");
 
     // Tick 2: both should apply
     sim.tick();
-    assert_eq!(sim.state.set_temp, 96.0, "set_temp applied tick 2");
+    assert_eq!(sim.state.set_temp, Temperature::fahrenheit(96.0), "set_temp applied tick 2");
     assert_eq!(
         sim.state.pumps[0],
         PumpState::Low,

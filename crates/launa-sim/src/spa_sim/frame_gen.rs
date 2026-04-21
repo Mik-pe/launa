@@ -9,6 +9,7 @@ use alloc::vec::Vec;
 
 use launa_protocol::frame::FrameEncoder;
 use launa_protocol::status::{HeatingMode, PumpState, TempRange, TemperatureScale};
+use launa_protocol::Temperature;
 
 use super::config::{FaultLogConfig, FilterCyclesConfig, InformationConfig, SpaConfigConfig};
 use super::state::SpaState;
@@ -70,9 +71,10 @@ pub(crate) fn apply_toggle_by_code(state: &mut SpaState, item_code: u8) {
         0x51 => state.heating_mode = cycle_heating_mode(state.heating_mode),
         0x50 => {
             // Save current set_temp to the active range before switching
+            let current_set = state.set_temp;
             match state.temp_range {
-                TempRange::High => state.set_temp_high = state.set_temp,
-                TempRange::Low => state.set_temp_low = state.set_temp,
+                TempRange::High => state.set_temp_high = current_set,
+                TempRange::Low => state.set_temp_low = current_set,
                 _ => {}
             }
             state.temp_range = flip_temp_range(state.temp_range);
@@ -123,18 +125,20 @@ pub(crate) fn generate_status_frame(
     if report_unknown_temp || in_unknown_period {
         payload[2] = 0xFF; // Unknown temperature
     } else {
-        let mut reported_temp = state.current_temp;
+        let mut reported_f = state.current_temp.to_fahrenheit();
         // Apply physics-model noise (if configured)
         if physics_noise_amplitude > 0.0 {
-            reported_temp += physics_noise_value;
+            reported_f += physics_noise_value;
         }
         // Apply legacy sensor_noise_jitter (if configured)
         if sensor_noise_jitter > 0.0 {
             let normalized = (ready_rand_value / (i64::MAX as f64)) as f32;
             let jitter = normalized * sensor_noise_jitter;
-            reported_temp += jitter;
+            reported_f += jitter;
         }
-        payload[2] = SpaState::encode_temp(reported_temp, state.temp_scale);
+        payload[2] = Temperature::fahrenheit(reported_f)
+            .convert(state.temp_scale)
+            .to_wire();
     }
     // Offset 3: Hour, Offset 4: Minute
     payload[3] = state.hour;
@@ -191,7 +195,7 @@ pub(crate) fn generate_status_frame(
     }
 
     // Offset 20: Set Temperature
-    payload[20] = SpaState::encode_temp(state.set_temp, state.temp_scale);
+    payload[20] = state.set_temp.to_wire();
 
     let mut frame = FrameEncoder::encode([0xFF, 0xAF], &payload)
         .expect("status frame encoding should never fail: payload is fixed 24 bytes");

@@ -155,8 +155,8 @@ fn test_status_all_bytes_0xff() {
 fn test_status_all_bytes_0x00() {
     let payload = [0x00u8; 24];
     let status = StatusUpdate::parse(&payload).unwrap();
-    assert_eq!(status.current_temp, Some(0.0));
-    assert_eq!(status.set_temp, 0.0);
+    assert_eq!(status.current_temp, Some(launa_protocol::Temperature::fahrenheit(0.0)));
+    assert_eq!(status.set_temp, launa_protocol::Temperature::fahrenheit(0.0));
     assert_eq!(status.hour, 0);
     assert_eq!(status.minute, 0);
 }

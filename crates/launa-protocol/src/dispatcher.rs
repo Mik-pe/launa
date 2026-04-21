@@ -336,6 +336,7 @@ pub fn dispatch_frame(frame: &Frame) -> IncomingMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Temperature;
     use std::string::String;
 
     #[test]
@@ -352,8 +353,8 @@ mod tests {
         let msg = dispatch_frame(&frame);
         match msg {
             IncomingMessage::StatusUpdate(s) => {
-                assert_eq!(s.current_temp, Some(100.0));
-                assert_eq!(s.set_temp, 104.0);
+                assert_eq!(s.current_temp, Some(Temperature::fahrenheit(100.0)));
+                assert_eq!(s.set_temp, Temperature::fahrenheit(104.0));
             }
             _ => panic!("Expected StatusUpdate, got {:?}", msg),
         }

@@ -16,6 +16,7 @@ use launa_protocol::command::Command;
 use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
 use launa_protocol::frame::FrameDecoder;
 use launa_protocol::status::{TempRange, TemperatureScale};
+use launa_protocol::Temperature;
 use launa_sim::SpaSim;
 
 #[test]
@@ -52,7 +53,7 @@ fn test_validated_temperature_pipeline_fahrenheit() {
     let msg = dispatch_frame(&status_frames[0]);
     match msg {
         IncomingMessage::StatusUpdate(s) => {
-            assert_eq!(s.set_temp, 100.0);
+            assert_eq!(s.set_temp, Temperature::fahrenheit(100.0));
             assert_eq!(s.temperature_scale, TemperatureScale::Fahrenheit);
         }
         _ => panic!("Expected StatusUpdate"),
@@ -65,8 +66,8 @@ fn test_validated_temperature_pipeline_celsius() {
     // Rationale: sim.state fields are test scenario setup inputs,
     // not assertions — the actual verification is through decoded status frames.
     sim.state.temp_scale = TemperatureScale::Celsius;
-    sim.state.current_temp = 36.0;
-    sim.state.set_temp = 40.0;
+    sim.state.current_temp = Temperature::celsius(36.0);
+    sim.state.set_temp = Temperature::celsius(40.0);
 
     let parse_result = launa_mqtt::command_parser::parse_set_temperature_validated(
         "38",
@@ -94,7 +95,7 @@ fn test_validated_temperature_pipeline_celsius() {
     let msg = dispatch_frame(&status_frames[0]);
     match msg {
         IncomingMessage::StatusUpdate(s) => {
-            assert_eq!(s.set_temp, 38.0);
+            assert_eq!(s.set_temp, Temperature::celsius(38.0));
             assert_eq!(s.temperature_scale, TemperatureScale::Celsius);
         }
         _ => panic!("Expected StatusUpdate"),
@@ -144,7 +145,7 @@ fn test_validated_temperature_pipeline_through_spaapp_fahrenheit() {
     let msg = dispatch_frame(&status_frames[0]);
     match msg {
         IncomingMessage::StatusUpdate(s) => {
-            assert_eq!(s.set_temp, 102.0);
+            assert_eq!(s.set_temp, Temperature::fahrenheit(102.0));
         }
         _ => panic!("Expected StatusUpdate"),
     }
@@ -165,8 +166,8 @@ fn test_validated_temperature_pipeline_through_spaapp_celsius() {
     app.force_registered(0x03);
     let mut sim = SpaSim::new();
     sim.state.temp_scale = TemperatureScale::Celsius;
-    sim.state.current_temp = 38.0;
-    sim.state.set_temp = 38.0;
+    sim.state.current_temp = Temperature::celsius(38.0);
+    sim.state.set_temp = Temperature::celsius(38.0);
 
     let status_bytes = sim.generate_status_frame();
     let mut decoder = FrameDecoder::new();
@@ -205,7 +206,7 @@ fn test_validated_temperature_pipeline_through_spaapp_celsius() {
     let msg = dispatch_frame(&status_frames[0]);
     match msg {
         IncomingMessage::StatusUpdate(s) => {
-            assert_eq!(s.set_temp, 40.0);
+            assert_eq!(s.set_temp, Temperature::celsius(40.0));
             assert_eq!(s.temperature_scale, TemperatureScale::Celsius);
         }
         _ => panic!("Expected StatusUpdate"),

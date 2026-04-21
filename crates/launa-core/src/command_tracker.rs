@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 use launa_hal::Timestamp;
 use launa_protocol::command::Command;
 use launa_protocol::command::ToggleItem;
-use launa_protocol::status::{HeatingMode, PumpState, StatusUpdate, TempRange, TemperatureScale};
+use launa_protocol::status::{HeatingMode, PumpState, StatusUpdate, TempRange};
 
 use crate::types::{COMMAND_ACK_TIMEOUT_MS, MAX_COMMAND_RETRIES, MAX_PENDING_COMMANDS};
 
@@ -177,14 +177,9 @@ impl CommandTracker {
                 }
             }
             ExpectedChange::TemperatureSet { temp } => {
-                // set_temp is decoded (÷2 for Celsius, ÷1 for Fahrenheit).
-                // Multiply back to raw wire value for comparison.
-                let divisor: f32 = match status.temperature_scale {
-                    TemperatureScale::Celsius => 2.0,
-                    TemperatureScale::Fahrenheit => 1.0,
-                    _ => 1.0,
-                };
-                ((status.set_temp * divisor) as u8) == *temp
+                // set_temp is a Temperature that knows its scale.
+                // to_wire() encodes back to raw byte (×2 for Celsius, direct for Fahrenheit).
+                status.set_temp.to_wire() == *temp
             }
             ExpectedChange::LightToggled { item, pre_state } => {
                 if let Some(idx) = item.light_index() {
@@ -227,12 +222,13 @@ mod tests {
     use super::*;
     use alloc::boxed::Box;
     use launa_protocol::status::{HeatingMode, PumpState, TempRange, TemperatureScale, TimeFormat};
+    use launa_protocol::Temperature;
     use launa_sim::VirtualClock;
 
-    /// Helper: build a StatusUpdate with explicit scale and set_temp.
-    fn make_status(set_temp: f32, scale: TemperatureScale) -> StatusUpdate {
+    /// Helper: build a StatusUpdate with explicit set_temp and scale.
+    fn make_status(set_temp: Temperature, scale: TemperatureScale) -> StatusUpdate {
         StatusUpdate {
-            current_temp: Some(38.0),
+            current_temp: Some(Temperature::celsius(38.0)),
             set_temp,
             hour: 0,
             minute: 0,
@@ -262,12 +258,12 @@ mod tests {
     /// Helper: build a Celsius StatusUpdate from a raw wire value.
     /// Raw 76 → set_temp=38.0, raw 77 → set_temp=38.5, etc.
     fn make_celsius_status(raw_set_temp: u8) -> StatusUpdate {
-        make_status(raw_set_temp as f32 / 2.0, TemperatureScale::Celsius)
+        make_status(Temperature::from_wire(raw_set_temp, TemperatureScale::Celsius), TemperatureScale::Celsius)
     }
 
     /// Helper: build a Fahrenheit StatusUpdate from a raw wire value.
     fn make_fahrenheit_status(raw_set_temp: u8) -> StatusUpdate {
-        make_status(raw_set_temp as f32, TemperatureScale::Fahrenheit)
+        make_status(Temperature::from_wire(raw_set_temp, TemperatureScale::Fahrenheit), TemperatureScale::Fahrenheit)
     }
 
     /// Test is_confirmed directly for Fahrenheit.

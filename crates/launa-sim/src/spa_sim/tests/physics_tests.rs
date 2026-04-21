@@ -1,12 +1,13 @@
 use super::*;
 use launa_protocol::frame::FrameDecoder;
 use launa_protocol::status::PumpState;
+use launa_protocol::Temperature;
 
 #[test]
 fn test_physics_heating() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 95.0;
-    sim.state.set_temp = 100.0;
+    sim.state.current_temp = Temperature::fahrenheit(95.0);
+    sim.state.set_temp = Temperature::fahrenheit(100.0);
     sim.state.is_heating = true;
     sim.state.pumps[0] = PumpState::Low;
 
@@ -14,12 +15,12 @@ fn test_physics_heating() {
     // Heat until we reach set_temp (within tolerance).
     for _ in 0..100 {
         sim.simulate_physics();
-        if sim.state.current_temp >= 100.0 {
+        if sim.state.current_temp >= Temperature::fahrenheit(100.0) {
             break;
         }
     }
     assert!(
-        sim.state.current_temp >= 100.0,
+        sim.state.current_temp >= Temperature::fahrenheit(100.0),
         "should reach set_temp, got {}",
         sim.state.current_temp
     );
@@ -32,19 +33,19 @@ fn test_physics_heating() {
 #[test]
 fn test_physics_cooling() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 105.0;
-    sim.state.set_temp = 100.0;
+    sim.state.current_temp = Temperature::fahrenheit(105.0);
+    sim.state.set_temp = Temperature::fahrenheit(100.0);
     sim.state.is_heating = false;
 
     sim.simulate_physics();
     // With proportional cooling, should decrease but not by a full 1.0°
     assert!(
-        sim.state.current_temp < 105.0,
+        sim.state.current_temp < Temperature::fahrenheit(105.0),
         "should cool down, got {}",
         sim.state.current_temp
     );
     assert!(
-        sim.state.current_temp > 100.0,
+        sim.state.current_temp > Temperature::fahrenheit(100.0),
         "should not reach set_temp in one tick, got {}",
         sim.state.current_temp
     );
@@ -53,14 +54,14 @@ fn test_physics_cooling() {
 #[test]
 fn test_realistic_thermal_heating_80_to_104() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 80.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(80.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = true;
     // Need at least one pump running for heater/pump interlock
     sim.state.pumps[0] = PumpState::Low;
 
     let mut ticks = 0;
-    while sim.state.current_temp < 104.0 && ticks < 200 {
+    while sim.state.current_temp < Temperature::fahrenheit(104.0) && ticks < 200 {
         sim.simulate_physics();
         ticks += 1;
     }
@@ -71,7 +72,7 @@ fn test_realistic_thermal_heating_80_to_104() {
         ticks
     );
     assert!(
-        sim.state.current_temp >= 104.0,
+        sim.state.current_temp >= Temperature::fahrenheit(104.0),
         "should reach set_temp, got {}",
         sim.state.current_temp
     );
@@ -80,12 +81,12 @@ fn test_realistic_thermal_heating_80_to_104() {
 #[test]
 fn test_realistic_thermal_cooling_104_to_80() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 104.0;
-    sim.state.set_temp = 80.0;
+    sim.state.current_temp = Temperature::fahrenheit(104.0);
+    sim.state.set_temp = Temperature::fahrenheit(80.0);
     sim.state.is_heating = false;
 
     let mut ticks = 0;
-    while sim.state.current_temp > 80.0 && ticks < 500 {
+    while sim.state.current_temp > Temperature::fahrenheit(80.0) && ticks < 500 {
         sim.simulate_physics();
         ticks += 1;
     }
@@ -96,7 +97,7 @@ fn test_realistic_thermal_cooling_104_to_80() {
         ticks
     );
     assert!(
-        sim.state.current_temp <= 80.0,
+        sim.state.current_temp <= Temperature::fahrenheit(80.0),
         "should reach set_temp, got {}",
         sim.state.current_temp
     );
@@ -105,8 +106,8 @@ fn test_realistic_thermal_cooling_104_to_80() {
 #[test]
 fn test_realistic_thermal_heating_rate_tapers() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 80.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(80.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = true;
     sim.state.pumps[0] = PumpState::Low;
 
@@ -114,13 +115,13 @@ fn test_realistic_thermal_heating_rate_tapers() {
     let checkpoints = [80.0f32, 90.0f32, 100.0f32];
     for &start_temp in &checkpoints {
         let mut s = SpaSim::new();
-        s.state.current_temp = start_temp;
-        s.state.set_temp = 104.0;
+        s.state.current_temp = Temperature::fahrenheit(start_temp);
+        s.state.set_temp = Temperature::fahrenheit(104.0);
         s.state.is_heating = true;
         s.state.pumps[0] = PumpState::Low;
-        let temp_before = s.state.current_temp;
+        let temp_before = s.state.current_temp.to_fahrenheit();
         s.simulate_physics();
-        let delta = s.state.current_temp - temp_before;
+        let delta = s.state.current_temp.to_fahrenheit() - temp_before;
         assert!(
             delta > 0.0,
             "temp should increase when heating at {}°F, got delta={}",
@@ -141,8 +142,8 @@ fn test_realistic_thermal_heating_rate_tapers() {
 #[test]
 fn test_realistic_thermal_deterministic() {
     let mut sim1 = SpaSim::new();
-    sim1.state.current_temp = 85.0;
-    sim1.state.set_temp = 104.0;
+    sim1.state.current_temp = Temperature::fahrenheit(85.0);
+    sim1.state.set_temp = Temperature::fahrenheit(104.0);
     sim1.state.is_heating = true;
     sim1.state.pumps[0] = PumpState::Low;
 
@@ -153,8 +154,8 @@ fn test_realistic_thermal_deterministic() {
     }
 
     let mut sim2 = SpaSim::new();
-    sim2.state.current_temp = 85.0;
-    sim2.state.set_temp = 104.0;
+    sim2.state.current_temp = Temperature::fahrenheit(85.0);
+    sim2.state.set_temp = Temperature::fahrenheit(104.0);
     sim2.state.is_heating = true;
     sim2.state.pumps[0] = PumpState::Low;
 
@@ -173,8 +174,8 @@ fn test_realistic_thermal_deterministic() {
 #[test]
 fn test_realistic_thermal_no_overshoot_default() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 103.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(103.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = true;
     sim.state.pumps[0] = PumpState::Low;
 
@@ -184,7 +185,7 @@ fn test_realistic_thermal_no_overshoot_default() {
     }
 
     assert!(
-        sim.state.current_temp <= 104.0,
+        sim.state.current_temp <= Temperature::fahrenheit(104.0),
         "without overshoot, temp should not exceed set_temp, got {}",
         sim.state.current_temp
     );
@@ -194,8 +195,11 @@ fn test_realistic_thermal_no_overshoot_default() {
 fn test_physics_sensor_noise_variation() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = 100.0;
-    sim.state.set_temp = 100.0;
+    sim.state.current_temp = Temperature::fahrenheit(100.0);
+    sim.state.set_temp = Temperature::fahrenheit(100.0);
+    sim.state.is_heating = false;
+    // Set ambient to current temp so physics doesn't change the temp
+    sim.set_ambient_temp(Temperature::fahrenheit(100.0));
     sim.set_physics_noise_amplitude(2.0);
 
     let mut variation_count = 0;
@@ -209,12 +213,12 @@ fn test_physics_sensor_noise_variation() {
             panic!("Expected StatusUpdate, got {:?}", msg);
         };
         if let Some(t) = s.current_temp {
-            if (t - 100.0).abs() > 0.01 {
+            if (t.to_fahrenheit() - 100.0).abs() > 0.01 {
                 variation_count += 1;
             }
             // All temps should be within ±2.0°F of internal temp
             assert!(
-                t >= 98.0 && t <= 102.0,
+                t.to_fahrenheit() >= 98.0 && t.to_fahrenheit() <= 102.0,
                 "temp {} should be within ±2.0 of 100.0",
                 t
             );
@@ -234,8 +238,11 @@ fn test_physics_sensor_noise_variation() {
 fn test_physics_sensor_noise_zero_no_noise() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = 100.0;
-    sim.state.set_temp = 100.0;
+    sim.state.current_temp = Temperature::fahrenheit(100.0);
+    sim.state.set_temp = Temperature::fahrenheit(100.0);
+    sim.state.is_heating = false;
+    // Set ambient to current temp so physics doesn't change the temp
+    sim.set_ambient_temp(Temperature::fahrenheit(100.0));
     sim.set_physics_noise_amplitude(0.0);
 
     for _ in 0..30 {
@@ -248,7 +255,7 @@ fn test_physics_sensor_noise_zero_no_noise() {
         };
         assert_eq!(
             s.current_temp,
-            Some(100.0),
+            Some(Temperature::fahrenheit(100.0)),
             "with noise=0.0, temp should be exact"
         );
     }
@@ -257,8 +264,8 @@ fn test_physics_sensor_noise_zero_no_noise() {
 #[test]
 fn test_physics_heater_off_when_pumps_off() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 90.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(90.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = true;
     // All pumps off, circ_pump off
     sim.state.pumps = [PumpState::Off; 6];
@@ -275,8 +282,8 @@ fn test_physics_heater_off_when_pumps_off() {
 #[test]
 fn test_physics_heater_on_when_pump_on() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 90.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(90.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = false;
     sim.state.pumps[0] = PumpState::Low;
 
@@ -291,8 +298,8 @@ fn test_physics_heater_on_when_pump_on() {
 #[test]
 fn test_physics_heater_on_when_circ_pump_on() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 90.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(90.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = false;
     sim.state.pumps = [PumpState::Off; 6];
     sim.state.circ_pump = true;
@@ -308,8 +315,8 @@ fn test_physics_heater_on_when_circ_pump_on() {
 #[test]
 fn test_physics_heater_off_after_pump_turned_off() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 90.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(90.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = true;
     sim.state.pumps[0] = PumpState::Low;
 
@@ -330,7 +337,10 @@ fn test_physics_heater_off_after_pump_turned_off() {
 fn test_physics_temp_unknown_on_startup_first_n_ticks() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = 100.0;
+    sim.state.current_temp = Temperature::fahrenheit(100.0);
+    sim.state.set_temp = Temperature::fahrenheit(100.0);
+    // Set ambient to current temp so physics doesn't change the temp during unknown period
+    sim.set_ambient_temp(Temperature::fahrenheit(100.0));
     sim.set_physics_unknown_temp_ticks(5); // First 5 ticks report unknown
 
     // Ticks 1-5: should report None (0xFF)
@@ -359,7 +369,7 @@ fn test_physics_temp_unknown_on_startup_first_n_ticks() {
     };
     assert_eq!(
         s.current_temp,
-        Some(100.0),
+        Some(Temperature::fahrenheit(100.0)),
         "tick 6: should report actual temp"
     );
 }
@@ -367,8 +377,8 @@ fn test_physics_temp_unknown_on_startup_first_n_ticks() {
 #[test]
 fn test_physics_internal_runs_during_unknown_temp() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 90.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(90.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = true;
     sim.state.pumps[0] = PumpState::Low;
     sim.set_physics_unknown_temp_ticks(5);
@@ -379,7 +389,7 @@ fn test_physics_internal_runs_during_unknown_temp() {
     }
 
     assert!(
-        sim.state.current_temp > 90.0,
+        sim.state.current_temp > Temperature::fahrenheit(90.0),
         "internal temp should have increased during unknown period, got {}",
         sim.state.current_temp
     );
@@ -389,7 +399,10 @@ fn test_physics_internal_runs_during_unknown_temp() {
 fn test_physics_unknown_temp_default_zero() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = 100.0;
+    sim.state.current_temp = Temperature::fahrenheit(100.0);
+    sim.state.set_temp = Temperature::fahrenheit(100.0);
+    // Set ambient to current temp so physics doesn't change the temp
+    sim.set_ambient_temp(Temperature::fahrenheit(100.0));
 
     // Default: no unknown temp period
     let bytes = sim.tick();
@@ -401,7 +414,7 @@ fn test_physics_unknown_temp_default_zero() {
     };
     assert_eq!(
         s.current_temp,
-        Some(100.0),
+        Some(Temperature::fahrenheit(100.0)),
         "default N=0: should report actual temp from first tick"
     );
 }
@@ -409,16 +422,18 @@ fn test_physics_unknown_temp_default_zero() {
 #[test]
 fn test_physics_heater_overshoot() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 100.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(100.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = true;
     sim.state.pumps[0] = PumpState::Low;
-    sim.set_physics_overshoot(2.0);
+    sim.set_physics_overshoot(Temperature::fahrenheit(2.0));
 
-    let mut max_temp = sim.state.current_temp;
+    let mut max_temp = sim.state.current_temp.to_fahrenheit();
     for _ in 0..200 {
         sim.simulate_physics();
-        max_temp = max_temp.max(sim.state.current_temp);
+        if sim.state.current_temp.to_fahrenheit() > max_temp {
+            max_temp = sim.state.current_temp.to_fahrenheit();
+        }
         // Stop once heating turns off
         if !sim.state.is_heating {
             break;
@@ -439,11 +454,11 @@ fn test_physics_heater_overshoot() {
 #[test]
 fn test_physics_heater_overshoot_hysteresis() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 104.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(104.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = false;
     sim.state.pumps[0] = PumpState::Low;
-    sim.set_physics_overshoot(2.0);
+    sim.set_physics_overshoot(Temperature::fahrenheit(2.0));
 
     // Simulate overshoot completion: set heating_overshot flag
     sim.heating_overshot = true;
@@ -452,16 +467,22 @@ fn test_physics_heater_overshoot_hysteresis() {
     // Hysteresis threshold = set_temp - overshoot/2 = 104 - 1.0 = 103.0
     // Temp should NOT start heating until it drops to 103.0
 
+    // Set ambient to test temp so physics doesn't change temp during this check
+    sim.set_ambient_temp(Temperature::fahrenheit(103.5));
+
     // Cool slightly to 103.5 — should NOT re-heat yet
-    sim.state.current_temp = 103.5;
+    sim.state.current_temp = Temperature::fahrenheit(103.5);
     sim.simulate_physics();
     assert!(
         !sim.state.is_heating,
         "should not re-heat at 103.5 (above hysteresis threshold of 103.0)"
     );
 
-    // Cool to 103.0 — should start re-heating
-    sim.state.current_temp = 102.9;
+    // Set ambient for the lower check too
+    sim.set_ambient_temp(Temperature::fahrenheit(102.9));
+
+    // Cool to below threshold — should start re-heating
+    sim.state.current_temp = Temperature::fahrenheit(102.9);
     sim.simulate_physics();
     assert!(
         sim.state.is_heating,
@@ -472,8 +493,8 @@ fn test_physics_heater_overshoot_hysteresis() {
 #[test]
 fn test_physics_overshoot_default_zero() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 103.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(103.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = true;
     sim.state.pumps[0] = PumpState::Low;
 
@@ -483,7 +504,7 @@ fn test_physics_overshoot_default_zero() {
     }
 
     assert!(
-        sim.state.current_temp <= 104.01,
+        sim.state.current_temp.to_fahrenheit() <= 104.01,
         "default overshoot=0: temp should not exceed set_temp, got {}",
         sim.state.current_temp
     );
@@ -493,14 +514,14 @@ fn test_physics_overshoot_default_zero() {
 fn test_all_physics_features_together() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = 80.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(80.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = true;
     sim.state.pumps[0] = PumpState::Low;
 
     // Enable all physics features
     sim.set_physics_unknown_temp_ticks(3);
-    sim.set_physics_overshoot(1.5);
+    sim.set_physics_overshoot(Temperature::fahrenheit(1.5));
     sim.set_physics_noise_amplitude(0.3);
 
     // First 3 ticks: unknown temp
@@ -530,17 +551,19 @@ fn test_all_physics_features_together() {
 
     // Internal temp should have been increasing during unknown period
     assert!(
-        sim.state.current_temp > 80.0,
+        sim.state.current_temp > Temperature::fahrenheit(80.0),
         "internal temp should have increased, got {}",
         sim.state.current_temp
     );
 
     // Continue heating until overshoot
-    let mut max_temp = sim.state.current_temp;
+    let mut max_temp = sim.state.current_temp.to_fahrenheit();
     for _ in 0..300 {
         sim.tick();
-        max_temp = max_temp.max(sim.state.current_temp);
-        if !sim.state.is_heating && sim.state.current_temp < 104.0 {
+        if sim.state.current_temp.to_fahrenheit() > max_temp {
+            max_temp = sim.state.current_temp.to_fahrenheit();
+        }
+        if !sim.state.is_heating && sim.state.current_temp < Temperature::fahrenheit(104.0) {
             break;
         }
     }
@@ -557,16 +580,16 @@ fn test_all_physics_features_together() {
 fn test_higher_ambient_slower_cooling() {
     // Compare cooling rate with ambient=70°F (default) vs ambient=85°F
     let mut sim70 = SpaSim::new();
-    sim70.state.current_temp = 104.0;
-    sim70.state.set_temp = 80.0;
+    sim70.state.current_temp = Temperature::fahrenheit(104.0);
+    sim70.state.set_temp = Temperature::fahrenheit(80.0);
     sim70.state.is_heating = false;
     // Default ambient is 70°F
 
     let mut sim85 = SpaSim::new();
-    sim85.state.current_temp = 104.0;
-    sim85.state.set_temp = 80.0;
+    sim85.state.current_temp = Temperature::fahrenheit(104.0);
+    sim85.state.set_temp = Temperature::fahrenheit(80.0);
     sim85.state.is_heating = false;
-    sim85.set_ambient_temp(85.0);
+    sim85.set_ambient_temp(Temperature::fahrenheit(85.0));
 
     // Run 10 physics ticks on each
     for _ in 0..10 {
@@ -586,15 +609,15 @@ fn test_higher_ambient_slower_cooling() {
 #[test]
 fn test_set_ambient_temp_70_matches_default() {
     let mut sim_default = SpaSim::new();
-    sim_default.state.current_temp = 104.0;
-    sim_default.state.set_temp = 80.0;
+    sim_default.state.current_temp = Temperature::fahrenheit(104.0);
+    sim_default.state.set_temp = Temperature::fahrenheit(80.0);
     sim_default.state.is_heating = false;
 
     let mut sim_explicit = SpaSim::new();
-    sim_explicit.state.current_temp = 104.0;
-    sim_explicit.state.set_temp = 80.0;
+    sim_explicit.state.current_temp = Temperature::fahrenheit(104.0);
+    sim_explicit.state.set_temp = Temperature::fahrenheit(80.0);
     sim_explicit.state.is_heating = false;
-    sim_explicit.set_ambient_temp(70.0);
+    sim_explicit.set_ambient_temp(Temperature::fahrenheit(70.0));
 
     for _ in 0..20 {
         sim_default.simulate_physics();
@@ -610,24 +633,30 @@ fn test_set_ambient_temp_70_matches_default() {
 #[test]
 fn test_default_ambient_is_70() {
     let sim = SpaSim::new();
-    assert_eq!(sim.ambient_temp(), 70.0, "default ambient should be 70°F");
+    assert_eq!(
+        sim.ambient_temp(),
+        Temperature::fahrenheit(70.0),
+        "default ambient should be 70°F"
+    );
 }
 
 #[test]
 fn test_pump_heat_contribution_raises_temp() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 95.0;
-    sim.state.set_temp = 100.0;
+    sim.state.current_temp = Temperature::fahrenheit(95.0);
+    sim.state.set_temp = Temperature::fahrenheit(100.0);
     sim.state.is_heating = false;
     sim.state.pumps[0] = PumpState::High;
+    // Set ambient to current temp so only pump heat contributes
+    sim.set_ambient_temp(Temperature::fahrenheit(95.0));
     // Enable pump heat contribution
-    sim.set_pump_heat_contribution(0.02); // 0.02°F per tick per running pump
+    sim.set_pump_heat_contribution(Temperature::fahrenheit(0.02)); // 0.02°F per tick per running pump
 
-    let temp_before = sim.state.current_temp;
+    let temp_before = sim.state.current_temp.to_fahrenheit();
     sim.simulate_physics();
 
     assert!(
-        sim.state.current_temp > temp_before,
+        sim.state.current_temp.to_fahrenheit() > temp_before,
         "pump heat should raise temp: before={}, after={}",
         temp_before,
         sim.state.current_temp
@@ -637,20 +666,21 @@ fn test_pump_heat_contribution_raises_temp() {
 #[test]
 fn test_pump_heat_contribution_default_off() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 95.0;
-    sim.state.set_temp = 100.0;
+    sim.state.current_temp = Temperature::fahrenheit(95.0);
+    sim.state.set_temp = Temperature::fahrenheit(100.0);
     sim.state.is_heating = false;
     sim.state.pumps[0] = PumpState::High;
+    // Set ambient to current temp so no cooling
+    sim.set_ambient_temp(Temperature::fahrenheit(95.0));
     // Don't call set_pump_heat_contribution — should default to 0
 
-    let temp_before = sim.state.current_temp;
+    let temp_before = sim.state.current_temp.to_fahrenheit();
 
-    // With default (no pump heat), temp should not increase from pumps alone
-    // (only cooling towards ambient should occur)
+    // With default (no pump heat) and no cooling delta, temp should stay the same
     sim.simulate_physics();
 
     assert!(
-        sim.state.current_temp <= temp_before,
+        sim.state.current_temp.to_fahrenheit() <= temp_before,
         "default pump heat=0: temp should not increase from pumps alone, before={}, after={}",
         temp_before,
         sim.state.current_temp
@@ -660,20 +690,22 @@ fn test_pump_heat_contribution_default_off() {
 #[test]
 fn test_pump_heat_multiple_pumps_higher_contribution() {
     let mut sim1 = SpaSim::new();
-    sim1.state.current_temp = 95.0;
-    sim1.state.set_temp = 100.0;
+    sim1.state.current_temp = Temperature::fahrenheit(95.0);
+    sim1.state.set_temp = Temperature::fahrenheit(100.0);
     sim1.state.is_heating = false;
     sim1.state.pumps[0] = PumpState::Low;
-    sim1.set_pump_heat_contribution(0.02);
+    sim1.set_ambient_temp(Temperature::fahrenheit(95.0));
+    sim1.set_pump_heat_contribution(Temperature::fahrenheit(0.02));
 
     let mut sim2 = SpaSim::new();
-    sim2.state.current_temp = 95.0;
-    sim2.state.set_temp = 100.0;
+    sim2.state.current_temp = Temperature::fahrenheit(95.0);
+    sim2.state.set_temp = Temperature::fahrenheit(100.0);
     sim2.state.is_heating = false;
     sim2.state.pumps[0] = PumpState::Low;
     sim2.state.pumps[1] = PumpState::Low;
     sim2.state.pumps[2] = PumpState::Low;
-    sim2.set_pump_heat_contribution(0.02);
+    sim2.set_ambient_temp(Temperature::fahrenheit(95.0));
+    sim2.set_pump_heat_contribution(Temperature::fahrenheit(0.02));
 
     for _ in 0..10 {
         sim1.simulate_physics();
@@ -691,8 +723,8 @@ fn test_pump_heat_multiple_pumps_higher_contribution() {
 #[test]
 fn test_heater_interlock_stops_when_all_pumps_off() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 90.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(90.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = true;
     sim.state.pumps[0] = PumpState::Low;
 
@@ -714,8 +746,8 @@ fn test_heater_interlock_stops_when_all_pumps_off() {
 #[test]
 fn test_heater_interlock_resumes_on_pump_restart() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 90.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(90.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = false; // not heating initially
 
     // All pumps off
@@ -740,8 +772,8 @@ fn test_heater_interlock_resumes_on_pump_restart() {
 #[test]
 fn test_heater_interlock_circ_pump_satisfies() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 90.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(90.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = false;
     sim.state.pumps = [PumpState::Off; 6];
     sim.state.circ_pump = true;
@@ -756,8 +788,8 @@ fn test_heater_interlock_circ_pump_satisfies() {
 #[test]
 fn test_heater_interlock_full_cycle() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 90.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(90.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = true;
     sim.state.pumps[0] = PumpState::Low;
 
@@ -765,7 +797,7 @@ fn test_heater_interlock_full_cycle() {
     sim.simulate_physics();
     assert!(sim.state.is_heating, "phase 1: heating with pump");
     let temp_phase1 = sim.state.current_temp;
-    assert!(temp_phase1 > 90.0, "should be warming up");
+    assert!(temp_phase1 > Temperature::fahrenheit(90.0), "should be warming up");
 
     // Phase 2: turn pump off — heating stops immediately
     sim.state.pumps[0] = PumpState::Off;
@@ -787,20 +819,20 @@ fn test_heater_interlock_full_cycle() {
 #[test]
 fn test_overshoot_full_cycle_heat_overshoot_cool_hysteresis_reheat() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 100.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(100.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = true;
     sim.state.pumps[0] = PumpState::Low;
-    sim.set_physics_overshoot(2.0);
+    sim.set_physics_overshoot(Temperature::fahrenheit(2.0));
 
-    let overshoot_target = 106.0; // set_temp + overshoot
-    let hysteresis_threshold = 103.0; // set_temp - overshoot/2
+    let overshoot_target = 106.0f32; // set_temp + overshoot
+    let hysteresis_threshold = 103.0f32; // set_temp - overshoot/2
 
     // Phase 1: Heat from 100 → 106 (overshoot target)
     let mut reached_overshoot = false;
     for _ in 0..200 {
         sim.simulate_physics();
-        if sim.state.current_temp >= overshoot_target - 0.01 {
+        if sim.state.current_temp.to_fahrenheit() >= overshoot_target - 0.01 {
             reached_overshoot = true;
             assert!(
                 !sim.state.is_heating,
@@ -816,7 +848,9 @@ fn test_overshoot_full_cycle_heat_overshoot_cool_hysteresis_reheat() {
     assert!(reached_overshoot, "should reach overshoot target 106°F");
 
     // Phase 2: Cool from 106 to 103.5 — should NOT re-heat (above hysteresis)
-    sim.state.current_temp = 103.5;
+    // Set ambient to test temp so physics doesn't cool below hysteresis
+    sim.set_ambient_temp(Temperature::fahrenheit(103.5));
+    sim.state.current_temp = Temperature::fahrenheit(103.5);
     sim.simulate_physics();
     assert!(
         !sim.state.is_heating,
@@ -825,7 +859,8 @@ fn test_overshoot_full_cycle_heat_overshoot_cool_hysteresis_reheat() {
     );
 
     // Phase 3: Cool below hysteresis threshold — should re-heat
-    sim.state.current_temp = 102.9;
+    sim.set_ambient_temp(Temperature::fahrenheit(102.9));
+    sim.state.current_temp = Temperature::fahrenheit(102.9);
     sim.simulate_physics();
     assert!(
         sim.state.is_heating,
@@ -837,7 +872,7 @@ fn test_overshoot_full_cycle_heat_overshoot_cool_hysteresis_reheat() {
     let mut reached_second_overshoot = false;
     for _ in 0..200 {
         sim.simulate_physics();
-        if sim.state.current_temp >= overshoot_target - 0.01 {
+        if sim.state.current_temp.to_fahrenheit() >= overshoot_target - 0.01 {
             reached_second_overshoot = true;
             break;
         }
@@ -852,17 +887,19 @@ fn test_overshoot_full_cycle_heat_overshoot_cool_hysteresis_reheat() {
 #[test]
 fn test_overshoot_max_observed_equals_set_temp_plus_overshoot() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = 95.0;
-    sim.state.set_temp = 100.0;
+    sim.state.current_temp = Temperature::fahrenheit(95.0);
+    sim.state.set_temp = Temperature::fahrenheit(100.0);
     sim.state.is_heating = true;
     sim.state.pumps[0] = PumpState::Low;
-    sim.set_physics_overshoot(3.0);
+    sim.set_physics_overshoot(Temperature::fahrenheit(3.0));
 
-    let mut max_temp = sim.state.current_temp;
+    let mut max_temp = sim.state.current_temp.to_fahrenheit();
     for _ in 0..300 {
         sim.simulate_physics();
-        max_temp = max_temp.max(sim.state.current_temp);
-        if !sim.state.is_heating && sim.state.current_temp < 100.0 {
+        if sim.state.current_temp.to_fahrenheit() > max_temp {
+            max_temp = sim.state.current_temp.to_fahrenheit();
+        }
+        if !sim.state.is_heating && sim.state.current_temp < Temperature::fahrenheit(100.0) {
             break;
         }
     }
@@ -879,8 +916,8 @@ fn test_overshoot_max_observed_equals_set_temp_plus_overshoot() {
 fn test_unknown_temp_exact_boundary_ticks() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = 100.0;
-    sim.state.set_temp = 100.0;
+    sim.state.current_temp = Temperature::fahrenheit(100.0);
+    sim.state.set_temp = Temperature::fahrenheit(100.0);
     sim.state.is_heating = false;
     sim.set_physics_unknown_temp_ticks(10);
 
@@ -910,8 +947,8 @@ fn test_unknown_temp_exact_boundary_ticks() {
 fn test_unknown_temp_physics_tick_count_advances() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = 90.0;
-    sim.state.set_temp = 104.0;
+    sim.state.current_temp = Temperature::fahrenheit(90.0);
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     sim.state.is_heating = true;
     sim.state.pumps[0] = PumpState::Low;
     sim.set_physics_unknown_temp_ticks(5);
@@ -922,7 +959,7 @@ fn test_unknown_temp_physics_tick_count_advances() {
     }
     // After 5 ticks of heating, internal temp should have risen
     assert!(
-        sim.state.current_temp > 90.0,
+        sim.state.current_temp > Temperature::fahrenheit(90.0),
         "internal temp should have risen during unknown period, got {}",
         sim.state.current_temp
     );
@@ -945,9 +982,11 @@ fn test_unknown_temp_physics_tick_count_advances() {
 fn test_physics_noise_stays_within_bounds() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = 100.0;
-    sim.state.set_temp = 100.0;
+    sim.state.current_temp = Temperature::fahrenheit(100.0);
+    sim.state.set_temp = Temperature::fahrenheit(100.0);
     sim.state.is_heating = false;
+    // Set ambient to current temp so physics doesn't change the temp
+    sim.set_ambient_temp(Temperature::fahrenheit(100.0));
     sim.set_physics_noise_amplitude(3.0);
 
     for _ in 0..200 {
@@ -959,7 +998,7 @@ fn test_physics_noise_stays_within_bounds() {
             panic!("Expected StatusUpdate, got {:?}", msg);
         };
         if let Some(t) = s.current_temp {
-            let deviation = (t - 100.0).abs();
+            let deviation = (t.to_fahrenheit() - 100.0).abs();
             assert!(
                 deviation <= 3.0,
                 "noise deviation {} should be within ±3.0°F",
@@ -971,12 +1010,13 @@ fn test_physics_noise_stays_within_bounds() {
 
 #[test]
 fn test_physics_noise_deterministic() {
-    let collect_temps = || -> Vec<Option<f32>> {
+    let collect_temps = || -> Vec<Option<Temperature>> {
         let mut sim = SpaSim::new();
         sim.registered = true;
-        sim.state.current_temp = 100.0;
-        sim.state.set_temp = 100.0;
+        sim.state.current_temp = Temperature::fahrenheit(100.0);
+        sim.state.set_temp = Temperature::fahrenheit(100.0);
         sim.state.is_heating = false;
+        sim.set_ambient_temp(Temperature::fahrenheit(100.0));
         sim.set_physics_noise_amplitude(2.0);
 
         let mut temps = Vec::new();
@@ -1005,9 +1045,11 @@ fn test_physics_noise_deterministic() {
 fn test_physics_noise_and_legacy_noise_combined() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = 100.0;
-    sim.state.set_temp = 100.0;
+    sim.state.current_temp = Temperature::fahrenheit(100.0);
+    sim.state.set_temp = Temperature::fahrenheit(100.0);
     sim.state.is_heating = false;
+    // Set ambient to current temp so physics doesn't change the temp
+    sim.set_ambient_temp(Temperature::fahrenheit(100.0));
     sim.set_physics_noise_amplitude(1.0);
     sim.simulate_sensor_noise(1.0);
 
@@ -1024,7 +1066,7 @@ fn test_physics_noise_and_legacy_noise_combined() {
         if let Some(t) = s.current_temp {
             // Combined noise: physics ±1 + legacy ±1, max deviation ±2.0
             // But could be wider since both apply independently
-            let deviation = (t - 100.0).abs();
+            let deviation = (t.to_fahrenheit() - 100.0).abs();
             if deviation > 4.0 {
                 all_within_bounds = false;
             }

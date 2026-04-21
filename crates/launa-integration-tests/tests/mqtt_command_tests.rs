@@ -11,6 +11,7 @@ use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
 use launa_protocol::frame::{FrameDecoder, FrameEncoder};
 use launa_protocol::status::PumpState;
+use launa_protocol::Temperature;
 use launa_sim::SpaSim;
 
 #[test]
@@ -129,7 +130,7 @@ fn test_mqtt_set_temperature_pipeline() {
     let msg = dispatch_frame(&status_frames[0]);
     match msg {
         IncomingMessage::StatusUpdate(s) => {
-            assert_eq!(s.set_temp, 102.0);
+            assert_eq!(s.set_temp, Temperature::fahrenheit(102.0));
         }
         _ => panic!("Expected StatusUpdate"),
     }
@@ -206,7 +207,7 @@ fn test_command_round_trip_set_temperature() {
     let msg = dispatch_frame(&status_frames[0]);
     match msg {
         IncomingMessage::StatusUpdate(s) => {
-            assert_eq!(s.set_temp, 100.0);
+            assert_eq!(s.set_temp, Temperature::fahrenheit(100.0));
         }
         _ => panic!("Expected StatusUpdate"),
     }

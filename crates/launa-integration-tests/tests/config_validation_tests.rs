@@ -18,6 +18,7 @@ use launa_protocol::command::{validate_set_temperature, Command, TempError};
 use launa_protocol::dispatcher::IncomingMessage;
 use launa_protocol::frame::{Frame, FrameDecoder};
 use launa_protocol::status::{HeatingMode, PumpState, TempRange, TemperatureScale, TimeFormat};
+use launa_protocol::Temperature;
 use launa_sim::spa_sim::{
     FilterCycleConfig, FilterCyclesConfig, InformationConfig, SpaConfigConfig,
 };
@@ -512,7 +513,7 @@ fn test_scale_switch_f_to_c_wire_values_2x() {
     let msg_f = launa_protocol::dispatcher::dispatch_frame(&frames_f[0]);
     match msg_f {
         IncomingMessage::StatusUpdate(s) => {
-            assert_eq!(s.set_temp, 104.0);
+            assert_eq!(s.set_temp, Temperature::fahrenheit(104.0));
             assert_eq!(s.temperature_scale, TemperatureScale::Fahrenheit);
         }
         _ => panic!("Expected StatusUpdate"),
@@ -522,7 +523,7 @@ fn test_scale_switch_f_to_c_wire_values_2x() {
     // Rationale: sim.state fields are test scenario setup inputs for mid-session
     // scale switching — verification is through decoded status frames below.
     sim.state.temp_scale = TemperatureScale::Celsius;
-    sim.state.set_temp = 40.0;
+    sim.state.set_temp = Temperature::celsius(40.0);
 
     // Generate status frame in Celsius — set_temp wire value should be 80 (40*2)
     let status_bytes_c = sim.generate_status_frame();
@@ -531,7 +532,7 @@ fn test_scale_switch_f_to_c_wire_values_2x() {
     let msg_c = launa_protocol::dispatcher::dispatch_frame(&frames_c[0]);
     match msg_c {
         IncomingMessage::StatusUpdate(s) => {
-            assert_eq!(s.set_temp, 40.0, "Celsius set_temp should decode to 40.0");
+            assert_eq!(s.set_temp, Temperature::celsius(40.0), "Celsius set_temp should decode to 40.0");
             assert_eq!(s.temperature_scale, TemperatureScale::Celsius);
         }
         _ => panic!("Expected StatusUpdate"),
@@ -562,8 +563,8 @@ fn test_scale_switch_f_to_c_mqtt_state() {
     // Rationale: sim.state fields are test scenario setup for mid-session scale switch.
     // Verification is through the MQTT JSON state published by the broker.
     harness.sim.state.temp_scale = TemperatureScale::Celsius;
-    harness.sim.state.set_temp = 38.0; // 38°C
-    harness.sim.state.current_temp = 36.0; // 36°C
+    harness.sim.state.set_temp = Temperature::celsius(38.0); // 38°C
+    harness.sim.state.current_temp = Temperature::celsius(36.0); // 36°C
 
     // Tick a few times to get new status
     for _ in 0..3 {
@@ -651,8 +652,8 @@ fn test_scale_switch_f_to_c_e2e_pipeline() {
     // Rationale: sim.state fields are test scenario setup for mid-session scale switch.
     // Verification is through the PublishState action carrying Celsius values.
     harness.sim.state.temp_scale = TemperatureScale::Celsius;
-    harness.sim.state.set_temp = 38.0;
-    harness.sim.state.current_temp = 36.0;
+    harness.sim.state.set_temp = Temperature::celsius(38.0);
+    harness.sim.state.current_temp = Temperature::celsius(36.0);
 
     // Tick through the pipeline and verify Celsius state in MQTT
     let actions = harness.full_tick();
@@ -675,7 +676,7 @@ fn test_scale_switch_f_to_c_e2e_pipeline() {
     );
     assert_eq!(
         celsius_state.unwrap(),
-        38.0,
+        Temperature::celsius(38.0),
         "set_temp should be 38.0°C in the published state"
     );
 }
@@ -753,8 +754,8 @@ fn test_mqtt_reconnect_discovery_in_broker() {
 
     // Attempted state publish during disconnect is dropped
     let status = launa_protocol::status::StatusUpdate {
-        current_temp: Some(100.0),
-        set_temp: 104.0,
+        current_temp: Some(Temperature::fahrenheit(100.0)),
+        set_temp: Temperature::fahrenheit(104.0),
         hour: 14,
         minute: 30,
         heating_mode: HeatingMode::Ready,

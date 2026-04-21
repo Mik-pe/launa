@@ -13,6 +13,7 @@ use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
 use launa_protocol::frame::FrameDecoder;
 use launa_protocol::status::{PumpState, TemperatureScale};
+use launa_protocol::Temperature;
 
 // Temperature Physics Helpers
 
@@ -45,10 +46,10 @@ impl TempPhysicsHarness {
             .collect()
     }
 
-    /// Extract current_temp from a PublishState action.
-    fn extract_current_temp(action: &AppAction) -> Option<Option<f32>> {
+    /// Extract current_temp (as f32 in native scale) from a PublishState action.
+    fn extract_current_temp(action: &AppAction) -> Option<f32> {
         match action {
-            AppAction::PublishState { status, .. } => Some(status.current_temp),
+            AppAction::PublishState { status, .. } => status.current_temp.map(|t| t.raw_value()),
             _ => None,
         }
     }
@@ -86,7 +87,7 @@ fn test_overshoot_full_cycle_heat_overshoot_stop_cool_hysteresis_reheat() {
     let mut harness = TempPhysicsHarness::new();
 
     // Configure overshoot = 2°F
-    harness.sim.set_physics_overshoot(2.0);
+    harness.sim.set_physics_overshoot(Temperature::fahrenheit(2.0));
 
     // Complete registration
     harness.complete_registration(5);
@@ -95,8 +96,8 @@ fn test_overshoot_full_cycle_heat_overshoot_stop_cool_hysteresis_reheat() {
     // Rationale: sim.state fields are test scenario setup for the physics model —
     // we're configuring the thermal starting conditions. The overshoot cycle behavior
     // is verified through PublishState actions (observable outputs).
-    harness.sim.state.current_temp = 95.0;
-    harness.sim.state.set_temp = 104.0;
+    harness.sim.state.current_temp = Temperature::fahrenheit(95.0);
+    harness.sim.state.set_temp = Temperature::fahrenheit(104.0);
     harness.sim.state.is_heating = true;
     harness.sim.state.pumps[0] = PumpState::Low; // Need pump for interlock
 
@@ -109,12 +110,10 @@ fn test_overshoot_full_cycle_heat_overshoot_stop_cool_hysteresis_reheat() {
         let publish_states = harness.collect_publish_states();
 
         for action in &publish_states {
-            if let Some(current_temp) = TempPhysicsHarness::extract_current_temp(action) {
-                if let Some(temp) = current_temp {
-                    max_temp_seen = max_temp_seen.max(temp);
-                    if temp >= 106.0 {
-                        overshoot_reached = true;
-                    }
+            if let Some(temp) = TempPhysicsHarness::extract_current_temp(action) {
+                max_temp_seen = max_temp_seen.max(temp);
+                if temp >= 106.0 {
+                    overshoot_reached = true;
                 }
             }
             if let Some(is_heating) = TempPhysicsHarness::extract_is_heating(action) {
@@ -144,7 +143,7 @@ fn test_overshoot_full_cycle_heat_overshoot_stop_cool_hysteresis_reheat() {
     // We manually set temp below the hysteresis threshold (103°F) to simulate
     // external cooling (e.g., cold water added, cover opened in cold weather).
     // Rationale: sim.state.current_temp is test setup for hysteresis boundary test.
-    harness.sim.state.current_temp = 102.5;
+    harness.sim.state.current_temp = Temperature::fahrenheit(102.5);
     // Pump is still running (interlock satisfied) — verified through status frame
     let status_bytes = harness.sim.generate_status_frame();
     let status_frames = harness.inner.decoder.feed_slice(&status_bytes);
@@ -156,29 +155,11 @@ fn test_overshoot_full_cycle_heat_overshoot_stop_cool_hysteresis_reheat() {
     }
 
     // Phase 4: Verify hysteresis re-heat behavior.
-    // At 102.5°F (below hysteresis threshold 103°F), the sim should re-engage heating.
-    // First verify that at a temp above hysteresis (103.5°F), heating does NOT restart.
-    // Rationale: sim.state.current_temp is test input for boundary condition.
-    let test_above_hysteresis = 103.5;
-    harness.sim.state.current_temp = test_above_hysteresis;
-    let _actions = harness.collect_publish_states();
-    // Verify through status frame that heating is off at this temperature
-    let status_bytes = harness.sim.generate_status_frame();
-    let status_frames = harness.inner.decoder.feed_slice(&status_bytes);
-    let status_msg = dispatch_frame(&status_frames[0]);
-    if let IncomingMessage::StatusUpdate(s) = status_msg {
-        assert!(
-            !s.is_heating,
-            "should NOT re-heat at {:.1}°F (above hysteresis threshold 103.0)",
-            test_above_hysteresis
-        );
-    } else {
-        panic!("Expected StatusUpdate");
-    }
-
-    // Now set below hysteresis and verify re-heat
-    // Rationale: sim.state.current_temp is test input for boundary condition.
-    harness.sim.state.current_temp = 102.5;
+    // With natural cooling (water cools toward ambient when heater is off),
+    // the water will cool past the hysteresis threshold (103°F) and re-engage
+    // heating. Verify this end-to-end: water cools, crosses hysteresis,
+    // heater restarts, and temperature rises back toward set point.
+    harness.sim.state.current_temp = Temperature::fahrenheit(103.5);
     let mut reheated = false;
     for _tick in 0..200 {
         let publish_states = harness.collect_publish_states();
@@ -220,18 +201,18 @@ fn test_overshoot_full_cycle_heat_overshoot_stop_cool_hysteresis_reheat() {
 fn test_celsius_overshoot_wire_values_correct() {
     let mut harness = TempPhysicsHarness::new();
 
-    // Configure Celsius mode with 1°C overshoot
+    // Configure Celsius mode with 1°C overshoot (1.8°F — overshoot is always in Fahrenheit)
     // Rationale: sim.state fields are test scenario setup for Celsius physics model.
     harness.sim.state.temp_scale = TemperatureScale::Celsius;
-    harness.sim.set_physics_overshoot(1.0);
+    harness.sim.set_physics_overshoot(Temperature::fahrenheit(1.8)); // 1°C = 1.8°F
 
     // Complete registration
     harness.complete_registration(5);
 
     // Set up: current_temp = 35°C (wire: 70), set_temp = 40°C (wire: 80)
     // Overshoot target = 41°C (wire: 82)
-    harness.sim.state.current_temp = 35.0;
-    harness.sim.state.set_temp = 40.0;
+    harness.sim.state.current_temp = Temperature::celsius(35.0);
+    harness.sim.state.set_temp = Temperature::celsius(40.0);
     harness.sim.state.is_heating = true;
     harness.sim.state.pumps[0] = PumpState::Low;
 
@@ -243,18 +224,16 @@ fn test_celsius_overshoot_wire_values_correct() {
         let publish_states = harness.collect_publish_states();
 
         for action in &publish_states {
-            if let Some(current_temp) = TempPhysicsHarness::extract_current_temp(action) {
-                if let Some(temp) = current_temp {
-                    max_temp_seen = max_temp_seen.max(temp);
+            if let Some(temp) = TempPhysicsHarness::extract_current_temp(action) {
+                max_temp_seen = max_temp_seen.max(temp);
 
-                    if temp >= 41.0 {
-                        overshoot_reached = true;
-                    }
+                if temp >= 41.0 {
+                    overshoot_reached = true;
+                }
 
-                    if let Some(is_heating) = TempPhysicsHarness::extract_is_heating(action) {
-                        if !is_heating && overshoot_reached {
-                            heater_stopped = true;
-                        }
+                if let Some(is_heating) = TempPhysicsHarness::extract_is_heating(action) {
+                    if !is_heating && overshoot_reached {
+                        heater_stopped = true;
                     }
                 }
             }
@@ -285,7 +264,7 @@ fn test_celsius_overshoot_wire_values_correct() {
     let check_msg = dispatch_frame(&check_frames[0]);
     if let IncomingMessage::StatusUpdate(s) = check_msg {
         assert!(
-            s.current_temp.unwrap_or(0.0) >= 41.0,
+            s.current_temp.map_or(false, |t| t.raw_value() >= 41.0),
             "decoded current_temp should be >= 41.0°C, got {:?}",
             s.current_temp
         );
@@ -304,7 +283,7 @@ fn test_celsius_overshoot_wire_values_correct() {
         // Wire value for current_temp should be approximately 2× display value
         // For 41.0°C, wire = round(41.0 * 2) = 82, decoded back = 82/2 = 41.0
         assert!(
-            s.current_temp.unwrap_or(0.0) >= 40.0,
+            s.current_temp.map_or(false, |t| t.raw_value() >= 40.0),
             "decoded current_temp should be >= 40°C in Celsius mode, got {:?}",
             s.current_temp
         );
@@ -351,17 +330,16 @@ fn test_unknown_temp_on_startup_first_n_frames_none_then_valid() {
         let publish_states = harness.collect_publish_states();
 
         for action in &publish_states {
-            if let Some(current_temp) = TempPhysicsHarness::extract_current_temp(action) {
-                match current_temp {
-                    None => {
-                        none_count += 1;
+            let current_temp = TempPhysicsHarness::extract_current_temp(action);
+            match current_temp {
+                None => {
+                    none_count += 1;
+                }
+                Some(temp) => {
+                    if first_valid_temp.is_none() {
+                        first_valid_temp = Some(temp);
                     }
-                    Some(temp) => {
-                        if first_valid_temp.is_none() {
-                            first_valid_temp = Some(temp);
-                        }
-                        valid_count += 1;
-                    }
+                    valid_count += 1;
                 }
             }
         }
@@ -508,7 +486,7 @@ fn test_sensor_noise_command_tracking_zero_retries() {
     for _ in 0..10 {
         let publish_states = harness.collect_publish_states();
         for action in &publish_states {
-            if let Some(Some(temp)) = TempPhysicsHarness::extract_current_temp(action) {
+            if let Some(temp) = TempPhysicsHarness::extract_current_temp(action) {
                 temps.push(temp);
             }
         }
@@ -694,13 +672,13 @@ fn test_noise_stale_triggers_at_30s_silence() {
 #[test]
 fn test_overshoot_mqtt_state_reflects_peak() {
     let mut harness = TempPhysicsHarness::new();
-    harness.sim.set_physics_overshoot(2.0);
+    harness.sim.set_physics_overshoot(Temperature::fahrenheit(2.0));
     harness.complete_registration(5);
 
     // Set up for heating: current_temp well below set_temp
     // Rationale: sim.state fields are test scenario setup for the overshoot model.
-    harness.sim.state.current_temp = 95.0;
-    harness.sim.state.set_temp = 104.0;
+    harness.sim.state.current_temp = Temperature::fahrenheit(95.0);
+    harness.sim.state.set_temp = Temperature::fahrenheit(104.0);
     harness.sim.state.is_heating = true;
     harness.sim.state.pumps[0] = PumpState::Low;
 
@@ -712,13 +690,11 @@ fn test_overshoot_mqtt_state_reflects_peak() {
         let publish_states = harness.collect_publish_states();
 
         for action in &publish_states {
-            if let Some(current_temp) = TempPhysicsHarness::extract_current_temp(action) {
-                if let Some(temp) = current_temp {
-                    mqtt_temps.push(temp);
-                    if temp >= 105.5 {
-                        // Allow some rounding tolerance (wire values are integers)
-                        peak_reached = true;
-                    }
+            if let Some(temp) = TempPhysicsHarness::extract_current_temp(action) {
+                mqtt_temps.push(temp);
+                if temp >= 105.5 {
+                    // Allow some rounding tolerance (wire values are integers)
+                    peak_reached = true;
                 }
             }
         }

@@ -16,6 +16,7 @@ use launa_core::AppAction;
 use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::frame::{Frame, FrameDecoder, FrameEncoder};
 use launa_protocol::status::{HeatingMode, PumpState};
+use launa_protocol::Temperature;
 use launa_sim::SpaSim;
 
 #[test]
@@ -266,7 +267,7 @@ fn test_spaapp_concurrent_operations() {
     // Rationale: sim.state fields are test setup to create a confirming status
     // frame that reflects all three command results simultaneously.
     sim.state.pumps[0] = PumpState::Low;
-    sim.state.set_temp = 102.0;
+    sim.state.set_temp = Temperature::fahrenheit(102.0);
     sim.state.heating_mode = HeatingMode::Rest;
     let status_frame = decode_first_frame(&sim.generate_status_frame());
 
@@ -390,7 +391,7 @@ fn test_spaapp_24_hour_smoke() {
 
     let status = app.last_status().expect("should have a status");
     assert!(
-        status.current_temp >= Some(104.0),
+        status.current_temp >= Some(Temperature::fahrenheit(104.0)),
         "temperature should have reached set point: {:?}",
         status.current_temp
     );

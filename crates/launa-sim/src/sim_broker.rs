@@ -257,11 +257,12 @@ mod tests {
     use launa_protocol::status::{
         HeatingMode, PumpState, StatusUpdate, TempRange, TemperatureScale, TimeFormat,
     };
+    use launa_protocol::Temperature;
 
     fn sample_status() -> StatusUpdate {
         StatusUpdate {
-            current_temp: Some(100.0),
-            set_temp: 104.0,
+            current_temp: Some(Temperature::fahrenheit(100.0)),
+            set_temp: Temperature::fahrenheit(104.0),
             hour: 14,
             minute: 30,
             heating_mode: HeatingMode::Ready,
@@ -281,7 +282,7 @@ mod tests {
             panel_locked: false,
             settings_lock: false,
             m8_cycle_time: 0,
-            sensor_a_temp: Some(98.0),
+            sensor_a_temp: Some(Temperature::fahrenheit(98.0)),
             sensor_b_temp: None,
             hold_timer_minutes: None,
         }
