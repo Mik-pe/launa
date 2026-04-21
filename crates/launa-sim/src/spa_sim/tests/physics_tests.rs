@@ -91,8 +91,8 @@ fn test_realistic_thermal_cooling_104_to_80() {
     }
 
     assert!(
-        ticks >= 200 && ticks <= 280,
-        "cooling 104→80 should take 200-280 ticks, took {}",
+        ticks >= 35 && ticks <= 65,
+        "cooling 104→80 should take 35-65 ticks, took {}",
         ticks
     );
     assert!(

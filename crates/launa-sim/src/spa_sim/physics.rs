@@ -95,9 +95,9 @@ pub(crate) fn simulate_physics(state: &mut SpaState, ctx: &mut PhysicsContext) {
         };
         let delta = (state.current_temp - ambient_temp).max(0.0);
         if delta > 0.01 {
-            let cooling_range = 17.0; // Tuned so 104→80 takes ~240 ticks
-            let base_rate = 0.1;
-            let rate = base_rate * (delta / cooling_range).max(0.05);
+            let cooling_range = 10.0; // Tuned for faster cooling
+            let base_rate = 0.25;
+            let rate = base_rate * (delta / cooling_range).max(0.1);
             let new_temp = state.current_temp - rate;
             state.current_temp = new_temp.max(effective_min);
         }
