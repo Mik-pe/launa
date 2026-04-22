@@ -285,7 +285,10 @@ fn test_status_celsius_temp_division() {
     payload[20] = 80; // set temp raw = 80 → 40.0°C
 
     let status = StatusUpdate::parse(&payload).unwrap();
-    assert_eq!(status.current_temp, Some(launa_protocol::Temperature::celsius(38.0)));
+    assert_eq!(
+        status.current_temp,
+        Some(launa_protocol::Temperature::celsius(38.0))
+    );
     assert_eq!(status.set_temp, launa_protocol::Temperature::celsius(40.0));
     assert!(matches!(
         status.temperature_scale,
@@ -302,8 +305,14 @@ fn test_status_fahrenheit_temp_no_division() {
     payload[20] = 106; // set temp = 106°F
 
     let status = StatusUpdate::parse(&payload).unwrap();
-    assert_eq!(status.current_temp, Some(launa_protocol::Temperature::fahrenheit(104.0)));
-    assert_eq!(status.set_temp, launa_protocol::Temperature::fahrenheit(106.0));
+    assert_eq!(
+        status.current_temp,
+        Some(launa_protocol::Temperature::fahrenheit(104.0))
+    );
+    assert_eq!(
+        status.set_temp,
+        launa_protocol::Temperature::fahrenheit(106.0)
+    );
 }
 
 #[test]
@@ -367,7 +376,10 @@ fn test_dispatch_valid_status_roundtrip() {
     let msg = dispatch_frame(&frame);
     match msg {
         IncomingMessage::StatusUpdate(s) => {
-            assert_eq!(s.current_temp, Some(launa_protocol::Temperature::fahrenheit(100.0)));
+            assert_eq!(
+                s.current_temp,
+                Some(launa_protocol::Temperature::fahrenheit(100.0))
+            );
             assert_eq!(s.set_temp, launa_protocol::Temperature::fahrenheit(104.0));
         }
         other => panic!("Expected StatusUpdate, got {:?}", other),

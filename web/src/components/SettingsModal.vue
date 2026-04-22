@@ -9,10 +9,14 @@ const props = withDefaults(defineProps<{
   accessoryConfig: AccessoryConfig
   selfTestEnabled?: boolean
   sniffEnabled?: boolean
+  selfTestPending?: boolean
+  sniffPending?: boolean
 }>(), {
   modelValue: false,
   selfTestEnabled: false,
   sniffEnabled: false,
+  selfTestPending: false,
+  sniffPending: false,
 })
 
 const emit = defineEmits<{
@@ -135,6 +139,7 @@ function toggleSniff(val: boolean): void {
             <ToggleSwitch
               label="Self-Test Mode"
               :model-value="selfTestEnabled"
+              :pending="selfTestPending"
               :disabled="false"
               @update:model-value="toggleSelfTest"
             />
@@ -146,6 +151,7 @@ function toggleSniff(val: boolean): void {
             <ToggleSwitch
               label="Sniff Mode"
               :model-value="sniffEnabled"
+              :pending="sniffPending"
               :disabled="false"
               @update:model-value="toggleSniff"
             />

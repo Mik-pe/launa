@@ -146,6 +146,24 @@ impl<'a> SpaApp<'a> {
         self.registration_started_at = None;
     }
 
+    /// Force-publish the current state, bypassing change detection.
+    ///
+    /// Used when a mode toggle (self-test, sniff) changes the `self_test` or
+    /// `sniff_mode` flags in the state JSON but the underlying `StatusUpdate`
+    /// hasn't changed. Without this, the MQTT task's change detection would
+    /// suppress the publish and the UI would never see the mode change.
+    pub fn force_publish(&self) -> Vec<AppAction> {
+        let mut actions = Vec::new();
+        if let Some(ref status) = self.last_status {
+            actions.push(AppAction::PublishState {
+                status: status.clone(),
+                fault: self.last_fault.clone(),
+                recovering_from_stale: false,
+            });
+        }
+        actions
+    }
+
     /// Start a pump timer. Returns actions including the toggle-on command.
     pub fn start_pump_timer(&mut self, pump_index: u8, minutes: u32) -> Vec<AppAction> {
         let now = self.clock.now();

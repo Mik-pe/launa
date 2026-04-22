@@ -44,7 +44,7 @@ interface Coord {
   y: number
 }
 
-const { data: history, loading, error } = useStatusHistory(200, 10000)
+const { data: history, loading, error, hoursRange, setHoursRange } = useStatusHistory(200, 10000)
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const tooltipData = ref<TooltipData | null>(null)
@@ -52,8 +52,15 @@ const mouseX = ref(-1)
 
 const points = computed<ChartPoint[]>(() => {
   if (!history.value?.length) return []
-  const reversed = [...history.value].reverse()
-  return reversed.map(entry => {
+  const raw = [...history.value]
+  // Server limit-mode returns DESC (newest first); hours-mode returns ASC (oldest first).
+  // Detect order from first vs last timestamp and always produce chronological (ASC).
+  if (raw.length >= 2) {
+    const t0 = new Date(raw[0].received_at).getTime()
+    const t1 = new Date(raw[raw.length - 1].received_at).getTime()
+    if (t0 > t1) raw.reverse()
+  }
+  return raw.map(entry => {
     try {
       const payload = typeof entry.payload === 'string' ? JSON.parse(entry.payload) : entry.payload
       return {
@@ -78,6 +85,35 @@ const points = computed<ChartPoint[]>(() => {
     }
   }).filter((p): p is ChartPoint => p != null)
 })
+
+const MAX_CHART_POINTS = 300
+
+function downsamplePoints(pts: ChartPoint[], maxPoints: number): ChartPoint[] {
+  if (pts.length <= maxPoints) return pts
+  const bucketSize = pts.length / maxPoints
+  const result: ChartPoint[] = []
+  for (let i = 0; i < maxPoints; i++) {
+    const start = Math.floor(i * bucketSize)
+    const end = Math.min(Math.floor((i + 1) * bucketSize), pts.length)
+    let minTemp = Infinity
+    let maxTemp = -Infinity
+    let minIdx = start
+    let maxIdx = start
+    for (let j = start; j < end; j++) {
+      const v = pts[j].current_temp
+      if (v != null) {
+        if (v < minTemp) { minTemp = v; minIdx = j }
+        if (v > maxTemp) { maxTemp = v; maxIdx = j }
+      }
+    }
+    const [first, second] = minIdx <= maxIdx ? [minIdx, maxIdx] : [maxIdx, minIdx]
+    result.push(pts[first])
+    if (first !== second) result.push(pts[second])
+  }
+  return result
+}
+
+const displayPoints = computed<ChartPoint[]>(() => downsamplePoints(points.value, MAX_CHART_POINTS))
 
 interface ComponentDef {
   key: keyof ChartPoint & string
@@ -130,7 +166,7 @@ function drawChart(): void {
 
   ctx.clearRect(0, 0, w, h)
 
-  const pts = points.value
+  const pts = displayPoints.value
   if (pts.length < 2) {
     ctx.fillStyle = '#525252'
     ctx.font = '13px system-ui, sans-serif'
@@ -233,7 +269,7 @@ function drawChart(): void {
       const p2 = coords[i + 1]
       const p3 = coords[Math.min(coords.length - 1, i + 2)]
 
-      const tension = 0.3
+      const tension = 0.1
       const cp1x = p1.x + (p2.x - p0.x) * tension
       const cp1y = p1.y + (p2.y - p0.y) * tension
       const cp2x = p2.x - (p3.x - p1.x) * tension
@@ -349,12 +385,12 @@ function drawChart(): void {
 
 function handleMouseMove(e: MouseEvent): void {
   const canvas = canvasRef.value
-  if (!canvas || points.value.length < 2) return
+  if (!canvas || displayPoints.value.length < 2) return
   const rect = canvas.getBoundingClientRect()
   mouseX.value = e.clientX - rect.left
 
   const mx = mouseX.value
-  const pts = points.value
+  const pts = displayPoints.value
   const tMin = pts[0].time.getTime()
   const tMax = pts[pts.length - 1].time.getTime()
   const cw = rect.width - chartPad.left - chartPad.right
@@ -525,7 +561,7 @@ function handleCompMouseLeave(): void {
   compTooltipData.value = null
 }
 
-watch(points, () => nextTick(() => { drawChart(); drawCompChart() }), { deep: true })
+watch([points, displayPoints], () => nextTick(() => { drawChart(); drawCompChart() }), { deep: true })
 onMounted(() => {
   drawChart()
   drawCompChart()
@@ -545,7 +581,23 @@ function drawChartAndComp(): void {
   <div class="space-y-4">
     <div class="flex items-center justify-between">
       <h2 class="text-lg font-semibold text-white">Temperature History</h2>
-      <span class="text-xs text-neutral-500">{{ points.length }} data points</span>
+      <div class="flex items-center gap-3">
+        <div class="flex bg-neutral-800 rounded-lg p-0.5">
+          <button
+            v-for="range in [{ label: '1h', hours: 1 }, { label: '6h', hours: 6 }, { label: '24h', hours: 24 }, { label: '7d', hours: 168 }]"
+            :key="range.hours"
+            class="px-2.5 py-1 text-xs rounded-md transition-colors"
+            :class="hoursRange === range.hours ? 'bg-neutral-600 text-white' : 'text-neutral-400 hover:text-neutral-200'"
+            @click="setHoursRange(range.hours)"
+          >{{ range.label }}</button>
+          <button
+            class="px-2.5 py-1 text-xs rounded-md transition-colors"
+            :class="hoursRange == null ? 'bg-neutral-600 text-white' : 'text-neutral-400 hover:text-neutral-200'"
+            @click="setHoursRange(null)"
+          >Recent</button>
+        </div>
+        <span class="text-xs text-neutral-500">{{ points.length }} pts</span>
+      </div>
     </div>
 
     <div v-if="loading && !points.length" class="flex flex-col items-center justify-center py-20 text-neutral-500">

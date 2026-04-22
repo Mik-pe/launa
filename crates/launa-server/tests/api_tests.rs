@@ -4,7 +4,7 @@ use axum_test::TestServer;
 use serde_json::json;
 
 use launa_server::db::Database;
-use launa_server::web::{build_router, AppState, AccessoryConfig};
+use launa_server::web::{build_router, AccessoryConfig, AppState};
 
 fn test_server_with_db() -> (TestServer, Arc<Database>) {
     let db = Arc::new(Database::open_in_memory().unwrap());

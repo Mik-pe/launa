@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use rumqttd::{Broker, Notification};
 use rumqttd::local::{LinkRx, LinkTx};
+use rumqttd::{Broker, Notification};
 use tracing::{error, info, warn};
 
 use crate::db::Database;

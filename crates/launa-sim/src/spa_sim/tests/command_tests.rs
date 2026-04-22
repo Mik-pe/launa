@@ -203,7 +203,8 @@ fn test_command_latency_defers_set_temperature() {
     for i in 1..=3 {
         sim.tick();
         assert_eq!(
-            sim.state.set_temp, Temperature::fahrenheit(104.0),
+            sim.state.set_temp,
+            Temperature::fahrenheit(104.0),
             "tick {}: set_temp should not change yet",
             i
         );
@@ -212,7 +213,8 @@ fn test_command_latency_defers_set_temperature() {
     // Tick 4: set_temp should change to 96.0
     sim.tick();
     assert_eq!(
-        sim.state.set_temp, Temperature::fahrenheit(96.0),
+        sim.state.set_temp,
+        Temperature::fahrenheit(96.0),
         "tick 4: deferred set_temp should be applied"
     );
 }
@@ -237,12 +239,20 @@ fn test_command_latency_set_temp_and_toggle_order() {
 
     // Tick 1: pending
     sim.tick();
-    assert_eq!(sim.state.set_temp, Temperature::fahrenheit(104.0), "set_temp unchanged tick 1");
+    assert_eq!(
+        sim.state.set_temp,
+        Temperature::fahrenheit(104.0),
+        "set_temp unchanged tick 1"
+    );
     assert_eq!(sim.state.pumps[0], PumpState::Off, "pump unchanged tick 1");
 
     // Tick 2: both should apply
     sim.tick();
-    assert_eq!(sim.state.set_temp, Temperature::fahrenheit(96.0), "set_temp applied tick 2");
+    assert_eq!(
+        sim.state.set_temp,
+        Temperature::fahrenheit(96.0),
+        "set_temp applied tick 2"
+    );
     assert_eq!(
         sim.state.pumps[0],
         PumpState::Low,

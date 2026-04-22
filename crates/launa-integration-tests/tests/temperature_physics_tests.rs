@@ -87,7 +87,9 @@ fn test_overshoot_full_cycle_heat_overshoot_stop_cool_hysteresis_reheat() {
     let mut harness = TempPhysicsHarness::new();
 
     // Configure overshoot = 2°F
-    harness.sim.set_physics_overshoot(Temperature::fahrenheit(2.0));
+    harness
+        .sim
+        .set_physics_overshoot(Temperature::fahrenheit(2.0));
 
     // Complete registration
     harness.complete_registration(5);
@@ -204,7 +206,9 @@ fn test_celsius_overshoot_wire_values_correct() {
     // Configure Celsius mode with 1°C overshoot (1.8°F — overshoot is always in Fahrenheit)
     // Rationale: sim.state fields are test scenario setup for Celsius physics model.
     harness.sim.state.temp_scale = TemperatureScale::Celsius;
-    harness.sim.set_physics_overshoot(Temperature::fahrenheit(1.8)); // 1°C = 1.8°F
+    harness
+        .sim
+        .set_physics_overshoot(Temperature::fahrenheit(1.8)); // 1°C = 1.8°F
 
     // Complete registration
     harness.complete_registration(5);
@@ -672,7 +676,9 @@ fn test_noise_stale_triggers_at_30s_silence() {
 #[test]
 fn test_overshoot_mqtt_state_reflects_peak() {
     let mut harness = TempPhysicsHarness::new();
-    harness.sim.set_physics_overshoot(Temperature::fahrenheit(2.0));
+    harness
+        .sim
+        .set_physics_overshoot(Temperature::fahrenheit(2.0));
     harness.complete_registration(5);
 
     // Set up for heating: current_temp well below set_temp

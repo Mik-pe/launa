@@ -1,4 +1,4 @@
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import type { Ref } from 'vue'
 import type { LogEntry, StatusEntry, TimestampedEntry } from '../types'
 
@@ -62,8 +62,57 @@ export function useLatestStatus(intervalMs = 5000) {
 }
 
 export function useStatusHistory(limit = 100, intervalMs = 10000) {
-  const url = `${BASE}/${getDeviceId()}/status?limit=${limit}`
-  return useFetch<StatusEntry[]>(url, intervalMs, [])
+  const url = computed(() => {
+    const base = `${BASE}/${getDeviceId()}/status`
+    if (hoursRange.value != null) {
+      return `${base}?hours=${hoursRange.value}`
+    }
+    return `${base}?limit=${limit}`
+  })
+
+  const data = ref<StatusEntry[]>([]) as Ref<StatusEntry[]>
+  const loading = ref(true)
+  const error = ref<string | null>(null)
+  let timer: ReturnType<typeof setInterval> | null = null
+  let fetchSeq = 0
+
+  async function refresh(): Promise<void> {
+    const seq = ++fetchSeq
+    try {
+      const res = await fetch(url.value)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = await res.json()
+      if (seq !== fetchSeq) return
+      data.value = json
+      error.value = null
+    } catch (e) {
+      if (seq !== fetchSeq) return
+      error.value = e instanceof Error ? e.message : String(e)
+    } finally {
+      if (seq === fetchSeq) loading.value = false
+    }
+  }
+
+  const hoursRange = ref<number | null>(null)
+
+  function setHoursRange(hours: number | null) {
+    hoursRange.value = hours
+    loading.value = true
+    refresh()
+  }
+
+  onMounted(() => {
+    refresh()
+    if (intervalMs > 0) {
+      timer = setInterval(refresh, intervalMs)
+    }
+  })
+
+  onUnmounted(() => {
+    if (timer) clearInterval(timer)
+  })
+
+  return { data, loading, error, refresh, hoursRange, setHoursRange }
 }
 
 export function useLogs(limit = 100, intervalMs = 5000) {

@@ -4,7 +4,6 @@
 //! (for ESP-IDF otadata validation) from scratch for `no_std` compatibility
 //! without external crypto dependencies.
 
-
 /// CRC32 (CRC-32/MPEG-2) incremental update. Polynomial 0x04C11DB7.
 pub fn crc32_update(crc: u32, data: &[u8]) -> u32 {
     let mut crc = crc;

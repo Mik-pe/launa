@@ -136,7 +136,10 @@ mod tests {
     fn test_fahrenheit_round_trip() {
         let temp = Temperature::fahrenheit(100.0);
         assert_eq!(temp.to_wire(), 100);
-        assert_eq!(Temperature::from_wire(100, TemperatureScale::Fahrenheit), temp);
+        assert_eq!(
+            Temperature::from_wire(100, TemperatureScale::Fahrenheit),
+            temp
+        );
     }
 
     #[test]
@@ -185,7 +188,10 @@ mod tests {
 
     #[test]
     fn test_equality_same_scale() {
-        assert_eq!(Temperature::fahrenheit(100.0), Temperature::fahrenheit(100.0));
+        assert_eq!(
+            Temperature::fahrenheit(100.0),
+            Temperature::fahrenheit(100.0)
+        );
         assert_eq!(Temperature::celsius(38.0), Temperature::celsius(38.0));
     }
 
@@ -215,6 +221,9 @@ mod tests {
     #[test]
     fn test_scale() {
         assert_eq!(Temperature::celsius(0.0).scale(), TemperatureScale::Celsius);
-        assert_eq!(Temperature::fahrenheit(0.0).scale(), TemperatureScale::Fahrenheit);
+        assert_eq!(
+            Temperature::fahrenheit(0.0).scale(),
+            TemperatureScale::Fahrenheit
+        );
     }
 }

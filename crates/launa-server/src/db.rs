@@ -116,31 +116,26 @@ impl Database {
         );
     }
 
-    pub fn insert_diagnostics(&self, device_id: &str, payload: &str) {
+    fn insert_timestamped(&self, table: &str, device_id: &str, payload: &str) {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().to_rfc3339();
-        let _ = conn.execute(
-            "INSERT INTO diagnostics (device_id, payload, received_at) VALUES (?1, ?2, ?3)",
-            params![device_id, payload, now],
+        let sql = format!(
+            "INSERT INTO {} (device_id, payload, received_at) VALUES (?1, ?2, ?3)",
+            table
         );
+        let _ = conn.execute(&sql, params![device_id, payload, now]);
+    }
+
+    pub fn insert_diagnostics(&self, device_id: &str, payload: &str) {
+        self.insert_timestamped("diagnostics", device_id, payload);
     }
 
     pub fn insert_alert(&self, device_id: &str, payload: &str) {
-        let conn = self.conn.lock().unwrap();
-        let now = Utc::now().to_rfc3339();
-        let _ = conn.execute(
-            "INSERT INTO alerts (device_id, payload, received_at) VALUES (?1, ?2, ?3)",
-            params![device_id, payload, now],
-        );
+        self.insert_timestamped("alerts", device_id, payload);
     }
 
     pub fn insert_sniff_frame(&self, device_id: &str, payload: &str) {
-        let conn = self.conn.lock().unwrap();
-        let now = Utc::now().to_rfc3339();
-        let _ = conn.execute(
-            "INSERT INTO sniff_frames (device_id, payload, received_at) VALUES (?1, ?2, ?3)",
-            params![device_id, payload, now],
-        );
+        self.insert_timestamped("sniff_frames", device_id, payload);
     }
 
     pub fn get_logs(&self, device_id: &str, limit: u64) -> Vec<LogEntry> {
@@ -181,6 +176,24 @@ impl Database {
         rows.filter_map(|r| r.ok()).collect()
     }
 
+    pub fn get_status_history_since(&self, device_id: &str, since: &str) -> Vec<StatusEntry> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT payload, received_at FROM status_history WHERE device_id = ?1 AND received_at >= ?2 ORDER BY id ASC",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map(params![device_id, since], |row| {
+                Ok(StatusEntry {
+                    payload: row.get(0)?,
+                    received_at: row.get(1)?,
+                })
+            })
+            .unwrap();
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
     pub fn get_latest_status(&self, device_id: &str) -> Option<StatusEntry> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
@@ -188,23 +201,24 @@ impl Database {
                 "SELECT payload, received_at FROM status_history WHERE device_id = ?1 ORDER BY id DESC LIMIT 1",
             )
             .unwrap();
-        let mut rows = stmt.query_map(params![device_id], |row| {
-            Ok(StatusEntry {
-                payload: row.get(0)?,
-                received_at: row.get(1)?,
+        let mut rows = stmt
+            .query_map(params![device_id], |row| {
+                Ok(StatusEntry {
+                    payload: row.get(0)?,
+                    received_at: row.get(1)?,
+                })
             })
-        })
-        .unwrap();
+            .unwrap();
         rows.next().and_then(|r| r.ok())
     }
 
-    pub fn get_alerts(&self, device_id: &str, limit: u64) -> Vec<TimestampedEntry> {
+    fn get_timestamped(&self, table: &str, device_id: &str, limit: u64) -> Vec<TimestampedEntry> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare(
-                "SELECT payload, received_at FROM alerts WHERE device_id = ?1 ORDER BY id DESC LIMIT ?2",
-            )
-            .unwrap();
+        let sql = format!(
+            "SELECT payload, received_at FROM {} WHERE device_id = ?1 ORDER BY id DESC LIMIT ?2",
+            table
+        );
+        let mut stmt = conn.prepare(&sql).unwrap();
         let rows = stmt
             .query_map(params![device_id, limit], |row| {
                 Ok(TimestampedEntry {
@@ -214,74 +228,40 @@ impl Database {
             })
             .unwrap();
         rows.filter_map(|r| r.ok()).collect()
+    }
+
+    pub fn get_alerts(&self, device_id: &str, limit: u64) -> Vec<TimestampedEntry> {
+        self.get_timestamped("alerts", device_id, limit)
     }
 
     pub fn get_diagnostics(&self, device_id: &str, limit: u64) -> Vec<TimestampedEntry> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare(
-                "SELECT payload, received_at FROM diagnostics WHERE device_id = ?1 ORDER BY id DESC LIMIT ?2",
-            )
-            .unwrap();
-        let rows = stmt
-            .query_map(params![device_id, limit], |row| {
-                Ok(TimestampedEntry {
-                    payload: row.get(0)?,
-                    received_at: row.get(1)?,
-                })
-            })
-            .unwrap();
-        rows.filter_map(|r| r.ok()).collect()
+        self.get_timestamped("diagnostics", device_id, limit)
     }
 
     pub fn get_sniff_frames(&self, device_id: &str, limit: u64) -> Vec<TimestampedEntry> {
+        self.get_timestamped("sniff_frames", device_id, limit)
+    }
+
+    fn clear_table(&self, table: &str, device_id: &str) {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare(
-                "SELECT payload, received_at FROM sniff_frames WHERE device_id = ?1 ORDER BY id DESC LIMIT ?2",
-            )
-            .unwrap();
-        let rows = stmt
-            .query_map(params![device_id, limit], |row| {
-                Ok(TimestampedEntry {
-                    payload: row.get(0)?,
-                    received_at: row.get(1)?,
-                })
-            })
-            .unwrap();
-        rows.filter_map(|r| r.ok()).collect()
+        let sql = format!("DELETE FROM {} WHERE device_id = ?1", table);
+        let _ = conn.execute(&sql, params![device_id]);
     }
 
     pub fn clear_logs(&self, device_id: &str) {
-        let conn = self.conn.lock().unwrap();
-        let _ = conn.execute(
-            "DELETE FROM device_logs WHERE device_id = ?1",
-            params![device_id],
-        );
+        self.clear_table("device_logs", device_id);
     }
 
     pub fn clear_alerts(&self, device_id: &str) {
-        let conn = self.conn.lock().unwrap();
-        let _ = conn.execute(
-            "DELETE FROM alerts WHERE device_id = ?1",
-            params![device_id],
-        );
+        self.clear_table("alerts", device_id);
     }
 
     pub fn clear_diagnostics(&self, device_id: &str) {
-        let conn = self.conn.lock().unwrap();
-        let _ = conn.execute(
-            "DELETE FROM diagnostics WHERE device_id = ?1",
-            params![device_id],
-        );
+        self.clear_table("diagnostics", device_id);
     }
 
     pub fn clear_sniff_frames(&self, device_id: &str) {
-        let conn = self.conn.lock().unwrap();
-        let _ = conn.execute(
-            "DELETE FROM sniff_frames WHERE device_id = ?1",
-            params![device_id],
-        );
+        self.clear_table("sniff_frames", device_id);
     }
 }
 

@@ -532,7 +532,11 @@ fn test_scale_switch_f_to_c_wire_values_2x() {
     let msg_c = launa_protocol::dispatcher::dispatch_frame(&frames_c[0]);
     match msg_c {
         IncomingMessage::StatusUpdate(s) => {
-            assert_eq!(s.set_temp, Temperature::celsius(40.0), "Celsius set_temp should decode to 40.0");
+            assert_eq!(
+                s.set_temp,
+                Temperature::celsius(40.0),
+                "Celsius set_temp should decode to 40.0"
+            );
             assert_eq!(s.temperature_scale, TemperatureScale::Celsius);
         }
         _ => panic!("Expected StatusUpdate"),

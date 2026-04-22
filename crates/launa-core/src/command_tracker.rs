@@ -214,6 +214,8 @@ impl CommandTracker {
     /// Reset all tracked state (e.g. on bus reset).
     pub fn reset(&mut self) {
         self.pending.clear();
+        self.dropped_count = 0;
+        self.retry_count = 0;
     }
 }
 
@@ -258,12 +260,18 @@ mod tests {
     /// Helper: build a Celsius StatusUpdate from a raw wire value.
     /// Raw 76 → set_temp=38.0, raw 77 → set_temp=38.5, etc.
     fn make_celsius_status(raw_set_temp: u8) -> StatusUpdate {
-        make_status(Temperature::from_wire(raw_set_temp, TemperatureScale::Celsius), TemperatureScale::Celsius)
+        make_status(
+            Temperature::from_wire(raw_set_temp, TemperatureScale::Celsius),
+            TemperatureScale::Celsius,
+        )
     }
 
     /// Helper: build a Fahrenheit StatusUpdate from a raw wire value.
     fn make_fahrenheit_status(raw_set_temp: u8) -> StatusUpdate {
-        make_status(Temperature::from_wire(raw_set_temp, TemperatureScale::Fahrenheit), TemperatureScale::Fahrenheit)
+        make_status(
+            Temperature::from_wire(raw_set_temp, TemperatureScale::Fahrenheit),
+            TemperatureScale::Fahrenheit,
+        )
     }
 
     /// Test is_confirmed directly for Fahrenheit.

@@ -249,6 +249,73 @@ Add new error injection capabilities to SpaSim and integration tests that exerci
 
 ### LOW — Minor Issues
 
+## Code Quality Review (2026-04-20)
+
+Crate-by-crate review for clean code, deduplication, bad tests, and UX. Five parallel worker audits covering protocol, MQTT, HAL/sim, app/integration-tests, and web/xtask.
+
+### HIGH — Structural / Maintainability
+
+- [ ] **Extract `dispatch_frame()` mega-function into message-type handlers** (`launa-protocol/src/dispatcher.rs`): 245-line function with 4+ levels of nesting. ~30 `Unknown` constructions and 8 duplicated parse-warn-fallback patterns. Split into `handle_status()`, `handle_config()`, `handle_registration()`, etc.
+- [ ] **Break `SpaSim` god object into focused subsystems** (`launa-sim/src/spa_sim/mod.rs`): 39 fields, 500+ lines of impl. Extract `ErrorInjection`, `FaultManager`, `FrameSplitter` subsystems.
+- [ ] **Break `main()` god function into named functions** (`app/src/main.rs`): ~250-line non-hw-test main handles init, WiFi, MQTT, OTA, event loop, self-test, sniff mode. Extract `init_wifi()`, `init_mqtt()`, `handle_ota_request()`, `run_event_loop()`.
+- [ ] **Replace `STATE_CHANNEL` 5-tuple with named struct** (`app/src/main.rs` line 151): `(StatusUpdate, FaultBuf, bool, bool, bool)` — the three bools are unreadable. Use `struct StateMessage { status, fault, recovering_from_stale, self_test, sniff_mode }`.
+- [ ] **Extract reconnect-and-sync helper** (`app/src/mqtt_task.rs`): Post-reconnect sequence (availability → discovery → subscribe → state) duplicated 3 times. Extract `reconnect_and_sync()`.
+- [ ] **Extract shared `LoadingSpinner.vue` component** (`web/src/`): Identical spinner SVG copy-pasted in 7 components (App.vue, StatusDashboard, TemperatureChart, LogViewer, AlertsView, DiagnosticsView, SniffFramesView).
+- [ ] **Split `useMqtt.ts` god composable** (`web/src/composables/useMqtt.ts`): 210+ lines handling connection, state, settings, commands, pending tracking, config fetching. Split into `useMqttConnection`, `useSpaState`, `useSettings`, `useAccessoryConfig`.
+
+### MEDIUM — Deduplication
+
+- [ ] **Deduplicate pump bit-decode logic** (`launa-protocol`): Pump bit-decoding duplicated between `status.rs` and `config.rs`. Extract shared helper.
+- [ ] **Deduplicate UART register constants and write logic** (`app/src/main.rs` vs `app/src/logger.rs`): Both define `UART0_BASE`, `UART_STATUS_REG`, FIFO size constants, and byte-write-then-spin-loop. Extract shared `uart_raw` module.
+- [ ] **Deduplicate hex encoding** (`app/src/main.rs` `publish_sniff_frame` vs `app/src/crypto.rs` `to_hex`): Reuse `crypto::to_hex()` in sniff frame publisher.
+- [ ] **Extract LCG PRNG into shared utility** (`launa-sim`): Magic constants `6364136223846793005`/`1442695040888963407` appear in `sim_broker.rs` and `physics.rs`. Different constants in `mod.rs`. Extract `fn lcg_next(state: &mut u64) -> u64`.
+- [ ] **Extract shared test helpers** (`tests/`): `full_registration()`, `sim_tick_to_app()`, `decode_first_frame()`, `make_new_client_query_frame()` copy-pasted across `registration_tests.rs`, `command_retry_tests.rs`, `spaapp_command_tests.rs`. Use `TestHarness` or `common/` module.
+- [ ] **Extract status-frame decode helper** (`tests/`): Generate → decode → dispatch → match `StatusUpdate` pattern repeated ~40 times. Add `TestHarness::decode_status()` or `dispatch_status()`.
+- [ ] **Deduplicate `timeAgo()` function** (`web/src/`): Identical function in LogViewer, AlertsView, DiagnosticsView, SniffFramesView. Extract to `composables/useTimeAgo.ts` or `utils.ts`.
+- [ ] **Deduplicate `parsePayload()` function** (`web/src/`): Identical function in AlertsView, DiagnosticsView, SniffFramesView. Extract shared utility.
+- [ ] **Extract `<PendingDot>` component** (`web/src/`): Animate-ping dot markup duplicated in App.vue, ToggleSwitch, SelectControl, TemperatureCard, ControlsPanel.
+- [ ] **Deduplicate xtask CLI argument parsing** (`xtask/src/*.rs`): Every module reimplements the same while-loop arg parser. Extract shared `Args` helper.
+- [ ] **Deduplicate xtask serial port resolution** (`xtask/src/`): "CLI arg → config → fallback" pattern in monitor.rs, self_test.rs, provision.rs. Extract `resolve_port()`.
+
+### MEDIUM — Bad Tests
+
+- [ ] **Fix `if let` assertions that silently pass on wrong message type** (`launa-sim/src/spa_sim/tests/`): Many tests use `if let IncomingMessage::StatusUpdate(s) = msg { assert!() }` — wrong message type silently passes. Use `let ... else { panic!() }`.
+- [ ] **Remove trivial smoke test `test_set_ambient_temp_method_exists`** (`launa-sim/src/spa_sim/tests/physics_tests.rs`): Calls setter and asserts nothing — only tests compilation.
+- [ ] **Remove duplicate test `test_simbroker_subscription_filtering_empty_means_all`** (`launa-sim/src/sim_broker.rs`): Duplicates `test_simbroker_default_identical_to_current`.
+- [ ] **Remove duplicate test `test_filter_cycle_start_does_not_toggle_running_pump`** (`launa-sim/src/spa_sim/tests/state_tests.rs`): Same behavior already tested by `test_spontaneous_event_does_not_double_toggle`.
+- [ ] **Add unit tests for `launa-hal`** (`crates/launa-hal/src/`): `Timestamp` arithmetic (`elapsed_since`, `saturating_add`), `Clock` trait defaults — zero tests exist.
+- [ ] **Add missing test coverage for protocol edge cases** (`launa-protocol`): Undefined pump state `3`, undefined heating mode `2`, config parser negative tests, CRC edge cases, unknown fault codes through `parse()`.
+- [ ] **Add missing integration test scenarios** (`launa-integration-tests`): OTA disconnect mid-download, concurrent OTA + MQTT command, NVS corruption fallback, OTA Content-Length exceeding partition, WiFi disconnect during MQTT publish.
+
+### MEDIUM — Bad UX
+
+- [ ] **Pending indicator spins forever on offline device** (`web/src/composables/useMqtt.ts`): `pendingKeys` only cleared on state message arrival. If device offline, spinner never stops. Add 5-second auto-clear timeout.
+- [ ] **MQTT publish silently drops commands when disconnected** (`web/src/composables/useMqtt.ts`): User clicks toggle, nothing happens, no feedback. Show toast/alert when command is dropped.
+- [ ] **Connection error hidden on mobile** (`web/src/components/ConnectionBar.vue`): `hidden sm:block` hides error details on mobile screens. Users see no error information.
+- [ ] **Settings modal has no input validation** (`web/src/components/SettingsModal.vue`): Empty broker URLs, invalid ports, special chars in device ID all accepted. Save always "succeeds" then silently fails to connect.
+- [ ] **Tab bar has no new-content indicators** (`web/src/App.vue`): New alerts/logs arrive but all tabs look identical. Add badge counts.
+- [ ] **Config fallback has unclear error on blank ESP32** (`app/src/config.rs`): Placeholder WiFi creds cause infinite reboot loop with generic "WiFi init failed". Add specific log: "FATAL: No valid config in NVS. Use `cargo xtask config-flash` to write configuration."
+- [ ] **Self-test silently discards real spa frames** (`app/src/main.rs`): Frame drain with no log. If self-test enabled while spa connected, all communication dropped silently. Log warning on first discard.
+- [ ] **OTA `?test=1` URL hack is undocumented and fragile** (`app/src/main.rs`): Query parameter triggers TCP connectivity test. Accidental inclusion silently skips OTA. Use dedicated MQTT topic.
+- [ ] **MQTT error messages lack actionable context** (`app/src/mqtt_client.rs`): Generic `ConnectionFailed` doesn't distinguish DNS vs TCP vs auth vs CONNACK. Include host:port and error detail.
+
+### LOW — Clean Code
+
+- [ ] **Name magic numbers in `generate_status_frame`** (`launa-sim/src/spa_sim/frame_gen.rs`): 11-parameter function. Bundle into `StatusFrameContext` struct or make method on `SpaSim`.
+- [ ] **Name MQTT packet type magic numbers** (`app/src/mqtt_client.rs` lines 418-458): Raw `3`, `4`, `9`, `12`, `13`, `14` should be named constants.
+- [ ] **Name OTA/App magic numbers** (`app/`): `5_000_000` panic delay, `0x140000` partition size, `1024`/`512` buffer sizes, `4096`/`1024` OTA buffer sizes. Extract named constants.
+- [ ] **Fix misleading `frame_jitter_ticks` naming** (`launa-sim/src/spa_sim/mod.rs`): Field is byte count, not tick count. Rename to `jitter_padding_bytes` or similar.
+- [ ] **Remove unused `diagnostics` ref from `useMqtt.ts`** (`web/src/composables/useMqtt.ts`): Defined and returned but never consumed — DiagnosticsView uses `useApi.ts` instead.
+- [ ] **Rename `alert_` to `alertMessage`** (`web/src/composables/useMqtt.ts`): Trailing underscore is a code smell.
+- [ ] **Remove inline Python script from `config_flash.rs`** (`xtask/src/config_flash.rs`): 60+ line Python string embedded in Rust. Move to separate file or rewrite in Rust.
+- [ ] **Use protocol types in `sniff_decode.rs`** (`xtask/src/sniff_decode.rs`): `describe_frame()` reimplements protocol parsing with raw byte offsets. Use parsers from `launa-protocol`.
+- [ ] **Fix `SpaState` type index signature disabling type safety** (`web/src/types.ts`): `[key: string]: unknown` defeats TypeScript excess property checking.
+- [ ] **`StatusDashboard.vue` always renders 6 pumps / 4 lights** (`web/src/components/StatusDashboard.vue`): Should respect `AccessoryConfig` like `ControlsPanel` does.
+- [ ] **`unsafe` `block_on` in SimTransport tests** (`launa-sim/src/sim_transport.rs`): Reimplements future executor from raw parts. Use `futures::block_on` or shared utility.
+- [ ] **Replace `unwrap()` with `expect()` in frame generators** (`launa-sim/src/spa_sim/frame_gen.rs`): `FrameEncoder::encode().unwrap()` in every generator — use `.expect("reason")` for better diagnostics.
+- [ ] **Add error injection to `SimTransport`** (`launa-sim/src/sim_transport.rs`): Currently always returns `Ok`. Can't test transport error handling. Add `set_read_error()` like `MockTransport`.
+- [ ] **`Network` trait may be unused dead abstraction** (`launa-hal/src/network.rs`): Only has mock implementations. Verify usage in `app/` and `launa-mqtt`, remove if unused.
+
 - [x] **`frame_error_count: u32` uses saturating_add** (`launa-protocol/src/frame.rs`): Both increment sites now use `saturating_add(1)` instead of `+= 1` to prevent wrap on noisy buses.
 - [x] **Status message: missing panel_locked, notification_type, settings_lock, M8 cycle time fields** (`launa-protocol/src/status.rs`): Additional fields at offsets 9/18/19/21/24 that other implementations parse. Low priority — advanced/niche features.
 - [x] **Missing message types: Preferences (0x26), Setup Parameters (0x25)** (`launa-protocol/src/dispatcher.rs`): Standard Balboa message types not handled. Non-essential but may appear on real spas.

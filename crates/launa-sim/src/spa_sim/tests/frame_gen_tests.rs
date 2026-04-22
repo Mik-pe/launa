@@ -34,14 +34,8 @@ fn test_tick_after_registration_no_query() {
 
 #[test]
 fn test_temp_encoding_fahrenheit() {
-    assert_eq!(
-        Temperature::fahrenheit(100.0).to_wire(),
-        100
-    );
-    assert_eq!(
-        Temperature::fahrenheit(104.0).to_wire(),
-        104
-    );
+    assert_eq!(Temperature::fahrenheit(100.0).to_wire(), 100);
+    assert_eq!(Temperature::fahrenheit(104.0).to_wire(), 104);
 }
 
 #[test]

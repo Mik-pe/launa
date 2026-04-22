@@ -24,7 +24,7 @@ pub fn status_to_json(
     sniff_mode: bool,
 ) -> String {
     let current_temp = match status.current_temp {
-        Some(t) => format!("{}", t),
+        Some(t) => format!("{}", t.raw_value()),
         None => String::from("null"),
     };
 

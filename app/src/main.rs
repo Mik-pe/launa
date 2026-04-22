@@ -294,6 +294,11 @@ async fn handle_mqtt_command(
                 if self_test_state.is_some() {
                     info!("Self-test mode disabled, resuming normal operation");
                     *self_test_state = None;
+                    // Immediately publish current spa state so the UI
+                    // receives self_test: false without waiting for the
+                    // next status change from the spa.
+                    let actions = app.force_publish();
+                    execute_actions(&actions, device_id_str, false, *sniff_mode).await;
                 }
             }
         }
@@ -304,6 +309,9 @@ async fn handle_mqtt_command(
             } else if !enable && *sniff_mode {
                 info!("Sniff mode disabled — resuming normal operation");
                 *sniff_mode = false;
+                // Immediately publish state so UI receives sniff_mode: false
+                let actions = app.force_publish();
+                execute_actions(&actions, device_id_str, self_test_state.is_some(), false).await;
             }
         }
         _ => {

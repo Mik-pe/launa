@@ -264,6 +264,8 @@ function handleTempRange(val: string): void {
       :accessory-config="serverConfig ?? { pumps: 2, lights: 1, blower: true, mister: false }"
       :self-test-enabled="selfTestEnabled"
       :sniff-enabled="sniffEnabled"
+      :self-test-pending="isPending('self_test')"
+      :sniff-pending="isPending('sniff_mode')"
       @save="handleSave"
       @save-accessory-config="saveAccessoryConfig"
       @toggle-self-test="setSelfTest"

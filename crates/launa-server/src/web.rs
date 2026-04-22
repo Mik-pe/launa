@@ -1,13 +1,14 @@
 use std::sync::{Arc, Mutex};
 
-use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::response::Json;
+use axum::Router;
+use chrono::Utc;
 use serde::Deserialize;
 use tracing::info;
 
-use crate::Config;
 use crate::db::Database;
+use crate::Config;
 
 pub fn start(config: &Config, db: Arc<Database>) -> Result<(), Box<dyn std::error::Error>> {
     use tower_http::services::{ServeDir, ServeFile};
@@ -50,12 +51,21 @@ pub fn build_router(state: AppState) -> Router {
         .route("/logs", axum::routing::get(get_logs).delete(clear_logs))
         .route("/status", axum::routing::get(get_status))
         .route("/status/latest", axum::routing::get(get_latest_status))
-        .route("/diagnostics", axum::routing::get(get_diagnostics).delete(clear_diagnostics))
-        .route("/alerts", axum::routing::get(get_alerts).delete(clear_alerts))
+        .route(
+            "/diagnostics",
+            axum::routing::get(get_diagnostics).delete(clear_diagnostics),
+        )
+        .route(
+            "/alerts",
+            axum::routing::get(get_alerts).delete(clear_alerts),
+        )
         .route("/sniff", axum::routing::get(get_sniff).delete(clear_sniff));
 
     Router::new()
-        .route("/api/config", axum::routing::get(get_config).put(set_config))
+        .route(
+            "/api/config",
+            axum::routing::get(get_config).put(set_config),
+        )
         .nest("/api/devices/{device_id}", device_routes)
         .with_state(state)
 }
@@ -89,6 +99,8 @@ pub struct AppState {
 struct LimitQuery {
     #[serde(default = "default_limit")]
     limit: u64,
+    #[serde(default)]
+    hours: Option<u64>,
 }
 
 fn default_limit() -> u64 {
@@ -124,7 +136,12 @@ async fn get_status(
     Path(device_id): Path<String>,
     Query(query): Query<LimitQuery>,
 ) -> Json<Vec<crate::db::StatusEntry>> {
-    Json(state.db.get_status_history(&device_id, query.limit))
+    if let Some(hours) = query.hours {
+        let since = (Utc::now() - chrono::Duration::hours(hours as i64)).to_rfc3339();
+        Json(state.db.get_status_history_since(&device_id, &since))
+    } else {
+        Json(state.db.get_status_history(&device_id, query.limit))
+    }
 }
 
 async fn get_latest_status(
@@ -158,10 +175,7 @@ async fn get_sniff(
     Json(state.db.get_sniff_frames(&device_id, query.limit))
 }
 
-async fn clear_logs(
-    State(state): State<AppState>,
-    Path(device_id): Path<String>,
-) -> &'static str {
+async fn clear_logs(State(state): State<AppState>, Path(device_id): Path<String>) -> &'static str {
     state.db.clear_logs(&device_id);
     "ok"
 }
@@ -182,10 +196,7 @@ async fn clear_diagnostics(
     "ok"
 }
 
-async fn clear_sniff(
-    State(state): State<AppState>,
-    Path(device_id): Path<String>,
-) -> &'static str {
+async fn clear_sniff(State(state): State<AppState>, Path(device_id): Path<String>) -> &'static str {
     state.db.clear_sniff_frames(&device_id);
     "ok"
 }

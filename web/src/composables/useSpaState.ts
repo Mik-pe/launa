@@ -102,7 +102,7 @@ export function useSpaState() {
     enabled: boolean,
     publish: (subtopic: string, payload: string | number | boolean) => void,
   ) {
-    selfTestEnabled.value = enabled
+    addPending('self_test')
     publish('self_test', enabled ? 'ON' : 'OFF')
   }
 
@@ -110,7 +110,7 @@ export function useSpaState() {
     enabled: boolean,
     publish: (subtopic: string, payload: string | number | boolean) => void,
   ) {
-    sniffEnabled.value = enabled
+    addPending('sniff_mode')
     publish('sniff', enabled ? 'ON' : 'OFF')
   }
 

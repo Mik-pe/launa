@@ -762,7 +762,11 @@ fn test_rapid_temperature_race_last_wins() {
         } else {
             panic!("Expected StatusUpdate");
         };
-    assert_eq!(initial_set_temp, Temperature::fahrenheit(104.0), "default set_temp should be 104");
+    assert_eq!(
+        initial_set_temp,
+        Temperature::fahrenheit(104.0),
+        "default set_temp should be 104"
+    );
 
     // Queue 3 rapid set_temperature commands: 100 → 104 → 102
     // SetTemperature deduplication replaces in-place, so only 1 remains (102).
@@ -795,7 +799,8 @@ fn test_rapid_temperature_race_last_wins() {
     let final_msg = launa_protocol::dispatcher::dispatch_frame(&final_status_frames[0]);
     if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = final_msg {
         assert_eq!(
-            s.set_temp, Temperature::fahrenheit(102.0),
+            s.set_temp,
+            Temperature::fahrenheit(102.0),
             "final set_temp should be 102 (last queued value wins)"
         );
     } else {
@@ -808,7 +813,8 @@ fn test_rapid_temperature_race_last_wins() {
     let msg = launa_protocol::dispatcher::dispatch_frame(&status_frames[0]);
     if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = msg {
         assert_eq!(
-            s.set_temp, Temperature::fahrenheit(102.0),
+            s.set_temp,
+            Temperature::fahrenheit(102.0),
             "status frame should report set_temp = 102"
         );
     } else {
