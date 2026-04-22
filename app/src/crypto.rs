@@ -13,6 +13,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use esp_hal::aes::{Aes, Key};
 use esp_hal::rng::Rng;
+use launa_protocol::hex;
 use log::warn;
 
 /// NVS values starting with this prefix are treated as encrypted.
@@ -82,51 +83,6 @@ fn random_nonce(rng: &mut Rng) -> [u8; 12] {
     nonce
 }
 
-/// Convert a byte slice to a lowercase hex string.
-pub(crate) fn to_hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        let hi = (b >> 4) & 0x0f;
-        let lo = b & 0x0f;
-        s.push(if hi < 10 { (b'0' + hi) as char } else { (b'a' + hi - 10) as char });
-        s.push(if lo < 10 { (b'0' + lo) as char } else { (b'a' + lo - 10) as char });
-    }
-    s
-}
-
-/// Maximum hex string length accepted by `from_hex()`.
-/// 1024 hex chars → 512 bytes decoded. More than enough for encrypted NVS
-/// values (typically ~100 chars). Prevents OOM from malformed/corrupt input
-/// on the 32 KiB ESP32 heap.
-const MAX_HEX_LEN: usize = 1024;
-
-/// Parse a hex string into a byte vector.
-///
-/// Returns `None` if the input has odd length, contains non-hex characters,
-/// or exceeds `MAX_HEX_LEN` (prevents unbounded heap allocation).
-fn from_hex(hex: &str) -> Option<Vec<u8>> {
-    if hex.len() % 2 != 0 || hex.len() > MAX_HEX_LEN {
-        return None;
-    }
-    let mut bytes = Vec::with_capacity(hex.len() / 2);
-    for i in (0..hex.len()).step_by(2) {
-        let hi = hex.as_bytes()[i].to_ascii_lowercase();
-        let lo = hex.as_bytes()[i + 1].to_ascii_lowercase();
-        let h = match hi {
-            b'0'..=b'9' => hi - b'0',
-            b'a'..=b'f' => hi - b'a' + 10,
-            _ => return None,
-        };
-        let l = match lo {
-            b'0'..=b'9' => lo - b'0',
-            b'a'..=b'f' => lo - b'a' + 10,
-            _ => return None,
-        };
-        bytes.push(h << 4 | l);
-    }
-    Some(bytes)
-}
-
 /// Increment a 16-byte counter (big-endian) in-place.
 fn increment_counter(counter: &mut [u8; 16]) {
     for byte in counter.iter_mut().rev() {
@@ -187,7 +143,7 @@ pub fn encrypt(plaintext: &str, aes: &mut Aes, rng: &mut Rng) -> String {
     combined.extend_from_slice(&buf);
 
     let mut result = String::from(ENC_PREFIX);
-    result.push_str(&to_hex(&combined));
+    result.push_str(&hex::to_hex(&combined));
     result
 }
 
@@ -209,7 +165,7 @@ pub fn maybe_decrypt(value: &str, aes: &mut Aes, _rng: &mut Rng) -> String {
         return String::from(value);
     }
 
-    let combined = match from_hex(hex_part) {
+    let combined = match hex::from_hex(hex_part) {
         Some(c) => c,
         None => {
             warn!("Invalid hex in encrypted value, returning as-is");

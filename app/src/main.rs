@@ -251,7 +251,7 @@ async fn execute_actions(actions: &[AppAction], device_id: &str, self_test: bool
 /// Formats the frame as JSON matching the sniffer protocol:
 /// `{"raw":"<hex>","type":"<MT>","len":<N>,"crc_ok":<bool>}`
 fn publish_sniff_frame(frame: &Frame) {
-    let hex_str = crypto::to_hex(&frame.payload);
+    let hex_str = launa_protocol::hex::to_hex(&frame.payload);
 
     let mt = alloc::format!(
         "{:02X}{:02X}",

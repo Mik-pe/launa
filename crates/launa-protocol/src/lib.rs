@@ -26,6 +26,7 @@ pub mod dispatcher;
 pub mod fault;
 pub mod filter;
 pub mod frame;
+pub mod hex;
 pub mod information;
 pub mod pump_bits;
 pub mod registration;
