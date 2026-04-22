@@ -154,6 +154,12 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 let self_test = msg.self_test;
                 let sniff_mode = msg.sniff_mode;
                 last_scale_range = Some((status.temperature_scale, status.temp_range));
+                // Force re-publish when self_test or sniff_mode changes so the
+                // first state after mode toggle always reaches the broker.
+                let mode_changed = self_test != last_self_test || sniff_mode != last_sniff_mode;
+                if mode_changed {
+                    last_published_status = None;
+                }
                 last_self_test = self_test;
                 last_sniff_mode = sniff_mode;
                 // Change detection: skip publish if state is identical to last

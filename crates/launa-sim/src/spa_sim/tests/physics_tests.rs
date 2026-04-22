@@ -1,6 +1,6 @@
 use super::*;
 use launa_protocol::frame::FrameDecoder;
-use launa_protocol::status::PumpState;
+use launa_protocol::status::{PumpState, TemperatureScale};
 use launa_protocol::Temperature;
 
 #[test]
@@ -797,7 +797,10 @@ fn test_heater_interlock_full_cycle() {
     sim.simulate_physics();
     assert!(sim.state.is_heating, "phase 1: heating with pump");
     let temp_phase1 = sim.state.current_temp;
-    assert!(temp_phase1 > Temperature::fahrenheit(90.0), "should be warming up");
+    assert!(
+        temp_phase1 > Temperature::fahrenheit(90.0),
+        "should be warming up"
+    );
 
     // Phase 2: turn pump off — heating stops immediately
     sim.state.pumps[0] = PumpState::Off;
@@ -1083,5 +1086,67 @@ fn test_physics_noise_and_legacy_noise_combined() {
         variation_count > 50,
         "combined noise should produce variation in most ticks, got {}/100",
         variation_count
+    );
+}
+
+#[test]
+fn test_lowering_target_temp_allows_cooling() {
+    // Simulate a self-test scenario: water at 37.5°C, set point at 38°C, heating active.
+    // User lowers set point to 35°C. Water should cool down toward ambient,
+    // not stay stuck or immediately snap to the new set point.
+    let mut sim = SpaSim::new();
+    sim.state.temp_scale = TemperatureScale::Celsius;
+    sim.state.current_temp = Temperature::celsius(37.5);
+    sim.state.set_temp = Temperature::celsius(38.0);
+    sim.state.is_heating = true;
+    sim.state.circ_pump = true;
+
+    // Lower the target to 35°C
+    sim.state.set_temp = Temperature::celsius(35.0);
+
+    // Run physics for several ticks — water should be cooling
+    let initial_f = sim.state.current_temp.to_fahrenheit();
+    for _ in 0..10 {
+        sim.simulate_physics();
+    }
+    let after_f = sim.state.current_temp.to_fahrenheit();
+
+    assert!(
+        after_f < initial_f - 0.5,
+        "water should cool after lowering target: start={}, end={}",
+        initial_f,
+        after_f
+    );
+
+    // Heater should NOT be on while above the lowered target
+    assert!(
+        !sim.state.is_heating,
+        "heater should be off while above lowered target, but is_heating=true"
+    );
+}
+
+#[test]
+fn test_lowering_target_temp_allows_gradual_cooling() {
+    // Water should cool gradually, not snap instantly to the new lower target.
+    let mut sim = SpaSim::new();
+    sim.state.temp_scale = TemperatureScale::Celsius;
+    sim.state.current_temp = Temperature::celsius(37.5);
+    sim.state.set_temp = Temperature::celsius(38.0);
+    sim.state.is_heating = true;
+    sim.state.circ_pump = true;
+
+    // Lower the target to 35°C
+    sim.state.set_temp = Temperature::celsius(35.0);
+
+    // After one tick, water should NOT have snapped to 35°C
+    sim.simulate_physics();
+    let temp_f = sim.state.current_temp.to_fahrenheit();
+    let target_f = Temperature::celsius(35.0).to_fahrenheit();
+
+    assert!(
+        temp_f > target_f + 1.0,
+        "water should cool gradually, not snap to target: temp={:.2}F, target={:.2}F",
+        temp_f,
+        target_f
     );
 }

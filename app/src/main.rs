@@ -677,9 +677,10 @@ async fn tick_self_test(
     let should_publish = self_test_last_publish
         .map_or(true, |t| t.elapsed().as_secs() >= SELF_TEST_PUBLISH_INTERVAL_SECS);
     if should_publish {
+        let status = self_test_state.status();
         execute_actions(
             &[AppAction::PublishState {
-                status: self_test_state.status().clone(),
+                status: status.clone(),
                 fault: None,
                 recovering_from_stale: false,
             }],

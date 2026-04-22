@@ -48,8 +48,8 @@ pub(crate) fn simulate_physics(state: &mut SpaState, ctx: &mut PhysicsContext) {
     let hysteresis = overshoot / 2.0;
 
     // If current_temp is above the new set_temp (e.g. user lowered target),
-    // clear the overshoot flag so normal heating control resumes once temp drops.
-    if ctx.heating_overshot && current_f > set_temp_f {
+    // clear the overshoot flag so the heater doesn't re-engage during cooling.
+    if ctx.heating_overshot && current_f > set_temp_f + 0.01 {
         ctx.heating_overshot = false;
     }
 
@@ -78,9 +78,14 @@ pub(crate) fn simulate_physics(state: &mut SpaState, ctx: &mut PhysicsContext) {
         }
 
         if current_f >= overshoot_target - 0.01 {
-            current_f = overshoot_target;
+            // Only snap when we arrived from below (actively heated to target).
+            // If user lowered set_temp below current_temp, current_f is well
+            // above overshoot_target — just turn off and let cooling handle it.
+            if current_f <= overshoot_target + 0.01 {
+                current_f = overshoot_target;
+                ctx.heating_overshot = true;
+            }
             state.is_heating = false;
-            ctx.heating_overshot = true;
         }
     } else if current_f > ambient_f {
         let delta = (current_f - ambient_f).max(0.0);
