@@ -9,28 +9,9 @@ use log::{error, info, warn};
 
 use crate::mqtt_client::{LastState, MqttClient};
 
-/// Parse an IPv4 dotted-quad address string into `[u8; 4]`.
-/// Rejects malformed input: wrong number of octets, out-of-range values,
-/// or extra trailing data.
-pub fn parse_ip(s: &str) -> Option<[u8; 4]> {
-    let mut parts = s.split('.');
-    let a = parts.next()?.parse::<u8>().ok()?;
-    let b = parts.next()?.parse::<u8>().ok()?;
-    let c = parts.next()?.parse::<u8>().ok()?;
-    let d = parts.next()?.parse::<u8>().ok()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    Some([a, b, c, d])
-}
-
-/// Compute exponential backoff in seconds for connection retries.
-///
-/// Returns 5s, 10s, 20s, 40s, 60s, 60s, ... capped at 60s.
-/// `attempt` is 1-based (first attempt = 1).
-pub fn backoff_secs(attempt: u32) -> u64 {
-    (5u64 << attempt.saturating_sub(1).min(4)).min(60)
-}
+// Re-export parse_ip and backoff_secs from launa-core for convenience.
+// These functions are now desktop-testable in the launa-core crate.
+pub(crate) use launa_core::network::{backoff_secs, parse_ip};
 
 /// Reconnect to MQTT with exponential backoff, alerting, and post-reconnect sync.
 ///
