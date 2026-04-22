@@ -24,6 +24,12 @@ pub struct FaultManager {
     pub(crate) fault_log_entries: Vec<FaultLogConfig>,
 }
 
+impl Default for FaultManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FaultManager {
     pub fn new() -> Self {
         FaultManager {

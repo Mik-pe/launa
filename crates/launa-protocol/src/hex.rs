@@ -40,7 +40,7 @@ pub const MAX_HEX_LEN: usize = 1024;
 /// Returns `None` if the input has odd length, contains non-hex characters,
 /// or exceeds `MAX_HEX_LEN` (prevents unbounded heap allocation).
 pub fn from_hex(hex: &str) -> Option<Vec<u8>> {
-    if hex.len() % 2 != 0 || hex.len() > MAX_HEX_LEN {
+    if !hex.len().is_multiple_of(2) || hex.len() > MAX_HEX_LEN {
         return None;
     }
     let mut bytes = Vec::with_capacity(hex.len() / 2);

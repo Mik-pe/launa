@@ -25,6 +25,12 @@ pub struct SimTransport {
     read_error: Option<TransportError>,
 }
 
+impl Default for SimTransport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SimTransport {
     pub fn new() -> Self {
         SimTransport {

@@ -74,6 +74,12 @@ pub struct PumpTimerManager {
     timers: [PumpTimer; 6],
 }
 
+impl Default for PumpTimerManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PumpTimerManager {
     pub fn new() -> Self {
         PumpTimerManager {
@@ -120,6 +126,12 @@ pub struct HoldModeTimer {
     timeout_ms: u64,
     /// True after timer fires; prevents re-arming until hold mode is released.
     fired: bool,
+}
+
+impl Default for HoldModeTimer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HoldModeTimer {

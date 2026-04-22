@@ -116,8 +116,8 @@ async fn set_config(
     Json(new_cfg): Json<AccessoryConfig>,
 ) -> Json<AccessoryConfig> {
     let mut cfg = state.accessory_config.lock().unwrap();
-    cfg.pumps = new_cfg.pumps.min(6).max(1);
-    cfg.lights = new_cfg.lights.min(4).max(1);
+    cfg.pumps = new_cfg.pumps.clamp(1, 6);
+    cfg.lights = new_cfg.lights.clamp(1, 4);
     cfg.blower = new_cfg.blower;
     cfg.mister = new_cfg.mister;
     Json(cfg.clone())

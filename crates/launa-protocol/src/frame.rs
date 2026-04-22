@@ -110,6 +110,12 @@ pub struct FrameDecoder {
     max_buffer_size: usize,
 }
 
+impl Default for FrameDecoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FrameDecoder {
     pub fn new() -> Self {
         FrameDecoder {

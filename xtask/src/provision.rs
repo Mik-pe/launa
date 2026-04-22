@@ -45,7 +45,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         .collect();
     let key_path = temp_dir.join(format!("launa-key-{}.tmp", random_suffix));
 
-    fs::write(&key_path, &block_data)
+    fs::write(&key_path, block_data)
         .with_context(|| format!("Failed to write key to temp file {}", key_path.display()))?;
 
     println!(
@@ -66,7 +66,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     // Pass the key via stdin to avoid confirmation prompts.
     // Newer espefuse (v5+) removed --no-confirm; instead we pipe "BURN" to stdin.
     let burn_result = Command::new(&espefuse)
-        .args(&[
+        .args([
             "--port",
             &port_name,
             "burn-block-data",

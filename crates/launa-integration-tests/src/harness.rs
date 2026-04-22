@@ -29,6 +29,12 @@ pub struct TestHarness {
     pub decoder: FrameDecoder,
 }
 
+impl Default for TestHarness {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TestHarness {
     /// Create a new harness with clean state: unregistered, no status, no publications.
     pub fn new() -> Self {

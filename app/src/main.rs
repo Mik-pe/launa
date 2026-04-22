@@ -207,7 +207,7 @@ async fn execute_actions(actions: &[AppAction], device_id: &str, self_test: bool
                 fault,
                 recovering_from_stale,
             } => {
-                let fb = fault.as_ref().map_or(FaultBuf::EMPTY, |s| FaultBuf::from_str(s));
+                let fb = fault.as_ref().map_or(FaultBuf::EMPTY, |s| FaultBuf::from_string(s));
                 if STATE_CHANNEL.try_send(types::StateMessage {
                     status: status.clone(),
                     fault: fb,

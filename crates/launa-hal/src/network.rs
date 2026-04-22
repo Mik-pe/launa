@@ -44,6 +44,12 @@ pub mod mock {
         last_connect_port: Option<u16>,
     }
 
+    impl Default for MockNetwork {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl MockNetwork {
         pub fn new() -> Self {
             MockNetwork {

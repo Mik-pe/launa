@@ -42,6 +42,12 @@ pub mod mock {
         read_error: Option<super::TransportError>,
     }
 
+    impl Default for MockTransport {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl MockTransport {
         pub fn new() -> Self {
             MockTransport {

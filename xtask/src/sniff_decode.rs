@@ -330,7 +330,7 @@ fn print_entry(entry: &SniffEntry) {
 
 fn hex_to_bytes(hex: &str) -> Vec<u8> {
     let hex = hex.trim().trim_start_matches("0x").trim_start_matches("0X");
-    let hex = if hex.len() % 2 != 0 {
+    let hex = if !hex.len().is_multiple_of(2) {
         // Odd-length: prepend '0' so "1A3B5" becomes "01A3B5"
         let mut padded = String::with_capacity(hex.len() + 1);
         padded.push('0');

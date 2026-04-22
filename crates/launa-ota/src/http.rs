@@ -51,13 +51,9 @@ pub fn extract_status_line(headers: &[u8]) -> String {
 /// Returns the index of the first `\r` of the terminating `\r\n\r\n`,
 /// or `None` if the header terminator is not found.
 pub fn find_header_end(data: &[u8]) -> Option<usize> {
-    for i in 0..data.len().saturating_sub(3) {
-        if data[i] == b'\r' && data[i + 1] == b'\n' && data[i + 2] == b'\r' && data[i + 3] == b'\n'
-        {
-            return Some(i);
-        }
-    }
-    None
+    (0..data.len().saturating_sub(3)).find(|&i| {
+        data[i] == b'\r' && data[i + 1] == b'\n' && data[i + 2] == b'\r' && data[i + 3] == b'\n'
+    })
 }
 
 /// Parse `crc` query parameter from URL (e.g. `?crc=DEADBEEF`).

@@ -357,7 +357,7 @@ impl<'a> SpaApp<'a> {
             // Probe at 5s intervals
             let should_probe = self
                 .last_probe_time
-                .map_or(true, |lp| now.elapsed_since(lp) >= STALE_PROBE_INTERVAL_MS);
+                .is_none_or(|lp| now.elapsed_since(lp) >= STALE_PROBE_INTERVAL_MS);
 
             if elapsed >= STALE_PROBE_INTERVAL_MS && should_probe {
                 // Use lightweight NothingToSend instead of ConfigurationRequest
@@ -392,7 +392,7 @@ impl<'a> SpaApp<'a> {
         // Diagnostics publishing (every 60s)
         let should_diag = self
             .last_diag_time
-            .map_or(true, |ld| now.elapsed_since(ld) >= DIAGNOSTICS_INTERVAL_MS);
+            .is_none_or(|ld| now.elapsed_since(ld) >= DIAGNOSTICS_INTERVAL_MS);
         if should_diag {
             self.last_diag_time = Some(now);
             let uptime_ms = now.elapsed_since(self.boot_time);

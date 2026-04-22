@@ -7,6 +7,8 @@
 //! The sim uses Rust types natively (enums, f32 temps) and only converts to raw
 //! bytes at the frame generation boundary.
 
+type PendingCommand = (u64, Box<dyn FnOnce(&mut SpaState)>);
+
 pub mod config;
 pub mod error_injection;
 pub mod fault_manager;
@@ -82,7 +84,7 @@ pub struct SpaSim {
     command_latency_ticks: u64,
     /// Pending commands waiting for their latency to expire.
     /// Each entry is (remaining_ticks, Box<dyn FnOnce(&mut SpaState)>).
-    pending_commands: Vec<(u64, Box<dyn FnOnce(&mut SpaState)>)>,
+    pending_commands: Vec<PendingCommand>,
     /// Min/max ticks between Ready frames. Default (1,1) = every tick.
     ready_interval_range: (u64, u64),
     /// Ticks remaining until the next Ready frame should be sent.
@@ -135,6 +137,12 @@ pub struct SpaSim {
     information_config: InformationConfig,
     /// Custom configuration response data. Defaults to the hardcoded config data.
     spa_config_config: SpaConfigConfig,
+}
+
+impl Default for SpaSim {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SpaSim {
@@ -561,9 +569,7 @@ impl SpaSim {
 
         // Frame jitter: add random padding bytes before status frame
         let padding_len = self.jitter_padding_len();
-        for _ in 0..padding_len {
-            output.push(0x00);
-        }
+        output.extend(core::iter::repeat_n(0x00, padding_len));
 
         // Send status update (this reads fault_active and priming_remaining_ticks)
         let status_bytes = self.generate_status_frame();
@@ -650,43 +656,39 @@ impl SpaSim {
                 match frame.payload[0] {
                     0x04 => Some(self.generate_config_response()),
                     0x11 => {
-                        if frame.payload.len() >= 2 {
-                            if self.should_accept_command() {
-                                let item_code = frame.payload[1];
-                                if self.command_latency_ticks == 0 {
-                                    self.handle_toggle_by_code(item_code);
-                                } else {
-                                    let latency = self.command_latency_ticks;
-                                    self.pending_commands.push((
-                                        latency,
-                                        Box::new(move |state: &mut SpaState| {
-                                            apply_toggle_by_code(state, item_code);
-                                        }),
-                                    ));
-                                }
+                        if frame.payload.len() >= 2 && self.should_accept_command() {
+                            let item_code = frame.payload[1];
+                            if self.command_latency_ticks == 0 {
+                                self.handle_toggle_by_code(item_code);
+                            } else {
+                                let latency = self.command_latency_ticks;
+                                self.pending_commands.push((
+                                    latency,
+                                    Box::new(move |state: &mut SpaState| {
+                                        apply_toggle_by_code(state, item_code);
+                                    }),
+                                ));
                             }
                         }
                         None
                     }
                     0x20 => {
-                        if frame.payload.len() >= 2 {
-                            if self.should_accept_command() {
-                                let raw_temp = frame.payload[1];
-                                let scale = self.state.temp_scale;
-                                if self.command_latency_ticks == 0 {
-                                    self.state
-                                        .set_target_temp(Temperature::from_wire(raw_temp, scale));
-                                } else {
-                                    let latency = self.command_latency_ticks;
-                                    self.pending_commands.push((
-                                        latency,
-                                        Box::new(move |state: &mut SpaState| {
-                                            state.set_target_temp(Temperature::from_wire(
-                                                raw_temp, scale,
-                                            ));
-                                        }),
-                                    ));
-                                }
+                        if frame.payload.len() >= 2 && self.should_accept_command() {
+                            let raw_temp = frame.payload[1];
+                            let scale = self.state.temp_scale;
+                            if self.command_latency_ticks == 0 {
+                                self.state
+                                    .set_target_temp(Temperature::from_wire(raw_temp, scale));
+                            } else {
+                                let latency = self.command_latency_ticks;
+                                self.pending_commands.push((
+                                    latency,
+                                    Box::new(move |state: &mut SpaState| {
+                                        state.set_target_temp(Temperature::from_wire(
+                                            raw_temp, scale,
+                                        ));
+                                    }),
+                                ));
                             }
                         }
                         None
@@ -707,7 +709,7 @@ impl SpaSim {
                 }
             }
             [0xFE, 0xBF] => {
-                if frame.payload.len() >= 1 && frame.payload[0] == 0x01 {
+                if !frame.payload.is_empty() && frame.payload[0] == 0x01 {
                     let id = self.next_client_id;
                     self.next_client_id += 1;
                     Some(self.generate_client_id_assignment(id))
@@ -717,7 +719,7 @@ impl SpaSim {
             }
             _ => {
                 // Client ID ack: <ID> BF 03
-                if frame.payload.len() >= 1
+                if !frame.payload.is_empty()
                     && frame.message_type[1] == 0xBF
                     && frame.payload[0] == 0x03
                 {
@@ -780,7 +782,7 @@ impl SpaSim {
 
         let inject_corrupt = self.error_injection.take_corrupt_next();
 
-        let result = generate_status_frame(
+        generate_status_frame(
             &self.state,
             self.priming_remaining_ticks,
             self.fault_manager.fault_active,
@@ -792,9 +794,7 @@ impl SpaSim {
             physics_noise_value,
             ready_rand_value,
             inject_corrupt,
-        );
-
-        result
+        )
     }
 
     /// Generate a `Ready` frame (`10 BF 06`).

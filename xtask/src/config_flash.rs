@@ -77,13 +77,10 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     if stdout.starts_with("CONFIG_OK") {
         println!("Config written successfully!");
         Ok(())
-    } else if stdout.starts_with("CONFIG_ERROR:") {
-        bail!("ESP32 config error: {}", &stdout["CONFIG_ERROR:".len()..]);
-    } else if stdout.starts_with("NO_RESPONSE:") {
-        bail!(
-            "No acknowledgment from ESP32: {}",
-            &stdout["NO_RESPONSE:".len()..]
-        );
+    } else if let Some(err) = stdout.strip_prefix("CONFIG_ERROR:") {
+        bail!("ESP32 config error: {}", err);
+    } else if let Some(msg) = stdout.strip_prefix("NO_RESPONSE:") {
+        bail!("No acknowledgment from ESP32: {}", msg);
     } else {
         bail!("Unexpected response: {}", stdout);
     }

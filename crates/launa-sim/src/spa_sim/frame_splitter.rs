@@ -20,6 +20,12 @@ pub struct FrameSplitter {
     pub(crate) remainder: Option<Vec<u8>>,
 }
 
+impl Default for FrameSplitter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FrameSplitter {
     pub fn new() -> Self {
         FrameSplitter {

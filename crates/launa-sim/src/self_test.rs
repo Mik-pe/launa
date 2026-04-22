@@ -18,6 +18,12 @@ pub struct SelfTestState {
     cached_status: Option<StatusUpdate>,
 }
 
+impl Default for SelfTestState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SelfTestState {
     /// Create a new self-test state.
     ///
@@ -73,6 +79,7 @@ impl SelfTestState {
 }
 
 #[cfg(feature = "std")]
+#[allow(unused_imports)]
 mod tests {
     use super::*;
     use launa_protocol::command::ToggleItem;

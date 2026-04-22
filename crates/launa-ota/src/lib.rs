@@ -176,6 +176,12 @@ pub mod mock {
         in_progress: bool,
     }
 
+    impl Default for MockOta {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl MockOta {
         pub fn new() -> Self {
             MockOta {

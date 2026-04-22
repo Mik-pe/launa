@@ -37,9 +37,13 @@ pub(crate) const OTA_ENTRY_SIZE: usize = 32;
 // Offsets within esp_ota_select_entry_t
 pub(crate) const OTA_SEQ_OFFSET: usize = 0;
 pub(crate) const OTA_SEQ_SIZE: usize = 4;
+#[allow(dead_code)]
 pub(crate) const OTA_LABEL_OFFSET: usize = 4;
+#[allow(dead_code)]
 pub(crate) const OTA_LABEL_SIZE: usize = 20;
+#[allow(dead_code)]
 pub(crate) const OTA_STATE_OFFSET: usize = 24;
+#[allow(dead_code)]
 pub(crate) const OTA_STATE_SIZE: usize = 4;
 pub(crate) const OTA_CRC_OFFSET: usize = 28;
 pub(crate) const OTA_CRC_SIZE: usize = 4;
@@ -80,6 +84,7 @@ pub(crate) fn u32_from_le(bytes: &[u8]) -> u32 {
 }
 
 /// Read a big-endian u32 from 4 bytes.
+#[allow(dead_code)]
 pub(crate) fn u32_from_be(bytes: &[u8]) -> u32 {
     u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
@@ -94,7 +99,7 @@ pub(crate) fn erase_range<S: NorFlash>(
 ) -> Result<(), OtaError> {
     let base = target.offset();
     let aligned_start = (start / SECTOR_SIZE) * SECTOR_SIZE;
-    let aligned_end = ((end + SECTOR_SIZE - 1) / SECTOR_SIZE) * SECTOR_SIZE;
+    let aligned_end = end.div_ceil(SECTOR_SIZE) * SECTOR_SIZE;
 
     let mut offset = aligned_start;
     while offset < aligned_end {
@@ -118,7 +123,7 @@ pub(crate) fn aligned_write<S: NorFlash>(
 ) -> Result<(), OtaError> {
     let abs_offset = target.offset() + offset;
 
-    if data.len() % WORD_SIZE as usize == 0 {
+    if data.len().is_multiple_of(WORD_SIZE as usize) {
         flash
             .write(abs_offset, data)
             .map_err(|_| OtaError::FlashError {

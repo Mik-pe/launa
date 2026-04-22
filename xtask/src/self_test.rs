@@ -20,7 +20,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     println!("Building and flashing self-test firmware...");
     let app_dir = crate::util::project_root().join("app");
     let status = Command::new("cargo")
-        .args(&[
+        .args([
             "+esp",
             "espflash",
             "flash",

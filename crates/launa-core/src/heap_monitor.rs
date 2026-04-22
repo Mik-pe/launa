@@ -12,6 +12,12 @@ pub struct HeapMonitor {
     last_check: Option<Timestamp>,
 }
 
+impl Default for HeapMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HeapMonitor {
     pub fn new() -> Self {
         HeapMonitor { last_check: None }
@@ -22,9 +28,9 @@ impl HeapMonitor {
     /// - `Some(false)` = warning (< 4 KiB but >= 1 KiB)
     /// - `None` = not time to check yet, or heap is fine
     pub fn tick(&mut self, now: Timestamp, free_heap: usize) -> Option<bool> {
-        let should_check = self.last_check.map_or(true, |last| {
-            now.elapsed_since(last) >= HEAP_CHECK_INTERVAL_MS
-        });
+        let should_check = self
+            .last_check
+            .is_none_or(|last| now.elapsed_since(last) >= HEAP_CHECK_INTERVAL_MS);
         if !should_check {
             return None;
         }

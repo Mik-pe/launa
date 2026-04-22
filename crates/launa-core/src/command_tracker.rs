@@ -86,6 +86,12 @@ pub struct VerifyResult {
     pub dropped: u32,
 }
 
+impl Default for CommandTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CommandTracker {
     pub fn new() -> Self {
         CommandTracker {

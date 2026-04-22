@@ -23,6 +23,12 @@ pub struct ErrorInjection {
     pub(crate) duplicate_next: bool,
 }
 
+impl Default for ErrorInjection {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ErrorInjection {
     pub fn new() -> Self {
         ErrorInjection {

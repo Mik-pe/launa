@@ -6,7 +6,7 @@
 /// 2. Client responds `FE BF 01 02 F1 73` — ID request
 /// 3. Spa replies `FE BF 02 <ID>` — assigned ID
 /// 4. Client acknowledges `<ID> BF 03`
-
+///
 /// Client ID registration state.
 ///
 /// Tracks the current phase of the RS-485 bus registration handshake:
@@ -34,6 +34,12 @@ pub enum RegistrationAction {
 
 pub struct RegistrationStateMachine {
     state: RegistrationState,
+}
+
+impl Default for RegistrationStateMachine {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RegistrationStateMachine {
@@ -72,7 +78,7 @@ impl RegistrationStateMachine {
             }
             RegistrationState::WaitingForAssignment => {
                 // Looking for FE BF 02 <ID>
-                if frame_type == [0xFE, 0xBF] && payload.len() >= 1 && payload[0] == 0x02 {
+                if frame_type == [0xFE, 0xBF] && !payload.is_empty() && payload[0] == 0x02 {
                     if let Some(&id) = payload.get(1) {
                         self.state = RegistrationState::Registered { client_id: id };
                         return RegistrationAction::SendIdAck { client_id: id };

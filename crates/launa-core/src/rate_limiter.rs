@@ -25,6 +25,12 @@ pub struct RateLimiter {
     pub(crate) window_start_ms: u64,
 }
 
+impl Default for RateLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RateLimiter {
     /// Create a new rate limiter with no commands counted.
     pub const fn new() -> Self {

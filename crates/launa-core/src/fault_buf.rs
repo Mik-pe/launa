@@ -20,7 +20,7 @@ impl FaultBuf {
     };
 
     /// Create a `FaultBuf` from a string slice, truncating to 63 bytes.
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_string(s: &str) -> Self {
         let to_copy = s.len().min(63);
         let mut buf = [0u8; 64];
         buf[..to_copy].copy_from_slice(&s.as_bytes()[..to_copy]);
@@ -52,27 +52,27 @@ mod tests {
 
     #[test]
     fn test_from_str_short() {
-        let buf = FaultBuf::from_str("Hello");
+        let buf = FaultBuf::from_string("Hello");
         assert_eq!(buf.as_str(), Some("Hello"));
     }
 
     #[test]
     fn test_from_str_empty_string() {
-        let buf = FaultBuf::from_str("");
+        let buf = FaultBuf::from_string("");
         assert_eq!(buf.as_str(), None);
     }
 
     #[test]
     fn test_from_str_exact_63_bytes() {
         let s = "A".repeat(63);
-        let buf = FaultBuf::from_str(&s);
+        let buf = FaultBuf::from_string(&s);
         assert_eq!(buf.as_str(), Some(&s[..]));
     }
 
     #[test]
     fn test_from_str_truncation_at_64_bytes() {
         let s = "A".repeat(80);
-        let buf = FaultBuf::from_str(&s);
+        let buf = FaultBuf::from_string(&s);
         let result = buf.as_str().unwrap();
         assert_eq!(result.len(), 63);
         assert!(result.chars().all(|c| c == 'A'));
@@ -81,7 +81,7 @@ mod tests {
     #[test]
     fn test_from_str_truncation_at_100_bytes() {
         let s = "xyz".repeat(34); // 102 bytes
-        let buf = FaultBuf::from_str(&s);
+        let buf = FaultBuf::from_string(&s);
         let result = buf.as_str().unwrap();
         assert_eq!(result.len(), 63);
     }
@@ -92,7 +92,7 @@ mod tests {
         // split a char. The result may be None (invalid UTF-8) or a
         // valid substring — either is acceptable for this simple buffer.
         let s = "é".repeat(50); // é is 2 bytes, so 100 bytes total
-        let buf = FaultBuf::from_str(&s);
+        let buf = FaultBuf::from_string(&s);
         // The buffer truncates at 63 bytes. "é" is 2 bytes, so 31 full
         // chars = 62 bytes. Byte 63 would split char 32.
         // as_str() may return None if the truncation splits a char.
@@ -107,21 +107,21 @@ mod tests {
     #[test]
     fn test_from_str_ascii_max() {
         let s = "ABCDEFGHIJ".repeat(10); // 100 bytes
-        let buf = FaultBuf::from_str(&s);
+        let buf = FaultBuf::from_string(&s);
         assert_eq!(buf.as_str().unwrap().len(), 63);
         assert_eq!(&buf.as_str().unwrap()[..10], "ABCDEFGHIJ");
     }
 
     #[test]
     fn test_clone() {
-        let buf = FaultBuf::from_str("Test fault");
+        let buf = FaultBuf::from_string("Test fault");
         let cloned = buf.clone();
         assert_eq!(buf.as_str(), cloned.as_str());
     }
 
     #[test]
     fn test_copy() {
-        let buf = FaultBuf::from_str("Test fault");
+        let buf = FaultBuf::from_string("Test fault");
         let copied = buf; // Copy semantic
         assert_eq!(buf.as_str(), copied.as_str());
     }
@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn test_realistic_fault_message() {
         let msg = "HeaterDry: code 27 at 14:30";
-        let buf = FaultBuf::from_str(msg);
+        let buf = FaultBuf::from_string(msg);
         assert_eq!(buf.as_str(), Some(msg));
     }
 }

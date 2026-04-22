@@ -93,6 +93,7 @@ pub(crate) fn apply_toggle_by_code(state: &mut SpaState, item_code: u8) {
 ///
 /// This is the boundary where Rust types → raw wire bytes.
 /// If corrupt frame injection is enabled, the last payload byte is flipped.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn generate_status_frame(
     state: &SpaState,
     priming_remaining_ticks: u64,
