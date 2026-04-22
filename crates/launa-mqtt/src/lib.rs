@@ -14,6 +14,7 @@ pub mod ota_url;
 pub mod packet;
 pub mod remote_log;
 pub mod state;
+pub mod state_change;
 pub mod topics;
 pub mod v5_codec;
 

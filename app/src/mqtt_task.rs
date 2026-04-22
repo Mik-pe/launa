@@ -163,20 +163,10 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 last_self_test = self_test;
                 last_sniff_mode = sniff_mode;
                 // Change detection: skip publish if state is identical to last
-                let changed = last_published_status.as_ref().map_or(true, |prev| {
-                    prev.current_temp != status.current_temp
-                        || prev.set_temp != status.set_temp
-                        || prev.is_heating != status.is_heating
-                        || prev.pumps != status.pumps
-                        || prev.lights != status.lights
-                        || prev.blower != status.blower
-                        || prev.circ_pump != status.circ_pump
-                        || prev.mister != status.mister
-                        || prev.is_hold != status.is_hold
-                        || prev.heating_mode != status.heating_mode
-                        || prev.temp_range != status.temp_range
-                        || prev.hold_timer_minutes != status.hold_timer_minutes
-                });
+                let changed = launa_mqtt::state_change::status_changed(
+                    last_published_status.as_ref(),
+                    &status,
+                );
                 if is_stale || changed {
                     last_published_status = Some(status.clone());
                     last_published_fault = Some(fault);
