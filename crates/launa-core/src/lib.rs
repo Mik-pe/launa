@@ -30,6 +30,7 @@ extern crate alloc;
 
 mod actions;
 mod command_tracker;
+mod fault_buf;
 mod heap_monitor;
 mod log_buffer;
 mod rate_limiter;
@@ -40,6 +41,7 @@ mod types;
 // Re-export all public items to preserve the public API
 pub use actions::AppAction;
 pub use command_tracker::{CommandTracker, VerifyResult};
+pub use fault_buf::FaultBuf;
 pub use heap_monitor::HeapMonitor;
 pub use log_buffer::{LogEntry, RemoteLogBuffer, MAX_LOG_MESSAGE_LEN, REMOTE_LOG_BUF_SIZE};
 pub use rate_limiter::{RateLimiter, RATE_LIMIT_MAX_COMMANDS, RATE_LIMIT_WINDOW_MS};
