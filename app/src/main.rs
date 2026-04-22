@@ -298,7 +298,7 @@ async fn handle_mqtt_command(
                     // receives self_test: false without waiting for the
                     // next status change from the spa.
                     let actions = app.force_publish();
-                    execute_actions(&actions, device_id_str, false, *sniff_mode).await;
+                    execute_actions(&actions, device_id, false, *sniff_mode).await;
                 }
             }
         }
@@ -311,7 +311,7 @@ async fn handle_mqtt_command(
                 *sniff_mode = false;
                 // Immediately publish state so UI receives sniff_mode: false
                 let actions = app.force_publish();
-                execute_actions(&actions, device_id_str, self_test_state.is_some(), false).await;
+                execute_actions(&actions, device_id, self_test_state.is_some(), false).await;
             }
         }
         _ => {

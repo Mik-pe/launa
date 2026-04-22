@@ -75,6 +75,7 @@ impl RemoteLogBuffer {
     }
 
     /// Whether log capture is enabled.
+    #[allow(dead_code)]
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::Relaxed)
     }
@@ -155,6 +156,8 @@ impl RemoteLogBuffer {
 }
 
 /// Global remote log buffer instance.
+/// SAFETY: Single-task access only (embassy cooperative executor, no preemption).
+#[allow(static_mut_refs)]
 static mut REMOTE_LOG_BUFFER: Option<RemoteLogBuffer> = None;
 
 /// Get a reference to the global remote log buffer.
@@ -162,6 +165,7 @@ static mut REMOTE_LOG_BUFFER: Option<RemoteLogBuffer> = None;
 /// Returns `None` if `init_remote_log()` has not been called yet.
 /// The returned reference is `'static` and safe to use from any task
 /// in the cooperative embassy executor.
+#[allow(static_mut_refs)]
 pub fn remote_log_buffer() -> Option<&'static RemoteLogBuffer> {
     unsafe { REMOTE_LOG_BUFFER.as_ref() }
 }
@@ -187,10 +191,7 @@ pub fn capture_log(level: log::Level, message: &str) {
         log::Level::Trace => "trace",
     };
 
-    let ts = unsafe {
-        // Use embassy Instant if available, otherwise 0
-        embassy_time::Instant::now().as_millis() as u64
-    };
+    let ts = embassy_time::Instant::now().as_millis() as u64;
 
     unsafe {
         if let Some(ref mut buf) = REMOTE_LOG_BUFFER {

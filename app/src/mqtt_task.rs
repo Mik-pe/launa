@@ -48,6 +48,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
 
     info!("MQTT task started");
 
+    #[allow(unused_assignments)]
     loop {
         // Check for WiFi reconnect signal — force MQTT reconnect
         if WIFI_RECONNECT_SIGNAL.try_take().is_some() {

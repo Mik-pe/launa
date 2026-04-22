@@ -37,6 +37,7 @@ use crate::mk_static;
 use crate::net_util;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum MqttAction {
     Command(Command),
     StartPumpTimer { pump: u8, minutes: u32 },
@@ -738,6 +739,7 @@ impl MqttClient {
     /// Publish an alert message to the alert topic.
     /// `level` should be "warn" or "error". `message` describes the alert condition.
     /// `uptime_secs` is the device uptime in seconds.
+    #[allow(dead_code)]
     pub async fn publish_alert(
         &mut self,
         level: &str,

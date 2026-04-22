@@ -21,6 +21,7 @@ const KEY_DEVICE_ID: &str = "device_id";
 const KEY_SELF_TEST: &str = "self_test";
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct AppConfig {
     pub wifi_ssid: String,
     pub wifi_password: String,
@@ -107,6 +108,7 @@ impl AppConfig {
         }
     }
 
+    #[allow(dead_code)]
     pub fn save(
         &self,
         nvs: &mut esp_nvs::Nvs<esp_storage::FlashStorage<'static>>,
@@ -158,6 +160,7 @@ fn nvs_get_str(
 }
 
 /// Write a value to NVS, logging a warning on failure.
+#[allow(dead_code)]
 fn nvs_set<R>(
     nvs: &mut esp_nvs::Nvs<esp_storage::FlashStorage<'static>>,
     namespace: &esp_nvs::Key,
