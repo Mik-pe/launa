@@ -1,9 +1,6 @@
 use crate::crc8;
 
 const FRAME_MARKER: u8 = 0x7E;
-const ESCAPE_CHAR: u8 = 0x7D;
-const ESCAPED_MARKER: u8 = 0x5E;
-const ESCAPED_ESCAPE: u8 = 0x5D;
 
 /// A parsed Balboa protocol frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,9 +58,9 @@ impl Frame {
 
     /// Encode this frame into raw bytes including start/end markers.
     ///
-    /// Bytes inside the frame body that equal `0x7E` or `0x7D` are escaped
-    /// using HDLC-style byte stuffing (`0x7D` followed by the byte XOR'd
-    /// with `0x20`). The decoder un-stuffs them on the way in.
+    /// The Balboa BP6013G1 does NOT use HDLC byte stuffing — frame body bytes
+    /// are written literally between 0x7E delimiters. Frame boundaries are
+    /// determined by the Length field, not by special-byte escaping.
     ///
     /// Returns `Err(FrameError::PayloadTooLarge(len))` if the payload exceeds
     /// 250 bytes (the maximum that fits in the u8 length field with overhead).
@@ -83,19 +80,9 @@ impl Frame {
         let crc = crc8::compute(&body);
         body.push(crc);
 
-        let mut buf = Vec::with_capacity(body.len() + 2 + body.len() / 8);
+        let mut buf = Vec::with_capacity(body.len() + 2);
         buf.push(FRAME_MARKER);
-        for &byte in &body {
-            if byte == FRAME_MARKER {
-                buf.push(ESCAPE_CHAR);
-                buf.push(ESCAPED_MARKER);
-            } else if byte == ESCAPE_CHAR {
-                buf.push(ESCAPE_CHAR);
-                buf.push(ESCAPED_ESCAPE);
-            } else {
-                buf.push(byte);
-            }
-        }
+        buf.extend_from_slice(&body);
         buf.push(FRAME_MARKER);
         Ok(buf)
     }
@@ -111,12 +98,15 @@ pub enum FrameError {
 
 /// Streaming frame decoder. Feed bytes one at a time; yields complete frames.
 ///
-/// Handles HDLC-style byte stuffing: `0x7D` is the escape character.
-/// Escaped bytes are XOR'd with `0x20` to recover the original value.
+/// The Balboa BP6013G1 does NOT use HDLC byte stuffing. Frame boundaries are
+/// determined by the Length field: after seeing the start marker 0x7E, the
+/// decoder reads the Length byte to know exactly how many bytes constitute the
+/// frame body, then validates the end marker. This allows raw 0x7E bytes to
+/// appear inside frame payloads without ambiguity.
 pub struct FrameDecoder {
     buffer: Vec<u8>,
     in_frame: bool,
-    escape_next: bool,
+    expected_length: usize,
     frame_error_count: u32,
     max_buffer_size: usize,
 }
@@ -132,7 +122,7 @@ impl FrameDecoder {
         FrameDecoder {
             buffer: Vec::new(),
             in_frame: false,
-            escape_next: false,
+            expected_length: 0,
             frame_error_count: 0,
             max_buffer_size: 512,
         }
@@ -150,43 +140,71 @@ impl FrameDecoder {
     }
 
     /// Feed a single byte. Returns `Some(Frame)` when a complete frame is decoded.
+    ///
+    /// Uses length-field framing: once the first byte after the start marker is
+    /// received (the Length byte), the decoder knows exactly how many more bytes
+    /// to collect before checking for the end marker.
     pub fn feed(&mut self, byte: u8) -> Option<Frame> {
         if byte == FRAME_MARKER {
-            if self.in_frame && !self.buffer.is_empty() {
-                let result = Frame::parse(&self.buffer);
-                self.buffer.clear();
-                self.in_frame = false;
-                self.escape_next = false;
-                match result {
-                    Ok(frame) => Some(frame),
-                    Err(_) => {
-                        self.frame_error_count = self.frame_error_count.saturating_add(1);
-                        None
+            if self.in_frame {
+                if self.expected_length > 0 && self.buffer.len() >= self.expected_length {
+                    // We have enough bytes — try to parse using length-field framing.
+                    // Use only the bytes up to expected_length for the frame body.
+                    let result = Frame::parse(&self.buffer[..self.expected_length]);
+                    self.buffer.clear();
+                    self.in_frame = false;
+                    self.expected_length = 0;
+                    match result {
+                        Ok(frame) => Some(frame),
+                        Err(_) => {
+                            self.frame_error_count = self.frame_error_count.saturating_add(1);
+                            None
+                        }
                     }
+                } else if !self.buffer.is_empty() {
+                    // Fallback: no length known yet, or fewer bytes than expected.
+                    // This handles the case where we see a second 0x7E before the
+                    // length field arrives (malformed data) — treat as error.
+                    self.buffer.clear();
+                    self.in_frame = false;
+                    self.expected_length = 0;
+                    self.frame_error_count = self.frame_error_count.saturating_add(1);
+                    // This 0x7E might be a new start marker, so start a new frame
+                    self.in_frame = true;
+                    None
+                } else {
+                    // Empty frame (consecutive 0x7E) — treat as new start
+                    self.in_frame = true;
+                    None
                 }
             } else {
+                // Start of a new frame
                 self.in_frame = true;
                 self.buffer.clear();
-                self.escape_next = false;
+                self.expected_length = 0;
                 None
             }
         } else if self.in_frame {
-            if self.escape_next {
-                // Un-stuff: XOR with 0x20
-                self.buffer.push(byte ^ 0x20);
-                self.escape_next = false;
-            } else if byte == ESCAPE_CHAR {
-                self.escape_next = true;
-            } else {
-                self.buffer.push(byte);
-            }
+            self.buffer.push(byte);
 
-            // Check buffer overflow after pushing
-            if self.buffer.len() > self.max_buffer_size {
-                self.buffer.clear();
-                self.in_frame = false;
-                self.escape_next = false;
-                self.frame_error_count = self.frame_error_count.saturating_add(1);
+            // Once we have the length byte, record it
+            if self.buffer.len() == 1 {
+                self.expected_length = byte as usize;
+                // Validate: minimum frame length is 4 (length + type(2) + crc)
+                if self.expected_length < 4 {
+                    self.buffer.clear();
+                    self.in_frame = false;
+                    self.expected_length = 0;
+                    self.frame_error_count = self.frame_error_count.saturating_add(1);
+                    return None;
+                }
+                if self.expected_length > self.max_buffer_size {
+                    self.buffer.clear();
+                    self.in_frame = false;
+                    self.expected_length = 0;
+                    self.frame_error_count = self.frame_error_count.saturating_add(1);
+                    return None;
+                }
             }
 
             None
@@ -196,13 +214,87 @@ impl FrameDecoder {
     }
 
     /// Feed a slice of bytes, returning all decoded frames.
+    ///
+    /// Uses length-field framing for efficient slice processing: instead of
+    /// feeding bytes one at a time, reads the length field and copies the
+    /// body bytes in bulk, then validates the end marker.
     pub fn feed_slice(&mut self, data: &[u8]) -> Vec<Frame> {
         let mut frames = Vec::new();
-        for &byte in data {
-            if let Some(frame) = self.feed(byte) {
-                frames.push(frame);
+        let mut i = 0;
+
+        while i < data.len() {
+            if !self.in_frame {
+                // Scan for start marker
+                if data[i] == FRAME_MARKER {
+                    self.in_frame = true;
+                    self.buffer.clear();
+                    self.expected_length = 0;
+                }
+                i += 1;
+                continue;
             }
+
+            // We're in a frame. Need at least 1 byte for the length field.
+            if self.expected_length == 0 {
+                // Still waiting for the length byte
+                if data[i] == FRAME_MARKER {
+                    // Second marker before length — restart
+                    self.buffer.clear();
+                    self.expected_length = 0;
+                    i += 1;
+                    continue;
+                }
+                self.buffer.push(data[i]);
+                self.expected_length = data[i] as usize;
+                if self.expected_length < 4 || self.expected_length > self.max_buffer_size {
+                    self.buffer.clear();
+                    self.in_frame = false;
+                    self.expected_length = 0;
+                    self.frame_error_count = self.frame_error_count.saturating_add(1);
+                }
+                i += 1;
+                continue;
+            }
+
+            // We know the expected length. Calculate how many body bytes we still need.
+            let needed = self.expected_length - self.buffer.len();
+            let available = data.len() - i;
+
+            // Don't consume past the expected body bytes
+            let to_copy = needed.min(available);
+            self.buffer.extend_from_slice(&data[i..i + to_copy]);
+            i += to_copy;
+
+            // Check if we have the full body
+            if self.buffer.len() < self.expected_length {
+                continue;
+            }
+
+            // We have the full body. The next byte must be the end marker (0x7E).
+            if i < data.len() {
+                if data[i] == FRAME_MARKER {
+                    let result = Frame::parse(&self.buffer[..self.expected_length]);
+                    self.buffer.clear();
+                    self.in_frame = false;
+                    self.expected_length = 0;
+                    match result {
+                        Ok(frame) => frames.push(frame),
+                        Err(_) => {
+                            self.frame_error_count = self.frame_error_count.saturating_add(1);
+                        }
+                    }
+                } else {
+                    // Expected end marker but got something else — frame error
+                    self.buffer.clear();
+                    self.in_frame = false;
+                    self.expected_length = 0;
+                    self.frame_error_count = self.frame_error_count.saturating_add(1);
+                }
+                i += 1;
+            }
+            // If i == data.len(), we'll pick up the end marker on the next call
         }
+
         frames
     }
 
@@ -578,7 +670,7 @@ mod tests {
             payload: (0u8..200).collect(),
         };
         let encoded = frame.encode().unwrap();
-        // Decode through the streaming decoder which handles un-stuffing
+        // Decode through the streaming decoder
         let mut decoder = FrameDecoder::new();
         let decoded = decoder.feed_slice(&encoded);
         assert_eq!(decoded.len(), 1);
@@ -586,18 +678,34 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_with_bytes_requiring_escaping() {
-        // Payload containing 0x7E (FRAME_MARKER) and 0x7D (ESCAPE_CHAR)
+    fn test_round_trip_with_special_bytes_no_escaping() {
+        // Payload containing 0x7D (the old ESCAPE_CHAR).
+        // With byte stuffing removed, 0x7D must be written literally — NOT as
+        // the HDLC escape sequence 0x7D 0x5D.
         let frame = Frame {
             message_type: [0x0A, 0xBF],
-            payload: vec![0x7E, 0x7D, 0x00, 0x42],
+            payload: vec![0x7D, 0x00, 0x42],
         };
         let encoded = frame.encode().unwrap();
         // Verify markers exist at start and end
         assert_eq!(*encoded.first().unwrap(), FRAME_MARKER);
         assert_eq!(*encoded.last().unwrap(), FRAME_MARKER);
 
-        // Decode through the streaming decoder which handles un-stuffing
+        // The body between markers must contain the raw 0x7D byte literally.
+        // In the old HDLC encoding, 0x7D would have been encoded as [0x7D, 0x5D]
+        // (2 bytes). Now it must be a single 0x7D byte.
+        let inner = &encoded[1..encoded.len() - 1];
+        // Verify no HDLC escape sequences present (0x7D followed by 0x5D or 0x5E)
+        for window in inner.windows(2) {
+            if window[0] == 0x7D {
+                assert!(
+                    window[1] != 0x5D && window[1] != 0x5E,
+                    "HDLC escape sequence found in encoded output"
+                );
+            }
+        }
+
+        // Decode through the streaming decoder using feed_slice (length-field aware)
         let mut decoder = FrameDecoder::new();
         let results = decoder.feed_slice(&encoded);
         assert_eq!(results.len(), 1);
@@ -664,18 +772,55 @@ mod tests {
     }
 
     #[test]
-    fn test_decoder_escape_sequence_decodes_correctly() {
-        // Manually build a frame that uses escape sequences for 0x7E and 0x7D
-        // Frame: type=[0x0A,0xBF], payload=[0x7E] → body = [length=6, 0x0A, 0xBF, 0x7E, crc]
-        let frame = Frame {
-            message_type: [0x0A, 0xBF],
-            payload: vec![0x7E],
-        };
-        let encoded = frame.encode().unwrap();
+    fn test_real_balboa_status_frame_decodes() {
+        // Known-good real Balboa BP6013G1 status frame captured from the wire.
+        // Full frame with CRC validated against launa-protocol crc8 implementation.
+        // Inner body: length=29, type=[0xFF,0xAF], 25-byte payload, CRC=0xC2
+        let raw: Vec<u8> = vec![
+            0x7E, 0x1D, 0xFF, 0xAF, 0x13, 0x00, 0x00, 0x64, 0x07, 0x07, 0x00, 0x00, 0x01, 0x00,
+            0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00,
+            0x00, 0xC2, 0x7E,
+        ];
 
         let mut decoder = FrameDecoder::new();
-        let results = decoder.feed_slice(&encoded);
+        let results = decoder.feed_slice(&raw);
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].payload, vec![0x7E]);
+        assert_eq!(results[0].message_type, [0xFF, 0xAF]);
+        // Length field = 0x1D = 29 = 1(length) + 2(type) + payload + 1(crc)
+        // So payload = 29 - 4 = 25 bytes
+        assert_eq!(results[0].payload.len(), 25);
+        // First byte of payload is 0x13 (status subtype)
+        assert_eq!(results[0].payload[0], 0x13);
+        assert_eq!(decoder.frame_error_count(), 0);
+    }
+
+    #[test]
+    fn test_encode_no_escape_for_0x7d_payload() {
+        // Verify that 0x7D (the old ESCAPE_CHAR) is written literally in the output
+        let frame = Frame {
+            message_type: [0x0A, 0xBF],
+            payload: vec![0x7D],
+        };
+        let encoded = frame.encode().unwrap();
+        let inner = &encoded[1..encoded.len() - 1];
+        // The inner body must contain 0x7D as a literal byte
+        assert!(
+            inner.contains(&0x7D),
+            "0x7D must appear literally in encoded body"
+        );
+    }
+
+    #[test]
+    fn test_encode_raw_body_matches_parse_input() {
+        // Verify that encoded body bytes (between markers) are exactly what Frame::parse expects
+        let frame = Frame {
+            message_type: [0xFF, 0xAF],
+            payload: vec![0x13, 0x00, 0x00, 0x64, 0x07],
+        };
+        let encoded = frame.encode().unwrap();
+        // The inner bytes should be directly parseable
+        let inner = &encoded[1..encoded.len() - 1];
+        let decoded = Frame::parse(inner).unwrap();
+        assert_eq!(decoded, frame);
     }
 }

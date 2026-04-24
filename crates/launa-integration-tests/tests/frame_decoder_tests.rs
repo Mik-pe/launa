@@ -2,7 +2,7 @@
 //!
 //! Tests for FrameDecoder edge cases: byte-at-a-time feeding, concatenated frames,
 //! noise bytes between frames, bus idle, split boundaries, corrupt-then-valid
-//! recovery, all-escape payloads, and frame encoding round-trips.
+//! recovery, raw payloads with old escape bytes, and frame encoding round-trips.
 
 use launa_protocol::frame::{Frame, FrameDecoder};
 
@@ -208,10 +208,12 @@ fn test_frame_decoder_corrupt_then_valid() {
 }
 
 #[test]
-fn test_frame_decoder_all_escape_payload() {
+fn test_frame_decoder_payload_with_old_escape_bytes() {
+    // With HDLC byte stuffing removed, 0x7D (the old escape char) is written
+    // literally in the frame body. The decoder must handle it as raw data.
     let payload: Vec<u8> = vec![
-        0x7E, 0x7D, 0x7E, 0x7D, 0x7E, 0x7D, 0x7E, 0x7D, 0x7E, 0x7D, 0x7E, 0x7D, 0x7E, 0x7D, 0x7E,
-        0x7D,
+        0x7D, 0x42, 0x7D, 0x42, 0x7D, 0x42, 0x7D, 0x42, 0x7D, 0x42, 0x7D, 0x42, 0x7D, 0x42, 0x7D,
+        0x42,
     ];
 
     let frame = Frame {
@@ -220,19 +222,27 @@ fn test_frame_decoder_all_escape_payload() {
     };
     let encoded = frame.encode().unwrap();
 
-    assert!(
-        encoded.iter().filter(|&&b| b == 0x7D).count() > 0,
-        "encoded frame should contain escape sequences"
+    // With no escaping, the inner content length should be exactly
+    // 1(length) + 2(type) + payload.len() + 1(crc)
+    let inner = &encoded[1..encoded.len() - 1];
+    let expected_inner_len = 1 + 2 + payload.len() + 1;
+    assert_eq!(
+        inner.len(),
+        expected_inner_len,
+        "raw (non-escaped) inner content ({}) should equal expected ({})",
+        inner.len(),
+        expected_inner_len
     );
 
-    let inner = &encoded[1..encoded.len() - 1];
-    let original_inner_len = 1 + 2 + payload.len() + 1;
-    assert!(
-        inner.len() > original_inner_len,
-        "escaped inner content ({}) should be longer than original ({})",
-        inner.len(),
-        original_inner_len
-    );
+    // No HDLC escape sequences: no 0x7D followed by 0x5D or 0x5E
+    for window in inner.windows(2) {
+        if window[0] == 0x7D {
+            assert!(
+                window[1] != 0x5D && window[1] != 0x5E,
+                "no HDLC escape sequences should be present in encoded output"
+            );
+        }
+    }
 
     let mut decoder = FrameDecoder::new();
     let decoded_frames = decoder.feed_slice(&encoded);
@@ -245,7 +255,7 @@ fn test_frame_decoder_all_escape_payload() {
     );
     assert_eq!(
         decoded_frames[0].payload, payload,
-        "payload should match original (all escape bytes unescaped correctly)"
+        "payload should match original (raw 0x7D bytes preserved correctly)"
     );
 
     assert_eq!(decoder.frame_error_count(), 0);
