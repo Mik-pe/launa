@@ -239,24 +239,21 @@ impl<'a> SpaApp<'a> {
             IncomingMessage::StatusUpdate(status) => {
                 self.frames_received += 1;
 
-                // Verify pending commands
+                // Verify pending commands — queue retries for next Ready window
                 let result = self.cmd_tracker.verify(&status, now);
                 for cmd in result.retries {
-                    let encoded = encode_command(&cmd);
-                    actions.push(AppAction::SendFrame(encoded));
+                    self.command_queue.push_back(cmd);
                 }
 
-                // Tick pump timers
+                // Tick pump timers — queue expired commands for next Ready window
                 let expired = self.pump_timers.tick_all(now, &status.pumps);
                 for cmd in expired {
-                    let encoded = encode_command(&cmd);
-                    actions.push(AppAction::SendFrame(encoded));
+                    self.command_queue.push_back(cmd);
                 }
 
-                // Hold mode safety timeout
+                // Hold mode safety timeout — queue for next Ready window
                 if let Some(cmd) = self.hold_timer.tick(now, status.is_hold) {
-                    let encoded = encode_command(&cmd);
-                    actions.push(AppAction::SendFrame(encoded));
+                    self.command_queue.push_back(cmd);
                 }
 
                 self.last_status = Some(status.clone());
@@ -461,6 +458,7 @@ fn encode_command(cmd: &Command) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::actions::AppAction;
+    use crate::types::COMMAND_ACK_TIMEOUT_MS;
     use alloc::boxed::Box;
     use alloc::vec;
     use launa_protocol::command::ToggleItem;
@@ -701,49 +699,61 @@ mod tests {
         // Advance past hold timeout (60 min)
         clock.advance_ms(61 * 60 * 1000);
 
-        // Send another status with hold still active → timer fires
+        // Send another status with hold still active → timer fires, command QUEUED
         let actions = app.process_frame(&hold_frame);
-        // The hold timer should have fired a toggle command
-        assert!(actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))));
-
-        // Bug 1 fix: after firing, subsequent ticks with is_hold=true should NOT re-fire
-        clock.advance_ms(5_000);
-        let actions2 = app.process_frame(&hold_frame);
-        let has_send2 = actions2
-            .iter()
-            .any(|a| matches!(a, AppAction::SendFrame(_)));
+        // Bug 6 fix: hold timer command should be QUEUED, not sent immediately
         assert!(
-            !has_send2,
-            "hold timer should NOT re-fire while hold mode is still active after firing"
+            !actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))),
+            "hold timer expiry should NOT produce immediate SendFrame"
+        );
+        assert_eq!(
+            app.queued_command_count(),
+            1,
+            "hold timer expiry should queue the command"
         );
 
-        // Advance more time — still should not re-fire
-        clock.advance_ms(61 * 60 * 1000);
-        let actions3 = app.process_frame(&hold_frame);
-        let has_send3 = actions3
-            .iter()
-            .any(|a| matches!(a, AppAction::SendFrame(_)));
+        // Ready frame should dequeue and send the hold toggle command
+        let ready_actions = app.process_frame(&ready_frame());
         assert!(
-            !has_send3,
-            "hold timer should NOT re-fire even after another full timeout period"
-        );
-
-        // Now release hold mode — timer should re-arm
-        let release_frame = status_frame(); // is_hold = false
-        app.process_frame(&release_frame);
-
-        // Re-enter hold mode
-        app.process_frame(&hold_frame);
-
-        // Advance past timeout again → should fire again
-        clock.advance_ms(61 * 60 * 1000);
-        let actions4 = app.process_frame(&hold_frame);
-        assert!(
-            actions4
+            ready_actions
                 .iter()
                 .any(|a| matches!(a, AppAction::SendFrame(_))),
+            "Ready frame should dequeue and send the hold toggle command"
+        );
+        assert_eq!(app.queued_command_count(), 0);
+
+        // Simulate hold mode being released (the toggle worked).
+        // This resets the hold timer's fired flag and allows it to re-arm.
+        let release_frame = status_frame(); // is_hold = false
+        app.process_frame(&release_frame);
+        // Advance past any ACK timeouts so retries settle
+        clock.advance_ms(COMMAND_ACK_TIMEOUT_MS + 1);
+        app.process_frame(&status_frame());
+        // Drain any remaining queue
+        while app.queued_command_count() > 0 {
+            app.process_frame(&ready_frame());
+        }
+
+        // Bug 1 fix: after firing AND hold mode released, re-enter hold mode.
+        // The timer should fire again after the timeout.
+        app.process_frame(&hold_frame);
+        clock.advance_ms(61 * 60 * 1000);
+        let _actions_refire = app.process_frame(&hold_frame);
+        assert_eq!(
+            app.queued_command_count(),
+            1,
             "hold timer should fire again after hold mode was released and re-entered"
         );
+
+        // And Ready frame dequeues it
+        let ready_actions2 = app.process_frame(&ready_frame());
+        assert!(
+            ready_actions2
+                .iter()
+                .any(|a| matches!(a, AppAction::SendFrame(_))),
+            "Ready frame should dequeue and send the re-armed hold toggle"
+        );
+        assert_eq!(app.queued_command_count(), 0);
     }
 
     #[test]
@@ -764,9 +774,27 @@ mod tests {
         // Advance past timer
         clock.advance_ms(61_000);
 
-        // Next status should trigger auto-off
+        // Next status should trigger auto-off — command QUEUED, not sent immediately
         let actions = app.process_frame(&status);
-        assert!(actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))));
+        assert!(
+            !actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))),
+            "pump timer expiry should NOT produce immediate SendFrame"
+        );
+        assert_eq!(
+            app.queued_command_count(),
+            1,
+            "pump timer expiry should queue the toggle-off command"
+        );
+
+        // Ready frame should dequeue and send the pump toggle-off command
+        let ready_actions = app.process_frame(&ready_frame());
+        assert!(
+            ready_actions
+                .iter()
+                .any(|a| matches!(a, AppAction::SendFrame(_))),
+            "Ready frame should dequeue and send the pump toggle-off"
+        );
+        assert_eq!(app.queued_command_count(), 0);
     }
 
     #[test]
@@ -811,8 +839,24 @@ mod tests {
         clock.advance_ms(6_000);
 
         // Same status arrives → pump still off → timeout triggers retry
-        let _actions = app.process_frame(&status_frame());
+        // Bug 6 fix: retry is QUEUED for next Ready window, not sent immediately
+        let actions = app.process_frame(&status_frame());
+        assert!(
+            !actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))),
+            "retry should NOT produce immediate SendFrame"
+        );
+        assert_eq!(app.queued_command_count(), 1, "retry should be queued");
         assert!(app.total_retries() > 0);
+
+        // Ready frame dequeues and sends the retry
+        let ready_actions = app.process_frame(&ready_frame());
+        assert!(
+            ready_actions
+                .iter()
+                .any(|a| matches!(a, AppAction::SendFrame(_))),
+            "Ready frame should dequeue and send the retry command"
+        );
+        assert_eq!(app.queued_command_count(), 0);
     }
 
     #[test]

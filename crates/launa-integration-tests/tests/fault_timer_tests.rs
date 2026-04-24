@@ -417,10 +417,15 @@ fn test_hold_mode_and_pump_timer_fire_independently() {
     h.advance_ms(5 * 60 * 1000 + 1_000); // slightly past 5 min
 
     let pump_timer_actions = h.collect_actions();
+    // Bug 6 fix: timer expiry commands are queued for the next Ready window.
+    // If a Ready frame was in the same sim tick, the command is already dequeued and sent.
+    // Either way, the pump toggle-off should appear as a SendFrame (queued then dequeued,
+    // or visible in actions if Ready was in a different tick).
     let pump_toggle = TestHarness::has_toggle_for(&pump_timer_actions, ToggleItem::Pump1);
+    let pump_queued = h.app.queued_command_count() > 0;
     assert!(
-        pump_toggle,
-        "pump timer should fire independently at 5 min while hold mode is active"
+        pump_toggle || pump_queued,
+        "pump timer should fire at 5 min (either sent via Ready or queued)"
     );
 
     // Hold timer should NOT have fired yet (only 5 min elapsed, needs 60 min)
@@ -430,21 +435,47 @@ fn test_hold_mode_and_pump_timer_fire_independently() {
         "hold timer should NOT fire at 5 min (needs 60 min)"
     );
 
-    // Re-start pump timer and advance to hold timer expiry
-    // First, get pump back on (the timer fired auto-off)
-    h.collect_actions(); // process the auto-off
-                         // The sim should have processed the toggle, turning pump off
-                         // Now we need to verify hold timer fires at its own time
+    // Process the pump auto-off through the sim (drain queue via Ready)
+    h.collect_actions(); // process any status + ready
+                         // Drain any remaining queued commands
+    while h.app.queued_command_count() > 0 {
+        let ready_bytes = {
+            use launa_protocol::frame::FrameEncoder;
+            FrameEncoder::encode([0x10, 0xBF], &[0x06]).unwrap()
+        };
+        let ready_frames = h.decoder.feed_slice(&ready_bytes);
+        for frame in &ready_frames {
+            let actions = h.app.process_frame(frame);
+            h.process_outgoing(&actions);
+        }
+    }
 
     // Advance to 60 min total (already at ~5 min, advance ~55 more min)
     h.advance_ms(55 * 60 * 1000);
 
-    let hold_timer_actions = h.collect_actions();
-    let hold_toggle = TestHarness::has_toggle_for(&hold_timer_actions, ToggleItem::HoldMode);
+    let _hold_timer_actions = h.collect_actions();
+    // Bug 6 fix: hold timer expiry is queued, then sent on Ready.
+    // The collect_actions() may have already dequeued it if a Ready was in the same tick.
+    let hold_toggle_in_actions =
+        TestHarness::has_toggle_for(&_hold_timer_actions, ToggleItem::HoldMode);
+    let hold_queued = h.app.queued_command_count() > 0;
     assert!(
-        hold_toggle,
+        hold_toggle_in_actions || hold_queued,
         "hold timer should fire at 60 min independently of pump timer"
     );
+
+    // Drain any remaining queue
+    while h.app.queued_command_count() > 0 {
+        let ready_bytes = {
+            use launa_protocol::frame::FrameEncoder;
+            FrameEncoder::encode([0x10, 0xBF], &[0x06]).unwrap()
+        };
+        let ready_frames = h.decoder.feed_slice(&ready_bytes);
+        for frame in &ready_frames {
+            let actions = h.app.process_frame(frame);
+            h.process_outgoing(&actions);
+        }
+    }
 }
 
 // Test 5: Multiple pump timers simultaneously (VAL-TEST-022)

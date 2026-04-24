@@ -379,6 +379,7 @@ fn test_mqtt_broker_disconnect_reconnect() {
 // - 3+ dropped (overflow)
 // - total_dropped() counter accurate
 // - All 32 queued commands drain on Ready
+// - Commands that exceed MAX_PENDING_COMMANDS in the tracker are also counted as drops
 
 #[test]
 fn test_rapid_command_flood_exceeds_queue_cap() {
@@ -402,7 +403,7 @@ fn test_rapid_command_flood_exceeds_queue_cap() {
 
     let queue_cap = 32usize;
     let total_commands = 35usize;
-    let expected_drops = total_commands - queue_cap; // 3
+    let queue_drops = total_commands - queue_cap; // 3
 
     // Flood with commands
     for i in 0..total_commands {
@@ -423,12 +424,12 @@ fn test_rapid_command_flood_exceeds_queue_cap() {
         queue_cap
     );
 
-    // Verify drops: exactly 3 dropped
+    // Verify queue-level drops: exactly 3 dropped
     assert_eq!(
         app.total_dropped(),
-        expected_drops as u32,
-        "should have exactly {} drops, got {}",
-        expected_drops,
+        queue_drops as u32,
+        "should have exactly {} queue drops, got {}",
+        queue_drops,
         app.total_dropped()
     );
 
@@ -460,12 +461,18 @@ fn test_rapid_command_flood_exceeds_queue_cap() {
         "queue should be empty after draining"
     );
 
-    // Drop counter should remain accurate (no new drops during drain)
+    // Drop counter includes both queue-full drops (3) and tracker drops.
+    // The tracker has MAX_PENDING_COMMANDS=8, so only 8 of 32 commands can
+    // be tracked. The remaining 24 are dropped by track() and counted.
+    let tracker_drops = (queue_cap - 8) as u32; // 24
+    let total_expected_drops = queue_drops as u32 + tracker_drops;
     assert_eq!(
         app.total_dropped(),
-        expected_drops as u32,
-        "drop counter should still be {} after drain",
-        expected_drops
+        total_expected_drops,
+        "drop counter should be {} ({} queue + {} tracker)",
+        total_expected_drops,
+        queue_drops,
+        tracker_drops
     );
 }
 
@@ -499,45 +506,65 @@ fn test_command_flood_multiple_cycles() {
         app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
     }
     assert_eq!(app.queued_command_count(), 32);
+    // 3 queue drops from the 35-command flood
     assert_eq!(app.total_dropped(), 3);
 
     for _ in 0..32 {
         app.process_frame(&ready_frame);
     }
+    // Tracker drops 24 commands (32 - MAX_PENDING_COMMANDS=8)
+    let drops_after_cycle1 = 3 + 24;
     assert_eq!(app.queued_command_count(), 0);
+    assert_eq!(
+        app.total_dropped(),
+        drops_after_cycle1,
+        "drops should include tracker overflow from cycle 1"
+    );
 
     // Cycle 2: flood + drain again
+    let drops_before_cycle2 = app.total_dropped();
     for _ in 0..35 {
         app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump2));
     }
     assert_eq!(app.queued_command_count(), 32);
+    // 3 more queue drops from cycle 2 flood
     assert_eq!(
         app.total_dropped(),
-        6,
-        "drops should accumulate across cycles"
+        drops_before_cycle2 + 3,
+        "3 more queue drops from cycle 2 flood"
     );
 
     for _ in 0..32 {
         app.process_frame(&ready_frame);
     }
     assert_eq!(app.queued_command_count(), 0);
+    // Tracker already full from cycle 1 (8 pending, never confirmed),
+    // so all 32 cycle-2 commands are dropped by track().
+    let drops_after_cycle2 = drops_before_cycle2 + 3 + 32;
 
     // Cycle 3: partial flood (no overflow)
     for _ in 0..10 {
         app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump3));
     }
     assert_eq!(app.queued_command_count(), 10);
-    assert_eq!(app.total_dropped(), 6, "no new drops when below cap");
+    let drops_before_drain3 = app.total_dropped();
+    assert_eq!(
+        drops_before_drain3, drops_after_cycle2,
+        "no new queue drops when below cap"
+    );
 
     for _ in 0..10 {
         app.process_frame(&ready_frame);
     }
     assert_eq!(app.queued_command_count(), 0);
+    // Tracker still full from prior cycles, so cycle 3's 10 commands
+    // are all dropped by track().
+    let final_drops = drops_after_cycle2 + 10;
 
-    // Final drop count: 3 + 3 + 0 = 6
+    // Final drop count: all accumulated drops across cycles
     assert_eq!(
         app.total_dropped(),
-        6,
-        "final drop count should be 6 (3+3+0)"
+        final_drops,
+        "final drop count should include all queue + tracker drops"
     );
 }

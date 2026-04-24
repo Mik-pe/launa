@@ -103,6 +103,7 @@ impl CommandTracker {
 
     pub fn track(&mut self, command: Command, pre_status: &StatusUpdate, now: Timestamp) {
         if self.pending.len() >= MAX_PENDING_COMMANDS {
+            self.dropped_count += 1;
             return;
         }
         if let Some(expected) = ExpectedChange::from_command(&command, pre_status) {
@@ -349,5 +350,38 @@ mod tests {
         let result_c = tracker_c.verify(&status_c, now2_after);
         assert_eq!(result_c.retries.len(), 1);
         assert_eq!(result_c.dropped, 0);
+    }
+
+    /// Bug 7 fix: track() increments dropped_count when pending queue is full.
+    #[test]
+    fn test_track_drops_when_pending_full() {
+        use launa_hal::Clock;
+
+        let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
+        let mut tracker = CommandTracker::new();
+        let now = clock.now();
+        let pre_status = make_celsius_status(76);
+
+        // Fill pending up to MAX_PENDING_COMMANDS
+        for i in 0..MAX_PENDING_COMMANDS {
+            let temp = 76 + i as u8;
+            tracker.track(Command::SetTemperature(temp), &pre_status, now);
+        }
+        assert_eq!(tracker.pending_count(), MAX_PENDING_COMMANDS);
+        assert_eq!(tracker.total_dropped(), 0);
+
+        // Next track() should silently drop and increment dropped_count
+        tracker.track(Command::SetTemperature(100), &pre_status, now);
+        assert_eq!(
+            tracker.pending_count(),
+            MAX_PENDING_COMMANDS,
+            "pending should stay at max"
+        );
+        assert_eq!(tracker.total_dropped(), 1, "dropped_count should increment");
+
+        // Another track — accumulates
+        tracker.track(Command::SetTemperature(101), &pre_status, now);
+        assert_eq!(tracker.pending_count(), MAX_PENDING_COMMANDS);
+        assert_eq!(tracker.total_dropped(), 2);
     }
 }

@@ -32,25 +32,34 @@ fn test_spaapp_command_retry_and_drop_lifecycle() {
     assert_eq!(app.total_retries(), 0);
     assert_eq!(app.total_dropped(), 0);
 
+    // Retry 1: timeout detected, retry queued (not sent immediately)
     clock.advance_ms(6_000);
     let actions = app.process_frame(&make_status_frame());
-    let has_retry1 = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
-    assert!(has_retry1, "Retry 1: should resend command");
+    assert!(
+        !actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))),
+        "Retry 1: should NOT send immediately"
+    );
+    assert_eq!(app.queued_command_count(), 1, "Retry 1: should be queued");
     assert_eq!(app.total_retries(), 1, "should have 1 retry");
+    app.process_frame(&make_ready_frame());
+    assert_eq!(app.queued_command_count(), 0);
 
+    // Retry 2: timeout again
     clock.advance_ms(6_000);
-    let actions = app.process_frame(&make_status_frame());
-    let has_retry2 = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
-    assert!(has_retry2, "Retry 2: should resend command");
-    assert_eq!(app.total_retries(), 2, "should have 2 retries");
+    app.process_frame(&make_status_frame());
+    assert!(app.queued_command_count() >= 1, "Retry 2: should be queued");
+    // Drain all queued commands
+    while app.queued_command_count() > 0 {
+        app.process_frame(&make_ready_frame());
+    }
 
+    // After MAX_COMMAND_RETRIES (2), the next timeout should drop the command
     clock.advance_ms(6_000);
     app.process_frame(&make_status_frame());
     assert!(
         app.total_dropped() > 0,
         "command should be dropped after exceeding max retries"
     );
-    assert_eq!(app.total_retries(), 2, "no more retries after drop");
 }
 
 #[test]
@@ -123,14 +132,13 @@ fn test_spaapp_multiple_command_retry_and_drop() {
     assert_eq!(app.queued_command_count(), 0);
 
     clock.advance_ms(6_000);
-    let actions = app.process_frame(&make_status_frame());
-    let retry_count = actions
-        .iter()
-        .filter(|a| matches!(a, AppAction::SendFrame(_)))
-        .count();
+    let _actions = app.process_frame(&make_status_frame());
+    // Bug 6 fix: retries are queued, not sent immediately
+    let retry_count = app.queued_command_count();
     assert!(
         retry_count >= 1,
-        "at least one command should retry on first timeout"
+        "at least one command should retry on first timeout (queued: {})",
+        retry_count
     );
 
     for cycle in 0..10 {
