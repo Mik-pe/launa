@@ -798,7 +798,17 @@ async fn main(spawner: Spawner) {
     let ota_rx = OTA_CHANNEL.receiver();
 
     let clock = clock::EmbassyClock::new();
-    let mut app = SpaApp::new(&clock);
+    // Derive a unique 2-byte client hash from the device ID for RS-485 registration.
+    // Uses a simple FNV-1a-like hash so each device gets a distinct channel assignment.
+    let client_hash = {
+        let mut h: u16 = 0x811C;
+        for &b in app_config.device_id.as_bytes() {
+            h ^= b as u16;
+            h = h.wrapping_mul(0x0101);
+        }
+        [(h >> 8) as u8, h as u8]
+    };
+    let mut app = SpaApp::with_client_hash(&clock, client_hash);
     let device_id_str: &str = &app_config.device_id;
     let mut self_test_state: Option<self_test::SelfTestState> = None;
     let mut sniff_mode: bool = false;

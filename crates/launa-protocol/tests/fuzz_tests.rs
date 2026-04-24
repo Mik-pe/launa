@@ -108,10 +108,8 @@ fn test_filter_cycles_random_input_no_panic() {
 #[test]
 fn test_frame_with_length_zero() {
     // Frame with length=0: only type bytes, no payload beyond the type
-    // length field = 0 means payload is empty and type bytes aren't included
-    // Actually: length field = type(2) + payload_len, so length=0 is impossible for valid frames
-    // But we still test it doesn't panic
-    let data = [0x00, 0xFF, 0xAF, 0x00]; // length=0, type, crc
+    // Length=0 is below the minimum of 4 — should return TooShort without panicking
+    let data = [0x00, 0xFF, 0xAF, 0x00];
     let result = Frame::parse(&data);
     assert!(result.is_err());
 }
@@ -129,7 +127,7 @@ fn test_frame_valid_crc_garbage_data() {
     // Frame with valid CRC but garbage data
     use launa_protocol::crc8;
 
-    let length = 5u8; // type(2) + payload(3)
+    let length = 7u8; // self(1) + type(2) + payload(3) + CRC(1)
     let msg_type = [0xFF, 0xAF];
     let payload = [0xDE, 0xAD, 0xBE];
     let mut body = vec![length];
@@ -170,8 +168,8 @@ fn test_status_all_bytes_0x00() {
 #[test]
 fn test_very_long_payload_frame() {
     // Create a frame with a large payload (but still fitting in u8 length)
-    // Max length = 255, so max payload = 253 (255 - 2 type bytes)
-    let payload: Vec<u8> = (0..253u8).collect();
+    // Max length = 255, so max payload = 251 (255 - 1(self) - 2(type) - 1(CRC))
+    let payload: Vec<u8> = (0..251u8).collect();
     let frame = Frame {
         message_type: [0xFF, 0xAF],
         payload,

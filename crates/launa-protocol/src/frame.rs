@@ -15,22 +15,31 @@ pub struct Frame {
 impl Frame {
     /// Parse a raw frame from bytes (excluding start/end 0x7E markers).
     /// Input should be the complete message body: [length, type_hi, type_lo, ..., checksum].
+    ///
+    /// Per the Balboa protocol, the Length byte counts *all* bytes between the
+    /// two 0x7E delimiters (including itself and the trailing CRC).
     pub fn parse(data: &[u8]) -> Result<Self, FrameError> {
         if data.len() < 4 {
             return Err(FrameError::TooShort(data.len()));
         }
 
         let length = data[0] as usize;
-        if data.len() < length + 2 {
+        // Minimum valid frame: Length=4 (self + type(2) + CRC), so Length must be >= 4
+        if length < 4 {
+            return Err(FrameError::TooShort(length));
+        }
+        if data.len() < length {
             return Err(FrameError::Incomplete {
-                expected: length + 2,
+                expected: length,
                 got: data.len(),
             });
         }
 
-        // Verify checksum (covers length byte through last data byte, excludes checksum itself)
-        let body = &data[..length + 1];
-        let expected_crc = data[length + 1];
+        // Length includes itself and the trailing CRC, so:
+        //   body (CRC input) = data[0 .. length-1]  (length byte through last data byte)
+        //   CRC               = data[length-1]
+        let body = &data[..length - 1];
+        let expected_crc = data[length - 1];
         let computed_crc = crc8::compute(body);
 
         if computed_crc != expected_crc {
@@ -41,7 +50,8 @@ impl Frame {
         }
 
         let message_type = [data[1], data[2]];
-        let payload = data[3..length + 1].to_vec();
+        // payload lies between message_type and the CRC
+        let payload = data[3..length - 1].to_vec();
 
         Ok(Frame {
             message_type,
@@ -56,13 +66,14 @@ impl Frame {
     /// with `0x20`). The decoder un-stuffs them on the way in.
     ///
     /// Returns `Err(FrameError::PayloadTooLarge(len))` if the payload exceeds
-    /// 253 bytes (the maximum that fits in the u8 length field).
+    /// 250 bytes (the maximum that fits in the u8 length field with overhead).
     pub fn encode(&self) -> Result<Vec<u8>, FrameError> {
-        // Length field = type(2) + payload length; must fit in u8
-        if 2 + self.payload.len() > u8::MAX as usize {
+        // Per the Balboa protocol, Length = 1(self) + 2(type) + payload + 1(CRC)
+        // must fit in u8.
+        if 4 + self.payload.len() > u8::MAX as usize {
             return Err(FrameError::PayloadTooLarge(self.payload.len()));
         }
-        let length = (2 + self.payload.len()) as u8;
+        let length = (4 + self.payload.len()) as u8;
 
         let mut body = Vec::with_capacity(1 + 2 + self.payload.len() + 1);
         body.push(length);
@@ -216,7 +227,7 @@ impl FrameEncoder {
     /// complete byte sequence including start/end markers.
     ///
     /// Returns `Err(FrameError::PayloadTooLarge(len))` if the payload exceeds
-    /// 253 bytes (the maximum that fits in the u8 length field).
+    /// 250 bytes (the maximum that fits in the u8 length field with overhead).
     pub fn encode(message_type: [u8; 2], payload: &[u8]) -> Result<Vec<u8>, FrameError> {
         let frame = Frame {
             message_type,
@@ -408,7 +419,7 @@ mod tests {
     fn test_decoder_exact_buffer_fill_works() {
         // Create a frame whose inner content (between markers) is exactly 8 bytes
         // Frame inner: [length, type_hi, type_lo, payload..., crc] = 8 bytes
-        // payload = 8 - 4 = 4 bytes
+        // length = 4 + 4 = 8, payload = 4 bytes
         let frame = Frame {
             message_type: [0x0A, 0xBF],
             payload: vec![0x01, 0x02, 0x03, 0x04],
@@ -434,30 +445,30 @@ mod tests {
 
     #[test]
     fn test_encode_payload_too_large() {
-        // 254-byte payload: length = 2 + 254 = 256 > u8::MAX
+        // 251-byte payload: length = 4 + 251 = 255 (fits), but 252: length = 256 > u8::MAX
         let frame = Frame {
             message_type: [0xFF, 0xAF],
-            payload: vec![0x00; 254],
+            payload: vec![0x00; 252],
         };
         let result = frame.encode();
         assert!(result.is_err());
         match result {
-            Err(FrameError::PayloadTooLarge(len)) => assert_eq!(len, 254),
+            Err(FrameError::PayloadTooLarge(len)) => assert_eq!(len, 252),
             other => panic!("expected PayloadTooLarge, got {:?}", other),
         }
     }
 
     #[test]
     fn test_encode_max_payload_succeeds() {
-        // 253-byte payload: length = 2 + 253 = 255 = u8::MAX (valid)
+        // 251-byte payload: length = 4 + 251 = 255 = u8::MAX (valid)
         let frame = Frame {
             message_type: [0xFF, 0xAF],
-            payload: vec![0x42; 253],
+            payload: vec![0x42; 251],
         };
         let result = frame.encode();
         assert!(
             result.is_ok(),
-            "253-byte payload should fit in u8 length field"
+            "251-byte payload should fit in u8 length field"
         );
     }
 
@@ -486,7 +497,8 @@ mod tests {
     #[test]
     fn test_parse_three_bytes_returns_too_short() {
         // Minimum is 4 bytes: length + type_hi + type_lo + crc
-        let result = Frame::parse(&[0x03, 0x0A, 0xBF]);
+        // Length = 4 means 4 total inner bytes (length + type(2) + crc)
+        let result = Frame::parse(&[0x04, 0x0A, 0xBF]);
         assert!(result.is_err());
         match result {
             Err(FrameError::TooShort(3)) => {}
@@ -496,9 +508,8 @@ mod tests {
 
     #[test]
     fn test_parse_incomplete_payload_returns_incomplete() {
-        // Length byte says 5 (2 type + 3 payload), so need 7 bytes total (5+2 for length+crc)
-        // But only provide 5 bytes
-        let data = [0x05, 0x0A, 0xBF, 0x01, 0x02];
+        // Length byte says 7 total bytes, but only provide 5
+        let data = [0x07, 0x0A, 0xBF, 0x01, 0x02];
         let result = Frame::parse(&data);
         assert!(result.is_err());
         match result {
@@ -655,7 +666,7 @@ mod tests {
     #[test]
     fn test_decoder_escape_sequence_decodes_correctly() {
         // Manually build a frame that uses escape sequences for 0x7E and 0x7D
-        // Frame: type=[0x0A,0xBF], payload=[0x7E] → body = [length=3, 0x0A, 0xBF, 0x7E, crc]
+        // Frame: type=[0x0A,0xBF], payload=[0x7E] → body = [length=6, 0x0A, 0xBF, 0x7E, crc]
         let frame = Frame {
             message_type: [0x0A, 0xBF],
             payload: vec![0x7E],

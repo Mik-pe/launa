@@ -106,14 +106,14 @@ fn test_frame_round_trip_100byte_payload() {
 #[test]
 fn test_frame_round_trip_max_payload() {
     // Max payload that still fits in u8 length field:
-    // length field = 2 (type) + payload_len; max length value = 255
-    // So max payload = 253 bytes
+    // Length = 1(self) + 2(type) + payload_len + 1(CRC); max Length value = 255
+    // So max payload = 251 bytes
     // Avoid 0x7E (frame marker) and 0x7D (escape char) in payload
     let payload: Vec<u8> = (0u8..=254u8)
         .filter(|&b| b != 0x7E && b != 0x7D)
-        .take(253)
+        .take(251)
         .collect();
-    assert_eq!(payload.len(), 253);
+    assert_eq!(payload.len(), 251);
     for &msg_type in &[
         [0xFF, 0xAF],
         [0x0A, 0xBF],
@@ -128,7 +128,7 @@ fn test_frame_round_trip_max_payload() {
 #[test]
 fn test_frame_round_trip_various_sizes() {
     let mut rng = 42;
-    for size in &[0, 1, 2, 5, 10, 50, 100, 150, 200, 253] {
+    for size in &[0, 1, 2, 5, 10, 50, 100, 150, 200, 251] {
         let payload = random_bytes(&mut rng, *size, true);
         round_trip_frame([0xFF, 0xAF], &payload);
         round_trip_frame([0x0A, 0xBF], &payload);

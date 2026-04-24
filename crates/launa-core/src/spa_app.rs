@@ -59,10 +59,24 @@ pub struct SpaApp<'a> {
     frames_received: u32,
 
     boot_time: Timestamp,
+
+    /// Unique client hash for RS-485 channel assignment (2 bytes).
+    /// Derived from device-specific data (e.g. ESP32 MAC address) so that
+    /// multiple devices on the same bus receive distinct channel IDs.
+    client_hash: [u8; 2],
 }
 
 impl<'a> SpaApp<'a> {
     pub fn new(clock: &'a dyn Clock) -> Self {
+        Self::with_client_hash(clock, [0x00, 0x01])
+    }
+
+    /// Create a new SpaApp with a specific client hash for RS-485 registration.
+    ///
+    /// The `client_hash` should be derived from unique device identity (e.g.
+    /// the ESP32 MAC address) so that multiple devices on the same RS-485 bus
+    /// receive distinct channel assignments from the spa controller.
+    pub fn with_client_hash(clock: &'a dyn Clock, client_hash: [u8; 2]) -> Self {
         let now = clock.now();
         SpaApp {
             clock,
@@ -82,6 +96,7 @@ impl<'a> SpaApp<'a> {
             was_stale: false,
             frames_received: 0,
             boot_time: now,
+            client_hash,
         }
     }
 
@@ -187,7 +202,10 @@ impl<'a> SpaApp<'a> {
                 .process(frame.message_type, &frame.payload);
             match action {
                 RegistrationAction::SendIdRequest => {
-                    match FrameEncoder::encode([0xFE, 0xBF], &[0x01, 0x02, 0xF1, 0x73]) {
+                    match FrameEncoder::encode(
+                        [0xFE, 0xBF],
+                        &[0x01, 0x02, self.client_hash[0], self.client_hash[1]],
+                    ) {
                         Ok(encoded) => {
                             actions.push(AppAction::SendFrame(encoded));
                             self.registration_started_at = Some(now);
