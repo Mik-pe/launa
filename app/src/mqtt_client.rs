@@ -683,7 +683,7 @@ impl MqttClient {
                     idx += 2;
                 }
 
-                if idx >= packet.len() { return None; }
+                if idx > packet.len() { return None; }
                 // MQTT 3.1.1: no properties field — payload starts immediately after topic (+ pkt_id if QoS>0)
                 let payload = Vec::from(&packet[idx..]);
 
