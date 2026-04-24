@@ -779,9 +779,7 @@ async fn main(spawner: Spawner) {
         .with_rx(peripherals.GPIO16)
         .into_async();
 
-    // DE pin disabled — current RS-485 transceiver has no DE input.
-    // Re-enable with Some(peripherals.GPIO4.into()) if using a transceiver with DE control.
-    let uart_transport = transport::Rs485Transport::new(uart, None);
+    let uart_transport = transport::Rs485Transport::new(uart, Some(peripherals.GPIO4.into()));
     info!("RS-485 UART initialized");
 
     let wifi_stack = init_wifi(
