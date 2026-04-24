@@ -67,6 +67,8 @@ pub(crate) fn apply_toggle_by_code(state: &mut SpaState, item_code: u8) {
         0x0C => state.blower = !state.blower,
         0x11 => state.lights[0] = !state.lights[0],
         0x12 => state.lights[1] = !state.lights[1],
+        0x13 => state.lights[2] = !state.lights[2],
+        0x14 => state.lights[3] = !state.lights[3],
         0x3C => state.hold = !state.hold,
         0x51 => state.heating_mode = cycle_heating_mode(state.heating_mode),
         0x50 => {
@@ -183,12 +185,18 @@ pub(crate) fn generate_status_frame(
     if state.blower {
         payload[13] |= 0x0C;
     }
-    // Offset 14: Lights (bits 0-1 = Light1, bits 2-3 = Light2)
+    // Offset 14: Lights (bits 0-1 = Light1, bits 2-3 = Light2, bits 4-5 = Light3, bits 6-7 = Light4)
     if state.lights[0] {
         payload[14] |= 0x03;
     }
     if state.lights[1] {
         payload[14] |= 0x0C;
+    }
+    if state.lights[2] {
+        payload[14] |= 0x30;
+    }
+    if state.lights[3] {
+        payload[14] |= 0xC0;
     }
     // Offset 15: Mister (0=off, 1=on)
     if state.mister {

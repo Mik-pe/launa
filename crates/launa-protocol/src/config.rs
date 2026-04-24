@@ -3,7 +3,7 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpaConfig {
     pub pump_configs: [PumpConfig; 6],
-    pub lights: [bool; 2],
+    pub lights: [bool; 4],
     pub circ_pump: bool,
     pub blower: bool,
     pub mister: bool,
@@ -46,8 +46,10 @@ impl SpaConfig {
         Ok(SpaConfig {
             pump_configs,
             lights: [
-                (payload[7] & 0x03) != 0, // light1
-                (payload[7] & 0x0C) != 0, // light2
+                (payload[7] & 0x03) != 0, // light1 bits 0-1
+                (payload[7] & 0x0C) != 0, // light2 bits 2-3
+                (payload[7] & 0x30) != 0, // light3 bits 4-5
+                (payload[7] & 0xC0) != 0, // light4 bits 6-7
             ],
             circ_pump: (payload[8] & 0x80) != 0,
             blower: (payload[8] & 0x03) != 0,
@@ -174,6 +176,8 @@ mod tests {
         assert_eq!(config.pump_configs, [PumpConfig::None; 6]);
         assert!(!config.lights[0]);
         assert!(!config.lights[1]);
+        assert!(!config.lights[2]);
+        assert!(!config.lights[3]);
         assert!(!config.circ_pump);
         assert!(!config.blower);
         assert!(!config.mister);
@@ -188,7 +192,7 @@ mod tests {
         // All pumps = TwoSpeed (2): 0b10_10_10_10
         payload[5] = 0b10_10_10_10;
         payload[6] = 0b00_00_10_10; // pump4=TwoSpeed, pump5=TwoSpeed
-        payload[7] = 0x0F; // both lights
+        payload[7] = 0xFF; // all 4 lights
         payload[8] = 0x80 | 0x03; // circ pump + blower
         payload[9] = 0x30 | 0x03; // mister + aux1 + aux2
         payload[3] = 0x01; // celsius
@@ -197,6 +201,8 @@ mod tests {
         assert_eq!(config.pump_configs, [PumpConfig::TwoSpeed; 6]);
         assert!(config.lights[0]);
         assert!(config.lights[1]);
+        assert!(config.lights[2]);
+        assert!(config.lights[3]);
         assert!(config.circ_pump);
         assert!(config.blower);
         assert!(config.mister);

@@ -96,7 +96,7 @@ fn print_state(tick: u64, state: &SpaState) {
         _ => "?",
     };
     println!(
-        "[tick {:>4}] temp={:.1} set={:.1} heating={} pump1={} pump2={} pump3={} circ={} blower={} light={} mister={} hold={}",
+        "[tick {:>4}] temp={:.1} set={:.1} heating={} pump1={} pump2={} pump3={} circ={} blower={} light1={} light2={} mister={} hold={}",
         tick,
         state.current_temp,
         state.set_temp,
@@ -107,6 +107,7 @@ fn print_state(tick: u64, state: &SpaState) {
         state.circ_pump,
         state.blower,
         state.lights[0],
+        state.lights[1],
         state.mister,
         state.hold,
     );

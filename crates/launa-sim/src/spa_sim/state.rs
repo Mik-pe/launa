@@ -34,8 +34,8 @@ pub struct SpaState {
     pub circ_pump: bool,
     /// Blower on/off.
     pub blower: bool,
-    /// Light states (indexed 0-1, where index 0 = Light 1).
-    pub lights: [bool; 2],
+    /// Light states (indexed 0-3, where index 0 = Light 1).
+    pub lights: [bool; 4],
     /// Mister on/off.
     pub mister: bool,
     /// Clock hour (0-23).
@@ -62,7 +62,7 @@ impl Default for SpaState {
             pumps: [PumpState::Off; 6],
             circ_pump: false,
             blower: false,
-            lights: [false; 2],
+            lights: [false; 4],
             mister: false,
             hour: 14,
             minute: 30,

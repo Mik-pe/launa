@@ -68,7 +68,7 @@ mod tests {
             circ_pump: false,
             blower: false,
             mister: false,
-            lights: [false, false],
+            lights: [false, false, false, false],
             is_priming: false,
             is_hold: false,
             notification_type: 0,

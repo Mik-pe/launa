@@ -250,7 +250,7 @@ mod tests {
             circ_pump: false,
             blower: false,
             mister: false,
-            lights: [false; 2],
+            lights: [false; 4],
             is_priming: false,
             is_hold: false,
             notification_type: 0,

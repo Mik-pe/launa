@@ -17,7 +17,7 @@ pub struct StatusUpdate {
     pub circ_pump: bool,
     pub blower: bool,
     pub mister: bool,
-    pub lights: [bool; 2],
+    pub lights: [bool; 4],
     pub is_priming: bool,
     pub is_hold: bool,
     /// Reminder/notification type from offset 6.
@@ -106,7 +106,7 @@ impl StatusUpdate {
     /// - FA = Flags: bit 2=Temp Range, bits 4-5=Heating State
     /// - P1 = Pumps 1-4 (2 bits each), P2 = Pumps 5-6
     /// - CB = Circ pump (bit 1), Blower (bits 2-3)
-    /// - LF = Lights (bits 0-1=Light1), MR = Mister (0=off, 1=on)
+    /// - LF = Lights (bits 0-1=Light1, bits 2-3=Light2, bits 4-5=Light3, bits 6-7=Light4), MR = Mister (0=off, 1=on)
     /// - ST = Set Temperature (÷2 if Celsius)
     pub fn parse(payload: &[u8]) -> Result<Self, StatusError> {
         if payload.len() < 24 {
@@ -201,8 +201,10 @@ impl StatusUpdate {
             blower,
             mister,
             lights: [
-                payload[14] & 0x03 != 0, // light1
-                payload[14] & 0x0C != 0, // light2
+                payload[14] & 0x03 != 0, // light1 bits 0-1
+                payload[14] & 0x0C != 0, // light2 bits 2-3
+                payload[14] & 0x30 != 0, // light3 bits 4-5
+                payload[14] & 0xC0 != 0, // light4 bits 6-7
             ],
             is_priming: payload[1] == 0x01,
             is_hold,
@@ -248,7 +250,7 @@ mod tests {
         payload[9] = 0x02; // 24h time format
         payload[10] = 0x34; // heating active (bits 4-5=0x30) + temp range high (bit 2)
         payload[11] = 0x01; // pump1=low
-        payload[14] = 0x03; // light on
+        payload[14] = 0x03; // light1 on
         payload[20] = 104; // set temp = 104°F
 
         let status = StatusUpdate::parse(&payload).unwrap();
@@ -261,6 +263,66 @@ mod tests {
         assert!(status.lights[0]);
         assert!(status.is_heating);
         assert_eq!(status.temp_range, TempRange::High);
+    }
+
+    #[test]
+    fn test_parse_status_all_4_lights_on() {
+        let mut payload = [0u8; 24];
+        payload[2] = 100;
+        payload[9] = 0x02;
+        payload[14] = 0xFF; // all light bits set
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.lights, [true, true, true, true]);
+    }
+
+    #[test]
+    fn test_parse_status_light3_on_only() {
+        let mut payload = [0u8; 24];
+        payload[2] = 100;
+        payload[9] = 0x02;
+        payload[14] = 0x30; // bits 4-5 set (Light3 only)
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.lights, [false, false, true, false]);
+    }
+
+    #[test]
+    fn test_parse_status_light4_on_only() {
+        let mut payload = [0u8; 24];
+        payload[2] = 100;
+        payload[9] = 0x02;
+        payload[14] = 0xC0; // bits 6-7 set (Light4 only)
+        payload[20] = 104;
+
+        let status = StatusUpdate::parse(&payload).unwrap();
+        assert_eq!(status.lights, [false, false, false, true]);
+    }
+
+    #[test]
+    fn test_parse_status_individual_lights() {
+        // Test each light individually
+        let cases: [(u8, [bool; 4]); 4] = [
+            (0x03, [true, false, false, false]), // Light1
+            (0x0C, [false, true, false, false]), // Light2
+            (0x30, [false, false, true, false]), // Light3
+            (0xC0, [false, false, false, true]), // Light4
+        ];
+        for (byte, expected) in cases {
+            let mut payload = [0u8; 24];
+            payload[2] = 100;
+            payload[9] = 0x02;
+            payload[14] = byte;
+            payload[20] = 104;
+            let status = StatusUpdate::parse(&payload).unwrap();
+            assert_eq!(
+                status.lights, expected,
+                "Failed for payload[14]=0x{:02X}",
+                byte
+            );
+        }
     }
 
     #[test]

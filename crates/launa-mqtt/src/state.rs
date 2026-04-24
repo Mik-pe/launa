@@ -137,7 +137,7 @@ mod tests {
             circ_pump: false,
             blower: false,
             mister: false,
-            lights: [true, false],
+            lights: [true, false, false, false],
             is_priming: false,
             is_hold: false,
             notification_type: 0,
@@ -171,6 +171,8 @@ mod tests {
         assert_eq!(parsed["pump6_on"], false);
         assert_eq!(parsed["light1"], true);
         assert_eq!(parsed["light2"], false);
+        assert_eq!(parsed["light3"], false);
+        assert_eq!(parsed["light4"], false);
         assert_eq!(parsed["blower"], false);
         assert_eq!(parsed["circ_pump"], false);
         assert_eq!(parsed["mister"], false);
