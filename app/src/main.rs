@@ -161,28 +161,42 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
     info!("UART task started");
 
     loop {
-        // Read from UART first (prioritize reads to avoid starving frame processing)
-        match transport.read(&mut buf).await {
-            Ok(n) if n > 0 => {
-                for &byte in &buf[..n] {
-                    if let Some(frame) = decoder.feed(byte) {
-                        frame_sender.send(frame).await;
+        // Use select so TX can proceed even when no RX data is available.
+        match select(transport.read(&mut buf), uart_rx.receive()).await {
+            Either::First(result) => {
+                match result {
+                    Ok(n) if n > 0 => {
+                        for &byte in &buf[..n] {
+                            if let Some(frame) = decoder.feed(byte) {
+                                frame_sender.send(frame).await;
+                            }
+                        }
+                    }
+                    Ok(_) => {
+                        Timer::after(Duration::from_millis(1)).await;
+                    }
+                    Err(e) => {
+                        error!("UART read error: {:?}", e);
+                        Timer::after(Duration::from_millis(10)).await;
+                    }
+                }
+                // Drain any pending TX after processing RX
+                while let Ok(data) = uart_rx.try_receive() {
+                    if let Err(e) = transport.write(&data).await {
+                        error!("UART write error: {:?}", e);
                     }
                 }
             }
-            Ok(_) => {
-                Timer::after(Duration::from_millis(1)).await;
-            }
-            Err(e) => {
-                error!("UART read error: {:?}", e);
-                Timer::after(Duration::from_millis(10)).await;
-            }
-        }
-
-        // Check for outgoing data after reads
-        if let Ok(data) = uart_rx.try_receive() {
-            if let Err(e) = transport.write(&data).await {
-                error!("UART write error: {:?}", e);
+            Either::Second(data) => {
+                if let Err(e) = transport.write(&data).await {
+                    error!("UART write error: {:?}", e);
+                }
+                // Drain any additional pending TX
+                while let Ok(data) = uart_rx.try_receive() {
+                    if let Err(e) = transport.write(&data).await {
+                        error!("UART write error: {:?}", e);
+                    }
+                }
             }
         }
     }
@@ -765,7 +779,9 @@ async fn main(spawner: Spawner) {
         .with_rx(peripherals.GPIO16)
         .into_async();
 
-    let uart_transport = transport::Rs485Transport::new(uart, Some(peripherals.GPIO4.into()));
+    // DE pin disabled — current RS-485 transceiver has no DE input.
+    // Re-enable with Some(peripherals.GPIO4.into()) if using a transceiver with DE control.
+    let uart_transport = transport::Rs485Transport::new(uart, None);
     info!("RS-485 UART initialized");
 
     let wifi_stack = init_wifi(
