@@ -1,12 +1,12 @@
 # Multi-stage build for launa-server targeting aarch64 (RPi Zero 2W)
 
 # --- Stage 1: Build the Vue frontend ---
-FROM --platform=$BUILDPLATFORM node:22-slim AS web-builder
+FROM --platform=$BUILDPLATFORM oven/bun:1 AS web-builder
 WORKDIR /build/web
-COPY web/package.json web/package-lock.json ./
-RUN npm install --frozen-lockfile || npm install
+COPY web/package.json web/bun.lock ./
+RUN bun install --frozen-lockfile
 COPY web/ ./
-RUN npm run build
+RUN bun run build
 
 # --- Stage 2: Cross-compile launa-server for aarch64 ---
 FROM --platform=linux/amd64 rust:1-slim AS server-builder
@@ -28,6 +28,7 @@ COPY crates/launa-core/Cargo.toml crates/launa-core/Cargo.toml
 COPY crates/launa-sim/Cargo.toml crates/launa-sim/Cargo.toml
 COPY crates/launa-integration-tests/Cargo.toml crates/launa-integration-tests/Cargo.toml
 COPY crates/launa-server/Cargo.toml crates/launa-server/Cargo.toml
+COPY xtask/Cargo.toml xtask/Cargo.toml
 
 # Create dummy source files so cargo can resolve the workspace graph
 RUN mkdir -p crates/launa-protocol/src && touch crates/launa-protocol/src/lib.rs \
@@ -40,7 +41,8 @@ RUN mkdir -p crates/launa-protocol/src && touch crates/launa-protocol/src/lib.rs
  && mkdir -p crates/launa-integration-tests/src && touch crates/launa-integration-tests/src/lib.rs \
  && mkdir -p crates/launa-server/src/bin \
  && echo "fn main(){}" > crates/launa-server/src/bin/launa-server.rs \
- && echo "" > crates/launa-server/src/lib.rs
+ && echo "" > crates/launa-server/src/lib.rs \
+ && mkdir -p xtask/src && echo "fn main(){}" > xtask/src/main.rs
 
 # Build dependencies only (cached layer). Expected to fail on real code.
 ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
@@ -50,6 +52,7 @@ RUN cargo build --release --target aarch64-unknown-linux-gnu -p launa-server 2>/
 
 # Copy real source code (overwrites dummy files)
 COPY crates/ crates/
+COPY xtask/ xtask/
 
 # Build the real binary
 RUN touch crates/*/src/*.rs && cargo build --release --target aarch64-unknown-linux-gnu -p launa-server
