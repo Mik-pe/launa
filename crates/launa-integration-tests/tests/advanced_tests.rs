@@ -461,18 +461,15 @@ fn test_rapid_command_flood_exceeds_queue_cap() {
         "queue should be empty after draining"
     );
 
-    // Drop counter includes both queue-full drops (3) and tracker drops.
-    // The tracker has MAX_PENDING_COMMANDS=8, so only 8 of 32 commands can
-    // be tracked. The remaining 24 are dropped by track() and counted.
-    let tracker_drops = (queue_cap - 8) as u32; // 24
-    let total_expected_drops = queue_drops as u32 + tracker_drops;
+    // Drop counter includes queue-full drops (3). Tracker deduplicates:
+    // commands with the same ExpectedChange update existing entries
+    // instead of creating new ones, so only 3 unique pending entries
+    // (Pump1, Pump2, Pump3) are tracked — no tracker overflow.
     assert_eq!(
         app.total_dropped(),
-        total_expected_drops,
-        "drop counter should be {} ({} queue + {} tracker)",
-        total_expected_drops,
-        queue_drops,
-        tracker_drops
+        queue_drops as u32,
+        "drop counter should be {} (queue drops only, no tracker overflow with dedup)",
+        queue_drops
     );
 }
 
@@ -512,16 +509,17 @@ fn test_command_flood_multiple_cycles() {
     for _ in 0..32 {
         app.process_frame(&ready_frame);
     }
-    // Tracker drops 24 commands (32 - MAX_PENDING_COMMANDS=8)
-    let drops_after_cycle1 = 3 + 24;
+    // Tracker deduplicates: all Pump1 toggles share one ExpectedChange,
+    // so only 1 pending entry — no tracker overflow.
+    let drops_after_cycle1 = 3u32;
     assert_eq!(app.queued_command_count(), 0);
     assert_eq!(
         app.total_dropped(),
         drops_after_cycle1,
-        "drops should include tracker overflow from cycle 1"
+        "drops should be queue drops only (tracker deduplicates)"
     );
 
-    // Cycle 2: flood + drain again
+    // Cycle 2: flood + drain again (different toggle item)
     let drops_before_cycle2 = app.total_dropped();
     for _ in 0..35 {
         app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump2));
@@ -538,9 +536,9 @@ fn test_command_flood_multiple_cycles() {
         app.process_frame(&ready_frame);
     }
     assert_eq!(app.queued_command_count(), 0);
-    // Tracker already full from cycle 1 (8 pending, never confirmed),
-    // so all 32 cycle-2 commands are dropped by track().
-    let drops_after_cycle2 = drops_before_cycle2 + 3 + 32;
+    // Tracker has 2 entries (Pump1 + Pump2), still well under
+    // MAX_PENDING_COMMANDS=8, so no tracker overflow.
+    let drops_after_cycle2 = drops_before_cycle2 + 3;
 
     // Cycle 3: partial flood (no overflow)
     for _ in 0..10 {
@@ -557,14 +555,13 @@ fn test_command_flood_multiple_cycles() {
         app.process_frame(&ready_frame);
     }
     assert_eq!(app.queued_command_count(), 0);
-    // Tracker still full from prior cycles, so cycle 3's 10 commands
-    // are all dropped by track().
-    let final_drops = drops_after_cycle2 + 10;
+    // Tracker now has 3 entries (Pump1 + Pump2 + Pump3), still no overflow.
+    let final_drops = drops_after_cycle2;
 
-    // Final drop count: all accumulated drops across cycles
+    // Final drop count: all accumulated queue drops across cycles
     assert_eq!(
         app.total_dropped(),
         final_drops,
-        "final drop count should include all queue + tracker drops"
+        "final drop count should include all queue drops (no tracker overflow with dedup)"
     );
 }

@@ -161,10 +161,16 @@ impl FrameDecoder {
                             None
                         }
                     }
+                } else if self.expected_length > 0 && self.buffer.len() < self.expected_length {
+                    // We know the expected length but haven't collected enough bytes yet.
+                    // The protocol has no byte stuffing — 0x7E can appear as a literal
+                    // body byte (e.g. temperature 0x7E = 126). Treat it as a data byte.
+                    self.buffer.push(byte);
+                    // If this was the last body byte, the real end marker comes next.
+                    None
                 } else if !self.buffer.is_empty() {
-                    // Fallback: no length known yet, or fewer bytes than expected.
-                    // This handles the case where we see a second 0x7E before the
-                    // length field arrives (malformed data) — treat as error.
+                    // No length known yet (only 1 byte buffered which is the length).
+                    // A premature 0x7E means malformed data — treat as error.
                     self.buffer.clear();
                     self.in_frame = false;
                     self.expected_length = 0;

@@ -77,7 +77,7 @@ Field: ST IM CT HH MM HM RT SA SB F9 FA P1 P2 CB LF MR -- -- -- -- ST -- -- --
 | 11 | P1 | Pump status (pumps 1-4): bits 0-1=Pump1, bits 2-3=Pump2, bits 4-5=Pump3, bits 6-7=Pump4 |
 | 12 | P2 | Pump status (pumps 5-6): bits 0-1=Pump5, bits 2-3=Pump6 (see P2 bit table below) |
 | 13 | CB | Circ pump (bit 1), Blower (bits 2-3) |
-| 14 | LF | Light: bits 0-1=Light 1, bits 2-3=Light 2 |
+| 14 | LF | Lights: bits 0-1=Light 1, bits 2-3=Light 2, bits 4-5=Light 3, bits 6-7=Light 4 |
 | 15 | MR | Mister: 0=OFF, 1=ON |
 | 20 | ST | Set Temperature (÷2 if Celsius) |
 

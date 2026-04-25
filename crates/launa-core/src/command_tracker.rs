@@ -102,11 +102,18 @@ impl CommandTracker {
     }
 
     pub fn track(&mut self, command: Command, pre_status: &StatusUpdate, now: Timestamp) {
-        if self.pending.len() >= MAX_PENDING_COMMANDS {
-            self.dropped_count += 1;
-            return;
-        }
         if let Some(expected) = ExpectedChange::from_command(&command, pre_status) {
+            // If a pending entry with the same expected change already exists
+            // (e.g. a retry being re-sent), update it instead of duplicating.
+            if let Some(existing) = self.pending.iter_mut().find(|p| p.expected == expected) {
+                existing.command = command;
+                existing.sent_at = now;
+                return;
+            }
+            if self.pending.len() >= MAX_PENDING_COMMANDS {
+                self.dropped_count += 1;
+                return;
+            }
             self.pending.push(PendingCommand {
                 command,
                 expected,
