@@ -59,6 +59,14 @@ const wifiColor = computed(() => {
   if (wifiBars.value >= 2) return 'text-amber-400'
   return 'text-red-400'
 })
+
+const wifiTooltip = computed(() => {
+  if (wifiBars.value === null) return ''
+  if (wifiBars.value === -1) return 'WiFi signal unknown'
+  const rssi = props.spaState?.wifi_rssi
+  const label = wifiBars.value >= 4 ? 'Excellent' : wifiBars.value >= 3 ? 'Good' : wifiBars.value >= 2 ? 'Fair' : wifiBars.value >= 1 ? 'Weak' : 'No signal'
+  return `WiFi: ${label} (${rssi} dBm)`
+})
 </script>
 
 <template>
@@ -86,10 +94,10 @@ const wifiColor = computed(() => {
         <!-- WiFi signal icon -->
         <svg v-if="wifiBars !== null"
           :class="['w-4 h-4', wifiColor]"
-          :title="wifiBars >= 0 ? `WiFi: ${spaState?.wifi_rssi} dBm` : 'WiFi signal unknown'"
+          :title="wifiTooltip"
           viewBox="0 0 24 24" fill="currentColor">
-          <!-- Dot (only when we have RSSI data) -->
-          <path v-if="wifiBars >= 0" d="M12 18a1.5 1.5 0 110 3 1.5 1.5 0 010-3z" />
+          <!-- Dot (always visible) -->
+          <circle cx="12" cy="19" r="1.5" />
           <!-- Bar 1 (weakest) -->
           <path v-if="wifiBars >= 1" d="M8.46 14.54a5 5 0 017.08 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
           <!-- Bar 2 -->

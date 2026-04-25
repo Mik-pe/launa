@@ -117,6 +117,10 @@ const FIRMWARE_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GI
 
 static MQTT_RECONNECT_COUNT: AtomicU32 = AtomicU32::new(0);
 static MQTT_LOSS_COUNT: AtomicU32 = AtomicU32::new(0);
+static FRAME_ERROR_COUNT: AtomicU32 = AtomicU32::new(0);
+static UART_BYTES_RECEIVED: AtomicU32 = AtomicU32::new(0);
+static UART_FIRST_BYTE_SEEN: AtomicU32 = AtomicU32::new(0); // 0=no, 1=yes
+static UART_LAST_NO_BYTE_ALERT_SECS: AtomicU32 = AtomicU32::new(0); // uptime when last alert sent
 
 /// Boot timestamp in seconds (lower 32 bits of millis/1000), set once in main().
 /// Used for uptime calculation. AtomicU32 is used because AtomicU64 is not
@@ -157,6 +161,8 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
     let frame_sender = FRAME_CHANNEL.sender();
     let uart_rx = UART_TX_CHANNEL.receiver();
     let mut buf = [0u8; 128];
+    let mut first_bytes_logged = false;
+    let mut first_frame_logged = false;
 
     info!("UART task started");
 
@@ -166,10 +172,39 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
             Either::First(result) => {
                 match result {
                     Ok(n) if n > 0 => {
+                        UART_BYTES_RECEIVED.fetch_add(n as u32, Ordering::Relaxed);
+                        if !first_bytes_logged {
+                            first_bytes_logged = true;
+                            UART_FIRST_BYTE_SEEN.store(1, Ordering::Relaxed);
+                            // Log first few raw bytes for diagnostics
+                            let hex_dump: Vec<u8> = buf[..n.min(16)].to_vec();
+                            let hex_str = launa_protocol::hex::to_hex(&hex_dump);
+                            info!("UART: first {} bytes from spa bus: {}", n, hex_str);
+                        }
+                        // Periodic raw byte logging (every ~1000 bytes)
+                        let total = UART_BYTES_RECEIVED.load(Ordering::Relaxed);
+                        if total % 1000 < n as u32 {
+                            let hex_dump: Vec<u8> = buf[..n.min(8)].to_vec();
+                            let hex_str = launa_protocol::hex::to_hex(&hex_dump);
+                            debug!("UART: {} total bytes, last {} bytes: {}", total, n, hex_str);
+                        }
+                        let prev_errors = decoder.frame_error_count();
                         for &byte in &buf[..n] {
                             if let Some(frame) = decoder.feed(byte) {
+                                if !first_frame_logged {
+                                    first_frame_logged = true;
+                                    info!(
+                                        "UART: first frame decoded, type={:02X}{:02X}, len={}",
+                                        frame.message_type[0], frame.message_type[1],
+                                        frame.payload.len()
+                                    );
+                                }
                                 frame_sender.send(frame).await;
                             }
+                        }
+                        let new_errors = decoder.frame_error_count();
+                        if new_errors > prev_errors {
+                            FRAME_ERROR_COUNT.fetch_add(new_errors - prev_errors, Ordering::Relaxed);
                         }
                     }
                     Ok(_) => {
@@ -252,8 +287,17 @@ async fn execute_actions(actions: &[AppAction], device_id: &str, self_test: bool
                 frames_received,
                 command_retries,
                 command_drops,
+                registration_state,
+                frame_errors: _,
+                uart_bytes: _,
             } => {
-                publish_diagnostics(device_id, *uptime_secs, *frames_received, *command_retries, *command_drops);
+                let frame_errors = FRAME_ERROR_COUNT.load(Ordering::Relaxed);
+                let uart_bytes = UART_BYTES_RECEIVED.load(Ordering::Relaxed);
+                let uart_active = UART_FIRST_BYTE_SEEN.load(Ordering::Relaxed);
+                publish_diagnostics(
+                    device_id, *uptime_secs, *frames_received, *command_retries,
+                    *command_drops, frame_errors, uart_bytes, registration_state, uart_active,
+                );
             }
             AppAction::RequestOta { url } => {
                 if let Err(_) = OTA_CHANNEL.try_send(url.clone()) {
@@ -761,10 +805,10 @@ async fn main(spawner: Spawner) {
     let mut wdt = timg1.wdt;
     wdt.set_timeout(
         esp_hal::timer::timg::MwdtStage::Stage0,
-        esp_hal::time::Duration::from_secs(120),
+        esp_hal::time::Duration::from_secs(200),
     );
     wdt.enable();
-    info!("Hardware watchdog enabled (120s timeout)");
+    info!("Hardware watchdog enabled (200s timeout)");
 
     info!("Launa ESP32 firmware starting...");
 
@@ -797,8 +841,8 @@ async fn main(spawner: Spawner) {
         .with_rx(peripherals.GPIO16)
         .into_async();
 
-    let uart_transport = transport::Rs485Transport::new(uart, Some(peripherals.GPIO4.into()));
-    info!("RS-485 UART initialized");
+    let uart_transport = transport::Rs485Transport::new(uart, None);
+    info!("RS-485 UART initialized (no DE pin, auto-direction transceiver)");
 
     let wifi_stack = init_wifi(
         spawner,
@@ -850,6 +894,11 @@ async fn main(spawner: Spawner) {
 
     let tick_interval = Duration::from_secs(1);
 
+    // Periodic UART TX test: send a registration probe every 15s when no bytes
+    // have been received, to verify the UART TX path works. This also acts as
+    // a keep-alive ping on the RS-485 bus.
+    let mut uart_tx_test_interval: Option<Instant> = None;
+
     loop {
         // Feed the hardware watchdog each iteration
         wdt.feed();
@@ -888,6 +937,40 @@ async fn main(spawner: Spawner) {
         // Heap check (uses actual ESP32 free heap)
         let heap_actions = app.check_heap(esp_alloc::HEAP.free());
         execute_actions(&heap_actions, device_id_str, self_test_state.is_some(), sniff_mode, read_wifi_rssi()).await;
+
+        // UART health check: alert if no bytes received after 30s of uptime
+        // Re-alert every 5 minutes until bytes are seen
+        let uptime = uptime_secs();
+        if UART_FIRST_BYTE_SEEN.load(Ordering::Relaxed) == 0 && uptime >= 30 {
+            let last_alert = UART_LAST_NO_BYTE_ALERT_SECS.load(Ordering::Relaxed) as u64;
+            if uptime - last_alert >= 300 || last_alert == 0 {
+                UART_LAST_NO_BYTE_ALERT_SECS.store(uptime as u32, Ordering::Relaxed);
+                error!("UART: no bytes received after {}s — check RS-485 wiring (RX=GPIO16, TX=GPIO17, DE=GPIO4)", uptime);
+                send_alert("error", "no_uart_bytes");
+            }
+        }
+
+        // UART TX test: every 15s when no bytes received, send a test frame
+        // to verify the UART TX path and check if the spa responds.
+        if UART_FIRST_BYTE_SEEN.load(Ordering::Relaxed) == 0 && !self_test_state.is_some() {
+            let should_test = uart_tx_test_interval.is_none_or(|t| t.elapsed().as_secs() >= 15);
+            if should_test {
+                uart_tx_test_interval = Some(Instant::now());
+                // Send a registration request: FE BF 01 02 F1 73
+                match launa_protocol::frame::FrameEncoder::encode(
+                    [0xFE, 0xBF],
+                    &[0x01, 0x02, client_hash[0], client_hash[1]],
+                ) {
+                    Ok(encoded) => {
+                        info!("UART TX test: sending registration probe ({} bytes)", encoded.len());
+                        UART_TX_CHANNEL.send(encoded).await;
+                    }
+                    Err(e) => {
+                        warn!("UART TX test: encode failed: {:?}", e);
+                    }
+                }
+            }
+        }
 
         handle_ota_request(&wifi_stack, &mut ota, &mut ota_buffers, &ota_rx, &mut wdt).await;
 

@@ -182,6 +182,7 @@ fn test_spaapp_diagnostics_periodic() {
             frames_received,
             command_retries,
             command_drops,
+            ..
         } => Some((
             *uptime_secs,
             *frames_received,

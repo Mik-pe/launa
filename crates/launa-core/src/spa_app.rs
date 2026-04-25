@@ -58,6 +58,10 @@ pub struct SpaApp<'a> {
     // Counters
     frames_received: u32,
 
+    /// Track whether we've emitted the "no_registration_query" alert to avoid
+    /// flooding. Reset when registration completes or the SM resets.
+    no_query_alert_sent: bool,
+
     boot_time: Timestamp,
 
     /// Unique client hash for RS-485 channel assignment (2 bytes).
@@ -95,6 +99,7 @@ impl<'a> SpaApp<'a> {
             last_diag_time: None,
             was_stale: false,
             frames_received: 0,
+            no_query_alert_sent: false,
             boot_time: now,
             client_hash,
         }
@@ -143,6 +148,17 @@ impl<'a> SpaApp<'a> {
     /// Whether the spa is currently detected as stale (no status for 30s).
     pub fn is_stale(&self) -> bool {
         self.was_stale
+    }
+
+    /// Registration state as a static string for diagnostics.
+    pub fn registration_state_str(&self) -> &'static str {
+        match self.registration.state() {
+            launa_protocol::registration::RegistrationState::WaitingForQuery => "waiting_for_query",
+            launa_protocol::registration::RegistrationState::WaitingForAssignment => {
+                "waiting_for_assignment"
+            }
+            launa_protocol::registration::RegistrationState::Registered { .. } => "registered",
+        }
     }
 
     /// Force registration (for tests).
@@ -361,8 +377,20 @@ impl<'a> SpaApp<'a> {
                     self.registration_started_at = None;
                 }
             }
+            // Alert if no registration query seen for 30s after boot
+            if !self.no_query_alert_sent && self.registration_started_at.is_none() {
+                let elapsed_since_boot = now.elapsed_since(self.boot_time);
+                if elapsed_since_boot >= STALE_THRESHOLD_MS {
+                    actions.push(AppAction::PublishAlert {
+                        level: String::from("warn"),
+                        message: String::from("no_registration_query"),
+                    });
+                    self.no_query_alert_sent = true;
+                }
+            }
         } else {
             self.registration_started_at = None;
+            self.no_query_alert_sent = false;
         }
 
         // Stale detection
@@ -416,6 +444,9 @@ impl<'a> SpaApp<'a> {
                 frames_received: self.frames_received,
                 command_retries: self.cmd_tracker.total_retries(),
                 command_drops: self.cmd_tracker.total_dropped(),
+                registration_state: self.registration_state_str(),
+                frame_errors: 0,
+                uart_bytes: 0,
             });
         }
 

@@ -21,6 +21,10 @@ pub(crate) fn publish_diagnostics(
     frames_received: u32,
     command_retries: u32,
     command_drops: u32,
+    frame_errors: u32,
+    uart_bytes: u32,
+    registration_state: &str,
+    uart_active: u32,
 ) {
     // Skip if heap is critically low to avoid OOM panic on format!
     let heap_free = esp_alloc::HEAP.free();
@@ -32,7 +36,7 @@ pub(crate) fn publish_diagnostics(
     let mqtt_losses = MQTT_LOSS_COUNT.load(Ordering::Relaxed);
 
     let json = alloc::format!(
-        r#"{{"device_id":"{}","uptime_secs":{},"mqtt_reconnect_count":{},"mqtt_loss_count":{},"command_retry_count":{},"command_drop_count":{},"frames_received":{},"heap_free":{},"fw_version":"{}"}}"#,
+        r#"{{"device_id":"{}","uptime_secs":{},"mqtt_reconnect_count":{},"mqtt_loss_count":{},"command_retry_count":{},"command_drop_count":{},"frames_received":{},"frame_errors":{},"uart_bytes":{},"reg":"{}","uart_rx":{},"heap_free":{},"fw_version":"{}"}}"#,
         escape_json_string(device_id),
         uptime_secs,
         mqtt_reconnects,
@@ -40,6 +44,10 @@ pub(crate) fn publish_diagnostics(
         command_retries,
         command_drops,
         frames_received,
+        frame_errors,
+        uart_bytes,
+        registration_state,
+        uart_active,
         heap_free,
         escape_json_string(FIRMWARE_VERSION),
     );

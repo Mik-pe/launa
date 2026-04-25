@@ -147,7 +147,8 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         .arg("--firmware")
         .arg(&ota_bin_path)
         .arg("--port")
-        .arg(ota_port.to_string());
+        .arg(ota_port.to_string())
+        .arg("--quiet");
 
     let mut ota_serve_child = ota_serve_cmd
         .spawn()
@@ -171,7 +172,6 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     }
 
     // Step 4: Publish OTA command via MQTT
-    println!("\n[4/7] Publishing OTA command via MQTT...");
     let ota_host = if config.ota.host.is_empty() {
         &config.mqtt.host
     } else {
@@ -210,8 +210,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         }
     }
 
-    // Now publish the OTA command — any subsequent availability "online"
-    // will be from the *new* boot after OTA completes.
+    println!("\n[4/7] Triggering OTA on device...");
     let payload = serde_json::json!({
         "url": firmware_url,
     });
@@ -224,12 +223,11 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             payload.to_string().as_bytes(),
         )
         .context("Failed to publish OTA command")?;
-    println!("OTA command published to {}", topic);
 
-    // Step 5: Wait for device to come back online via MQTT
-    println!("\n[5/7] Waiting for device to come back online (timeout 120s)...");
+    // Step 5: Wait for device to download firmware and reboot
+    println!("[5/7] Waiting for device to download firmware and reboot (timeout 200s)...");
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    let deadline = std::time::Instant::now() + Duration::from_secs(200);
     let mut came_online = false;
     let mut state_payload: Option<String> = None;
 
@@ -243,13 +241,13 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                     let payload = String::from_utf8_lossy(&publish.payload);
                     if payload == "online" {
                         came_online = true;
-                        println!("\nDevice {} is back online!", device_id);
+                        println!("\nDevice rebooted and came back online!");
                     }
                 }
                 if publish.topic == status_topic {
                     came_online = true;
                     state_payload = Some(String::from_utf8_lossy(&publish.payload).to_string());
-                    println!("\nDevice {} published state!", device_id);
+                    println!("\nDevice published state after OTA!");
                 }
                 if came_online {
                     break;
@@ -305,7 +303,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         );
         Ok(())
     } else {
-        bail!("OTA flash timed out. Device did not come back online within 120s.");
+        bail!("OTA flash timed out. Device did not come back online within 200s.");
     }
 }
 

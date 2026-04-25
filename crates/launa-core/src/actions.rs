@@ -36,6 +36,9 @@ pub enum AppAction {
         frames_received: u32,
         command_retries: u32,
         command_drops: u32,
+        registration_state: &'static str,
+        frame_errors: u32,
+        uart_bytes: u32,
     },
 
     /// Publish an alert.

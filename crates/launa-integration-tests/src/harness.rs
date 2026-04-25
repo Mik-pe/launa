@@ -132,7 +132,8 @@ impl TestHarness {
         for action in actions {
             match action {
                 AppAction::PublishState { status, .. } => {
-                    let json = launa_mqtt::state::status_to_json(status, None, None, false, false, None);
+                    let json =
+                        launa_mqtt::state::status_to_json(status, None, None, false, false, None);
                     let topic = launa_mqtt::topics::TopicBuilder::new("test_spa").state_topic();
                     self.broker.publish(&topic, &json);
                 }
@@ -156,10 +157,13 @@ impl TestHarness {
                     frames_received,
                     command_retries,
                     command_drops,
+                    registration_state,
+                    frame_errors,
+                    uart_bytes,
                 } => {
                     let payload = format!(
-                        "{{\"uptime\":{},\"frames\":{},\"retries\":{},\"drops\":{}}}",
-                        uptime_secs, frames_received, command_retries, command_drops
+                        "{{\"uptime\":{},\"frames\":{},\"retries\":{},\"drops\":{},\"reg\":\"{}\",\"frame_err\":{},\"uart_bytes\":{}}}",
+                        uptime_secs, frames_received, command_retries, command_drops, registration_state, frame_errors, uart_bytes
                     );
                     self.broker.publish("launa/test_spa/diagnostics", &payload);
                 }

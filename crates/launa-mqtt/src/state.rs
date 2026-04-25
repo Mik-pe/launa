@@ -268,7 +268,14 @@ mod tests {
     #[test]
     fn test_status_to_json_with_fault() {
         let status = sample_status();
-        let json_str = status_to_json(&status, Some("HeaterDry: code 27"), None, false, false, None);
+        let json_str = status_to_json(
+            &status,
+            Some("HeaterDry: code 27"),
+            None,
+            false,
+            false,
+            None,
+        );
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["last_fault"], "HeaterDry: code 27");
     }
@@ -285,7 +292,14 @@ mod tests {
     fn test_escape_json_string_backslash() {
         // Backslash in a fault string must be escaped
         let status = sample_status();
-        let json_str = status_to_json(&status, Some("Fault:\\path\\to\\issue"), None, false, false, None);
+        let json_str = status_to_json(
+            &status,
+            Some("Fault:\\path\\to\\issue"),
+            None,
+            false,
+            false,
+            None,
+        );
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["last_fault"], "Fault:\\path\\to\\issue");
     }
@@ -294,7 +308,14 @@ mod tests {
     fn test_escape_json_string_newline_tab() {
         // Newline and tab must be escaped
         let status = sample_status();
-        let json_str = status_to_json(&status, Some("Line1\nLine2\tTabbed"), None, false, false, None);
+        let json_str = status_to_json(
+            &status,
+            Some("Line1\nLine2\tTabbed"),
+            None,
+            false,
+            false,
+            None,
+        );
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["last_fault"], "Line1\nLine2\tTabbed");
     }
@@ -344,7 +365,14 @@ mod tests {
     fn test_escape_json_string_quote_in_fault() {
         // Double-quote in a fault string must be escaped (existing behaviour)
         let status = sample_status();
-        let json_str = status_to_json(&status, Some("Heater \"dry\" fire"), None, false, false, None);
+        let json_str = status_to_json(
+            &status,
+            Some("Heater \"dry\" fire"),
+            None,
+            false,
+            false,
+            None,
+        );
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["last_fault"], "Heater \"dry\" fire");
     }
