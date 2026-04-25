@@ -2,6 +2,8 @@
 
 extern crate alloc;
 
+use core::sync::atomic::{AtomicI32, Ordering};
+
 use embassy_executor::Spawner;
 use embassy_net::{DhcpConfig, Runner, StackResources, Config as NetConfig, Stack};
 use embassy_time::{Duration, Timer};
@@ -17,6 +19,12 @@ use log::{error, info, warn};
 
 use crate::WIFI_RECONNECT_SIGNAL;
 use crate::mk_static;
+
+/// Last known WiFi RSSI in dBm, updated by `connection_task` every second.
+///
+/// A value of `i32::MIN` means no RSSI reading is available yet (not connected).
+/// Read from the main loop to include in MQTT state payloads.
+pub static WIFI_RSSI: AtomicI32 = AtomicI32::new(i32::MIN);
 
 /// Handle to the embassy-net network stack.
 ///
@@ -45,8 +53,13 @@ async fn connection_task(mut controller: WifiController<'static>) {
                     if !controller.is_connected() {
                         break;
                     }
+                    // Read RSSI while connected (updates every ~1s).
+                    if let Ok(rssi) = controller.rssi() {
+                        WIFI_RSSI.store(rssi, Ordering::Relaxed);
+                    }
                     Timer::after(Duration::from_secs(1)).await;
                 }
+                WIFI_RSSI.store(i32::MIN, Ordering::Relaxed);
                 warn!("WiFi disconnected");
             }
             Err(e) => {

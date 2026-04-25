@@ -26,6 +26,7 @@ export interface SpaState {
   last_fault?: string
   self_test?: boolean
   sniff_mode?: boolean
+  wifi_rssi?: number | null
 }
 
 export interface MqttSettings {

@@ -43,6 +43,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
     > = None;
     let mut last_self_test: bool = false;
     let mut last_sniff_mode: bool = false;
+    let mut last_wifi_rssi: Option<i32> = None;
     let mut last_published_status: Option<StatusUpdate> = None;
     let mut last_published_fault: Option<FaultBuf> = None;
 
@@ -64,6 +65,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                     fault: fault_str,
                     self_test: last_self_test,
                     sniff_mode: last_sniff_mode,
+                    wifi_rssi: last_wifi_rssi,
                 }
             });
             crate::net_util::reconnect_with_backoff(
@@ -154,6 +156,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 let is_stale = msg.recovering_from_stale;
                 let self_test = msg.self_test;
                 let sniff_mode = msg.sniff_mode;
+                let wifi_rssi = msg.wifi_rssi;
                 last_scale_range = Some((status.temperature_scale, status.temp_range));
                 // Force re-publish when self_test or sniff_mode changes so the
                 // first state after mode toggle always reaches the broker.
@@ -163,6 +166,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 }
                 last_self_test = self_test;
                 last_sniff_mode = sniff_mode;
+                last_wifi_rssi = wifi_rssi;
                 // Change detection: skip publish if state is identical to last
                 let changed = launa_mqtt::state_change::status_changed(
                     last_published_status.as_ref(),
@@ -171,7 +175,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 if is_stale || changed {
                     last_published_status = Some(status.clone());
                     last_published_fault = Some(fault);
-                    if let Err(e) = mqtt.publish_state(&status, fault.as_str(), self_test, sniff_mode, self_test).await {
+                    if let Err(e) = mqtt.publish_state(&status, fault.as_str(), self_test, sniff_mode, wifi_rssi, self_test).await {
                         warn!("MQTT state publish failed: {:?}", e);
                     }
                 }
@@ -314,6 +318,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                                 fault: fault_str,
                                 self_test: last_self_test,
                                 sniff_mode: last_sniff_mode,
+                                wifi_rssi: last_wifi_rssi,
                             }
                         });
                         crate::net_util::reconnect_with_backoff(

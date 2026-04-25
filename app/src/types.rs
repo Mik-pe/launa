@@ -12,6 +12,8 @@ pub(crate) struct StateMessage {
     pub recovering_from_stale: bool,
     pub self_test: bool,
     pub sniff_mode: bool,
+    /// WiFi RSSI in dBm, or `None` if not available.
+    pub wifi_rssi: Option<i32>,
 }
 
 // Re-export FaultBuf from launa-core for convenience

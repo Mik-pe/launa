@@ -207,10 +207,17 @@ mod mqtt_task;
 /// Self-test status publish interval in seconds.
 const SELF_TEST_PUBLISH_INTERVAL_SECS: u64 = 1;
 
+/// Read the current WiFi RSSI from the shared atomic.
+/// Returns `None` if not connected (value is `i32::MIN`).
+fn read_wifi_rssi() -> Option<i32> {
+    let rssi = wifi::WIFI_RSSI.load(Ordering::Relaxed);
+    if rssi == i32::MIN { None } else { Some(rssi) }
+}
+
 /// Execute a batch of `AppAction` side effects from `SpaApp`.
 ///
 /// Maps each action to the corresponding IO operation (UART send, MQTT publish, etc.).
-async fn execute_actions(actions: &[AppAction], device_id: &str, self_test: bool, sniff_mode: bool) {
+async fn execute_actions(actions: &[AppAction], device_id: &str, self_test: bool, sniff_mode: bool, wifi_rssi: Option<i32>) {
     for action in actions {
         match action {
             AppAction::SendFrame(bytes) => {
@@ -228,6 +235,7 @@ async fn execute_actions(actions: &[AppAction], device_id: &str, self_test: bool
                     recovering_from_stale: *recovering_from_stale,
                     self_test,
                     sniff_mode,
+                    wifi_rssi,
                 }).is_err() {
                     debug!("STATE_CHANNEL full, dropping stale state update");
                 }
@@ -312,7 +320,7 @@ async fn handle_mqtt_command(
                     // receives self_test: false without waiting for the
                     // next status change from the spa.
                     let actions = app.force_publish();
-                    execute_actions(&actions, device_id, false, *sniff_mode).await;
+                    execute_actions(&actions, device_id, false, *sniff_mode, read_wifi_rssi()).await;
                 }
             }
         }
@@ -320,12 +328,15 @@ async fn handle_mqtt_command(
             if enable && !*sniff_mode {
                 info!("Sniff mode enabled — publishing raw RS-485 frames");
                 *sniff_mode = true;
+                // Immediately publish state so UI receives sniff_mode: true
+                let actions = app.force_publish();
+                execute_actions(&actions, device_id, self_test_state.is_some(), true, read_wifi_rssi()).await;
             } else if !enable && *sniff_mode {
                 info!("Sniff mode disabled — resuming normal operation");
                 *sniff_mode = false;
                 // Immediately publish state so UI receives sniff_mode: false
                 let actions = app.force_publish();
-                execute_actions(&actions, device_id, self_test_state.is_some(), false).await;
+                execute_actions(&actions, device_id, self_test_state.is_some(), false, read_wifi_rssi()).await;
             }
         }
         _ => {
@@ -333,7 +344,7 @@ async fn handle_mqtt_command(
                 st.apply_command(&cmd);
             } else {
                 let actions = app.on_mqtt_command(cmd);
-                execute_actions(&actions, device_id, self_test_state.is_some(), *sniff_mode).await;
+                execute_actions(&actions, device_id, self_test_state.is_some(), *sniff_mode, read_wifi_rssi()).await;
             }
         }
     }
@@ -615,14 +626,14 @@ async fn process_uart_frames(
     }
 
     let actions = app.process_frame(&frame);
-    execute_actions(&actions, device_id, self_test_active, sniff_mode).await;
+    execute_actions(&actions, device_id, self_test_active, sniff_mode, read_wifi_rssi()).await;
 
     while let Ok(frame) = frame_rx.try_receive() {
         if sniff_mode {
             publish_sniff_frame(&frame);
         }
         let actions = app.process_frame(&frame);
-        execute_actions(&actions, device_id, self_test_active, sniff_mode).await;
+        execute_actions(&actions, device_id, self_test_active, sniff_mode, read_wifi_rssi()).await;
     }
 
 }
@@ -715,6 +726,7 @@ async fn tick_self_test(
             device_id,
             true,
             sniff_mode,
+            read_wifi_rssi(),
         )
         .await;
         *self_test_last_publish = Some(now);
@@ -870,19 +882,19 @@ async fn main(spawner: Spawner) {
             self_test_last_publish = None;
             // Periodic tick: stale detection, registration timeout, diagnostics
             let tick_actions = app.tick();
-            execute_actions(&tick_actions, device_id_str, false, sniff_mode).await;
+            execute_actions(&tick_actions, device_id_str, false, sniff_mode, read_wifi_rssi()).await;
         }
 
         // Heap check (uses actual ESP32 free heap)
         let heap_actions = app.check_heap(esp_alloc::HEAP.free());
-        execute_actions(&heap_actions, device_id_str, self_test_state.is_some(), sniff_mode).await;
+        execute_actions(&heap_actions, device_id_str, self_test_state.is_some(), sniff_mode, read_wifi_rssi()).await;
 
         handle_ota_request(&wifi_stack, &mut ota, &mut ota_buffers, &ota_rx, &mut wdt).await;
 
         // Drain pump timer commands
         while let Ok((pump_index, minutes)) = pump_timer_rx.try_receive() {
             let actions = app.start_pump_timer(pump_index, minutes);
-            execute_actions(&actions, device_id_str, self_test_state.is_some(), sniff_mode).await;
+            execute_actions(&actions, device_id_str, self_test_state.is_some(), sniff_mode, read_wifi_rssi()).await;
             info!("Started pump {} timer for {} min", pump_index, minutes);
         }
     }

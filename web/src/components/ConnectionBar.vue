@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import type { SpaState } from '../types'
 
 const props = defineProps<{
   connected: boolean
@@ -9,6 +10,7 @@ const props = defineProps<{
   deviceId: string
   connectionError: string | null
   initialConnect: boolean
+  spaState: SpaState | null
 }>()
 
 const emit = defineEmits<{
@@ -34,6 +36,29 @@ const statusText = computed(() => {
   if (props.availability === 'reconnecting') return 'Reconnecting...'
   return 'Offline'
 })
+
+// RSSI signal strength: 0-4 bars, or -1 when connected but no RSSI data yet
+// Excellent: >= -50, Good: >= -60, Fair: >= -70, Weak: >= -80, None: < -80
+const wifiBars = computed(() => {
+  const rssi = props.spaState?.wifi_rssi
+  if (rssi == null) {
+    // Show dim icon when connected but firmware hasn't reported RSSI yet
+    return props.connected && props.availability === 'online' ? -1 : null
+  }
+  if (rssi >= -50) return 4
+  if (rssi >= -60) return 3
+  if (rssi >= -70) return 2
+  if (rssi >= -80) return 1
+  return 0
+})
+
+const wifiColor = computed(() => {
+  if (wifiBars.value === null) return 'text-neutral-600'
+  if (wifiBars.value === -1) return 'text-neutral-500'
+  if (wifiBars.value >= 3) return 'text-emerald-400'
+  if (wifiBars.value >= 2) return 'text-amber-400'
+  return 'text-red-400'
+})
 </script>
 
 <template>
@@ -58,6 +83,27 @@ const statusText = computed(() => {
         <span class="truncate hidden sm:inline max-w-[200px]" :title="connectionError">{{ connectionError }}</span>
       </div>
       <div class="flex items-center gap-2 text-sm">
+        <!-- WiFi signal icon -->
+        <svg v-if="wifiBars !== null"
+          :class="['w-4 h-4', wifiColor]"
+          :title="wifiBars >= 0 ? `WiFi: ${spaState?.wifi_rssi} dBm` : 'WiFi signal unknown'"
+          viewBox="0 0 24 24" fill="currentColor">
+          <!-- Dot (only when we have RSSI data) -->
+          <path v-if="wifiBars >= 0" d="M12 18a1.5 1.5 0 110 3 1.5 1.5 0 010-3z" />
+          <!-- Bar 1 (weakest) -->
+          <path v-if="wifiBars >= 1" d="M8.46 14.54a5 5 0 017.08 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          <!-- Bar 2 -->
+          <path v-if="wifiBars >= 2" d="M5.64 11.64a9 9 0 0112.72 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          <!-- Bar 3 -->
+          <path v-if="wifiBars >= 3" d="M2.81 8.81a13 13 0 0118.38 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          <!-- Bar 4 (strongest) -->
+          <path v-if="wifiBars >= 4" d="M.34 5.66a17 17 0 0123.32 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          <!-- Dim outline when no RSSI data -->
+          <template v-if="wifiBars === -1">
+            <path d="M8.46 14.54a5 5 0 017.08 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            <path d="M5.64 11.64a9 9 0 0112.72 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </template>
+        </svg>
         <span class="relative flex h-2.5 w-2.5">
           <span v-if="connected && availability === 'online'"
             class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />

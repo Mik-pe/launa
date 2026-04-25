@@ -50,6 +50,7 @@ pub struct LastState<'a> {
     pub fault: Option<&'a str>,
     pub self_test: bool,
     pub sniff_mode: bool,
+    pub wifi_rssi: Option<i32>,
 }
 
 pub struct TcpTransport {
@@ -410,7 +411,7 @@ impl MqttClient {
         self.post_connect_publish(celsius).await?;
         if let Some(state) = last_state {
             if let Err(e) = self
-                .publish_state(state.status, state.fault, state.self_test, state.sniff_mode, state.self_test)
+                .publish_state(state.status, state.fault, state.self_test, state.sniff_mode, state.wifi_rssi, state.self_test)
                 .await
             {
                 warn!("Reconnect: publish state failed: {:?}", e);
@@ -716,10 +717,10 @@ impl MqttClient {
         }
     }
 
-    pub async fn publish_state(&mut self, status: &StatusUpdate, last_fault: Option<&str>, self_test: bool, sniff_mode: bool, retain: bool) -> Result<(), MqttError> {
+    pub async fn publish_state(&mut self, status: &StatusUpdate, last_fault: Option<&str>, self_test: bool, sniff_mode: bool, wifi_rssi: Option<i32>, retain: bool) -> Result<(), MqttError> {
         let topics = TopicBuilder::new(&self.device_id);
         let state_topic = topics.state_topic();
-        let json = status_to_json(status, last_fault, Some(crate::FIRMWARE_VERSION), self_test, sniff_mode);
+        let json = status_to_json(status, last_fault, Some(crate::FIRMWARE_VERSION), self_test, sniff_mode, wifi_rssi);
         self.publish(&state_topic, json.as_bytes(), 1, retain).await
     }
 

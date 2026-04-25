@@ -107,6 +107,7 @@ function handleTempRange(val: string): void {
       :device-id="settings.deviceId"
       :connection-error="connectionError"
       :initial-connect="initialConnect"
+      :spa-state="spaState"
       @open-settings="showSettings = true"
     />
 

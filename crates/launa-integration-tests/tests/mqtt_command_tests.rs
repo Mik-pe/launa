@@ -174,7 +174,7 @@ fn test_command_round_trip_pump_toggle() {
             PumpState::Low,
             "pump1 should be on after toggle"
         );
-        let json_str = launa_mqtt::state::status_to_json(&s, None, None, false, false);
+        let json_str = launa_mqtt::state::status_to_json(&s, None, None, false, false, None);
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["pump1_on"], true);
     } else {
