@@ -3,7 +3,7 @@
 extern crate alloc;
 
 use embassy_executor::Spawner;
-use embassy_net::{Runner, StackResources, Config as NetConfig, Stack};
+use embassy_net::{DhcpConfig, Runner, StackResources, Config as NetConfig, Stack};
 use embassy_time::{Duration, Timer};
 use esp_hal::rng::Rng;
 use esp_radio::wifi::{
@@ -79,6 +79,7 @@ impl WifiStack {
         rng: Rng,
         ssid: &str,
         password: &str,
+        hostname: &str,
     ) -> Result<Self, esp_radio::wifi::WifiError> {
         let station_config = WifiConfig::Station(
             StationConfig::default()
@@ -103,7 +104,17 @@ impl WifiStack {
 
         let wifi_interface = interfaces.station;
 
-        let net_config = NetConfig::dhcpv4(Default::default());
+        let mut dhcp_config = DhcpConfig::default();
+        // Truncate hostname to 32 bytes (DHCP Option 12 limit).
+        let truncated: heapless::String<32> = hostname
+            .char_indices()
+            .take_while(|(i, _)| *i < 32)
+            .map(|(_, c)| c)
+            .collect();
+        if !truncated.is_empty() {
+            dhcp_config.hostname = Some(truncated);
+        }
+        let net_config = NetConfig::dhcpv4(dhcp_config);
         let seed = ((rng.random() as u64) << 32) | (rng.random() as u64);
 
         let (stack, runner) = embassy_net::new(

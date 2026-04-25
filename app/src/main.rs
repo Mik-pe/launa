@@ -587,8 +587,8 @@ async fn handle_ota_request<TG: esp_hal::timer::timg::TimerGroupInstance>(
 
 /// Process UART frames received during the event loop.
 ///
-/// In sniff mode, publishes raw frames to the sniff channel.
-/// In normal mode, feeds frames through SpaApp for state updates.
+/// Process incoming UART frames through SpaApp for state updates and commands.
+/// In sniff mode, also publishes raw frames to the sniff channel as a side effect.
 /// In self-test mode, discards all UART frames with a one-time warning.
 async fn process_uart_frames(
     frame: Frame,
@@ -599,27 +599,32 @@ async fn process_uart_frames(
     frame_rx: &embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, Frame, 4>,
     self_test_discard_warned: &mut bool,
 ) {
-    if sniff_mode {
-        publish_sniff_frame(&frame);
-        while let Ok(f) = frame_rx.try_receive() {
-            publish_sniff_frame(&f);
-        }
-    } else if !self_test_active {
-        let actions = app.process_frame(&frame);
-        execute_actions(&actions, device_id, self_test_active, sniff_mode).await;
-
-        while let Ok(frame) = frame_rx.try_receive() {
-            let actions = app.process_frame(&frame);
-            execute_actions(&actions, device_id, self_test_active, sniff_mode).await;
-        }
-    } else {
+    if self_test_active {
         // When in self-test mode, drain and discard UART frames with a one-time warning
         if !*self_test_discard_warned {
             warn!("Self-test active: discarding spa frames (self-test generates its own state)");
             *self_test_discard_warned = true;
         }
         while frame_rx.try_receive().is_ok() {}
+        return;
     }
+
+    // In sniff mode, publish raw frames as a side effect alongside normal processing.
+    if sniff_mode {
+        publish_sniff_frame(&frame);
+    }
+
+    let actions = app.process_frame(&frame);
+    execute_actions(&actions, device_id, self_test_active, sniff_mode).await;
+
+    while let Ok(frame) = frame_rx.try_receive() {
+        if sniff_mode {
+            publish_sniff_frame(&frame);
+        }
+        let actions = app.process_frame(&frame);
+        execute_actions(&actions, device_id, self_test_active, sniff_mode).await;
+    }
+
 }
 
 /// Connect to WiFi with fatal error handling.
@@ -631,8 +636,9 @@ async fn init_wifi(
     rng: esp_hal::rng::Rng,
     ssid: &str,
     password: &str,
+    hostname: &str,
 ) -> crate::wifi::WifiStack {
-    match wifi::WifiStack::connect(spawner, wifi_peripheral, rng, ssid, password).await {
+    match wifi::WifiStack::connect(spawner, wifi_peripheral, rng, ssid, password, hostname).await {
         Ok(stack) => stack,
         Err(e) => {
             error!(
@@ -788,6 +794,7 @@ async fn main(spawner: Spawner) {
         esp_hal::rng::Rng::new(),
         &app_config.wifi_ssid,
         &app_config.wifi_password,
+        &app_config.device_id,
     )
     .await;
 

@@ -38,7 +38,8 @@ esp-bootloader-esp-idf = { version = "0.5", default-features = false, features =
 
 embassy-executor = "0.10"
 embassy-time = "0.5"
-embassy-net = { version = "0.9", features = ["tcp", "dhcpv4", "medium-ethernet", "dns"] }
+embassy-net = { version = "0.9", features = ["tcp", "dhcpv4", "dhcpv4-hostname", "medium-ethernet", "dns"] }
+heapless = "0.9"
 embassy-sync = "0.8"
 embassy-futures = "0.1"
 
