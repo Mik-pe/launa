@@ -3,7 +3,7 @@
 # --- Stage 1: Build the Vue frontend ---
 FROM --platform=$BUILDPLATFORM node:22-slim AS web-builder
 WORKDIR /build/web
-COPY web/package.json web/bun.lock ./
+COPY web/package.json web/package-lock.json ./
 RUN npm install --frozen-lockfile || npm install
 COPY web/ ./
 RUN npm run build

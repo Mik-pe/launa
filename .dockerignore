@@ -2,8 +2,15 @@ target/
 app/
 node_modules/
 web/node_modules/
+web/dist/
 *.db
 launa.toml
 launa.example.toml
 .git/
 .factory/
+docs/
+xtask/
+tests/
+deploy.sh
+deploy.example.sh
+*.md
