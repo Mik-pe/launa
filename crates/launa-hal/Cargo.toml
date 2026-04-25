@@ -8,10 +8,10 @@ default = ["std"]
 std = []
 
 [dependencies]
-log.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+futures = { version = "0.3", default-features = false, features = ["executor"] }
 
 [[test]]
 name = "hal_tests"

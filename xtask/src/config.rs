@@ -69,6 +69,16 @@ pub fn config_path() -> PathBuf {
 }
 
 pub fn load() -> anyhow::Result<Config> {
+    load_inner(true)
+}
+
+/// Load config without checking that the serial port is physically present.
+/// Use this for commands that operate over WiFi/MQTT (e.g. ota-flash).
+pub fn load_without_serial_port_check() -> anyhow::Result<Config> {
+    load_inner(false)
+}
+
+fn load_inner(check_serial_port: bool) -> anyhow::Result<Config> {
     let path = config_path();
     if !path.exists() {
         bail!(
@@ -83,7 +93,7 @@ pub fn load() -> anyhow::Result<Config> {
     let config: Config =
         toml::from_str(&contents).with_context(|| format!("Failed to parse {}", path.display()))?;
 
-    config.validate()?;
+    config.validate(check_serial_port)?;
     Ok(config)
 }
 
@@ -111,7 +121,7 @@ pub fn validate_mqtt_port(port: u16) -> anyhow::Result<()> {
 }
 
 impl Config {
-    fn validate(&self) -> anyhow::Result<()> {
+    fn validate(&self, check_serial_port: bool) -> anyhow::Result<()> {
         let mut errors: Vec<String> = Vec::new();
 
         if self.wifi.ssid.is_empty() || self.wifi.ssid == "YourWiFiName" {
@@ -134,7 +144,7 @@ impl Config {
         }
 
         // Check serial port existence
-        if !self.device.serial_port.is_empty() {
+        if check_serial_port && !self.device.serial_port.is_empty() {
             match serialport::available_ports() {
                 Ok(ports) => {
                     let port_names: Vec<&str> =

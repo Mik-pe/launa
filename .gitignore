@@ -9,6 +9,8 @@ app/vendor/
 *~
 launa.toml
 launa.key
+launa.db
 *.toml.bak
+tests/
 web/node_modules/
 web/dist/

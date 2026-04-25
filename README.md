@@ -129,12 +129,12 @@ Bad updates auto-rollback — if the new firmware crashes before connecting to M
 |-------|-------------|
 | `launa-protocol` | Balboa protocol parser, CRC-8, frame codec, status/command types |
 | `launa-hal` | Hardware abstraction traits (async Transport, Clock) with mock impls for desktop testing |
-| `launa-mqtt` | MQTT topics, HA discovery builder (27 entities), command parser, state serialization, MQTT v5 codec |
+| `launa-mqtt` | MQTT topics, HA discovery builder (28+ entities), command parser, state serialization, MQTT v5 codec |
 | `launa-ota` | OTA update trait with mock for testing |
 | `launa-esp-ota` | ESP32 OTA: crypto verification, flash partition management, OTA state machine |
 | `launa-core` | SpaApp with rate limiter, command tracker, pump/hold timers, diagnostics, alerting |
 | `launa-sim` | Spa simulator: physics model, frame generation, state management, SimBroker |
-| `launa-integration-tests` | 130+ tests exercising SpaApp through sim pipeline |
+| `launa-integration-tests` | 140+ tests exercising SpaApp through sim pipeline |
 | `app/` | ESP32 firmware binary (esp-hal + embassy) |
 | `xtask/` | Host-side tooling (flash, monitor, OTA, sniffer, sim, self-test) |
 

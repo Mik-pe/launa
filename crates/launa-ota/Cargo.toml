@@ -8,5 +8,4 @@ default = ["mock"]
 mock = []
 
 [dependencies]
-log.workspace = true
 thiserror.workspace = true

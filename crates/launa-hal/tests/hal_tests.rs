@@ -10,25 +10,7 @@ use launa_hal::Transport;
 /// MockTransport's async methods always complete immediately,
 /// so this is safe for test use.
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
-
-    fn dummy_raw_waker() -> RawWaker {
-        fn no_op(_: *const ()) {}
-        fn clone(_: *const ()) -> RawWaker {
-            dummy_raw_waker()
-        }
-        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
-        RawWaker::new(std::ptr::null(), &VTABLE)
-    }
-
-    let waker = unsafe { Waker::from_raw(dummy_raw_waker()) };
-    let mut cx = Context::from_waker(&waker);
-
-    let mut future = std::pin::pin!(future);
-    match future.as_mut().poll(&mut cx) {
-        Poll::Ready(val) => val,
-        Poll::Pending => panic!("MockTransport async method should not return Pending"),
-    }
+    futures::executor::block_on(future)
 }
 
 // MockTransport tests

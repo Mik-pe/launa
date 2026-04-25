@@ -48,7 +48,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         }
     }
 
-    let config = crate::config::load()?;
+    let config = crate::config::load_without_serial_port_check()?;
     let device_id = device_id_override.unwrap_or(config.device.id.clone());
     let ota_port = config.ota.serve_port;
 

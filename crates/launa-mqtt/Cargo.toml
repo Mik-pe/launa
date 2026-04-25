@@ -8,8 +8,6 @@ default = ["std"]
 std = ["serde", "serde_json"]
 
 [dependencies]
-log.workspace = true
-thiserror.workspace = true
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 launa-protocol = { path = "../launa-protocol" }
