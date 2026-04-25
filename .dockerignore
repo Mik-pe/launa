@@ -1,0 +1,9 @@
+target/
+app/
+node_modules/
+web/node_modules/
+*.db
+launa.toml
+launa.example.toml
+.git/
+.factory/

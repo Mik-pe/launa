@@ -11,6 +11,7 @@ launa.toml
 launa.key
 launa.db
 *.toml.bak
+deploy.sh
 tests/
 web/node_modules/
 web/dist/
