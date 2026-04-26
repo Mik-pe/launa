@@ -194,8 +194,10 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     // so subscribing now delivers the current-boot "online" immediately.
     let status_topic = format!("launa/{}/state", device_id);
     let avail_topic = format!("launa/{}/availability", device_id);
+    let diag_topic = format!("launa/{}/diagnostics", device_id);
     client.subscribe(&status_topic, rumqttc::QoS::AtLeastOnce)?;
     client.subscribe(&avail_topic, rumqttc::QoS::AtLeastOnce)?;
+    client.subscribe(&diag_topic, rumqttc::QoS::AtLeastOnce)?;
 
     // Drain stale retained messages from the current boot
     let drain_deadline = std::time::Instant::now() + Duration::from_secs(3);
@@ -230,7 +232,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     let deadline = std::time::Instant::now() + Duration::from_secs(200);
     let mut came_online = false;
-    let mut state_payload: Option<String> = None;
+    let mut version_payload: Option<String> = None;
 
     for notification in connection.iter() {
         if std::time::Instant::now() > deadline {
@@ -245,12 +247,17 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                         println!("\nDevice rebooted and came back online!");
                     }
                 }
-                if publish.topic == status_topic {
-                    came_online = true;
-                    state_payload = Some(String::from_utf8_lossy(&publish.payload).to_string());
-                    println!("\nDevice published state after OTA!");
+                if publish.topic == status_topic || publish.topic == diag_topic {
+                    let payload = String::from_utf8_lossy(&publish.payload).to_string();
+                    if publish.topic == status_topic {
+                        println!("\nDevice published state after OTA!");
+                    }
+                    // Extract version from either state or diagnostics payload
+                    if version_payload.is_none() && extract_firmware_version(&payload).is_some() {
+                        version_payload = Some(payload);
+                    }
                 }
-                // Got online — done waiting. State may or may not have arrived.
+                // Got online — done waiting.
                 if came_online {
                     break;
                 }
@@ -267,7 +274,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     if !came_online {
         bail!("OTA flash failed: device did not come back online within 200s.");
     }
-    match (&expected_version, &state_payload) {
+    match (&expected_version, &version_payload) {
         (Some(expected), Some(payload)) => {
             match extract_firmware_version(payload) {
                 Some(reported) => {
