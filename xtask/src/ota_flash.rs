@@ -259,6 +259,38 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         }
     }
 
+    // If device came online but we never got a state payload, request one
+    if came_online && state_payload.is_none() {
+        println!("Device is online but no state received, requesting status...");
+        client
+            .publish(
+                &format!("launa/{}/command/status", device_id),
+                rumqttc::QoS::AtLeastOnce,
+                false,
+                b"1",
+            )
+            .ok();
+
+        let state_deadline = std::time::Instant::now() + Duration::from_secs(15);
+        for notification in connection.iter() {
+            if std::time::Instant::now() > state_deadline {
+                break;
+            }
+            match notification {
+                Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
+                    if publish.topic == status_topic {
+                        state_payload =
+                            Some(String::from_utf8_lossy(&publish.payload).to_string());
+                        println!("\nDevice published state after request!");
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+    }
+
     // Step 6: Verify firmware version
     println!("\n[6/7] Verifying firmware version...");
     if !came_online {
