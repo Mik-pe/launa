@@ -7,7 +7,8 @@ use std::time::Duration;
 /// Offset of the factory/app partition in the merged flash image (from partitions.csv).
 const APP_PARTITION_OFFSET: usize = 0x20000;
 
-/// Read the firmware version from app/Cargo.toml.
+/// Read the firmware version from app/Cargo.toml and append the git short SHA,
+/// matching the format used by the ESP32 firmware: "version (sha)".
 fn read_firmware_version() -> anyhow::Result<String> {
     let app_cargo_toml = crate::util::project_root().join("app").join("Cargo.toml");
     let contents =
@@ -23,7 +24,22 @@ fn read_firmware_version() -> anyhow::Result<String> {
     }
 
     let cargo: CargoToml = toml::from_str(&contents).context("Failed to parse app/Cargo.toml")?;
-    Ok(cargo.package.version)
+    let version = cargo.package.version;
+
+    let short_sha = std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+
+    Ok(format!("{} ({})", version, short_sha))
 }
 
 /// Extract the firmware_version field from a JSON payload.
