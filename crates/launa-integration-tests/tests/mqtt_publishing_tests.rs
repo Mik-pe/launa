@@ -86,8 +86,8 @@ fn test_ha_discovery_full_validation() {
 
     assert_eq!(
         configs.len(),
-        29,
-        "should produce exactly 29 discovery configs"
+        31,
+        "should produce exactly 31 discovery configs"
     );
 
     let mut topics_seen = std::collections::HashSet::new();
@@ -128,7 +128,9 @@ fn test_ha_discovery_full_validation() {
             .get("optimistic")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        if !is_optimistic {
+        // Button entities are command-only (have payload_press, no state_topic)
+        let is_button = v.get("payload_press").is_some();
+        if !is_optimistic && !is_button {
             assert!(
                 v.get("state_topic").is_some(),
                 "missing state_topic in {}",
@@ -148,10 +150,12 @@ fn test_ha_discovery_full_validation() {
             uid
         );
 
-        if !is_optimistic {
+        if !is_optimistic && !is_button {
             let st = v["state_topic"].as_str().unwrap();
             let uid = v["unique_id"].as_str().unwrap();
-            let is_dedicated_topic = uid.ends_with("_diagnostics") || uid.ends_with("_alert");
+            let is_dedicated_topic = uid.ends_with("_diagnostics")
+                || uid.ends_with("_alert")
+                || uid.ends_with("_firmware_version");
             if !is_dedicated_topic {
                 assert_eq!(
                     st, "launa/test_spa/state",

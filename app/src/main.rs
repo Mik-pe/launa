@@ -383,6 +383,12 @@ async fn handle_mqtt_command(
                 execute_actions(&actions, device_id, self_test_state.is_some(), false, read_wifi_rssi()).await;
             }
         }
+        Command::Reboot => {
+            info!("Remote reboot requested via MQTT, resetting in 1s...");
+            // Brief delay to allow the log message and any pending MQTT acks to flush
+            Timer::after(Duration::from_secs(1)).await;
+            esp_hal::system::software_reset();
+        }
         _ => {
             if let Some(ref mut st) = self_test_state {
                 st.apply_command(&cmd);
@@ -390,197 +396,6 @@ async fn handle_mqtt_command(
                 let actions = app.on_mqtt_command(cmd);
                 execute_actions(&actions, device_id, self_test_state.is_some(), *sniff_mode, read_wifi_rssi()).await;
             }
-        }
-    }
-}
-
-#[cfg(feature = "hw-test")]
-#[esp_rtos::main]
-async fn main(_spawner: Spawner) {
-    esp_println::logger::init_logger_from_env();
-    esp_alloc::heap_allocator!(#[ram(reclaimed)] size: 64 * 1024);
-    esp_alloc::heap_allocator!(size: 36 * 1024);
-
-    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
-    let peripherals = esp_hal::init(config);
-
-    let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
-    let sw_int = esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
-    esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
-
-    info!("HW test mode");
-
-    // Test 1: UART
-    let uart_config = esp_hal::uart::Config::default().with_baudrate(115200);
-    let mut uart = esp_hal::uart::Uart::new(peripherals.UART1, uart_config)
-        .expect("Failed to create UART")
-        .with_tx(peripherals.GPIO17)
-        .with_rx(peripherals.GPIO16)
-        .into_async();
-    info!("TEST_PASS:uart_init");
-
-    // Test 2: Timer
-    Timer::after(Duration::from_millis(100)).await;
-    info!("TEST_PASS:timer");
-
-    // Test 3: Heap
-    let free = esp_alloc::HEAP.free();
-    if free > 1000 {
-        info!("TEST_PASS:heap_free={}", free);
-    } else {
-        info!("TEST_FAIL:heap_low={}", free);
-    }
-
-    info!("TEST_PASS:all");
-
-    // Wait for CONFIG_START over serial, parse key=value lines,
-    // write to NVS on CONFIG_END. 30-second timeout.
-    info!("Waiting for serial config (30s timeout)...");
-
-    /// Maximum line length for serial config receiver.
-    /// Config lines are short key=value pairs (well under 256 bytes).
-    /// This bound prevents OOM on the 32 KiB ESP32 heap if serial input
-    /// is continuous without a newline terminator.
-    const MAX_LINE_LEN: usize = 256;
-
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let mut line_buf: Vec<u8> = Vec::new();
-    let mut read_buf = [0u8; 64];
-    let mut config_started = false;
-    let mut kv_pairs: Vec<(alloc::string::String, alloc::string::String)> = Vec::new();
-    let mut config_done = false;
-
-    while Instant::now() < deadline && !config_done {
-        match uart.read(&mut read_buf) {
-            Ok(0) => {
-                Timer::after(Duration::from_millis(10)).await;
-            }
-            Ok(n) => {
-                for &byte in &read_buf[..n] {
-                    if byte == b'\n' {
-                        // Process complete line — extract as owned string before clearing buffer
-                        let line = {
-                            let raw = core::str::from_utf8(&line_buf).unwrap_or("");
-                            // Trim CR/LF whitespace
-                            let trimmed = raw.trim_start_matches('\r').trim_end_matches('\r');
-                            alloc::string::String::from(trimmed)
-                        };
-                        line_buf.clear();
-
-                        if !config_started {
-                            if line == "CONFIG_START" {
-                                config_started = true;
-                                info!("Config reception started");
-                            }
-                        } else if line == "CONFIG_END" {
-                            config_done = true;
-                        } else if !line.is_empty() {
-                            // Parse key=value
-                            if let Some(eq_pos) = line.find('=') {
-                                let key = &line[..eq_pos];
-                                let value = &line[eq_pos + 1..];
-                                kv_pairs.push((
-                                    alloc::string::String::from(key),
-                                    alloc::string::String::from(value),
-                                ));
-                            }
-                        }
-                    } else if byte != b'\r' {
-                        if line_buf.len() < MAX_LINE_LEN {
-                            line_buf.push(byte);
-                        }
-                        // Excess bytes beyond MAX_LINE_LEN are silently dropped.
-                        // A warning is not logged per-byte to avoid flooding
-                        // the serial output on sustained overflow.
-                    }
-                }
-            }
-            Err(_) => {
-                // No data available or read error — brief pause before retry
-                Timer::after(Duration::from_millis(10)).await;
-            }
-        }
-    }
-
-    if !config_done {
-        let msg: &[u8] = if !config_started {
-            b"CONFIG_ERROR:timeout_no_start\n"
-        } else {
-            b"CONFIG_ERROR:timeout_no_end\n"
-        };
-        let _ = uart.write(msg);
-        let _ = uart.flush();
-        warn!("Config reception timed out");
-        return;
-    }
-
-    // Map xtask dotted keys to AppConfig fields and save to NVS
-    let mut app_config = config::AppConfig::default();
-
-    for (key, value) in &kv_pairs {
-        match key.as_str() {
-            "wifi.ssid" => app_config.wifi_ssid = value.clone(),
-            "wifi.password" => app_config.wifi_password = value.clone(),
-            "mqtt.host" => app_config.mqtt_host = value.clone(),
-            "mqtt.port" => {
-                match value.parse::<u16>() {
-                    Ok(p) => {
-                        app_config.mqtt_port = p;
-                    }
-                    Err(_) => {
-                        let msg = alloc::format!("CONFIG_ERROR:invalid_port={}\n", value);
-                        let _ = uart.write(msg.as_bytes());
-                        let _ = uart.flush();
-                        warn!("Invalid port: {}", value);
-                        return;
-                    }
-                }
-            }
-            "mqtt.user" => app_config.mqtt_user = value.clone(),
-            "mqtt.password" => app_config.mqtt_password = value.clone(),
-            "device.id" => app_config.device_id = value.clone(),
-            other => {
-                warn!("Unknown config key: {}", other);
-            }
-        }
-    }
-
-    // Mask sensitive fields: SSID and MQTT host are secrets that should
-    // not appear in plain text in logs. Show first 2 chars + "***" to aid
-    // debugging without exposing full values.
-    let masked_ssid = if app_config.wifi_ssid.len() > 2 {
-        // SAFETY: index 0..2 is within bounds since len() > 2
-        let prefix = &app_config.wifi_ssid[..2];
-        alloc::format!("{}***", prefix)
-    } else {
-        alloc::string::String::from("***")
-    };
-    let masked_host = if app_config.mqtt_host.len() > 2 {
-        // SAFETY: index 0..2 is within bounds since len() > 2
-        let prefix = &app_config.mqtt_host[..2];
-        alloc::format!("{}***", prefix)
-    } else {
-        alloc::string::String::from("***")
-    };
-    info!(
-        "Parsed config: ssid={} mqtt={}:{} device={}",
-        masked_ssid, masked_host, app_config.mqtt_port, app_config.device_id
-    );
-
-    // Write to NVS
-    match config::AppConfig::open_nvs(peripherals.FLASH) {
-        Some(mut nvs) => {
-            let mut aes = esp_hal::aes::Aes::new(peripherals.AES);
-            let mut rng = esp_hal::rng::Rng::new();
-            app_config.save(&mut nvs, &mut aes, &mut rng);
-            let _ = uart.write(b"CONFIG_OK\n");
-            let _ = uart.flush();
-            info!("Config saved to NVS successfully");
-        }
-        None => {
-            warn!("NVS unavailable — cannot save config");
-            let _ = uart.write(b"CONFIG_ERROR:nvs_unavailable\n");
-            let _ = uart.flush();
         }
     }
 }
@@ -638,6 +453,119 @@ async fn handle_ota_request<TG: esp_hal::timer::timg::TimerGroupInstance>(
         }
         esp_hal::system::software_reset();
     }
+}
+
+/// Receive configuration over USB serial (UART0) using raw register access.
+///
+/// Waits for `CONFIG_START` followed by key=value lines and `CONFIG_END`.
+/// Parses the config and returns it. Does NOT save to NVS — the caller
+/// is responsible for persisting.
+/// Returns `None` if no config was received within the timeout.
+///
+/// This uses raw UART0 register reads (see `uart_raw`) so it works alongside
+/// the logger which writes to UART0 TX. The host sends config data over
+/// USB serial which is physically UART0.
+fn receive_serial_config(timeout_secs: u64) -> Option<config::AppConfig> {
+    info!("Waiting for serial config ({}s timeout)...", timeout_secs);
+
+    const MAX_LINE_LEN: usize = 256;
+
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    let mut line_buf: Vec<u8> = Vec::new();
+    let mut config_started = false;
+    let mut kv_pairs: Vec<(alloc::string::String, alloc::string::String)> = Vec::new();
+    let mut config_done = false;
+
+    while Instant::now() < deadline && !config_done {
+        // Drain UART0 RX FIFO (USB serial)
+        let mut rx_byte = uart_raw::read_byte();
+        while let Some(byte) = rx_byte {
+            if byte == b'\n' {
+                let line = {
+                    let raw = core::str::from_utf8(&line_buf).unwrap_or("");
+                    let trimmed = raw.trim_start_matches('\r').trim_end_matches('\r');
+                    alloc::string::String::from(trimmed)
+                };
+                line_buf.clear();
+
+                if !config_started {
+                    if line == "CONFIG_START" {
+                        config_started = true;
+                        info!("Config reception started");
+                    }
+                } else if line == "CONFIG_END" {
+                    config_done = true;
+                } else if !line.is_empty() {
+                    if let Some(eq_pos) = line.find('=') {
+                        let key = &line[..eq_pos];
+                        let value = &line[eq_pos + 1..];
+                        kv_pairs.push((
+                            alloc::string::String::from(key),
+                            alloc::string::String::from(value),
+                        ));
+                    }
+                }
+            } else if byte != b'\r' {
+                if line_buf.len() < MAX_LINE_LEN {
+                    line_buf.push(byte);
+                }
+            }
+
+            rx_byte = uart_raw::read_byte();
+        }
+
+        // Brief delay to avoid busy-looping when FIFO is empty
+        esp_hal::rom::ets_delay_us(1000);
+    }
+
+    if !config_done {
+        info!("No serial config received, continuing with NVS config");
+        return None;
+    }
+
+    // Map dotted keys to AppConfig fields
+    let mut app_config = config::AppConfig::default();
+
+    for (key, value) in &kv_pairs {
+        match key.as_str() {
+            "wifi.ssid" => app_config.wifi_ssid = value.clone(),
+            "wifi.password" => app_config.wifi_password = value.clone(),
+            "mqtt.host" => app_config.mqtt_host = value.clone(),
+            "mqtt.port" => {
+                match value.parse::<u16>() {
+                    Ok(p) => {
+                        app_config.mqtt_port = p;
+                    }
+                    Err(_) => {
+                        warn!("Invalid port: {}", value);
+                        uart_raw::write_bytes(
+                            alloc::format!("CONFIG_ERROR:invalid_port={}\n", value).as_bytes(),
+                        );
+                        uart_raw::flush();
+                        return None;
+                    }
+                }
+            }
+            "mqtt.user" => app_config.mqtt_user = value.clone(),
+            "mqtt.password" => app_config.mqtt_password = value.clone(),
+            "device.id" => app_config.device_id = value.clone(),
+            other => {
+                warn!("Unknown config key: {}", other);
+            }
+        }
+    }
+
+    info!(
+        "Parsed config: ssid=<{} chars> mqtt={}:{} device={}",
+        app_config.wifi_ssid.len(),
+        app_config.mqtt_host,
+        app_config.mqtt_port,
+        app_config.device_id
+    );
+
+    uart_raw::write_bytes(b"CONFIG_OK\n");
+    uart_raw::flush();
+    Some(app_config)
 }
 
 /// Process UART frames received during the event loop.
@@ -777,7 +705,6 @@ async fn tick_self_test(
     }
 }
 
-#[cfg(not(feature = "hw-test"))]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) {
     esp_alloc::heap_allocator!(#[ram(reclaimed)] size: 64 * 1024);
@@ -812,26 +739,42 @@ async fn main(spawner: Spawner) {
 
     info!("Launa ESP32 firmware starting...");
 
-    let app_config;
-    let mut ota;
-    let mut ota_buffers;
+    let mut app_config;
+    let mut ota = None;
+    let mut ota_buffers = None;
+    let mut nvs_handle: Option<esp_nvs::Nvs<esp_storage::FlashStorage<'static>>> = None;
     match config::AppConfig::open_nvs(peripherals.FLASH) {
         Some(mut nvs) => {
             let mut aes = esp_hal::aes::Aes::new(peripherals.AES);
             let mut rng = esp_hal::rng::Rng::new();
             app_config = config::AppConfig::load(&mut nvs, &mut aes, &mut rng);
             info!("Config loaded: device_id={}", app_config.device_id);
-            // Recover flash from NVS for OTA use
-            let flash = nvs.into_inner();
-            ota = Some(ota::create_ota(flash));
-            ota_buffers = Some(ota::OtaBuffers::new());
+            nvs_handle = Some(nvs);
         }
         None => {
             warn!("NVS unavailable — using default config, OTA disabled");
             app_config = config::AppConfig::default();
-            ota = None;
-            ota_buffers = None;
         }
+    }
+
+    // Brief serial config window: listen on UART0 (USB serial) for config-flash.
+    // If CONFIG_START is received within 5 seconds, accept new config and save to NVS.
+    // Otherwise proceed normally with the NVS/default config.
+    if let Some(new_config) = receive_serial_config(5) {
+        app_config = new_config;
+        if let Some(ref mut nvs) = nvs_handle {
+            let mut aes = esp_hal::aes::Aes::new(unsafe { esp_hal::peripherals::AES::steal() });
+            let mut rng = esp_hal::rng::Rng::new();
+            app_config.save(nvs, &mut aes, &mut rng);
+            info!("Serial config saved to NVS");
+        }
+    }
+
+    // Recover flash from NVS for OTA use
+    if let Some(nvs) = nvs_handle.take() {
+        let flash = nvs.into_inner();
+        ota = Some(ota::create_ota(flash));
+        ota_buffers = Some(ota::OtaBuffers::new());
     }
 
     let uart_config = esp_hal::uart::Config::default().with_baudrate(115200);
@@ -841,8 +784,9 @@ async fn main(spawner: Spawner) {
         .with_rx(peripherals.GPIO16)
         .into_async();
 
-    let uart_transport = transport::Rs485Transport::new(uart, None);
     info!("RS-485 UART initialized (no DE pin, auto-direction transceiver)");
+
+    let uart_transport = transport::Rs485Transport::new(uart, None);
 
     let wifi_stack = init_wifi(
         spawner,

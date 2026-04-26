@@ -1,87 +1,124 @@
 use anyhow::{bail, Context};
-use std::path::PathBuf;
-use std::process::Command;
+use serialport::{DataBits, FlowControl, Parity, StopBits};
+use std::io::{Read, Write};
+use std::time::{Duration, Instant};
 
-/// Locate the `scripts/config_flash.py` bundled alongside this crate.
-fn script_path() -> PathBuf {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
-    PathBuf::from(manifest_dir)
-        .join("scripts")
-        .join("config_flash.py")
+/// Strip ANSI escape sequences from a string for reliable matching.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Skip the entire escape sequence
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                while let Some(&nc) = chars.peek() {
+                    chars.next();
+                    if nc.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
-    let mut port_name = None;
+    let mut cli_port = None;
     let mut parser = crate::util::Args::new(args);
     while parser.has_more() {
         match parser.peek().unwrap() {
-            "--port" => port_name = Some(parser.value("--port")?.to_string()),
+            "--port" => cli_port = Some(parser.value("--port")?.to_string()),
             _ => return Err(parser.unknown_arg()),
         }
     }
 
     let config = crate::config::load()?;
-    let port_name = port_name.unwrap_or(config.device.serial_port.clone());
+    let port_name =
+        crate::util::resolve_port(cli_port.as_deref(), Some(&config))?;
 
-    // Build config lines
-    let mut lines = Vec::new();
-    lines.push("CONFIG_START".to_string());
-    lines.push(format!("wifi.ssid={}", config.wifi.ssid));
-    lines.push(format!("wifi.password={}", config.wifi.password));
-    lines.push(format!("mqtt.host={}", config.mqtt.host));
-    lines.push(format!("mqtt.port={}", config.mqtt.port));
+    // Build config payload
+    let mut payload = String::from("CONFIG_START\r\n");
+    payload.push_str(&format!("wifi.ssid={}\r\n", config.wifi.ssid));
+    payload.push_str(&format!("wifi.password={}\r\n", config.wifi.password));
+    payload.push_str(&format!("mqtt.host={}\r\n", config.mqtt.host));
+    payload.push_str(&format!("mqtt.port={}\r\n", config.mqtt.port));
     if !config.mqtt.user.is_empty() {
-        lines.push(format!("mqtt.user={}", config.mqtt.user));
+        payload.push_str(&format!("mqtt.user={}\r\n", config.mqtt.user));
     }
     if !config.mqtt.password.is_empty() {
-        lines.push(format!("mqtt.password={}", config.mqtt.password));
+        payload.push_str(&format!("mqtt.password={}\r\n", config.mqtt.password));
     }
-    lines.push(format!("device.id={}", config.device.id));
-    lines.push("CONFIG_END".to_string());
+    payload.push_str(&format!("device.id={}\r\n", config.device.id));
+    payload.push_str("CONFIG_END\r\n");
 
-    // Write config payload to a temp file so Python can read it (avoids escaping issues)
-    let temp_dir = std::env::temp_dir();
-    let config_file = temp_dir.join("launa_config_payload.txt");
-    let payload: String = lines.join("\n");
-    std::fs::write(&config_file, &payload).context("Failed to write temp config file")?;
+    println!("Connecting to {}...", port_name);
+    let mut port = serialport::new(&port_name, 115200)
+        .data_bits(DataBits::Eight)
+        .parity(Parity::None)
+        .stop_bits(StopBits::One)
+        .flow_control(FlowControl::None)
+        .timeout(Duration::from_millis(100))
+        .open()
+        .with_context(|| format!("Failed to open {}", port_name))?;
 
-    let script = script_path();
-    println!(
-        "Writing config to ESP32 via {} (using Python/pyserial)...",
-        port_name
+    // Drain any stale data in the RX buffer
+    let mut drain = [0u8; 4096];
+    let _ = port.read(&mut drain);
+
+    // Reset ESP32 via DTR/RTS (standard auto-reset circuit on NodeMCU-style boards).
+    // Circuit: RTS -> NPN -> EN, DTR -> NPN -> GPIO0
+    // For normal boot: GPIO0 must be HIGH when EN rises.
+    //   DTR=LOW (GPIO0=HIGH), RTS=HIGH (EN=LOW=assert reset), then RTS=LOW (EN=HIGH=release)
+    println!("Resetting ESP32...");
+    port.write_data_terminal_ready(false)
+        .context("Failed to set DTR")?;  // GPIO0 = HIGH (normal boot, not download)
+    port.write_request_to_send(true)
+        .context("Failed to set RTS")?;   // EN = LOW (assert reset)
+    std::thread::sleep(Duration::from_millis(100));
+    port.write_request_to_send(false)
+        .context("Failed to set RTS")?;   // EN = HIGH (release reset)
+    // Give ESP32 time to boot and enter the config window.
+    // Boot takes ~500ms, then the app waits 5s for serial config.
+    // Wait 1.5s to be safely past the bootloader and into the app.
+    println!("Waiting for ESP32 to boot...");
+    std::thread::sleep(Duration::from_millis(1500));
+
+    // Drain any boot output
+    let _ = port.read(&mut drain);
+
+    println!("Sending config...");
+    port.write_all(payload.as_bytes())
+        .context("Failed to write config")?;
+    port.flush().context("Failed to flush")?;
+
+    // Wait for CONFIG_OK or CONFIG_ERROR
+    let resp_deadline = Instant::now() + Duration::from_secs(10);
+    let mut buf = [0u8; 4096];
+    let mut response = String::new();
+    while Instant::now() < resp_deadline {
+        match port.read(&mut buf) {
+            Ok(0) => {}
+            Ok(n) => {
+                response.push_str(&String::from_utf8_lossy(&buf[..n]));
+                let clean = strip_ansi(&response);
+                if clean.contains("CONFIG_OK") {
+                    println!("Config written successfully!");
+                    return Ok(());
+                }
+                if clean.contains("CONFIG_ERROR") {
+                    bail!("ESP32 config error: {}", clean.trim());
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(e) => bail!("Serial read error: {}", e),
+        }
+    }
+    bail!(
+        "No CONFIG_OK response within 10s. Output:\n{}",
+        strip_ansi(&response)
     );
-
-    let output = Command::new("python")
-        .arg(&script)
-        .arg(&port_name)
-        .arg(&config_file)
-        .output()
-        .context(
-            "Failed to run Python. Is Python with pyserial installed? (pip install pyserial)",
-        )?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-
-    if !stderr.is_empty() {
-        eprintln!("Python stderr: {}", stderr);
-    }
-
-    // Clean up temp config file
-    let _ = std::fs::remove_file(&config_file);
-
-    if !output.status.success() {
-        bail!("Python config-flash script failed: {}", stderr);
-    }
-
-    if stdout.starts_with("CONFIG_OK") {
-        println!("Config written successfully!");
-        Ok(())
-    } else if let Some(err) = stdout.strip_prefix("CONFIG_ERROR:") {
-        bail!("ESP32 config error: {}", err);
-    } else if let Some(msg) = stdout.strip_prefix("NO_RESPONSE:") {
-        bail!("No acknowledgment from ESP32: {}", msg);
-    } else {
-        bail!("Unexpected response: {}", stdout);
-    }
 }

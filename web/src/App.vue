@@ -214,10 +214,15 @@ function handleTempRange(val: string): void {
             <span>Last Fault: {{ spaState.last_fault }}</span>
           </div>
 
-          <!-- Firmware -->
-          <div v-if="spaState?.firmware_version"
-            class="text-center text-xs text-neutral-600 pb-4">
-            Firmware {{ spaState.firmware_version }}
+          <!-- Firmware & Reboot -->
+          <div class="flex items-center justify-center gap-3 pb-4 text-xs text-neutral-600">
+            <span v-if="spaState?.firmware_version">Firmware {{ spaState.firmware_version }}</span>
+            <button v-if="connected && availability === 'online'"
+              @click="publish('reboot', 'ON')"
+              class="px-2 py-0.5 rounded bg-neutral-700 hover:bg-red-700 text-neutral-300 text-xs transition-colors"
+              title="Reboot device">
+              Reboot
+            </button>
           </div>
           </template>
         </template>

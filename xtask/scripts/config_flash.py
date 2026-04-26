@@ -25,7 +25,15 @@ def main():
     print(f"Opening {port_name}...", file=sys.stderr)
     port = serial.Serial(port_name, 115200, timeout=1)
 
-    # Wait for ESP32 ready signal
+    # Toggle DTR to reset the ESP32, then catch the config window on boot
+    print("Resetting ESP32 via DTR...", file=sys.stderr)
+    port.dtr = False
+    time.sleep(0.1)
+    port.dtr = True
+    time.sleep(0.1)
+    port.dtr = False
+
+    # Wait for ESP32 ready signal after reboot
     start = time.time()
     ready = False
     all_output = ""

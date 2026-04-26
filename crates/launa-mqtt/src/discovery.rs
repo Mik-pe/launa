@@ -387,6 +387,26 @@ impl DiscoveryBuilder {
             &format!("{}/sniff", cmd_topic),
         ));
 
+        // Firmware version sensor (diagnostic, reads from state JSON)
+        configs.push(DiscoveryMessage {
+            topic: topics.discovery_topic("sensor", "firmware_version"),
+            payload: format!(
+                r#"{{"device":{},"origin":{},"name":"Firmware Version","unique_id":"{}_firmware_version","state_topic":"{}","value_template":"{{{{value_json.firmware_version}}}}","availability_topic":"{}","entity_category":"diagnostic","icon":"mdi:information-outline"}}"#,
+                device_info, origin, self.device_id, state_topic, avail_topic
+            ),
+            retain: false,
+        });
+
+        // Reboot button (optimistic switch — sends ON to command/reboot)
+        configs.push(DiscoveryMessage {
+            topic: topics.discovery_topic("button", "reboot"),
+            payload: format!(
+                r#"{{"device":{},"origin":{},"name":"Reboot","unique_id":"{}_reboot","command_topic":"{}/reboot","payload_press":"ON","availability_topic":"{}","entity_category":"config","icon":"mdi:restart"}}"#,
+                device_info, origin, self.device_id, cmd_topic, avail_topic
+            ),
+            retain: false,
+        });
+
         configs
     }
 
@@ -745,7 +765,9 @@ mod tests {
                 .get("optimistic")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            if !is_optimistic {
+            // Button entities are command-only (have payload_press, no state_topic)
+            let is_button = v.get("payload_press").is_some();
+            if !is_optimistic && !is_button {
                 assert!(
                     v.get("state_topic").is_some(),
                     "missing 'state_topic' in {}",

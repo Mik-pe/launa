@@ -72,6 +72,7 @@ pub enum Command {
     NothingToSend { client_id: u8 },
     SelfTest(bool),
     Sniff(bool),
+    Reboot,
 }
 
 /// Toggleable spa component — used in toggle commands and pump timers.
@@ -226,6 +227,7 @@ impl Command {
             Command::NothingToSend { client_id } => ([*client_id, 0xBF], vec![0x07]),
             Command::SelfTest(_) => ([0x00, 0x00], Vec::new()), // not sent to spa
             Command::Sniff(_) => ([0x00, 0x00], Vec::new()),    // not sent to spa
+            Command::Reboot => ([0x00, 0x00], Vec::new()),      // not sent to spa
         }
     }
 }

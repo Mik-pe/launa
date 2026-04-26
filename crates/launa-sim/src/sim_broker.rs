@@ -304,7 +304,7 @@ mod tests {
         broker.publish_discovery("test_spa");
 
         let discoveries = broker.discovery_payloads();
-        assert_eq!(discoveries.len(), 29);
+        assert_eq!(discoveries.len(), 31);
     }
 
     #[test]

@@ -1,17 +1,17 @@
 //! Raw ESP32 UART0 register access helpers.
 //!
-//! Provides low-level constants and write primitives for UART0,
-//! shared by the panic handler (main.rs) and the serial logger
-//! (logger.rs). Both need to bypass the HAL and write directly to
-//! hardware registers.
+//! Provides low-level constants and read/write primitives for UART0,
+//! shared by the panic handler (main.rs), the serial logger
+//! (logger.rs), and the serial config receiver. All bypass the HAL
+//! and access hardware registers directly.
 
 /// ESP32 UART0 register base address.
 pub const UART0_BASE: usize = 0x60000000;
 
-/// FIFO register (write-only, writes go to TX FIFO).
+/// FIFO register — writes go to TX FIFO, reads come from RX FIFO.
 pub const UART_FIFO_REG: usize = UART0_BASE;
 
-/// Status register — bits 16-22 contain TX FIFO count.
+/// Status register — bits 16-22 contain TX FIFO count, bits 0-7 contain RX FIFO count.
 pub const UART_STATUS_REG: usize = UART0_BASE + 0x1C;
 
 /// TX FIFO size for ESP32.
@@ -20,12 +20,24 @@ pub const UART_FIFO_SIZE: u16 = 128;
 /// Mask for TX FIFO count in status register.
 pub const TX_FIFO_CNT_MASK: u32 = 0x7F << 16;
 
+/// Mask for RX FIFO count in status register (bits 0-7, shifted left by 0).
+pub const RX_FIFO_CNT_MASK: u32 = 0xFF;
+
 /// Read the current TX FIFO count from the UART status register.
 #[inline]
 pub fn tx_fifo_count() -> u16 {
     unsafe {
         let status = (UART_STATUS_REG as *const u32).read_volatile();
         ((status & TX_FIFO_CNT_MASK) >> 16) as u16
+    }
+}
+
+/// Read the current RX FIFO count from the UART status register.
+#[inline]
+pub fn rx_fifo_count() -> u16 {
+    unsafe {
+        let status = (UART_STATUS_REG as *const u32).read_volatile();
+        (status & RX_FIFO_CNT_MASK) as u16
     }
 }
 
@@ -46,6 +58,16 @@ pub fn write_bytes(data: &[u8]) {
     for &b in data {
         write_byte(b);
     }
+}
+
+/// Read a single byte from the UART RX FIFO.
+/// Returns `None` if the RX FIFO is empty.
+#[inline]
+pub fn read_byte() -> Option<u8> {
+    if rx_fifo_count() == 0 {
+        return None;
+    }
+    unsafe { Some((UART_FIFO_REG as *const u8).read_volatile()) }
 }
 
 /// Spin until the TX FIFO has fully drained, then wait an additional

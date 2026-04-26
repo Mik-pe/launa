@@ -6,7 +6,6 @@ mod monitor;
 mod ota_flash;
 mod ota_serve;
 mod provision;
-mod self_test;
 mod sniff_decode;
 mod spa_sim;
 mod util;
@@ -28,7 +27,6 @@ fn usage() {
     eprintln!(
         "  ota-flash [--feature <name>] [--device-id <id>]   Build and flash remotely over WiFi"
     );
-    eprintln!("  self-test [--port <COMx>]                         Run hardware self-test");
     eprintln!("  config-flash [--port <COMx>]                      Write config to ESP32 NVS");
     eprintln!(
         "  provision [--port <COMx>] [--no-confirm]          Burn AES key to ESP32 eFuse BLOCK3"
@@ -55,7 +53,6 @@ fn main() -> anyhow::Result<()> {
         "spa-sim" | "spa_sim" => spa_sim::run(sub_args),
         "ota-serve" | "ota_serve" => ota_serve::run(sub_args),
         "ota-flash" | "ota_flash" => ota_flash::run(sub_args),
-        "self-test" | "self_test" => self_test::run(sub_args),
         "config-flash" | "config_flash" => config_flash::run(sub_args),
         "provision" => provision::run(sub_args),
         "listen" => listen::run(sub_args),
@@ -117,17 +114,6 @@ mod tests {
         assert!(
             run_returns_error_containing(result, "--duration requires a value"),
             "Should error about --duration requiring a value"
-        );
-    }
-
-    // --- self_test.rs argument parsing tests ---
-    #[test]
-    fn test_self_test_port_as_last_arg_returns_error() {
-        let args = vec!["--port".to_string()];
-        let result = self_test::run(&args);
-        assert!(
-            run_returns_error_containing(result, "--port requires a value"),
-            "Should error about --port requiring a value"
         );
     }
 

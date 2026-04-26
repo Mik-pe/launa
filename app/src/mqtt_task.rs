@@ -271,6 +271,14 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                             continue;
                         }
 
+                        // Handle reboot command
+                        let reboot_subtopic = alloc::format!("{}/reboot", cmd_base);
+                        if topic == reboot_subtopic {
+                            info!("MQTT reboot command received");
+                            cmd_sender.send(Command::Reboot).await;
+                            continue;
+                        }
+
                         // Handle commands and pump timers (with rate limiting)
                         let (scale, range) = match last_scale_range {
                             Some((s, r)) => (Some(s), Some(r)),
