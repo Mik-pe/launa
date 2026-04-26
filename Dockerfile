@@ -28,7 +28,11 @@ COPY crates/launa-core/Cargo.toml crates/launa-core/Cargo.toml
 COPY crates/launa-sim/Cargo.toml crates/launa-sim/Cargo.toml
 COPY crates/launa-integration-tests/Cargo.toml crates/launa-integration-tests/Cargo.toml
 COPY crates/launa-server/Cargo.toml crates/launa-server/Cargo.toml
-COPY xtask/Cargo.toml xtask/Cargo.toml
+
+# Create a minimal dummy xtask so Cargo can resolve the workspace graph
+# without pulling in xtask's real (heavy) dependencies
+RUN mkdir -p xtask/src && echo '[package]\nname = "xtask"\nversion = "0.1.0"\nedition = "2021"\n' > xtask/Cargo.toml \
+ && echo "fn main(){}" > xtask/src/main.rs
 
 # Create dummy source files so cargo can resolve the workspace graph
 RUN mkdir -p crates/launa-protocol/src && touch crates/launa-protocol/src/lib.rs \
@@ -41,8 +45,7 @@ RUN mkdir -p crates/launa-protocol/src && touch crates/launa-protocol/src/lib.rs
  && mkdir -p crates/launa-integration-tests/src && touch crates/launa-integration-tests/src/lib.rs \
  && mkdir -p crates/launa-server/src/bin \
  && echo "fn main(){}" > crates/launa-server/src/bin/launa-server.rs \
- && echo "" > crates/launa-server/src/lib.rs \
- && mkdir -p xtask/src && echo "fn main(){}" > xtask/src/main.rs
+ && echo "" > crates/launa-server/src/lib.rs
 
 # Build dependencies only (cached layer). Expected to fail on real code.
 ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
@@ -52,7 +55,6 @@ RUN cargo build --release --target aarch64-unknown-linux-gnu -p launa-server 2>/
 
 # Copy real source code (overwrites dummy files)
 COPY crates/ crates/
-COPY xtask/ xtask/
 
 # Build the real binary
 RUN touch crates/*/src/*.rs && cargo build --release --target aarch64-unknown-linux-gnu -p launa-server
