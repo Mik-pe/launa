@@ -26,12 +26,14 @@ fn read_firmware_version() -> anyhow::Result<String> {
     Ok(cargo.package.version)
 }
 
-/// Extract the firmware_version field from a state JSON payload.
-/// Returns None if the field is missing or the payload is not valid JSON.
-pub fn extract_firmware_version(state_json: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(state_json).ok()?;
+/// Extract the firmware version from a JSON payload.
+/// Checks both `firmware_version` (state topic) and `fw_version` (diagnostics topic).
+/// Returns None if neither field is found or the payload is not valid JSON.
+pub fn extract_firmware_version(json: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
     value
-        .get("firmware_version")?
+        .get("firmware_version")
+        .or_else(|| value.get("fw_version"))?
         .as_str()
         .map(|s| s.to_string())
 }
