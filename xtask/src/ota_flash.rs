@@ -251,14 +251,15 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                     let payload = String::from_utf8_lossy(&publish.payload).to_string();
                     if publish.topic == status_topic {
                         println!("\nDevice published state after OTA!");
+                    } else {
+                        println!("\nDevice published diagnostics after OTA!");
                     }
-                    // Extract version from either state or diagnostics payload
                     if version_payload.is_none() && extract_firmware_version(&payload).is_some() {
                         version_payload = Some(payload);
                     }
                 }
-                // Got online — done waiting.
-                if came_online {
+                // Got online with version — done.
+                if came_online && version_payload.is_some() {
                     break;
                 }
             }
