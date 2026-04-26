@@ -4,16 +4,32 @@
 //! - `serial-log` — writes to UART0 using raw ESP32 registers (off by default)
 //! - `remote-log` — forwards to MQTT via the remote_log module (on by default)
 //!
-//! When serial-log is disabled, the UART register code and spinlock are not
-//! compiled, saving code space and eliminating UART overhead in production.
+//! When serial-log is disabled, the UART code is not compiled, saving code
+//! space and eliminating UART overhead in production.
+//!
+//! ## UART output strategy
+//!
+//! The ESP32 UART0 TX FIFO is only 128 bytes, and the esp-rtos scheduler
+//! can preempt between log calls. Two mechanisms prevent interleaved output:
+//!
+//! 1. **Non-reentrant try-lock** (AtomicBool CAS): only one log call may
+//!    write to the UART at a time. If the lock is already held (e.g. the
+//!    current task was preempted mid-write, or re-entrancy from the
+//!    allocator), the contending message is silently dropped.
+//!
+//! 2. **Post-write flush**: after writing all bytes, we busy-wait until
+//!    the TX FIFO has fully drained. This guarantees the previous message
+//!    is completely transmitted before the lock is released and the next
+//!    message begins, so no bytes from different messages coexist in the
+//!    FIFO.
+//!
+//! We deliberately do NOT use `esp_sync::RawMutex` — it identifies
+//! threads by Xtensa processor ID, which is the same for all RTOS tasks
+//! on a single core, making it reentrant and defeating mutual exclusion.
 
 extern crate alloc;
 
 use log::{Level, LevelFilter, Metadata, Record};
-
-// ---------------------------------------------------------------------------
-// Serial UART output (feature-gated)
-// ---------------------------------------------------------------------------
 
 #[cfg(feature = "serial-log")]
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -21,39 +37,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "serial-log")]
 use esp_hal::system::Cpu;
 
-/// Spinlock for cross-core UART synchronization.
 #[cfg(feature = "serial-log")]
-struct Spinlock {
-    locked: AtomicBool,
-}
-
-#[cfg(feature = "serial-log")]
-impl Spinlock {
-    const fn new() -> Self {
-        Spinlock {
-            locked: AtomicBool::new(false),
-        }
-    }
-
-    #[inline(always)]
-    fn lock(&self) {
-        while self
-            .locked
-            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
-            core::hint::spin_loop();
-        }
-    }
-
-    #[inline(always)]
-    fn unlock(&self) {
-        self.locked.store(false, Ordering::Release);
-    }
-}
-
-#[cfg(feature = "serial-log")]
-static UART_LOCK: Spinlock = Spinlock::new();
+static UART_LOCK: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "serial-log")]
 fn color_for_level(level: Level) -> (&'static str, &'static str) {
@@ -119,6 +104,15 @@ impl log::Log for Logger {
         // Write to UART0 serial output
         #[cfg(feature = "serial-log")]
         {
+            // Try to acquire the lock. If already held, drop this message
+            // to avoid deadlock from re-entrancy (e.g. allocator -> log).
+            if UART_LOCK
+                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                return;
+            }
+
             let core_id = match Cpu::current() {
                 Cpu::ProCpu => 0,
                 Cpu::AppCpu => 1,
@@ -126,7 +120,7 @@ impl log::Log for Logger {
 
             let (color, reset) = color_for_level(record.level());
             let msg = alloc::format!(
-                "{}[C{}] {} - {}{}",
+                "{}[C{}] {} - {}{}\n",
                 color,
                 core_id,
                 record.level(),
@@ -134,18 +128,16 @@ impl log::Log for Logger {
                 reset,
             );
 
-            UART_LOCK.lock();
             crate::uart_raw::write_bytes(msg.as_bytes());
-            crate::uart_raw::write_byte(b'\n');
-            UART_LOCK.unlock();
+            crate::uart_raw::flush(); // Wait for all bytes to be sent
+
+            UART_LOCK.store(false, Ordering::Release);
         }
     }
 
     #[cfg(feature = "serial-log")]
     fn flush(&self) {
-        UART_LOCK.lock();
         crate::uart_raw::flush();
-        UART_LOCK.unlock();
     }
 
     #[cfg(not(feature = "serial-log"))]
