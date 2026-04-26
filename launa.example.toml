@@ -21,7 +21,7 @@ password = ""                  # optional
 
 [device]
 id = "launa_spa"               # required — unique ID for HA entity prefixes
-serial_port = "COM3"           # required for USB flash commands
+serial_port = ""               # optional — auto-detected if empty (macOS: /dev/cu.usb*, Linux: /dev/ttyUSB*)
 
 [ota]
 serve_port = 8081              # optional, default 8081 — port for local OTA HTTP server

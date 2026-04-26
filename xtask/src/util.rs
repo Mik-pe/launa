@@ -1,7 +1,7 @@
 //! Shared utilities for xtask modules.
 
 use anyhow::{bail, Context};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Returns the project root directory (parent of xtask/).
 ///
@@ -90,10 +90,78 @@ impl<'a> Args<'a> {
     }
 }
 
-/// Resolve the serial port using the "CLI arg → config → fallback" pattern.
+/// Auto-detect an ESP32 USB serial port.
 ///
-/// If `cli_port` is `Some`, that wins. Otherwise falls back to
-/// `config.device.serial_port`. If neither provides a value, returns an error.
+/// On macOS, scans `/dev/cu.usb*` for common USB-serial adapters.
+/// On Linux, scans `/dev/ttyUSB*` and `/dev/ttyACM*`.
+/// Returns the first matching device path, or `None` if nothing is found.
+pub fn auto_detect_serial_port() -> Option<String> {
+    let candidates: Vec<&str> = if cfg!(target_os = "macos") {
+        vec![
+            "/dev/cu.usbserial*",
+            "/dev/cu.usbmodem*",
+            "/dev/cu.wchusbserial*",
+        ]
+    } else if cfg!(target_os = "linux") {
+        vec!["/dev/ttyUSB*", "/dev/ttyACM*"]
+    } else {
+        vec!["COM*"]
+    };
+
+    for pattern in candidates {
+        if let Ok(entries) = glob::glob(pattern) {
+            for entry in entries.flatten() {
+                let path = entry.to_string_lossy().to_string();
+                // Prefer /dev/cu.* over /dev/tty.* on macOS (call-out device, no carrier detect blocking)
+                return Some(path);
+            }
+        }
+    }
+
+    // Fallback: try serialport enumeration
+    if let Ok(ports) = serialport::available_ports() {
+        for port in ports {
+            if is_likely_esp_port(&port.port_name) {
+                return Some(port.port_name);
+            }
+        }
+    }
+
+    None
+}
+
+/// Check if a port name looks like a USB serial adapter (ESP32, CH340, CP210x, etc.).
+fn is_likely_esp_port(name: &str) -> bool {
+    let path = Path::new(name);
+    let file_name = path
+        .file_name()
+        .map(|f| f.to_string_lossy())
+        .unwrap_or_default();
+
+    // macOS patterns
+    if file_name.starts_with("cu.usbserial")
+        || file_name.starts_with("cu.usbmodem")
+        || file_name.starts_with("cu.wchusbserial")
+    {
+        return true;
+    }
+
+    // Linux patterns
+    if file_name.starts_with("ttyUSB") || file_name.starts_with("ttyACM") {
+        return true;
+    }
+
+    // Windows COM ports (COM3 and above are typically USB serial)
+    if let Ok(n) = file_name.trim_start_matches("COM").parse::<u32>() {
+        return n >= 3;
+    }
+
+    false
+}
+
+/// Resolve the serial port using the "CLI arg → config → auto-detect → error" pattern.
+///
+/// Priority: `--port` flag > config file > auto-detect USB device.
 pub fn resolve_port(
     cli_port: Option<&str>,
     config: Option<&crate::config::Config>,
@@ -104,12 +172,20 @@ pub fn resolve_port(
     if let Some(cfg) = config {
         return Ok(cfg.device.serial_port.clone());
     }
-    bail!("No serial port specified. Use --port or set device.serial_port in launa.toml")
+    if let Some(p) = auto_detect_serial_port() {
+        println!("Auto-detected serial port: {}", p);
+        return Ok(p);
+    }
+    bail!(
+        "No serial port found. Use --port <device> or set device.serial_port in launa.toml\n\
+         Detected serial ports: {}",
+        list_available_ports()
+    )
 }
 
-/// Resolve the serial port with a fallback default when no config is available.
+/// Resolve the serial port with auto-detection fallback.
 ///
-/// Like `resolve_port`, but returns `default` when neither CLI nor config provides a value.
+/// Like `resolve_port`, but returns `default` when nothing is found.
 pub fn resolve_port_or(
     cli_port: Option<&str>,
     config: Option<&crate::config::Config>,
@@ -121,5 +197,21 @@ pub fn resolve_port_or(
     if let Some(cfg) = config {
         return cfg.device.serial_port.clone();
     }
+    if let Some(p) = auto_detect_serial_port() {
+        return p;
+    }
     default.to_string()
+}
+
+/// Return a comma-separated list of available serial ports (for error messages).
+fn list_available_ports() -> String {
+    match serialport::available_ports() {
+        Ok(ports) if ports.is_empty() => "none".to_string(),
+        Ok(ports) => ports
+            .iter()
+            .map(|p| p.port_name.clone())
+            .collect::<Vec<_>>()
+            .join(", "),
+        Err(_) => "unable to enumerate".to_string(),
+    }
 }

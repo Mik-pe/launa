@@ -4,11 +4,16 @@ use std::process::Command;
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut feature = None;
     let mut port = None;
+    let mut monitor = false;
     let mut parser = crate::util::Args::new(args);
     while parser.has_more() {
         match parser.peek().unwrap() {
             "--feature" => feature = Some(parser.value("--feature")?.to_string()),
             "--port" => port = Some(parser.value("--port")?.to_string()),
+            "--monitor" => {
+                monitor = true;
+                parser.skip();
+            }
             _ => return Err(parser.unknown_arg()),
         }
     }
@@ -21,6 +26,10 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         .arg("--chip")
         .arg("esp32");
     cmd.arg("--partition-table").arg("partitions.csv");
+
+    if monitor {
+        cmd.arg("--monitor");
+    }
 
     if let Some(ref f) = feature {
         cmd.arg("--features").arg(f);
@@ -38,6 +47,9 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     }
     if let Some(ref p) = port {
         println!("  Port: {}", p);
+    }
+    if monitor {
+        println!("  Monitor: enabled (serial log after flash)");
     }
 
     let status = cmd

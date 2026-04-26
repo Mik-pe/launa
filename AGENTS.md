@@ -37,8 +37,8 @@ Requires `launa.toml` at project root (gitignored; copy from `launa.example.toml
 | Command | Description |
 |---|---|
 | `cargo xtask flash` | Flash firmware to ESP32 via USB |
+| `cargo xtask flash --monitor` | Flash + monitor in one command |
 | `cargo xtask monitor` | Read serial output from ESP32 |
-| `cargo xtask flash-monitor` | Flash + monitor in one command |
 | `cargo xtask sniff-decode` | Decode sniffer frames from MQTT |
 | `cargo xtask spa-sim` | Simulate spa over RS-485 |
 | `cargo xtask ota-serve` | Serve firmware .bin over HTTP for OTA |

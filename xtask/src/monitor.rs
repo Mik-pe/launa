@@ -4,13 +4,13 @@ use std::time::{Duration, Instant};
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut port_name = None;
-    let mut duration_secs = 10u64;
+    let mut duration_secs = None;
     let mut parser = crate::util::Args::new(args);
     while parser.has_more() {
         match parser.peek().unwrap() {
             "--port" => port_name = Some(parser.value("--port")?.to_string()),
             "--duration" => {
-                duration_secs = parser.optional_parsed::<u64>("--duration")?.unwrap();
+                duration_secs = parser.optional_parsed::<u64>("--duration")?;
             }
             _ => return Err(parser.unknown_arg()),
         }
@@ -24,12 +24,16 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         .open()
         .with_context(|| format!("Failed to open serial port {}", port_name))?;
 
-    println!(
-        "Monitoring on {} for {}s... (Ctrl+C to stop)",
-        port_name, duration_secs
-    );
+    if let Some(secs) = duration_secs {
+        println!(
+            "Monitoring on {} for {}s... (Ctrl+C to stop)",
+            port_name, secs
+        );
+    } else {
+        println!("Monitoring on {}... (Ctrl+C to stop)", port_name);
+    }
     let start = Instant::now();
-    let deadline = start + Duration::from_secs(duration_secs);
+    let deadline = duration_secs.map(|s| start + Duration::from_secs(s));
 
     // Ctrl+C handler
     let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -40,7 +44,8 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     let mut buf = [0u8; 256];
     let mut port = port;
-    while Instant::now() < deadline && running.load(std::sync::atomic::Ordering::SeqCst) {
+    let running_check = || running.load(std::sync::atomic::Ordering::SeqCst);
+    while deadline.map_or(true, |d| Instant::now() < d) && running_check() {
         match port.read(&mut buf) {
             Ok(n) => {
                 let text = String::from_utf8_lossy(&buf[..n]);

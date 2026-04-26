@@ -1,7 +1,6 @@
 mod config;
 mod config_flash;
 mod flash;
-mod flash_monitor;
 mod listen;
 mod monitor;
 mod ota_flash;
@@ -19,9 +18,8 @@ fn usage() {
     eprintln!("Usage: cargo xtask <command> [args...]");
     eprintln!();
     eprintln!("Commands:");
-    eprintln!("  flash [--feature <name>] [--port <COMx>]         Flash firmware via USB");
-    eprintln!("  monitor [--port <COMx>] [--duration <secs>]       Read serial output");
-    eprintln!("  flash-monitor [--feature <name>] [--port <COMx>]  Flash + monitor");
+    eprintln!("  flash [--feature <name>] [--port <COMx>] [--monitor]  Flash firmware via USB");
+    eprintln!("  monitor [--port <COMx>] [--duration <secs>]            Read serial output (runs until Ctrl+C)");
     eprintln!(
         "  sniff-decode [--host <host>] [--port <1883>]      Decode sniffer frames from MQTT"
     );
@@ -53,7 +51,6 @@ fn main() -> anyhow::Result<()> {
     match command.as_str() {
         "flash" => flash::run(sub_args),
         "monitor" => monitor::run(sub_args),
-        "flash-monitor" | "flash_monitor" => flash_monitor::run(sub_args),
         "sniff-decode" | "sniff_decode" => sniff_decode::run(sub_args),
         "spa-sim" | "spa_sim" => spa_sim::run(sub_args),
         "ota-serve" | "ota_serve" => ota_serve::run(sub_args),

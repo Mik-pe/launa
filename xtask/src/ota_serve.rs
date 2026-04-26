@@ -72,7 +72,9 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                 // Switch accepted stream to blocking mode for reliable writes
                 stream.set_nonblocking(false).ok();
                 let peer_str = peer.to_string();
-                if !quiet { println!("[{}] connected", peer_str); }
+                if !quiet {
+                    println!("[{}] connected", peer_str);
+                }
 
                 let mut buf = [0u8; 4096];
                 stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
@@ -80,12 +82,16 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
                 match stream.read(&mut buf) {
                     Ok(0) => {
-                        if !quiet { println!("[{}] empty request, closing", peer_str); }
+                        if !quiet {
+                            println!("[{}] empty request, closing", peer_str);
+                        }
                     }
                     Ok(n) => {
                         let request = String::from_utf8_lossy(&buf[..n]);
                         let first_line = request.lines().next().unwrap_or("");
-                        if !quiet { println!("[{}] request: {}", peer_str, first_line); }
+                        if !quiet {
+                            println!("[{}] request: {}", peer_str, first_line);
+                        }
 
                         if first_line.contains("HTTP") {
                             // Real HTTP request - serve the firmware
@@ -121,8 +127,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                                                 "=".repeat(filled) + &" ".repeat(bar_len - filled);
                                             eprint!(
                                                 "\rDownloading firmware [{bar}] {pct:3}% ({}/{})",
-                                                offset,
-                                                total
+                                                offset, total
                                             );
                                             last_pct = pct;
                                         }
@@ -145,7 +150,9 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                             // Raw TCP data (test mode) - echo back
                             let msg = format!("echo: {} bytes received\n", n);
                             let _ = stream.write_all(msg.as_bytes());
-                            if !quiet { println!("[{}] raw TCP: sent echo", peer_str); }
+                            if !quiet {
+                                println!("[{}] raw TCP: sent echo", peer_str);
+                            }
                         }
                     }
                     Err(e) => {
@@ -164,6 +171,8 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         }
     }
 
-    if !quiet { println!("OTA server stopped."); }
+    if !quiet {
+        println!("OTA server stopped.");
+    }
     Ok(())
 }

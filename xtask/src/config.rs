@@ -136,14 +136,11 @@ impl Config {
         if let Err(e) = validate_device_id(&self.device.id) {
             errors.push(e.to_string());
         }
-        if self.device.serial_port.is_empty() {
-            errors.push("device.serial_port must be set (e.g. COM3 or /dev/ttyUSB0)".to_string());
-        }
         if let Err(e) = validate_mqtt_port(self.mqtt.port) {
             errors.push(e.to_string());
         }
 
-        // Check serial port existence
+        // Check serial port existence (only if explicitly configured; auto-detect skips this)
         if check_serial_port && !self.device.serial_port.is_empty() {
             match serialport::available_ports() {
                 Ok(ports) => {
