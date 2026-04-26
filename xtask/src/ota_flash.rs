@@ -68,14 +68,6 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let device_id = device_id_override.unwrap_or(config.device.id.clone());
     let ota_port = config.ota.serve_port;
 
-    // Read expected firmware version
-    let expected_version = read_firmware_version().ok();
-    if let Some(ref v) = expected_version {
-        println!("Expected firmware version: {}", v);
-    } else {
-        println!("Warning: Could not read firmware version from app/Cargo.toml");
-    }
-
     println!(
         "OTA flash: device={}, feature={}, ota_port={}",
         device_id, feature, ota_port
@@ -153,6 +145,14 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         ota_bin_path.display(),
         app_image.len()
     );
+
+    // Read expected firmware version after build so git HEAD matches what was compiled in.
+    let expected_version = read_firmware_version().ok();
+    if let Some(ref v) = &expected_version {
+        println!("Expected firmware version: {}", v);
+    } else {
+        println!("Warning: Could not determine expected firmware version");
+    }
 
     // Step 3: Start OTA server in background
     println!("\n[3/7] Starting OTA server...");
@@ -263,7 +263,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                         println!("\nDevice rebooted and came back online!");
                     }
                 }
-                if publish.topic == status_topic || publish.topic == diag_topic {
+                if came_online && (publish.topic == status_topic || publish.topic == diag_topic) {
                     let payload = String::from_utf8_lossy(&publish.payload).to_string();
                     if publish.topic == status_topic {
                         println!("\nDevice published state after OTA!");
