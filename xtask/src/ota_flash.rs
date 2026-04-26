@@ -259,19 +259,11 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         }
     }
 
-    // If device came online but we never got a state payload, request one
+    // If device came online but we never got a state payload, wait a bit longer
+    // for the device to publish state (it publishes on change, ~1s intervals).
     if came_online && state_payload.is_none() {
-        println!("Device is online but no state received, requesting status...");
-        client
-            .publish(
-                &format!("launa/{}/command/status", device_id),
-                rumqttc::QoS::AtLeastOnce,
-                false,
-                b"1",
-            )
-            .ok();
-
-        let state_deadline = std::time::Instant::now() + Duration::from_secs(15);
+        println!("Device is online but no state received, waiting for state publish...");
+        let state_deadline = std::time::Instant::now() + Duration::from_secs(10);
         for notification in connection.iter() {
             if std::time::Instant::now() > state_deadline {
                 break;
@@ -281,7 +273,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                     if publish.topic == status_topic {
                         state_payload =
                             Some(String::from_utf8_lossy(&publish.payload).to_string());
-                        println!("\nDevice published state after request!");
+                        println!("\nDevice published state!");
                         break;
                     }
                 }
