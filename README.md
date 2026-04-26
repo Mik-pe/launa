@@ -185,9 +185,8 @@ Requires `launa.toml` at project root (gitignored; copy from `launa.example.toml
 
 | Command | Description |
 |---------|-------------|
-| `cargo xtask flash [--feature sniff\|hw-test]` | Flash firmware to ESP32 via USB |
-| `cargo xtask monitor` | Read serial output from ESP32 |
-| `cargo xtask flash-monitor` | Flash + monitor in one command |
+| `cargo xtask flash [--feature sniff\|hw-test] [--monitor]` | Flash firmware to ESP32 via USB |
+| `cargo xtask monitor` | Read serial output from ESP32 (runs until Ctrl+C) |
 | `cargo xtask config-flash` | Write WiFi/MQTT config to ESP32 NVS |
 | `cargo xtask ota-flash` | Build + serve + trigger OTA update over WiFi |
 | `cargo xtask ota-serve` | Serve firmware `.bin` over HTTP for OTA |

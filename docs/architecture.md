@@ -144,7 +144,7 @@ Tests use `SpaSimulator` → `SimTransport` → `SpaApp` → `SimBroker`.
 
 Host-side Cargo xtask tooling. Not part of the firmware.
 
-- Flash, monitor, flash-monitor
+- Flash (with optional --monitor), monitor
 - OTA build + serve + trigger
 - Spa simulator (USB-RS485)
 - Sniffer frame decoder

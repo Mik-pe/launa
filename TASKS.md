@@ -155,7 +155,7 @@ All software development is complete. The firmware compiles for xtensa-esp32-non
 - **Robustness**: CommandTracker (ACK/retry/drop), stale-status detection (5s probe, 30s stale), heap monitoring, HoldModeTimer (60min safety), bounded command queue, exponential backoff on reconnect, alert throttling
 - **Security**: Encrypted NVS config (AES-128-CTR via ESP32 hardware AES, eFuse key), cargo xtask provision
 - **Testing**: SpaSim with error injection (command failure, bus silence, corrupt frames), SimBroker with connection loss simulation, SpaApp architecture (all logic in launa-core, ESP32 is thin IO wiring), 24-hour simulation, stress tests
-- **xtask**: flash, monitor, flash-monitor, sniff-decode, spa-sim, ota-serve, ota-flash, self-test, config-flash, provision
+- **xtask**: flash (--monitor), monitor, sniff-decode, spa-sim, ota-serve, ota-flash, self-test, config-flash, provision
 - **Features**: sniffer mode, hw-test mode, pump timers, light color cycling, Pump1-6 + Light1-2 support
 
 ## Logic Flaws & Bugs (Deep Audit 2026-04-16)
