@@ -249,36 +249,15 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                     came_online = true;
                     state_payload = Some(String::from_utf8_lossy(&publish.payload).to_string());
                     println!("\nDevice published state after OTA!");
+                }
+                // Got online — done waiting. State may or may not have arrived.
+                if came_online {
                     break;
                 }
             }
             Ok(_) => {}
             Err(e) => {
                 eprintln!("MQTT error: {}", e);
-            }
-        }
-    }
-
-    // If device came online but we never got a state payload, wait a bit longer
-    // for the device to publish state (it publishes on change, ~1s intervals).
-    if came_online && state_payload.is_none() {
-        println!("Device is online but no state received, waiting for state publish...");
-        let state_deadline = std::time::Instant::now() + Duration::from_secs(10);
-        for notification in connection.iter() {
-            if std::time::Instant::now() > state_deadline {
-                break;
-            }
-            match notification {
-                Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
-                    if publish.topic == status_topic {
-                        state_payload =
-                            Some(String::from_utf8_lossy(&publish.payload).to_string());
-                        println!("\nDevice published state!");
-                        break;
-                    }
-                }
-                Ok(_) => {}
-                Err(_) => break,
             }
         }
     }
