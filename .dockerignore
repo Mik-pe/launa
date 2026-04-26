@@ -1,15 +1,5 @@
 target/
-app/
-node_modules/
-web/node_modules/
 web/dist/
-*.db
-launa.toml
-launa.example.toml
+web/node_modules/
 .git/
-.factory/
-docs/
-tests/
-deploy.sh
-deploy.example.sh
-*.md
+*.db
