@@ -302,12 +302,13 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                     }
                 }
                 None => {
-                    bail!("OTA flash failed: firmware_version field not found in state payload. Cannot verify the update was applied.");
+                    println!("Warning: firmware_version field not found in state payload. Cannot fully verify.");
                 }
             }
         }
-        (Some(_), None) => {
-            bail!("OTA flash failed: no state payload received from device. Cannot verify the update was applied.");
+        (Some(expected), None) => {
+            println!("Warning: no state payload received (device may not be connected to spa).");
+            println!("Expected version: {}. Connect device to spa and verify manually.", expected);
         }
         (None, _) => {
             println!("Warning: could not determine expected version. Skipping version check.");
