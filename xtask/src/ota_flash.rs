@@ -156,6 +156,13 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     // Step 3: Start OTA server in background
     println!("\n[3/7] Starting OTA server...");
+    let server_addr = format!("127.0.0.1:{}", ota_port);
+    if std::net::TcpStream::connect(&server_addr).is_ok() {
+        bail!(
+            "Port {} is already in use. Stop the existing OTA server first (e.g. `kill` the process listening on that port).",
+            ota_port
+        );
+    }
     let xtask_bin = std::env::current_exe().context("Failed to get current exe path")?;
     let mut ota_serve_cmd = Command::new(&xtask_bin);
     ota_serve_cmd
