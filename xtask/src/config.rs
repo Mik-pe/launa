@@ -34,24 +34,16 @@ pub struct DeviceConfig {
     pub serial_port: String,
 }
 
-fn default_ota_host() -> String {
-    String::new()
-}
-
 #[derive(Debug, Deserialize)]
 pub struct OtaConfig {
     #[serde(default = "default_ota_port")]
     pub serve_port: u16,
-    /// OTA server host. Defaults to mqtt.host when empty.
-    #[serde(default = "default_ota_host")]
-    pub host: String,
 }
 
 impl Default for OtaConfig {
     fn default() -> Self {
         OtaConfig {
             serve_port: 8081,
-            host: String::new(),
         }
     }
 }

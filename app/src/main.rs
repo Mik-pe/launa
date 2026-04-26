@@ -737,7 +737,7 @@ async fn main(spawner: Spawner) {
     wdt.enable();
     info!("Hardware watchdog enabled (200s timeout)");
 
-    info!("Launa ESP32 firmware starting...");
+    info!("Launa ESP32 firmware v{} starting...", FIRMWARE_VERSION);
 
     let mut app_config;
     let mut ota = None;

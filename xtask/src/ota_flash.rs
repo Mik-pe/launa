@@ -172,11 +172,12 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     }
 
     // Step 4: Publish OTA command via MQTT
-    let ota_host = if config.ota.host.is_empty() {
-        &config.mqtt.host
-    } else {
-        &config.ota.host
+    // Auto-detect local IP since we host the OTA server on this machine.
+    let ota_host = match local_ip_address::local_ip() {
+        Ok(ip) => ip.to_string(),
+        Err(_) => bail!("Failed to auto-detect local IP address. Set ota.host in launa.toml or check network."),
     };
+    println!("OTA server address: {}:{}", ota_host, ota_port);
     let firmware_url = format!("http://{}:{}/firmware.bin", ota_host, ota_port);
 
     let mut mqttoptions = rumqttc::MqttOptions::new(
@@ -239,7 +240,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
                 if publish.topic == avail_topic {
                     let payload = String::from_utf8_lossy(&publish.payload);
-                    if payload == "online" {
+                    if payload == "online" && !came_online {
                         came_online = true;
                         println!("\nDevice rebooted and came back online!");
                     }
@@ -248,8 +249,6 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                     came_online = true;
                     state_payload = Some(String::from_utf8_lossy(&publish.payload).to_string());
                     println!("\nDevice published state after OTA!");
-                }
-                if came_online {
                     break;
                 }
             }
@@ -262,30 +261,31 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     // Step 6: Verify firmware version
     println!("\n[6/7] Verifying firmware version...");
-    if came_online {
-        if let Some(ref expected) = expected_version {
-            if let Some(ref payload) = state_payload {
-                match extract_firmware_version(payload) {
-                    Some(reported) => {
-                        if reported == *expected {
-                            println!("Firmware version verified: {} (matches expected)", reported);
-                        } else {
-                            bail!(
-                                "Firmware version mismatch! Expected '{}', got '{}'. Possible rollback occurred.",
-                                expected, reported
-                            );
-                        }
-                    }
-                    None => {
-                        println!(
-                            "Warning: firmware_version field not found in state payload. Cannot verify version."
+    if !came_online {
+        bail!("OTA flash failed: device did not come back online within 200s.");
+    }
+    match (&expected_version, &state_payload) {
+        (Some(expected), Some(payload)) => {
+            match extract_firmware_version(payload) {
+                Some(reported) => {
+                    if reported == *expected {
+                        println!("Firmware version verified: {} (matches expected)", reported);
+                    } else {
+                        bail!(
+                            "OTA flash failed: firmware version mismatch! Expected '{}', got '{}'. OTA was rejected or rolled back.",
+                            expected, reported
                         );
                     }
                 }
-            } else {
-                println!("Warning: no state payload captured. Cannot verify version.");
+                None => {
+                    bail!("OTA flash failed: firmware_version field not found in state payload. Cannot verify the update was applied.");
+                }
             }
-        } else {
+        }
+        (Some(_), None) => {
+            bail!("OTA flash failed: no state payload received from device. Cannot verify the update was applied.");
+        }
+        (None, _) => {
             println!("Warning: could not determine expected version. Skipping version check.");
         }
     }
@@ -296,15 +296,11 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let _ = ota_serve_child.wait();
     println!("OTA server stopped.");
 
-    if came_online {
-        println!(
-            "\nOTA flash successful! Device {} is running new firmware.",
-            device_id
-        );
-        Ok(())
-    } else {
-        bail!("OTA flash timed out. Device did not come back online within 200s.");
-    }
+    println!(
+        "\nOTA flash successful! Device {} is running new firmware.",
+        device_id
+    );
+    Ok(())
 }
 
 #[cfg(test)]
