@@ -37,6 +37,7 @@ export function useMqtt() {
       const base = `launa/${conn.settings.value.deviceId}`
       c.subscribe(`${base}/state`)
       c.subscribe(`${base}/availability`)
+      c.subscribe(`${base}/boot`)
       c.subscribe(`${base}/alert`)
     })
 

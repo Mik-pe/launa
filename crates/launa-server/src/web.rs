@@ -66,6 +66,10 @@ pub fn build_router(state: AppState) -> Router {
             "/api/config",
             axum::routing::get(get_config).put(set_config),
         )
+        .route(
+            "/api/devices/{device_id}/availability",
+            axum::routing::get(get_device_availability),
+        )
         .nest("/api/devices/{device_id}", device_routes)
         .with_state(state)
 }
@@ -199,4 +203,11 @@ async fn clear_diagnostics(
 async fn clear_sniff(State(state): State<AppState>, Path(device_id): Path<String>) -> &'static str {
     state.db.clear_sniff_frames(&device_id);
     "ok"
+}
+
+async fn get_device_availability(
+    State(state): State<AppState>,
+    Path(device_id): Path<String>,
+) -> Json<Option<crate::db::DeviceStatus>> {
+    Json(state.db.get_device_status(&device_id))
 }

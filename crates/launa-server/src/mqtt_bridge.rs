@@ -61,12 +61,32 @@ fn handle_forward(db: &Database, publish: &rumqttd::protocol::Publish) {
     let subtopic = parts[2];
 
     match subtopic {
+        "availability" => handle_availability(db, device_id, payload),
+        "boot" => handle_boot(db, device_id, payload),
         "state" => db.insert_status(device_id, payload),
         "log" => handle_log(db, device_id, payload),
         "diagnostics" => db.insert_diagnostics(device_id, payload),
         "alert" => db.insert_alert(device_id, payload),
         "sniff" => db.insert_sniff_frame(device_id, payload),
         _ => {}
+    }
+}
+
+fn handle_availability(db: &Database, device_id: &str, payload: &str) {
+    // Payload is a plain string: "online", "offline", or "stale"
+    let status = match payload.trim() {
+        "online" => "online",
+        "offline" => "offline",
+        "stale" => "stale",
+        other => other,
+    };
+    db.update_device_status(device_id, status, None);
+}
+
+fn handle_boot(db: &Database, device_id: &str, payload: &str) {
+    let boot_id = payload.trim().parse::<u32>().ok();
+    if let Some(bid) = boot_id {
+        db.update_device_status(device_id, "online", Some(bid));
     }
 }
 

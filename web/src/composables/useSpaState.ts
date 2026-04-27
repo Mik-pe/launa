@@ -22,6 +22,7 @@ export function useSpaState() {
   const selfTestEnabled = ref(false)
   const sniffEnabled = ref(false)
   let reconnectingTimer: ReturnType<typeof setTimeout> | null = null
+  let lastBootId: string | null = null
   const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   function addPending(key: string): void {
@@ -72,6 +73,15 @@ export function useSpaState() {
     } else if (topic === `${base}/availability`) {
       clearTimeout(reconnectingTimer!)
       availability.value = payload
+    } else if (topic === `${base}/boot`) {
+      // Device published boot_id — if it changed, clear stale state from a previous boot
+      if (lastBootId !== null && lastBootId !== payload) {
+        spaState.value = null
+        pendingKeys.value = new Set()
+        for (const t of pendingTimers.values()) clearTimeout(t)
+        pendingTimers.clear()
+      }
+      lastBootId = payload
     } else if (topic === `${base}/alert`) {
       alertMessage.value = payload
     }
@@ -118,6 +128,7 @@ export function useSpaState() {
     clearTimeout(reconnectingTimer!)
     for (const t of pendingTimers.values()) clearTimeout(t)
     pendingTimers.clear()
+    lastBootId = null
   }
 
   return {

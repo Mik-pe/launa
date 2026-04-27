@@ -20,6 +20,8 @@ use log::{info, warn};
 use crate::types::FaultBuf;
 use crate::*;
 
+static MQTT_PUB_WARN: crate::rate_log::RateLog = crate::rate_log::RateLog::new();
+
 #[embassy_executor::task]
 pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
     let cmd_sender = COMMAND_CHANNEL.sender();
@@ -93,8 +95,8 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
         // Check for diagnostics payloads to publish (non-blocking)
         if non_cmd_count < MAX_NON_CMD_RECEIVES {
             if let Ok(diag_payload) = diag_rx.try_receive() {
-                if let Err(e) = mqtt.publish(&diag_topic, &diag_payload, 0, false).await {
-                    warn!("MQTT diagnostics publish failed: {:?}", e);
+                if let Err(_) = mqtt.publish(&diag_topic, &diag_payload, 0, false).await {
+                    rate_warn!(MQTT_PUB_WARN, "MQTT diagnostics publish failed");
                 }
                 non_cmd_count += 1;
                 continue;
@@ -104,8 +106,8 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
         // Check for alert payloads to publish (non-blocking)
         if non_cmd_count < MAX_NON_CMD_RECEIVES {
             if let Ok(alert_payload) = alert_rx.try_receive() {
-                if let Err(e) = mqtt.publish(&alert_topic, &alert_payload, 1, false).await {
-                    warn!("MQTT alert publish failed: {:?}", e);
+                if let Err(_) = mqtt.publish(&alert_topic, &alert_payload, 1, false).await {
+                    rate_warn!(MQTT_PUB_WARN, "MQTT alert publish failed");
                 }
                 non_cmd_count += 1;
                 continue;
@@ -115,8 +117,8 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
         // Check for sniff frame payloads to publish (non-blocking)
         if non_cmd_count < MAX_NON_CMD_RECEIVES {
             if let Ok(sniff_payload) = sniff_rx.try_receive() {
-                if let Err(e) = mqtt.publish(&sniff_topic, &sniff_payload, 0, false).await {
-                    warn!("MQTT sniff publish failed: {:?}", e);
+                if let Err(_) = mqtt.publish(&sniff_topic, &sniff_payload, 0, false).await {
+                    rate_warn!(MQTT_PUB_WARN, "MQTT sniff publish failed");
                 }
                 non_cmd_count += 1;
                 continue;
@@ -137,8 +139,8 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                         };
                         let json = launa_mqtt::log_entry_to_json(&log_entry);
                         let payload = json.as_bytes();
-                        if let Err(e) = mqtt.publish(&log_topic, payload, 0, false).await {
-                            warn!("MQTT log publish failed: {:?}", e);
+                        if let Err(_) = mqtt.publish(&log_topic, payload, 0, false).await {
+                            rate_warn!(MQTT_PUB_WARN, "MQTT log publish failed");
                             break;
                         }
                     }
@@ -175,13 +177,13 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 if is_stale || changed {
                     last_published_status = Some(status.clone());
                     last_published_fault = Some(fault);
-                    if let Err(e) = mqtt.publish_state(&status, fault.as_str(), self_test, sniff_mode, wifi_rssi, self_test).await {
-                        warn!("MQTT state publish failed: {:?}", e);
+                    if let Err(_) = mqtt.publish_state(&status, fault.as_str(), self_test, sniff_mode, wifi_rssi, self_test).await {
+                        rate_warn!(MQTT_PUB_WARN, "MQTT state publish failed");
                     }
                 }
                 if is_stale {
-                    if let Err(e) = mqtt.publish_availability_stale().await {
-                        warn!("MQTT stale availability publish failed: {:?}", e);
+                    if let Err(_) = mqtt.publish_availability_stale().await {
+                        rate_warn!(MQTT_PUB_WARN, "MQTT stale availability publish failed");
                     }
                 } else {
                     // Status received after being stale — publish recovery

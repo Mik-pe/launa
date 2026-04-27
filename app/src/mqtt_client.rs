@@ -134,6 +134,8 @@ pub struct MqttClient {
     rate_limiter: RateLimiter,
     /// Last disconnect reason, set by recv() before returning None.
     pub last_disconnect: Option<String>,
+    /// Random boot identifier included in availability payloads.
+    boot_id: u32,
 }
 
 #[derive(Debug)]
@@ -204,6 +206,7 @@ impl MqttClient {
     pub async fn connect(
         stack: &'static Stack<'static>,
         config: &AppConfig,
+        boot_id: u32,
     ) -> Result<Self, MqttError> {
         // Allocate socket buffers once — wrapped in UnsafeCell so we can safely
         // reborrow across reconnects without raw-pointer aliasing UB.
@@ -266,6 +269,7 @@ impl MqttClient {
             rx_buffer: Vec::with_capacity(RX_BUFFER_MAX_SIZE),
             rate_limiter: RateLimiter::new(),
             last_disconnect: None,
+            boot_id,
         };
 
         let client_id = format!("launa_{}", config.device_id);
@@ -728,7 +732,14 @@ impl MqttClient {
         let topics = TopicBuilder::new(&self.device_id);
         let avail_topic = topics.availability_topic();
         let payload = if online { "online" } else { "offline" };
-        self.publish(&avail_topic, payload.as_bytes(), 1, true).await
+        self.publish(&avail_topic, payload.as_bytes(), 1, true).await?;
+        // When coming online, also publish boot_id so the web GUI can detect reboots
+        if online {
+            let boot_topic = topics.boot_topic();
+            let boot_payload = alloc::format!("{}", self.boot_id);
+            self.publish(&boot_topic, boot_payload.as_bytes(), 1, true).await?;
+        }
+        Ok(())
     }
 
     pub async fn publish_availability_stale(&mut self) -> Result<(), MqttError> {

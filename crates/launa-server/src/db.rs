@@ -34,6 +34,13 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch(
             "
+            CREATE TABLE IF NOT EXISTS devices (
+                device_id   TEXT PRIMARY KEY,
+                status      TEXT NOT NULL DEFAULT 'offline',
+                boot_id     INTEGER,
+                updated_at  TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS device_logs (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 device_id   TEXT NOT NULL,
@@ -263,6 +270,56 @@ impl Database {
     pub fn clear_sniff_frames(&self, device_id: &str) {
         self.clear_table("sniff_frames", device_id);
     }
+
+    /// Update device availability status and optional boot_id.
+    ///
+    /// Uses UPSERT so the first seen message for a device_id creates the row.
+    /// `boot_id` is only updated when Some (i.e., on "online" messages).
+    pub fn update_device_status(&self, device_id: &str, status: &str, boot_id: Option<u32>) {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        match boot_id {
+            Some(bid) => {
+                let _ = conn.execute(
+                    "INSERT INTO devices (device_id, status, boot_id, updated_at) VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(device_id) DO UPDATE SET status = ?2, boot_id = ?3, updated_at = ?4",
+                    params![device_id, status, bid, now],
+                );
+            }
+            None => {
+                let _ = conn.execute(
+                    "INSERT INTO devices (device_id, status, updated_at) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(device_id) DO UPDATE SET status = ?2, updated_at = ?3",
+                    params![device_id, status, now],
+                );
+            }
+        }
+    }
+
+    /// Get the current device status (online/offline/stale) and boot_id.
+    pub fn get_device_status(&self, device_id: &str) -> Option<DeviceStatus> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT status, boot_id, updated_at FROM devices WHERE device_id = ?1")
+            .unwrap();
+        let mut rows = stmt
+            .query_map(params![device_id], |row| {
+                Ok(DeviceStatus {
+                    status: row.get(0)?,
+                    boot_id: row.get(1)?,
+                    updated_at: row.get(2)?,
+                })
+            })
+            .unwrap();
+        rows.next().and_then(|r| r.ok())
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DeviceStatus {
+    pub status: String,
+    pub boot_id: Option<u32>,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

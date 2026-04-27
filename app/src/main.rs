@@ -53,6 +53,7 @@ mod types;
 mod uart_raw;
 mod wifi;
 
+mod rate_log;
 mod self_test;
 
 /// Custom panic handler: logs panic location, waits 500ms for log flush,
@@ -115,6 +116,29 @@ impl<'a> core::fmt::Write for SliceWrite<'a> {
 /// Used in HA discovery (sw_version), MQTT state JSON, and diagnostics payload.
 const FIRMWARE_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_SHORT_SHA"), ")");
 
+/// Random boot identifier generated once per boot. Published in the availability
+/// payload so the web GUI can detect device reboots and clear stale state.
+static BOOT_ID: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Get the boot_id, generating it on first access from the hardware RNG.
+fn boot_id() -> u32 {
+    let id = BOOT_ID.load(Ordering::Relaxed);
+    if id != 0 {
+        return id;
+    }
+    // Generate a random non-zero boot_id
+    let rng = esp_hal::rng::Rng::new();
+    let mut new_id: u32;
+    loop {
+        new_id = rng.random();
+        if new_id != 0 {
+            break;
+        }
+    }
+    BOOT_ID.store(new_id, Ordering::Relaxed);
+    new_id
+}
+
 static MQTT_RECONNECT_COUNT: AtomicU32 = AtomicU32::new(0);
 static MQTT_LOSS_COUNT: AtomicU32 = AtomicU32::new(0);
 static FRAME_ERROR_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -157,6 +181,9 @@ static SNIFF_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::ne
 
 #[embassy_executor::task]
 async fn uart_task(mut transport: transport::Rs485Transport) {
+    static UART_READ_ERR: rate_log::RateLog = rate_log::RateLog::new();
+    static UART_WRITE_ERR: rate_log::RateLog = rate_log::RateLog::new();
+
     let mut decoder = FrameDecoder::new();
     let frame_sender = FRAME_CHANNEL.sender();
     let uart_rx = UART_TX_CHANNEL.receiver();
@@ -210,26 +237,26 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                     Ok(_) => {
                         Timer::after(Duration::from_millis(1)).await;
                     }
-                    Err(e) => {
-                        error!("UART read error: {:?}", e);
+                    Err(_) => {
+                        rate_error!(UART_READ_ERR, "UART read error: Io");
                         Timer::after(Duration::from_millis(10)).await;
                     }
                 }
                 // Drain any pending TX after processing RX
                 while let Ok(data) = uart_rx.try_receive() {
-                    if let Err(e) = transport.write(&data).await {
-                        error!("UART write error: {:?}", e);
+                    if let Err(_) = transport.write(&data).await {
+                        rate_error!(UART_WRITE_ERR, "UART write error: Io (drain)");
                     }
                 }
             }
             Either::Second(data) => {
-                if let Err(e) = transport.write(&data).await {
-                    error!("UART write error: {:?}", e);
+                if let Err(_) = transport.write(&data).await {
+                    rate_error!(UART_WRITE_ERR, "UART write error: Io");
                 }
                 // Drain any additional pending TX
                 while let Ok(data) = uart_rx.try_receive() {
-                    if let Err(e) = transport.write(&data).await {
-                        error!("UART write error: {:?}", e);
+                    if let Err(_) = transport.write(&data).await {
+                        rate_error!(UART_WRITE_ERR, "UART write error: Io (drain)");
                     }
                 }
             }
@@ -643,11 +670,12 @@ async fn init_wifi(
 async fn connect_mqtt(
     stack: &'static embassy_net::Stack<'static>,
     config: &config::AppConfig,
+    bid: u32,
 ) -> mqtt_client::MqttClient {
     let mut attempt: u32 = 0;
     loop {
         attempt += 1;
-        match mqtt_client::MqttClient::connect(stack, config).await {
+        match mqtt_client::MqttClient::connect(stack, config, bid).await {
             Ok(m) => break m,
             Err(e) => {
                 let backoff_secs = (5u64 << attempt.saturating_sub(1).min(4)).min(60);
@@ -799,7 +827,8 @@ async fn main(spawner: Spawner) {
     )
     .await;
 
-    let mut mqtt = connect_mqtt(wifi_stack.stack, &app_config).await;
+    let bid = boot_id();
+    let mut mqtt = connect_mqtt(wifi_stack.stack, &app_config, bid).await;
 
     // Fahrenheit default; mqtt_task will re-publish with correct scale after first status
     let _ = mqtt.post_connect_publish(false).await;

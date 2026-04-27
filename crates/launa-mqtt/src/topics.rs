@@ -40,6 +40,12 @@ impl TopicBuilder {
         alloc::format!("{}/{}/availability", BASE_TOPIC, self.device_id)
     }
 
+    /// Topic for publishing the boot identifier (random u32, retained).
+    /// The web GUI subscribes to detect device reboots and clear stale state.
+    pub fn boot_topic(&self) -> String {
+        alloc::format!("{}/{}/boot", BASE_TOPIC, self.device_id)
+    }
+
     pub fn discovery_topic(&self, component: &str, object_id: &str) -> String {
         alloc::format!(
             "homeassistant/{}/{}/{}/config",
