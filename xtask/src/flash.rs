@@ -1,6 +1,12 @@
 use anyhow::{bail, Context};
 use std::process::Command;
 
+/// otadata partition offset and size from partitions.csv.
+/// Erasing this before USB flash ensures the bootloader doesn't
+/// keep booting from a stale OTA slot after a USB flash.
+const OTADATA_OFFSET: &str = "0x10000";
+const OTADATA_SIZE: &str = "0x2000";
+
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut feature = None;
     let mut port = None;
@@ -19,6 +25,37 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     }
 
     let app_dir = crate::util::project_root().join("app");
+
+    // Erase otadata partition so the bootloader falls back to the factory
+    // partition. Without this, an OTA-updated device keeps booting from the
+    // OTA slot even after a USB flash overwrites factory.
+    println!("Erasing otadata partition to clear OTA boot selection...");
+    let mut erase_cmd = Command::new("cargo");
+    erase_cmd
+        .arg("+esp")
+        .arg("espflash")
+        .arg("erase-region")
+        .arg(OTADATA_OFFSET)
+        .arg(OTADATA_SIZE)
+        .arg("--chip")
+        .arg("esp32");
+    if let Some(ref p) = port {
+        erase_cmd.arg("-p").arg(p);
+    }
+    erase_cmd.current_dir(&app_dir);
+
+    let erase_status = erase_cmd
+        .status()
+        .context("Failed to run espflash erase-region")?;
+
+    if !erase_status.success() {
+        bail!(
+            "otadata erase failed with exit code {:?}",
+            erase_status.code()
+        );
+    }
+    println!("otadata erased.");
+
     let mut cmd = Command::new("cargo");
     cmd.arg("+esp")
         .arg("espflash")
