@@ -6,70 +6,38 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-pub fn run(args: &[String]) -> anyhow::Result<()> {
-    let mut firmware_path = None;
-    let mut port = 8080u16;
-    let mut quiet = false;
-    let mut parser = crate::util::Args::new(args);
-    while parser.has_more() {
-        match parser.peek().unwrap() {
-            "--firmware" => firmware_path = Some(PathBuf::from(parser.value("--firmware")?)),
-            "--port" => {
-                port = parser.optional_parsed::<u16>("--port")?.unwrap();
-            }
-            "--quiet" => {
-                quiet = true;
-                parser.skip();
-            }
-            _ => return Err(parser.unknown_arg()),
-        }
-    }
-
-    let firmware_path = firmware_path.context("--firmware <path> is required")?;
-    if !firmware_path.exists() {
-        bail!("Firmware file not found: {}", firmware_path.display());
-    }
-
-    let firmware_data = std::fs::read(&firmware_path)
-        .with_context(|| format!("Failed to read {}", firmware_path.display()))?;
-
-    let firmware_data = Arc::new(firmware_data);
+/// Run the OTA server with an externally-controlled shutdown flag.
+/// Binds to `0.0.0.0:<port>` and serves the firmware file until `shutdown` is set.
+/// Returns the actual bound address (useful for detecting OS-assigned port 0).
+pub fn serve(
+    port: u16,
+    firmware_data: &[u8],
+    quiet: bool,
+    shutdown: &AtomicBool,
+) -> anyhow::Result<()> {
+    let firmware_data = Arc::new(firmware_data.to_vec());
     let addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&addr)
         .map_err(|e| anyhow::anyhow!("Failed to bind TCP on {}: {}", addr, e))?;
-    // Use blocking I/O — avoids WOULD_BLOCK errors on partial writes.
-    // We set a short accept timeout so the running flag is checked periodically.
     listener
         .set_nonblocking(false)
         .map_err(|e| anyhow::anyhow!("Failed to set blocking mode: {}", e))?;
 
     if !quiet {
-        println!("OTA server running on http://{}/firmware.bin", addr);
+        let bound_addr = listener.local_addr()?;
         println!(
-            "Serving: {} ({} bytes)",
-            firmware_path.display(),
-            firmware_data.len()
+            "OTA server running on http://{}/firmware.bin",
+            bound_addr
         );
-        println!("Press Ctrl+C to stop.");
+        println!("Firmware: {} bytes", firmware_data.len());
     }
 
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-    crate::util::ctrlc_handler(move || {
-        r.store(false, Ordering::SeqCst);
-    });
-
-    // Set accept timeout so we can check the running flag periodically
-    listener.set_nonblocking(false).ok();
-    // Use a short timeout on accept to allow graceful shutdown
     let accept_timeout = Duration::from_millis(500);
 
-    while running.load(Ordering::SeqCst) {
-        // Set a read timeout on the listener socket to allow periodic running checks
+    while !shutdown.load(Ordering::SeqCst) {
         listener.set_nonblocking(true).ok();
         match listener.accept() {
             Ok((mut stream, peer)) => {
-                // Switch accepted stream to blocking mode for reliable writes
                 stream.set_nonblocking(false).ok();
                 let peer_str = peer.to_string();
                 if !quiet {
@@ -94,7 +62,6 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                         }
 
                         if first_line.contains("HTTP") {
-                            // Real HTTP request - serve the firmware
                             let header = format!(
                                 "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                                 firmware_data.len()
@@ -147,7 +114,6 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                                 }
                             }
                         } else {
-                            // Raw TCP data (test mode) - echo back
                             let msg = format!("echo: {} bytes received\n", n);
                             let _ = stream.write_all(msg.as_bytes());
                             if !quiet {
@@ -161,7 +127,6 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                 }
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                // No pending connection — sleep briefly and re-check running flag
                 std::thread::sleep(accept_timeout);
             }
             Err(e) => {
@@ -175,4 +140,41 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         println!("OTA server stopped.");
     }
     Ok(())
+}
+
+/// CLI entry point for `cargo xtask ota-serve`.
+pub fn run(args: &[String]) -> anyhow::Result<()> {
+    let mut firmware_path = None;
+    let mut port = 8080u16;
+    let mut quiet = false;
+    let mut parser = crate::util::Args::new(args);
+    while parser.has_more() {
+        match parser.peek().unwrap() {
+            "--firmware" => firmware_path = Some(PathBuf::from(parser.value("--firmware")?)),
+            "--port" => {
+                port = parser.optional_parsed::<u16>("--port")?.unwrap();
+            }
+            "--quiet" => {
+                quiet = true;
+                parser.skip();
+            }
+            _ => return Err(parser.unknown_arg()),
+        }
+    }
+
+    let firmware_path = firmware_path.context("--firmware <path> is required")?;
+    if !firmware_path.exists() {
+        bail!("Firmware file not found: {}", firmware_path.display());
+    }
+
+    let firmware_data = std::fs::read(&firmware_path)
+        .with_context(|| format!("Failed to read {}", firmware_path.display()))?;
+
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let r = shutdown.clone();
+    crate::util::ctrlc_handler(move || {
+        r.store(true, Ordering::SeqCst);
+    });
+
+    serve(port, &firmware_data, quiet, &shutdown)
 }

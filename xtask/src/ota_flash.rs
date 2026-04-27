@@ -154,7 +154,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         println!("Warning: Could not determine expected firmware version");
     }
 
-    // Step 3: Start OTA server in background
+    // Step 3: Start OTA server in a background thread (same process, so it dies with us)
     println!("\n[3/7] Starting OTA server...");
     let server_addr = format!("127.0.0.1:{}", ota_port);
     if std::net::TcpStream::connect(&server_addr).is_ok() {
@@ -163,20 +163,16 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             ota_port
         );
     }
-    let xtask_bin = std::env::current_exe().context("Failed to get current exe path")?;
-    let mut ota_serve_cmd = Command::new(&xtask_bin);
-    ota_serve_cmd
-        .arg("ota-serve")
-        .arg("--firmware")
-        .arg(&ota_bin_path)
-        .arg("--port")
-        .arg(ota_port.to_string())
-        .arg("--quiet");
 
-    let mut ota_serve_child = ota_serve_cmd
-        .spawn()
-        .context("Failed to start OTA server")?;
-    println!("OTA server started (PID {}).", ota_serve_child.id());
+    let ota_bin_data = std::fs::read(&ota_bin_path)
+        .with_context(|| format!("Failed to read {}", ota_bin_path.display()))?;
+    let server_shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let server_shutdown_clone = server_shutdown.clone();
+    let server_port = ota_port;
+
+    let server_thread = std::thread::spawn(move || {
+        crate::ota_serve::serve(server_port, &ota_bin_data, true, &server_shutdown_clone)
+    });
 
     // Wait for server to be ready (verify with TCP connect)
     let server_addr = format!("127.0.0.1:{}", ota_port);
@@ -187,8 +183,8 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             break;
         }
         if attempt == 10 {
-            let _ = ota_serve_child.kill();
-            let _ = ota_serve_child.wait();
+            server_shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = server_thread.join();
             bail!("OTA server did not become ready on port {}", ota_port);
         }
         println!("Waiting for OTA server... (attempt {}/10)", attempt);
@@ -327,9 +323,12 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     // Step 7: Cleanup
     println!("\n[7/7] Cleaning up...");
-    let _ = ota_serve_child.kill();
-    let _ = ota_serve_child.wait();
-    println!("OTA server stopped.");
+    server_shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+    match server_thread.join() {
+        Ok(Ok(())) => println!("OTA server stopped."),
+        Ok(Err(e)) => eprintln!("OTA server error: {}", e),
+        Err(_) => eprintln!("OTA server thread panicked."),
+    }
 
     println!(
         "\nOTA flash successful! Device {} is running new firmware.",

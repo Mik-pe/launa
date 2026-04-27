@@ -286,6 +286,11 @@ impl MqttClient {
         Ok(client)
     }
 
+    /// Whether the MQTT transport is currently connected.
+    pub fn is_connected(&self) -> bool {
+        self.transport.is_some()
+    }
+
     fn allocate_packet_id(&mut self) -> u16 {
         let id = self.next_packet_id;
         self.next_packet_id = self.next_packet_id.wrapping_add(1);

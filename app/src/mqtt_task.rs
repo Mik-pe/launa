@@ -20,7 +20,7 @@ use log::{info, warn};
 use crate::types::FaultBuf;
 use crate::*;
 
-static MQTT_PUB_WARN: crate::rate_log::RateLog = crate::rate_log::RateLog::new();
+static MQTT_PUB_WARN: launa_core::RateLog = launa_core::RateLog::new();
 
 #[embassy_executor::task]
 pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
@@ -80,119 +80,120 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
             .await;
         }
 
-        // Drain non-command channels with a bounding counter to prevent
-        // starving command processing. Without this limit, a continuous
-        // stream of diagnostics/alerts/state updates with `continue` could
-        // indefinitely delay `mqtt.recv()`, causing missed commands.
-        //
-        // The counter resets to 0 each loop iteration (each iteration gets
-        // its own budget), so increments in `continue` branches are never
-        // read across iterations — hence the unused_assignments allow on
-        // the increment lines below.
-        const MAX_NON_CMD_RECEIVES: u8 = 5;
-        let mut non_cmd_count: u8 = 0;
+        // Skip all publish work when MQTT is disconnected. This avoids:
+        // - Draining the remote log buffer only to fail the publish (logs lost)
+        // - Wasting CPU on failed publish attempts for diagnostics/alerts/sniff/state
+        if !mqtt.is_connected() {
+            // Still need to drain the command channel so it doesn't fill up
+            // during disconnection — but recv() below handles reconnection.
+            // Jump straight to the recv/select block.
+        } else {
+            const MAX_NON_CMD_RECEIVES: u8 = 5;
+            #[allow(unused_assignments)]
+            let mut non_cmd_count: u8 = 0;
 
-        // Check for diagnostics payloads to publish (non-blocking)
-        if non_cmd_count < MAX_NON_CMD_RECEIVES {
-            if let Ok(diag_payload) = diag_rx.try_receive() {
-                if let Err(_) = mqtt.publish(&diag_topic, &diag_payload, 0, false).await {
-                    rate_warn!(MQTT_PUB_WARN, "MQTT diagnostics publish failed");
-                }
-                non_cmd_count += 1;
-                continue;
-            }
-        }
-
-        // Check for alert payloads to publish (non-blocking)
-        if non_cmd_count < MAX_NON_CMD_RECEIVES {
-            if let Ok(alert_payload) = alert_rx.try_receive() {
-                if let Err(_) = mqtt.publish(&alert_topic, &alert_payload, 1, false).await {
-                    rate_warn!(MQTT_PUB_WARN, "MQTT alert publish failed");
-                }
-                non_cmd_count += 1;
-                continue;
-            }
-        }
-
-        // Check for sniff frame payloads to publish (non-blocking)
-        if non_cmd_count < MAX_NON_CMD_RECEIVES {
-            if let Ok(sniff_payload) = sniff_rx.try_receive() {
-                if let Err(_) = mqtt.publish(&sniff_topic, &sniff_payload, 0, false).await {
-                    rate_warn!(MQTT_PUB_WARN, "MQTT sniff publish failed");
-                }
-                non_cmd_count += 1;
-                continue;
-            }
-        }
-
-        // Drain remote log buffer and publish entries (non-blocking)
-        #[cfg(feature = "remote-log")]
-        if non_cmd_count < MAX_NON_CMD_RECEIVES {
-            if let Some(log_buf) = crate::remote_log::remote_log_buffer() {
-                if !log_buf.is_empty() {
-                    let entries = log_buf.drain();
-                    for entry in &entries {
-                        let log_entry = launa_mqtt::RemoteLogEntry {
-                            level: entry.level,
-                            message: entry.message.clone(),
-                            timestamp_ms: entry.timestamp_ms,
-                        };
-                        let json = launa_mqtt::log_entry_to_json(&log_entry);
-                        let payload = json.as_bytes();
-                        if let Err(_) = mqtt.publish(&log_topic, payload, 0, false).await {
-                            rate_warn!(MQTT_PUB_WARN, "MQTT log publish failed");
-                            break;
-                        }
+            // Check for diagnostics payloads to publish (non-blocking)
+            if non_cmd_count < MAX_NON_CMD_RECEIVES {
+                if let Ok(diag_payload) = diag_rx.try_receive() {
+                    if let Err(_) = mqtt.publish(&diag_topic, &diag_payload, 0, false).await {
+                        rate_warn!(MQTT_PUB_WARN, "MQTT diagnostics publish failed");
                     }
                     non_cmd_count += 1;
                     continue;
                 }
             }
-        }
 
-        // Check for state updates to publish (non-blocking)
-        if non_cmd_count < MAX_NON_CMD_RECEIVES {
-            if let Ok(msg) = state_rx.try_receive() {
-                let status = msg.status;
-                let fault = msg.fault;
-                let is_stale = msg.recovering_from_stale;
-                let self_test = msg.self_test;
-                let sniff_mode = msg.sniff_mode;
-                let wifi_rssi = msg.wifi_rssi;
-                last_scale_range = Some((status.temperature_scale, status.temp_range));
-                // Force re-publish when self_test or sniff_mode changes so the
-                // first state after mode toggle always reaches the broker.
-                let mode_changed = self_test != last_self_test || sniff_mode != last_sniff_mode;
-                if mode_changed {
-                    last_published_status = None;
-                }
-                last_self_test = self_test;
-                last_sniff_mode = sniff_mode;
-                last_wifi_rssi = wifi_rssi;
-                // Change detection: skip publish if state is identical to last
-                let changed = launa_mqtt::state_change::status_changed(
-                    last_published_status.as_ref(),
-                    &status,
-                );
-                if is_stale || changed {
-                    last_published_status = Some(status.clone());
-                    last_published_fault = Some(fault);
-                    if let Err(_) = mqtt.publish_state(&status, fault.as_str(), self_test, sniff_mode, wifi_rssi, self_test).await {
-                        rate_warn!(MQTT_PUB_WARN, "MQTT state publish failed");
+            // Check for alert payloads to publish (non-blocking)
+            if non_cmd_count < MAX_NON_CMD_RECEIVES {
+                if let Ok(alert_payload) = alert_rx.try_receive() {
+                    if let Err(_) = mqtt.publish(&alert_topic, &alert_payload, 1, false).await {
+                        rate_warn!(MQTT_PUB_WARN, "MQTT alert publish failed");
                     }
+                    non_cmd_count += 1;
+                    continue;
                 }
-                if is_stale {
-                    if let Err(_) = mqtt.publish_availability_stale().await {
-                        rate_warn!(MQTT_PUB_WARN, "MQTT stale availability publish failed");
-                    }
-                } else {
-                    // Status received after being stale — publish recovery
-                    let _ = mqtt.publish_availability(true).await;
-                }
-                non_cmd_count += 1;
-                continue;
             }
-        }
+
+            // Check for sniff frame payloads to publish (non-blocking)
+            if non_cmd_count < MAX_NON_CMD_RECEIVES {
+                if let Ok(sniff_payload) = sniff_rx.try_receive() {
+                    if let Err(_) = mqtt.publish(&sniff_topic, &sniff_payload, 0, false).await {
+                        rate_warn!(MQTT_PUB_WARN, "MQTT sniff publish failed");
+                    }
+                    non_cmd_count += 1;
+                    continue;
+                }
+            }
+
+            // Drain remote log buffer and publish entries (non-blocking)
+            #[cfg(feature = "remote-log")]
+            if non_cmd_count < MAX_NON_CMD_RECEIVES {
+                if let Some(log_buf) = crate::remote_log::remote_log_buffer() {
+                    if !log_buf.is_empty() {
+                        let entries = log_buf.drain();
+                        for entry in &entries {
+                            let log_entry = launa_mqtt::RemoteLogEntry {
+                                level: entry.level,
+                                message: entry.message.clone(),
+                                timestamp_ms: entry.timestamp_ms,
+                            };
+                            let json = launa_mqtt::log_entry_to_json(&log_entry);
+                            let payload = json.as_bytes();
+                            if let Err(_) = mqtt.publish(&log_topic, payload, 0, false).await {
+                                rate_warn!(MQTT_PUB_WARN, "MQTT log publish failed");
+                                break;
+                            }
+                        }
+                        non_cmd_count += 1;
+                        continue;
+                    }
+                }
+            }
+
+            // Check for state updates to publish (non-blocking)
+            if non_cmd_count < MAX_NON_CMD_RECEIVES {
+                if let Ok(msg) = state_rx.try_receive() {
+                    let status = msg.status;
+                    let fault = msg.fault;
+                    let is_stale = msg.recovering_from_stale;
+                    let self_test = msg.self_test;
+                    let sniff_mode = msg.sniff_mode;
+                    let wifi_rssi = msg.wifi_rssi;
+                    last_scale_range = Some((status.temperature_scale, status.temp_range));
+                    // Force re-publish when self_test or sniff_mode changes so the
+                    // first state after mode toggle always reaches the broker.
+                    let mode_changed = self_test != last_self_test || sniff_mode != last_sniff_mode;
+                    if mode_changed {
+                        last_published_status = None;
+                    }
+                    last_self_test = self_test;
+                    last_sniff_mode = sniff_mode;
+                    last_wifi_rssi = wifi_rssi;
+                    // Change detection: skip publish if state is identical to last
+                    let changed = launa_mqtt::state_change::status_changed(
+                        last_published_status.as_ref(),
+                        &status,
+                    );
+                    if is_stale || changed {
+                        last_published_status = Some(status.clone());
+                        last_published_fault = Some(fault);
+                        if let Err(_) = mqtt.publish_state(&status, fault.as_str(), self_test, sniff_mode, wifi_rssi, self_test).await {
+                            rate_warn!(MQTT_PUB_WARN, "MQTT state publish failed");
+                        }
+                    }
+                    if is_stale {
+                        if let Err(_) = mqtt.publish_availability_stale().await {
+                            rate_warn!(MQTT_PUB_WARN, "MQTT stale availability publish failed");
+                        }
+                    } else {
+                        // Status received after being stale — publish recovery
+                        let _ = mqtt.publish_availability(true).await;
+                    }
+                    non_cmd_count += 1;
+                    continue;
+                }
+            }
+        } // end else (connected)
 
         // Check for incoming MQTT messages, with a 1-second timeout so we
         // re-check the channels above even when no MQTT messages arrive.
