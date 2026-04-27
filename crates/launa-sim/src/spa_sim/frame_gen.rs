@@ -206,8 +206,13 @@ pub(crate) fn generate_status_frame(
     // Offset 20: Set Temperature
     payload[20] = state.set_temp.to_wire();
 
-    let mut frame = FrameEncoder::encode([0xFF, 0xAF], &payload)
-        .expect("status frame encoding should never fail: payload is fixed 24 bytes");
+    // Real Balboa hardware includes a 0x13 sub-type prefix byte before the
+    // 24-byte status payload. Prepend it so simulation matches wire format.
+    let mut wire_payload = vec![0x13];
+    wire_payload.extend_from_slice(&payload);
+
+    let mut frame = FrameEncoder::encode([0xFF, 0xAF], &wire_payload)
+        .expect("status frame encoding should never fail: payload is fixed 25 bytes");
 
     // Corrupt frame injection: flip a byte in the middle of the encoded frame
     // to guarantee a CRC mismatch on decode. Corrupting the end marker doesn't

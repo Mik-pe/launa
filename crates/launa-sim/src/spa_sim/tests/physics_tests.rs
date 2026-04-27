@@ -930,7 +930,7 @@ fn test_unknown_temp_exact_boundary_ticks() {
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&bytes);
         assert_eq!(
-            frames[0].payload[2], 0xFF,
+            frames[0].payload[3], 0xFF,
             "tick {}: current_temp should be 0xFF (None)",
             i
         );
@@ -941,7 +941,7 @@ fn test_unknown_temp_exact_boundary_ticks() {
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&bytes);
     assert_ne!(
-        frames[0].payload[2], 0xFF,
+        frames[0].payload[3], 0xFF,
         "tick 11: current_temp should NOT be 0xFF anymore"
     );
 }

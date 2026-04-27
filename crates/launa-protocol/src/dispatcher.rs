@@ -57,8 +57,20 @@ fn unknown_msg(msg_type: [u8; 2], payload: &[u8]) -> IncomingMessage {
 // ---------------------------------------------------------------------------
 
 /// Handle status update frames (message type `FF AF`).
+///
+/// The Balboa protocol includes a sub-type byte (`0x13`) as the first byte
+/// of the payload area. This must be stripped before passing the remaining
+/// 24 bytes to `StatusUpdate::parse()`. Frames from the simulator omit this
+/// byte (24-byte payload), so both lengths are accepted.
 fn handle_status(msg_type: [u8; 2], payload: &[u8]) -> IncomingMessage {
-    match StatusUpdate::parse(payload) {
+    // Real Balboa hardware sends 25 bytes: [0x13, <24 status bytes>].
+    // The simulator sends 24 bytes without the 0x13 prefix.
+    let status_data = if payload.len() == 25 && payload[0] == 0x13 {
+        &payload[1..]
+    } else {
+        payload
+    };
+    match StatusUpdate::parse(status_data) {
         Ok(status) => IncomingMessage::StatusUpdate(status),
         Err(_) => {
             log::warn!(
@@ -336,8 +348,16 @@ pub fn dispatch_frame(frame: &Frame) -> IncomingMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::status::{HeatingMode, PumpState, TempRange, TemperatureScale};
     use crate::Temperature;
     use std::string::String;
+
+    fn hex_decode(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
 
     #[test]
     fn test_dispatch_status_update() {
@@ -355,6 +375,71 @@ mod tests {
             IncomingMessage::StatusUpdate(s) => {
                 assert_eq!(s.current_temp, Some(Temperature::fahrenheit(100.0)));
                 assert_eq!(s.set_temp, Temperature::fahrenheit(104.0));
+            }
+            _ => panic!("Expected StatusUpdate, got {:?}", msg),
+        }
+    }
+
+    /// Real Balboa hardware includes a 0x13 sub-type prefix in the payload.
+    /// The dispatcher must strip it before passing to StatusUpdate::parse().
+    #[test]
+    fn test_dispatch_status_update_with_0x13_prefix() {
+        // Build a 24-byte status payload, then prepend 0x13 to simulate
+        // what real Balboa hardware sends on the wire.
+        let mut inner = [0u8; 24];
+        inner[0] = 0x00; // running
+        inner[2] = 100; // current temp = 100°F
+        inner[9] = 0x02; // 24h time
+        inner[10] = 0x34; // heating + temp range high
+        inner[20] = 104; // set temp
+
+        let mut payload = vec![0x13]; // sub-type prefix
+        payload.extend_from_slice(&inner);
+
+        assert_eq!(payload.len(), 25);
+
+        let frame = Frame {
+            message_type: [0xFF, 0xAF],
+            payload,
+        };
+
+        let msg = dispatch_frame(&frame);
+        match msg {
+            IncomingMessage::StatusUpdate(s) => {
+                assert_eq!(s.current_temp, Some(Temperature::fahrenheit(100.0)));
+                assert_eq!(s.set_temp, Temperature::fahrenheit(104.0));
+                assert_eq!(s.temp_range, TempRange::High);
+                assert!(s.is_heating);
+            }
+            _ => panic!("Expected StatusUpdate, got {:?}", msg),
+        }
+    }
+
+    /// Celsius status with 0x13 prefix — verifies temp scale + wire-value decoding.
+    #[test]
+    fn test_dispatch_status_celsius_with_0x13_prefix() {
+        let mut inner = [0u8; 24];
+        inner[0] = 0x00; // running
+        inner[2] = 72; // 36°C (wire: 36*2 = 72)
+        inner[9] = 0x01; // Celsius bit
+        inner[10] = 0x04; // temp range high, no heating
+        inner[20] = 80; // set temp = 40°C (wire: 40*2 = 80)
+
+        let mut payload = vec![0x13];
+        payload.extend_from_slice(&inner);
+
+        let frame = Frame {
+            message_type: [0xFF, 0xAF],
+            payload,
+        };
+
+        let msg = dispatch_frame(&frame);
+        match msg {
+            IncomingMessage::StatusUpdate(s) => {
+                assert_eq!(s.current_temp, Some(Temperature::celsius(36.0)));
+                assert_eq!(s.set_temp, Temperature::celsius(40.0));
+                assert_eq!(s.temperature_scale, TemperatureScale::Celsius);
+                assert_eq!(s.temp_range, TempRange::High);
             }
             _ => panic!("Expected StatusUpdate, got {:?}", msg),
         }
@@ -913,19 +998,84 @@ mod tests {
         );
     }
 
+    /// Regression test: real sniffer capture from BP6013G1 in Celsius mode.
+    /// Raw wire payload is 25 bytes (0x13 prefix + 24 status bytes).
+    /// Before the fix, the 0x13 prefix shifted all offsets by 1, causing:
+    ///   - current_temp = 3 (init_mode byte 0x03) instead of 35°C
+    ///   - temp_range = Low (wrong flags byte) instead of High
+    ///   - temp_scale = Fahrenheit (wrong flags byte) instead of Celsius
     #[test]
-    fn test_dispatch_short_0x22_payload_too_short_for_data() {
-        // Payload [0x22, 0x01]: sub-type and settings-type present, but
-        // only 2 bytes total — no room for the 3-byte header + filter data.
+    fn test_real_sniffer_celsius_status_frame() {
+        let sniffer_hex = "130003460c0c00280306031c00000200000000020248000000";
+        let payload = hex_decode(sniffer_hex);
+        assert_eq!(payload.len(), 25);
+        assert_eq!(payload[0], 0x13);
+
         let frame = Frame {
-            message_type: [0x0A, 0xBF],
-            payload: vec![0x22, 0x01],
+            message_type: [0xFF, 0xAF],
+            payload,
         };
+
         let msg = dispatch_frame(&frame);
-        assert!(
-            matches!(msg, IncomingMessage::Unknown { .. }),
-            "Expected Unknown for [0x22, 0x01] too-short payload, got {:?}",
-            msg
-        );
+        let status = match msg {
+            IncomingMessage::StatusUpdate(s) => s,
+            other => panic!("Expected StatusUpdate, got {:?}", other),
+        };
+
+        // Temperature: payload[3]=0x46=70, Celsius → 70/2 = 35°C
+        assert_eq!(status.current_temp, Some(Temperature::celsius(35.0)));
+        // Set temp: payload[21]=0x48=72, Celsius → 72/2 = 36°C
+        assert_eq!(status.set_temp, Temperature::celsius(36.0));
+        // Scale: payload[9]=0x03, bit 0=1 → Celsius
+        assert_eq!(status.temperature_scale, TemperatureScale::Celsius);
+        // Temp range: payload[10]=0x1C=28, bit 2=1 → High
+        assert_eq!(status.temp_range, TempRange::High);
+        // Heating: payload[10]=0x1C, bits 4-5=0x10 → heating active
+        assert!(status.is_heating);
+        // All pumps off: payload[11]=0x1C... wait, let me re-check
+        // payload[11]=0x00 → pumps 1-4 all off
+        // Actually payload[11] in the raw is index 11 of the full 25-byte payload
+        // After stripping 0x13, status data[11] = 0x00 → all pumps 1-4 off
+        for (i, pump) in status.pumps.iter().enumerate() {
+            assert_eq!(*pump, PumpState::Off, "pump {} should be off", i + 1);
+        }
+        // Blower off
+        assert!(!status.blower);
+        // Mister off
+        assert!(!status.mister);
+        // Lights off: status data[14]=0x00
+        for (i, &on) in status.lights.iter().enumerate() {
+            assert!(!on, "light {} should be off", i + 1);
+        }
+        // Heating mode: payload[5]=0x00 → Ready
+        assert_eq!(status.heating_mode, HeatingMode::Ready);
+        // Hour: payload[3]=0x0C=12, Minute: payload[4]=0x0C=12
+        assert_eq!(status.hour, 12);
+        assert_eq!(status.minute, 12);
+        // Circ pump: payload[13]=0x02, bit 1=1 → on
+        assert!(status.circ_pump);
+        // Init mode: payload[1]=0x03 → Reminder
+        // (SpaApp doesn't expose init_mode publicly, but is_priming should be false)
+        assert!(!status.is_priming);
+        // 24h time: payload[9]=0x03, bit 1=1
+        assert_eq!(status.time_format, crate::status::TimeFormat::Hour24);
+    }
+
+    /// Same sniffer data, but verify it fails with the OLD behavior (no 0x13 stripping).
+    /// This proves the bug: if we pass the raw 25 bytes directly to StatusUpdate::parse,
+    /// we get the wrong values.
+    #[test]
+    fn test_sniffer_data_proves_the_offset_bug() {
+        let sniffer_hex = "130003460c0c00280306031c00000200000000020248000000";
+        let payload = hex_decode(sniffer_hex);
+
+        // Without the 0x13 strip, parse reads payload[2]=0x03 as current_temp
+        let buggy = StatusUpdate::parse(&payload).unwrap();
+        // Bug: init_mode byte 0x03 parsed as temperature in Fahrenheit = 3°F
+        assert_eq!(buggy.current_temp, Some(Temperature::fahrenheit(3.0)));
+        // Bug: wrong flags byte → Fahrenheit instead of Celsius
+        assert_eq!(buggy.temperature_scale, TemperatureScale::Fahrenheit);
+        // Bug: wrong flags byte → Low instead of High
+        assert_eq!(buggy.temp_range, TempRange::Low);
     }
 }

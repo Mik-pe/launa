@@ -863,9 +863,10 @@ impl SpaSim {
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&output);
         for frame in &frames {
-            if frame.message_type == [0xFF, 0xAF] && frame.payload.len() == 24 {
-                if let Ok(status) = launa_protocol::status::StatusUpdate::parse(&frame.payload) {
-                    return Some(status);
+            if frame.message_type == [0xFF, 0xAF] {
+                match launa_protocol::dispatch_frame(frame) {
+                    launa_protocol::IncomingMessage::StatusUpdate(status) => return Some(status),
+                    _ => continue,
                 }
             }
         }

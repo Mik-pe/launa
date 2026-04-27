@@ -359,7 +359,7 @@ fn test_simulate_priming_mode_sets_init_mode() {
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&bytes);
     assert_eq!(
-        frames[0].payload[1], 0x01,
+        frames[0].payload[2], 0x01,
         "init_mode should be 0x01 (priming) after simulate_priming_mode"
     );
 }
@@ -377,7 +377,7 @@ fn test_priming_mode_auto_exits_after_duration() {
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&bytes);
         assert_eq!(
-            frames[0].payload[1], 0x01,
+            frames[0].payload[2], 0x01,
             "tick {}: init_mode should be 0x01 (priming)",
             i
         );
@@ -389,7 +389,7 @@ fn test_priming_mode_auto_exits_after_duration() {
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&bytes);
         assert_eq!(
-            frames[0].payload[1], 0x00,
+            frames[0].payload[2], 0x00,
             "tick {}: init_mode should be 0x00 (priming exited)",
             i
         );
@@ -407,7 +407,7 @@ fn test_priming_mode_zero_duration_exits_immediately() {
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&bytes);
     assert_eq!(
-        frames[0].payload[1], 0x00,
+        frames[0].payload[2], 0x00,
         "zero-duration priming should exit immediately"
     );
 }
@@ -423,7 +423,7 @@ fn test_clear_priming_mode_manual_exit() {
     let bytes = sim.generate_status_frame();
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&bytes);
-    assert_eq!(frames[0].payload[1], 0x01, "should be in priming mode");
+    assert_eq!(frames[0].payload[2], 0x01, "should be in priming mode");
 
     // Manually clear
     sim.clear_priming_mode();
@@ -432,7 +432,7 @@ fn test_clear_priming_mode_manual_exit() {
     let bytes = sim.generate_status_frame();
     let frames = decoder.feed_slice(&bytes);
     assert_eq!(
-        frames[0].payload[1], 0x00,
+        frames[0].payload[2], 0x00,
         "priming should be cleared manually"
     );
 }

@@ -26,7 +26,7 @@ fn test_simulate_fault_state_sets_fault_flag() {
     let fault_frames = decoder.feed_slice(&fault_bytes);
     // The raw payload byte 1 should be 0x02
     assert_eq!(
-        fault_frames[0].payload[1], 0x02,
+        fault_frames[0].payload[2], 0x02,
         "init_mode should be 0x02 (fault) after simulate_fault_state"
     );
 }
@@ -91,7 +91,7 @@ fn test_clear_fault_state_restores_init_mode() {
     let mut decoder = FrameDecoder::new();
     let fault_frames = decoder.feed_slice(&fault_bytes);
     assert_eq!(
-        fault_frames[0].payload[1], 0x02,
+        fault_frames[0].payload[2], 0x02,
         "init_mode should be 0x02 during fault"
     );
 
@@ -102,7 +102,7 @@ fn test_clear_fault_state_restores_init_mode() {
     let clear_bytes = sim.generate_status_frame();
     let clear_frames = decoder.feed_slice(&clear_bytes);
     assert_eq!(
-        clear_frames[0].payload[1], 0x00,
+        clear_frames[0].payload[2], 0x00,
         "init_mode should be 0x00 after clear_fault_state"
     );
 }
@@ -141,7 +141,7 @@ fn test_transient_fault_auto_clears_after_n_ticks() {
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&bytes);
         assert_eq!(
-            frames[0].payload[1], 0x02,
+            frames[0].payload[2], 0x02,
             "tick {}: init_mode should be 0x02 (fault active)",
             i
         );
@@ -153,7 +153,7 @@ fn test_transient_fault_auto_clears_after_n_ticks() {
         let mut decoder = FrameDecoder::new();
         let frames = decoder.feed_slice(&bytes);
         assert_eq!(
-            frames[0].payload[1], 0x00,
+            frames[0].payload[2], 0x00,
             "tick {}: init_mode should be 0x00 (fault cleared)",
             i
         );
@@ -172,7 +172,7 @@ fn test_transient_fault_zero_ticks_clears_immediately() {
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&bytes);
     assert_eq!(
-        frames[0].payload[1], 0x00,
+        frames[0].payload[2], 0x00,
         "zero-tick transient should clear immediately"
     );
 }
@@ -188,13 +188,13 @@ fn test_transient_fault_one_tick() {
     let bytes = sim.tick();
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&bytes);
-    assert_eq!(frames[0].payload[1], 0x02, "tick 1: fault should be active");
+    assert_eq!(frames[0].payload[2], 0x02, "tick 1: fault should be active");
 
     // Tick 2: cleared
     let bytes = sim.tick();
     let frames = decoder.feed_slice(&bytes);
     assert_eq!(
-        frames[0].payload[1], 0x00,
+        frames[0].payload[2], 0x00,
         "tick 2: fault should be cleared"
     );
 }
@@ -412,7 +412,7 @@ fn test_command_before_fault_executes_after_clear() {
     let bytes = sim.tick();
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&bytes);
-    assert_eq!(frames[0].payload[1], 0x00, "init_mode should be 0x00");
+    assert_eq!(frames[0].payload[2], 0x00, "init_mode should be 0x00");
 }
 
 #[test]
@@ -424,14 +424,14 @@ fn test_fault_overrides_priming_mode() {
     let bytes = sim.generate_status_frame();
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&bytes);
-    assert_eq!(frames[0].payload[1], 0x01, "should be priming first");
+    assert_eq!(frames[0].payload[2], 0x01, "should be priming first");
 
     // Fault overrides priming
     sim.simulate_fault_state(FaultCode::HeaterDry);
     let bytes = sim.generate_status_frame();
     let frames = decoder.feed_slice(&bytes);
     assert_eq!(
-        frames[0].payload[1], 0x02,
+        frames[0].payload[2], 0x02,
         "fault should override priming mode"
     );
 
@@ -440,7 +440,7 @@ fn test_fault_overrides_priming_mode() {
     let bytes = sim.generate_status_frame();
     let frames = decoder.feed_slice(&bytes);
     assert_eq!(
-        frames[0].payload[1], 0x01,
+        frames[0].payload[2], 0x01,
         "priming should resume after fault cleared"
     );
 }
@@ -455,14 +455,14 @@ fn test_fault_lifecycle_defaults_off() {
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&bytes);
     assert_eq!(
-        frames[0].payload[1], 0x00,
+        frames[0].payload[2], 0x00,
         "init_mode should be 0x00 by default"
     );
 
     // Second tick also normal
     let bytes = sim.tick();
     let frames = decoder.feed_slice(&bytes);
-    assert_eq!(frames[0].payload[1], 0x00, "should remain 0x00");
+    assert_eq!(frames[0].payload[2], 0x00, "should remain 0x00");
 }
 
 #[test]
@@ -483,12 +483,12 @@ fn test_transient_fault_with_command_latency() {
     let bytes = sim.tick();
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&bytes);
-    assert_eq!(frames[0].payload[1], 0x02, "tick 1: fault active");
+    assert_eq!(frames[0].payload[2], 0x02, "tick 1: fault active");
 
     // Tick 2: fault active, command fires (latency 1→0)
     let bytes = sim.tick();
     let frames = decoder.feed_slice(&bytes);
-    assert_eq!(frames[0].payload[1], 0x02, "tick 2: fault still active");
+    assert_eq!(frames[0].payload[2], 0x02, "tick 2: fault still active");
     assert_eq!(
         sim.state.pumps[0],
         PumpState::Low,
@@ -498,5 +498,5 @@ fn test_transient_fault_with_command_latency() {
     // Tick 3: fault cleared
     let bytes = sim.tick();
     let frames = decoder.feed_slice(&bytes);
-    assert_eq!(frames[0].payload[1], 0x00, "tick 3: fault cleared");
+    assert_eq!(frames[0].payload[2], 0x00, "tick 3: fault cleared");
 }
