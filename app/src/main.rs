@@ -285,6 +285,7 @@ async fn execute_actions(actions: &[AppAction], device_id: &str, self_test: bool
             AppAction::PublishDiagnostics {
                 uptime_secs,
                 frames_received,
+                unregistered_frames,
                 command_retries,
                 command_drops,
                 registration_state,
@@ -295,7 +296,7 @@ async fn execute_actions(actions: &[AppAction], device_id: &str, self_test: bool
                 let uart_bytes = UART_BYTES_RECEIVED.load(Ordering::Relaxed);
                 let uart_active = UART_FIRST_BYTE_SEEN.load(Ordering::Relaxed);
                 publish_diagnostics(
-                    device_id, *uptime_secs, *frames_received, *command_retries,
+                    device_id, *uptime_secs, *frames_received, *unregistered_frames, *command_retries,
                     *command_drops, frame_errors, uart_bytes, registration_state, uart_active,
                 );
             }

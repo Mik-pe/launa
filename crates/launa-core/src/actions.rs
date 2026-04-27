@@ -34,6 +34,7 @@ pub enum AppAction {
     PublishDiagnostics {
         uptime_secs: u64,
         frames_received: u32,
+        unregistered_frames: u32,
         command_retries: u32,
         command_drops: u32,
         registration_state: &'static str,

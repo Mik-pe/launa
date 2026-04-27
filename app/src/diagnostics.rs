@@ -19,6 +19,7 @@ pub(crate) fn publish_diagnostics(
     device_id: &str,
     uptime_secs: u64,
     frames_received: u32,
+    unregistered_frames: u32,
     command_retries: u32,
     command_drops: u32,
     frame_errors: u32,
@@ -36,7 +37,7 @@ pub(crate) fn publish_diagnostics(
     let mqtt_losses = MQTT_LOSS_COUNT.load(Ordering::Relaxed);
 
     let json = alloc::format!(
-        r#"{{"device_id":"{}","uptime_secs":{},"mqtt_reconnect_count":{},"mqtt_loss_count":{},"command_retry_count":{},"command_drop_count":{},"frames_received":{},"frame_errors":{},"uart_bytes":{},"reg":"{}","uart_rx":{},"heap_free":{},"firmware_version":"{}"}}"#,
+        r#"{{"device_id":"{}","uptime_secs":{},"mqtt_reconnect_count":{},"mqtt_loss_count":{},"command_retry_count":{},"command_drop_count":{},"frames_received":{},"unregistered_frames":{},"frame_errors":{},"uart_bytes":{},"reg":"{}","uart_rx":{},"heap_free":{},"firmware_version":"{}"}}"#,
         escape_json_string(device_id),
         uptime_secs,
         mqtt_reconnects,
@@ -44,6 +45,7 @@ pub(crate) fn publish_diagnostics(
         command_retries,
         command_drops,
         frames_received,
+        unregistered_frames,
         frame_errors,
         uart_bytes,
         registration_state,

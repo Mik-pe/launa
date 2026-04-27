@@ -57,6 +57,8 @@ pub struct SpaApp<'a> {
 
     // Counters
     frames_received: u32,
+    /// Frames received while unregistered (for diagnostics).
+    unregistered_frames_received: u32,
 
     /// Track whether we've emitted the "no_registration_query" alert to avoid
     /// flooding. Reset when registration completes or the SM resets.
@@ -99,6 +101,7 @@ impl<'a> SpaApp<'a> {
             last_diag_time: None,
             was_stale: false,
             frames_received: 0,
+            unregistered_frames_received: 0,
             no_query_alert_sent: false,
             boot_time: now,
             client_hash,
@@ -140,9 +143,14 @@ impl<'a> SpaApp<'a> {
         self.cmd_tracker.total_retries()
     }
 
-    /// Total frames received.
+    /// Total frames received (post-registration status frames).
     pub fn frames_received(&self) -> u32 {
         self.frames_received
+    }
+
+    /// Frames received while unregistered.
+    pub fn unregistered_frames_received(&self) -> u32 {
+        self.unregistered_frames_received
     }
 
     /// Whether the spa is currently detected as stale (no status for 30s).
@@ -213,11 +221,25 @@ impl<'a> SpaApp<'a> {
 
         // Handle registration
         if !self.registration.is_registered() {
+            self.unregistered_frames_received += 1;
             let action = self
                 .registration
                 .process(frame.message_type, &frame.payload);
+            log::info!(
+                "REG: state={:?}, frame={:02X}{:02X} payload={:?}, action={:?}",
+                self.registration.state(),
+                frame.message_type[0],
+                frame.message_type[1],
+                &frame.payload,
+                action,
+            );
             match action {
                 RegistrationAction::SendIdRequest => {
+                    log::info!(
+                        "REG: sending ID request with hash {:02X}{:02X}",
+                        self.client_hash[0],
+                        self.client_hash[1],
+                    );
                     match FrameEncoder::encode(
                         [0xFE, 0xBF],
                         &[0x01, 0x02, self.client_hash[0], self.client_hash[1]],
@@ -227,11 +249,12 @@ impl<'a> SpaApp<'a> {
                             self.registration_started_at = Some(now);
                         }
                         Err(e) => {
-                            log::error!("Failed to encode registration request: {:?}", e);
+                            log::error!("REG: failed to encode registration request: {:?}", e);
                         }
                     }
                 }
                 RegistrationAction::SendIdAck { client_id: id } => {
+                    log::info!("REG: acknowledging client ID 0x{:02X}", id);
                     match FrameEncoder::encode([id, 0xBF], &[0x03]) {
                         Ok(encoded) => {
                             actions.push(AppAction::SendFrame(encoded));
@@ -239,7 +262,7 @@ impl<'a> SpaApp<'a> {
                             self.registration_started_at = None;
                         }
                         Err(e) => {
-                            log::error!("Failed to encode ID ack: {:?}", e);
+                            log::error!("REG: failed to encode ID ack: {:?}", e);
                         }
                     }
                 }
@@ -442,6 +465,7 @@ impl<'a> SpaApp<'a> {
             actions.push(AppAction::PublishDiagnostics {
                 uptime_secs: uptime_ms / 1000,
                 frames_received: self.frames_received,
+                unregistered_frames: self.unregistered_frames_received,
                 command_retries: self.cmd_tracker.total_retries(),
                 command_drops: self.cmd_tracker.total_dropped(),
                 registration_state: self.registration_state_str(),

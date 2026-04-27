@@ -155,6 +155,7 @@ impl TestHarness {
                 AppAction::PublishDiagnostics {
                     uptime_secs,
                     frames_received,
+                    unregistered_frames: _,
                     command_retries,
                     command_drops,
                     registration_state,
