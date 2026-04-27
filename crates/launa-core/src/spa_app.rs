@@ -18,6 +18,7 @@ use launa_protocol::status::StatusUpdate;
 use crate::actions::AppAction;
 use crate::command_tracker::CommandTracker;
 use crate::heap_monitor::HeapMonitor;
+use crate::rate_log::RateLog;
 use crate::timers::{HoldModeTimer, PumpTimerManager};
 use crate::types::{
     DIAGNOSTICS_INTERVAL_MS, MAX_COMMAND_QUEUE, REGISTRATION_HASH_ROTATE_THRESHOLD,
@@ -64,6 +65,10 @@ pub struct SpaApp<'a> {
     /// flooding. Reset when registration completes or the SM resets.
     no_query_alert_sent: bool,
 
+    /// Rate limiter for the per-frame registration log to avoid flooding
+    /// UART and remote log when unregistered.
+    reg_log: RateLog,
+
     boot_time: Timestamp,
 
     /// Unique client hash for RS-485 channel assignment (2 bytes).
@@ -109,6 +114,7 @@ impl<'a> SpaApp<'a> {
             frames_received: 0,
             unregistered_frames_received: 0,
             no_query_alert_sent: false,
+            reg_log: RateLog::new(),
             boot_time: now,
             client_hash,
             failed_registration_attempts: 0,
@@ -251,14 +257,30 @@ impl<'a> SpaApp<'a> {
             let action = self
                 .registration
                 .process(frame.message_type, &frame.payload);
-            log::info!(
-                "REG: state={:?}, frame={:02X}{:02X} payload={:?}, action={:?}",
-                self.registration.state(),
-                frame.message_type[0],
-                frame.message_type[1],
-                &frame.payload,
-                action,
-            );
+            let now_secs = now.as_secs() as u32;
+            match self.reg_log.check(now_secs, 5) {
+                Ok(suppressed) => {
+                    if suppressed > 0 {
+                        log::info!(
+                            "REG: state={:?}, frame={:02X}{:02X} (suppressed {})",
+                            self.registration.state(),
+                            frame.message_type[0],
+                            frame.message_type[1],
+                            suppressed,
+                        );
+                    } else {
+                        log::info!(
+                            "REG: state={:?}, frame={:02X}{:02X} payload={:?}, action={:?}",
+                            self.registration.state(),
+                            frame.message_type[0],
+                            frame.message_type[1],
+                            &frame.payload,
+                            action,
+                        );
+                    }
+                }
+                Err(_) => { /* suppressed */ }
+            }
             match action {
                 RegistrationAction::SendIdRequest => {
                     log::info!(

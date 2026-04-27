@@ -39,6 +39,7 @@ use types::FaultBuf;
 
 mod clock;
 mod config;
+mod crash_info;
 mod logger;
 mod crypto;
 mod diagnostics;
@@ -56,9 +57,10 @@ mod wifi;
 mod rate_log;
 mod self_test;
 
-/// Custom panic handler: logs panic location, waits 500ms for log flush,
-/// then triggers a software reset. Replaces esp-backtrace's default infinite
-/// loop to allow automatic recovery from panics.
+/// Custom panic handler: logs panic location, stores crash info to NVS,
+/// waits 500ms for log flush, then triggers a software reset.
+/// Replaces esp-backtrace's default infinite loop to allow automatic recovery
+/// from panics. Crash info is published via MQTT on next boot.
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     // Write directly to UART0 registers — don't use the logger since
@@ -71,6 +73,11 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
     uart_raw::write_bytes(&buf[..written]);
     uart_raw::flush();
+
+    // Write crash info to NVS (pre-check prevents repeated writes in crash loops)
+    let panic_msg = core::str::from_utf8(&buf[..written]).unwrap_or("PANIC");
+    let reason = crash_info::CrashReason::classify(panic_msg);
+    crash_info::write_crash_info(reason, panic_msg);
 
     // Busy-wait ~500ms to allow UART TX to fully transmit.
     /// Approximate iterations for ~500ms delay at 240 MHz with loop overhead.
@@ -181,8 +188,8 @@ static SNIFF_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::ne
 
 #[embassy_executor::task]
 async fn uart_task(mut transport: transport::Rs485Transport) {
-    static UART_READ_ERR: rate_log::RateLog = rate_log::RateLog::new();
-    static UART_WRITE_ERR: rate_log::RateLog = rate_log::RateLog::new();
+    static UART_READ_ERR: launa_core::RateLog = launa_core::RateLog::new();
+    static UART_WRITE_ERR: launa_core::RateLog = launa_core::RateLog::new();
 
     let mut decoder = FrameDecoder::new();
     let frame_sender = FRAME_CHANNEL.sender();
@@ -772,12 +779,21 @@ async fn main(spawner: Spawner) {
     let mut ota = None;
     let mut ota_buffers = None;
     let mut nvs_handle: Option<esp_nvs::Nvs<esp_storage::FlashStorage<'static>>> = None;
+    let mut pending_crash_alarm: Option<crash_info::CrashInfo> = None;
     match config::AppConfig::open_nvs(peripherals.FLASH) {
         Some(mut nvs) => {
             let mut aes = esp_hal::aes::Aes::new(peripherals.AES);
             let mut rng = esp_hal::rng::Rng::new();
             app_config = config::AppConfig::load(&mut nvs, &mut aes, &mut rng);
             info!("Config loaded: device_id={}", app_config.device_id);
+
+            // Read crash info from previous boot (written by panic handler).
+            // Stored in memory for publishing after MQTT connects.
+            pending_crash_alarm = crash_info::read_crash_info(&mut nvs);
+
+            // Expose NVS handle to panic handler for crash recording.
+            unsafe { crash_info::set_nvs_ptr(&mut nvs); }
+
             nvs_handle = Some(nvs);
         }
         None => {
@@ -800,7 +816,13 @@ async fn main(spawner: Spawner) {
     }
 
     // Recover flash from NVS for OTA use
-    if let Some(nvs) = nvs_handle.take() {
+    // Clear the NVS pointer before consuming the handle, and clear crash flag
+    // from NVS now that we've read it into pending_crash_alarm.
+    if let Some(mut nvs) = nvs_handle.take() {
+        crash_info::clear_nvs_ptr();
+        if pending_crash_alarm.is_some() {
+            crash_info::clear_crash_info(&mut nvs);
+        }
         let flash = nvs.into_inner();
         ota = Some(ota::create_ota(flash));
         ota_buffers = Some(ota::OtaBuffers::new());
@@ -832,6 +854,24 @@ async fn main(spawner: Spawner) {
 
     // Fahrenheit default; mqtt_task will re-publish with correct scale after first status
     let _ = mqtt.post_connect_publish(false).await;
+
+    // Publish crash alarm from previous boot if present.
+    // This must happen after MQTT connect and before spawning the MQTT task.
+    if let Some(ref crash) = pending_crash_alarm {
+        let alarm_json = crash_info::crash_alarm_json(crash, FIRMWARE_VERSION);
+        let topics = launa_mqtt::topics::TopicBuilder::new(&mqtt.device_id);
+        let alert_topic = topics.alert_topic();
+        match mqtt.publish(&alert_topic, alarm_json.as_bytes(), 1, false).await {
+            Ok(()) => {
+                info!("Crash alarm published: reason={}", crash.reason.as_str());
+                drop(pending_crash_alarm.take());
+            }
+            Err(e) => {
+                warn!("Failed to publish crash alarm: {:?}, will retry via alert channel", e);
+                send_alert("error", &alloc::format!("crash_alarm_publish_failed:{}", crash.reason.as_str()));
+            }
+        }
+    }
 
     validate_firmware(&mut ota);
 
