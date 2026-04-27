@@ -20,8 +20,8 @@ use crate::command_tracker::CommandTracker;
 use crate::heap_monitor::HeapMonitor;
 use crate::timers::{HoldModeTimer, PumpTimerManager};
 use crate::types::{
-    DIAGNOSTICS_INTERVAL_MS, MAX_COMMAND_QUEUE, REGISTRATION_TIMEOUT_MS, STALE_PROBE_INTERVAL_MS,
-    STALE_THRESHOLD_MS,
+    DIAGNOSTICS_INTERVAL_MS, MAX_COMMAND_QUEUE, REGISTRATION_HASH_ROTATE_THRESHOLD,
+    REGISTRATION_TIMEOUT_MS, STALE_PROBE_INTERVAL_MS, STALE_THRESHOLD_MS,
 };
 
 /// The core application logic, extracted from the ESP32 main loop.
@@ -70,6 +70,12 @@ pub struct SpaApp<'a> {
     /// Derived from device-specific data (e.g. ESP32 MAC address) so that
     /// multiple devices on the same bus receive distinct channel IDs.
     client_hash: [u8; 2],
+
+    /// Number of consecutive failed registration attempts (ID request sent
+    /// but no ClientIdAssignment received within timeout). After
+    /// REGISTRATION_HASH_ROTATE_THRESHOLD attempts, the hash is rotated
+    /// to try a different identity on the bus.
+    failed_registration_attempts: u8,
 }
 
 impl<'a> SpaApp<'a> {
@@ -105,6 +111,7 @@ impl<'a> SpaApp<'a> {
             no_query_alert_sent: false,
             boot_time: now,
             client_hash,
+            failed_registration_attempts: 0,
         }
     }
 
@@ -174,6 +181,7 @@ impl<'a> SpaApp<'a> {
         self.registration.process([0xFE, 0xBF], &[0x00]);
         self.registration.process([0xFE, 0xBF], &[0x02, client_id]);
         self.client_id = Some(client_id);
+        self.failed_registration_attempts = 0;
     }
 
     /// Force-reset the registration state machine to WaitingForQuery (for tests).
@@ -183,6 +191,24 @@ impl<'a> SpaApp<'a> {
         self.registration.reset();
         self.client_id = None;
         self.registration_started_at = None;
+    }
+
+    /// Rotate the client hash to try a different identity on the bus.
+    ///
+    /// Called after repeated registration failures (timeout waiting for
+    /// ClientIdAssignment). XORs the attempt counter into both hash bytes
+    /// so subsequent ID requests use a different identity. The counter is
+    /// NOT reset, ensuring each rotation produces a unique hash.
+    fn rotate_client_hash(&mut self) {
+        let attempt = self.failed_registration_attempts;
+        self.client_hash[0] ^= attempt;
+        self.client_hash[1] ^= attempt.wrapping_mul(0x37);
+        log::warn!(
+            "REG: rotating client hash to {:02X}{:02X} after {} failed attempts",
+            self.client_hash[0],
+            self.client_hash[1],
+            attempt,
+        );
     }
 
     /// Force-publish the current state, bypassing change detection.
@@ -260,6 +286,7 @@ impl<'a> SpaApp<'a> {
                             actions.push(AppAction::SendFrame(encoded));
                             self.client_id = Some(id);
                             self.registration_started_at = None;
+                            self.failed_registration_attempts = 0;
                         }
                         Err(e) => {
                             log::error!("REG: failed to encode ID ack: {:?}", e);
@@ -392,6 +419,10 @@ impl<'a> SpaApp<'a> {
         if !self.registration.is_registered() {
             if let Some(started) = self.registration_started_at {
                 if now.elapsed_since(started) >= REGISTRATION_TIMEOUT_MS {
+                    self.failed_registration_attempts += 1;
+                    if self.failed_registration_attempts >= REGISTRATION_HASH_ROTATE_THRESHOLD {
+                        self.rotate_client_hash();
+                    }
                     actions.push(AppAction::PublishAlert {
                         level: String::from("warn"),
                         message: String::from("registration_timeout"),
@@ -720,6 +751,87 @@ mod tests {
         });
         assert!(has_alert);
         assert!(!app.is_registered());
+    }
+
+    #[test]
+    fn test_hash_rotates_after_repeated_registration_failures() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+        let original_hash = app.client_hash;
+
+        // Simulate 10 failed registration attempts (query → timeout, no assignment)
+        for _ in 0..10 {
+            app.process_frame(&new_client_query_frame()); // sends ID request
+            clock.advance_ms(6_000); // past 5s timeout
+            app.tick(); // triggers timeout, increments counter
+        }
+
+        // Hash should have changed from the original
+        assert_ne!(app.client_hash, original_hash);
+    }
+
+    #[test]
+    fn test_hash_does_not_rotate_on_few_failures() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+        let original_hash = app.client_hash;
+
+        // Simulate 9 failed attempts (below threshold of 10)
+        for _ in 0..9 {
+            app.process_frame(&new_client_query_frame());
+            clock.advance_ms(6_000);
+            app.tick();
+        }
+
+        // Hash should NOT have changed yet
+        assert_eq!(app.client_hash, original_hash);
+        assert_eq!(app.failed_registration_attempts, 9);
+    }
+
+    #[test]
+    fn test_failed_attempts_reset_on_successful_registration() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+
+        // Accumulate some failures
+        for _ in 0..5 {
+            app.process_frame(&new_client_query_frame());
+            clock.advance_ms(6_000);
+            app.tick();
+        }
+        assert_eq!(app.failed_registration_attempts, 5);
+
+        // Now succeed
+        app.process_frame(&new_client_query_frame());
+        app.process_frame(&client_id_assignment_frame(0x04));
+
+        assert!(app.is_registered());
+        assert_eq!(app.failed_registration_attempts, 0);
+    }
+
+    #[test]
+    fn test_hash_rotates_multiple_times() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+        let original_hash = app.client_hash;
+
+        // First rotation after 10 failures
+        for _ in 0..10 {
+            app.process_frame(&new_client_query_frame());
+            clock.advance_ms(6_000);
+            app.tick();
+        }
+        let hash_after_first = app.client_hash;
+        assert_ne!(hash_after_first, original_hash);
+
+        // Second rotation after another 10 failures
+        for _ in 0..10 {
+            app.process_frame(&new_client_query_frame());
+            clock.advance_ms(6_000);
+            app.tick();
+        }
+        assert_ne!(app.client_hash, hash_after_first);
+        assert_ne!(app.client_hash, original_hash);
     }
 
     #[test]

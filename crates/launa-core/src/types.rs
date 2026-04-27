@@ -13,6 +13,7 @@ pub(crate) const DEFAULT_HOLD_MODE_TIMEOUT_MS: u64 = 60 * 60 * 1000;
 pub(crate) const STALE_PROBE_INTERVAL_MS: u64 = 5_000;
 pub(crate) const STALE_THRESHOLD_MS: u64 = 30_000;
 pub(crate) const REGISTRATION_TIMEOUT_MS: u64 = 5_000;
+pub(crate) const REGISTRATION_HASH_ROTATE_THRESHOLD: u8 = 10;
 pub(crate) const DIAGNOSTICS_INTERVAL_MS: u64 = 60_000;
 
 pub(crate) const HEAP_CHECK_INTERVAL_MS: u64 = 30_000;
