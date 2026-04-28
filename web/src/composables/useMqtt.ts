@@ -56,8 +56,7 @@ export function useMqtt() {
   async function fetchLastSeen() {
     try {
       const deviceId = conn.settings.value.deviceId
-      const base = new URL(conn.settings.value.brokerUrl)
-      const apiUrl = `${base.protocol === 'wss:' ? 'https:' : 'http:'}//${base.host}/api/devices/${encodeURIComponent(deviceId)}/availability`
+      const apiUrl = `${window.location.origin}/api/devices/${encodeURIComponent(deviceId)}/availability`
       const res = await fetch(apiUrl)
       if (res.ok) {
         const data = await res.json()
