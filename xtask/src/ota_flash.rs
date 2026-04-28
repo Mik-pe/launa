@@ -74,7 +74,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     );
 
     // Step 1: Run cargo test (exclude launa-server — it may be running and lock the binary)
-    println!("\n[1/7] Running cargo test...");
+    println!("\n[1/6] Running cargo test...");
     let test_status = Command::new("cargo")
         .args(["test", "--workspace", "--exclude", "launa-server"])
         .current_dir(crate::util::project_root())
@@ -86,7 +86,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     println!("Tests passed.");
 
     // Step 2: Build firmware
-    println!("\n[2/7] Building firmware...");
+    println!("\n[2/6] Building firmware...");
     let target_dir = crate::util::project_root().join("target");
     let merged_path = target_dir.join("launa-merged.bin");
     let ota_bin_path = target_dir.join("launa-ota.bin");
@@ -155,7 +155,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     }
 
     // Step 3: Start OTA server in a background thread (same process, so it dies with us)
-    println!("\n[3/7] Starting OTA server...");
+    println!("\n[3/6] Starting OTA server...");
     let server_addr = format!("127.0.0.1:{}", ota_port);
     if std::net::TcpStream::connect(&server_addr).is_ok() {
         bail!(
@@ -202,7 +202,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         println!("Waiting for OTA server... (attempt {}/10)", attempt);
     }
 
-    // Step 4: Publish OTA command via MQTT
+    // Step 4: Trigger OTA and wait for device to download + reboot (with retries).
     // Auto-detect local IP since we host the OTA server on this machine.
     let ota_host = match local_ip_address::local_ip() {
         Ok(ip) => ip.to_string(),
@@ -246,111 +246,142 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         }
     }
 
-    println!("\n[4/7] Triggering OTA on device...");
-    let payload = serde_json::json!({
-        "url": firmware_url,
-    });
-    let topic = format!("launa/{}/ota", device_id);
-    client
-        .publish(
-            &topic,
-            rumqttc::QoS::AtLeastOnce,
-            false,
-            payload.to_string().as_bytes(),
-        )
-        .context("Failed to publish OTA command")?;
+    // Step 4: Publish OTA command and wait for device to download + reboot.
+    //          Retry up to 3 attempts if the device doesn't start downloading within 15s.
+    const MAX_OTA_ATTEMPTS: usize = 3;
 
-    // Step 5: Wait for device to download firmware and reboot
-    //
-    // Phase 1: Wait for the device to connect to our OTA server and start downloading.
-    //          If the device doesn't start downloading within 15s, it's not reachable.
-    // Phase 2: Wait for the device to come back online after flashing + rebooting.
-    //          No hard timeout — once download started, the device controls the pace.
-    //          But if download completed and we still haven't seen the device online
-    //          after 60s, something went wrong during flashing.
-
-    println!("[5/7] Waiting for device to connect and download firmware...");
-
-    // Phase 1: Wait for download to start (15s timeout)
-    let connect_deadline = std::time::Instant::now() + Duration::from_secs(15);
-    loop {
-        let bytes = ota_progress.bytes_sent.load(std::sync::atomic::Ordering::SeqCst);
-        if bytes > 0 {
-            println!("Device connected, firmware download started!");
-            break;
-        }
-        if std::time::Instant::now() > connect_deadline {
-            server_shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
-            let _ = server_thread.join();
-            bail!(
-                "OTA flash failed: device did not connect to OTA server within 15s.\n\
-                 Check that the device is online and can reach {}:{}.",
-                ota_host, ota_port
-            );
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
-
-    // Phase 2: Wait for download to finish, then for device to reboot and come online.
-    //          The MQTT event loop runs concurrently — we check both download progress
-    //          and MQTT messages in this loop.
+    let ota_topic = format!("launa/{}/ota", device_id);
+    let ota_payload = serde_json::json!({ "url": firmware_url });
     let mut came_online = false;
     let mut version_payload: Option<String> = None;
     let mut download_complete = false;
-    let mut idle_since: Option<std::time::Instant> = None;
 
-    for notification in connection.iter() {
-        // Check download progress
-        let bytes = ota_progress.bytes_sent.load(std::sync::atomic::Ordering::SeqCst);
-        if !download_complete && bytes >= ota_progress.total_bytes {
-            download_complete = true;
-            println!("Firmware download complete! Waiting for device to flash and reboot...");
-            idle_since = Some(std::time::Instant::now());
+    for attempt in 1..=MAX_OTA_ATTEMPTS {
+        if attempt > 1 {
+            // Reset OTA progress so we can detect a fresh download
+            ota_progress
+                .bytes_sent
+                .store(0, std::sync::atomic::Ordering::SeqCst);
         }
 
-        // If download finished but device hasn't come back in 60s, something died
-        if download_complete {
-            if let Some(since) = idle_since {
-                if since.elapsed() > Duration::from_secs(60) {
-                    break;
+        println!(
+            "\n[4/6] Triggering OTA on device (attempt {}/{})...",
+            attempt, MAX_OTA_ATTEMPTS
+        );
+        client
+            .publish(
+                &ota_topic,
+                rumqttc::QoS::AtLeastOnce,
+                false,
+                ota_payload.to_string().as_bytes(),
+            )
+            .context("Failed to publish OTA command")?;
+
+        // Phase 1: Wait for download to start (15s timeout)
+        println!("[4/6] Waiting for device to connect and download firmware...");
+        let connect_deadline = std::time::Instant::now() + Duration::from_secs(15);
+        let mut download_started = false;
+        loop {
+            let bytes = ota_progress.bytes_sent.load(std::sync::atomic::Ordering::SeqCst);
+            if bytes > 0 {
+                println!("Device connected, firmware download started!");
+                download_started = true;
+                break;
+            }
+            if std::time::Instant::now() > connect_deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+
+        if !download_started {
+            if attempt < MAX_OTA_ATTEMPTS {
+                println!(
+                    "Device did not connect within 15s, retrying ({}/{} attempts remaining)...",
+                    MAX_OTA_ATTEMPTS - attempt,
+                    MAX_OTA_ATTEMPTS - 1
+                );
+                // Drain any pending MQTT events before retrying
+                let drain_deadline = std::time::Instant::now() + Duration::from_secs(1);
+                for notification in connection.iter() {
+                    if std::time::Instant::now() > drain_deadline {
+                        break;
+                    }
+                    let _ = notification;
+                }
+                continue;
+            } else {
+                server_shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+                let _ = server_thread.join();
+                bail!(
+                    "OTA flash failed: device did not connect to OTA server after {} attempts.\n\
+                     Check that the device is online and can reach {}:{}.",
+                    MAX_OTA_ATTEMPTS, ota_host, ota_port
+                );
+            }
+        }
+
+        // Phase 2: Wait for download to finish, then for device to reboot and come online.
+        let mut idle_since: Option<std::time::Instant> = None;
+
+        for notification in connection.iter() {
+            let bytes = ota_progress.bytes_sent.load(std::sync::atomic::Ordering::SeqCst);
+            if !download_complete && bytes >= ota_progress.total_bytes {
+                download_complete = true;
+                println!("Firmware download complete! Waiting for device to flash and reboot...");
+                idle_since = Some(std::time::Instant::now());
+            }
+
+            if download_complete {
+                if let Some(since) = idle_since {
+                    if since.elapsed() > Duration::from_secs(60) {
+                        break;
+                    }
+                }
+            }
+
+            match notification {
+                Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
+                    if publish.topic == avail_topic {
+                        let payload = String::from_utf8_lossy(&publish.payload);
+                        if payload == "online" && !came_online {
+                            came_online = true;
+                            println!("\nDevice rebooted and came back online!");
+                        }
+                    }
+                    if came_online
+                        && (publish.topic == status_topic || publish.topic == diag_topic)
+                    {
+                        let payload = String::from_utf8_lossy(&publish.payload).to_string();
+                        if publish.topic == status_topic {
+                            println!("\nDevice published state after OTA!");
+                        } else {
+                            println!("\nDevice published diagnostics after OTA!");
+                        }
+                        if version_payload.is_none()
+                            && extract_firmware_version(&payload).is_some()
+                        {
+                            version_payload = Some(payload);
+                        }
+                    }
+                    if came_online && version_payload.is_some() {
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("MQTT error: {}", e);
                 }
             }
         }
 
-        match notification {
-            Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
-                if publish.topic == avail_topic {
-                    let payload = String::from_utf8_lossy(&publish.payload);
-                    if payload == "online" && !came_online {
-                        came_online = true;
-                        println!("\nDevice rebooted and came back online!");
-                    }
-                }
-                if came_online && (publish.topic == status_topic || publish.topic == diag_topic) {
-                    let payload = String::from_utf8_lossy(&publish.payload).to_string();
-                    if publish.topic == status_topic {
-                        println!("\nDevice published state after OTA!");
-                    } else {
-                        println!("\nDevice published diagnostics after OTA!");
-                    }
-                    if version_payload.is_none() && extract_firmware_version(&payload).is_some() {
-                        version_payload = Some(payload);
-                    }
-                }
-                // Got online with version — done.
-                if came_online && version_payload.is_some() {
-                    break;
-                }
-            }
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("MQTT error: {}", e);
-            }
-        }
+        // If download started (Phase 1 succeeded), don't retry Phase 2 failures —
+        // the device has the firmware and a retry would start a new download.
+        break;
     }
 
     // Step 6: Verify firmware version
-    println!("\n[6/7] Verifying firmware version...");
+    println!("\n[5/6] Verifying firmware version...");
     if !came_online {
         if !download_complete {
             bail!("OTA flash failed: firmware download did not complete.");
@@ -387,7 +418,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     }
 
     // Step 7: Cleanup
-    println!("\n[7/7] Cleaning up...");
+    println!("\n[6/6] Cleaning up...");
     server_shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
     match server_thread.join() {
         Ok(Ok(())) => println!("OTA server stopped."),
