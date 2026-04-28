@@ -20,7 +20,7 @@ echo "[1/5] Building web assets..."
 docker run --rm --platform linux/amd64 \
   -v "$(pwd)/web:/project/web" \
   "$IMAGE_NAME" \
-  bash -c "cd /project/web && bun install --frozen-lockfile && bun run build"
+  bash -c "cd /project/web && rm -rf dist && bun install --frozen-lockfile && bun run build"
 
 # Step 2: Build Rust binary (cross-compile for aarch64)
 echo "[2/5] Cross-compiling launa-server for aarch64..."
