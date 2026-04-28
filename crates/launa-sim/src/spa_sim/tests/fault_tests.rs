@@ -68,15 +68,14 @@ fn test_simulate_fault_state_different_codes() {
         let response = sim.generate_fault_log_response();
         let msg = super::dispatch_response(&response);
 
-        if let launa_protocol::dispatcher::IncomingMessage::FaultLogResponse(entry) = msg {
-            assert_eq!(
-                entry.message_code, *code,
-                "fault log should carry {:?}",
-                code
-            );
-        } else {
+        let launa_protocol::dispatcher::IncomingMessage::FaultLogResponse(entry) = msg else {
             panic!("Expected FaultLogResponse, got {:?}", msg);
-        }
+        };
+        assert_eq!(
+            entry.message_code, *code,
+            "fault log should carry {:?}",
+            code
+        );
     }
 }
 

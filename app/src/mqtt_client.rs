@@ -111,6 +111,9 @@ const PACKET_PINGREQ: u8 = 12;
 const PACKET_PINGRESP: u8 = 13;
 const PACKET_DISCONNECT: u8 = 14;
 
+/// SUBACK fixed header byte (packet type 9 << 4).
+const HEADER_SUBACK: u8 = PACKET_SUBACK << 4;
+
 /// TCP socket buffer sizes for MQTT connections.
 const MQTT_SOCKET_BUF_SIZE: usize = 1024;
 
@@ -579,10 +582,10 @@ impl MqttClient {
 
             let packet_type = header_buf[0] >> 4;
 
-            if header_buf[0] == 0x90 {
+            if header_buf[0] == HEADER_SUBACK {
                 // SUBACK — reassemble and validate
                 let mut suback_buf = Vec::new();
-                suback_buf.push(0x90);
+                suback_buf.push(HEADER_SUBACK);
                 suback_buf.extend_from_slice(&rl_buf[..rl_bytes]);
                 suback_buf.extend_from_slice(&payload_buf[..remaining_len]);
 

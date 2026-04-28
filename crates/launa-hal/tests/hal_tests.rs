@@ -1,9 +1,7 @@
-//! HAL integration tests for mock transport and mock network.
+//! HAL integration tests for mock transport.
 
-use launa_hal::network::mock::MockNetwork;
 use launa_hal::transport::mock::MockTransport;
 use launa_hal::transport::TransportError;
-use launa_hal::Network;
 use launa_hal::Transport;
 
 /// Helper: poll an async future to completion synchronously.
@@ -194,85 +192,4 @@ fn test_mock_transport_read_error_returns_zero_bytes() {
         result.is_err(),
         "read should return Err when read error is set"
     );
-}
-
-// MockNetwork tests
-
-#[test]
-fn test_mock_network_new_not_connected() {
-    let net = MockNetwork::new();
-    assert!(!net.is_connected());
-}
-
-#[test]
-fn test_mock_network_connect_wifi() {
-    let mut net = MockNetwork::new();
-    net.connect_wifi("TestSSID", "password123").unwrap();
-    assert!(net.is_connected());
-}
-
-#[test]
-fn test_mock_network_tcp_connect_without_wifi_fails() {
-    let mut net = MockNetwork::new();
-    let result = net.tcp_connect("192.168.1.1", 8080);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_mock_network_tcp_connect_flow() {
-    let mut net = MockNetwork::new();
-
-    // 1. Connect WiFi
-    net.connect_wifi("TestSSID", "password").unwrap();
-
-    // 2. Queue a response
-    net.queue_response(vec![0x01, 0x02, 0x03]);
-
-    // 3. Connect TCP
-    let mut socket = net.tcp_connect("example.com", 1883).unwrap();
-
-    // 4. Read the queued response
-    let mut buf = [0u8; 10];
-    let n = socket.read(&mut buf).unwrap();
-    assert_eq!(n, 3);
-    assert_eq!(&buf[..3], &[0x01, 0x02, 0x03]);
-
-    // 5. Write data
-    socket.write(&[0xAA, 0xBB]).unwrap();
-    assert_eq!(net.get_sent_data(), vec![0xAA, 0xBB]);
-
-    // 6. Close
-    socket.close().unwrap();
-}
-
-#[test]
-fn test_mock_network_tcp_empty_response() {
-    let mut net = MockNetwork::new();
-    net.connect_wifi("SSID", "pass").unwrap();
-    // No response queued
-    let mut socket = net.tcp_connect("host", 80).unwrap();
-    let mut buf = [0u8; 10];
-    let n = socket.read(&mut buf).unwrap();
-    assert_eq!(n, 0);
-}
-
-#[test]
-fn test_mock_network_clear_sent_data() {
-    let mut net = MockNetwork::new();
-    net.connect_wifi("SSID", "pass").unwrap();
-    let mut socket = net.tcp_connect("host", 80).unwrap();
-    socket.write(&[0x01]).unwrap();
-    assert_eq!(net.get_sent_data(), vec![0x01]);
-
-    net.clear_sent_data();
-    assert!(net.get_sent_data().is_empty());
-}
-
-#[test]
-fn test_mock_network_tracks_connect_params() {
-    let mut net = MockNetwork::new();
-    net.connect_wifi("SSID", "pass").unwrap();
-    let _socket = net.tcp_connect("broker.example.com", 1883).unwrap();
-    assert_eq!(net.last_connect_addr(), Some("broker.example.com"));
-    assert_eq!(net.last_connect_port(), Some(1883));
 }

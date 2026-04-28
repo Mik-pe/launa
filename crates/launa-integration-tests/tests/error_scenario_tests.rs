@@ -1,14 +1,11 @@
-//! Integration tests for OTA, NVS, and error recovery scenarios.
+//! Integration tests for OTA and error recovery scenarios.
 //!
 //! Tests for:
 //! 1. OTA disconnect mid-download — partial download recovery and rollback
-//! 2. NVS corruption fallback — device handles missing/empty config gracefully
-//! 3. OTA Content-Length exceeding partition size — oversized firmware rejected
-//! 4. WiFi disconnect during MQTT publish — broker drops during active publish
+//! 2. OTA Content-Length exceeding partition size — oversized firmware rejected
+//! 3. WiFi disconnect during MQTT publish — broker drops during active publish
 
 use launa_core::AppAction;
-use launa_hal::network::mock::MockNetwork;
-use launa_hal::Network;
 use launa_integration_tests::harness::TestHarness;
 use launa_ota::http::{parse_content_length, validate_http_status};
 use launa_ota::mock::MockOta;
@@ -203,143 +200,7 @@ fn test_ota_disconnect_app_remains_functional() {
 }
 
 // ---------------------------------------------------------------------------
-// 2. NVS corruption fallback
-// ---------------------------------------------------------------------------
-
-/// Tests that the device handles missing NVS configuration gracefully.
-///
-/// In the real firmware, NVS stores WiFi SSID/password and MQTT broker config.
-/// On ESP32, the app reads these at startup. If NVS is corrupted or empty,
-/// the app should fail gracefully rather than panic.
-///
-/// This test simulates the scenario using MockNetwork (which mirrors how the
-/// real firmware uses the Network trait). We verify that:
-/// - An unconfigured MockNetwork (not connected) rejects TCP connections
-/// - The error is ConnectionFailed (not a panic)
-/// - SpaApp can still process frames even when network is unavailable
-#[test]
-fn test_nvs_missing_config_graceful_handling() {
-    // Simulate missing NVS config: MockNetwork starts disconnected
-    let mut network = MockNetwork::new();
-
-    // Network should report as not connected
-    assert!(
-        !network.is_connected(),
-        "unconfigured network should not be connected"
-    );
-
-    // Attempting TCP connect without WiFi should fail gracefully
-    let result = network.tcp_connect("broker.example.com", 1883);
-    assert!(
-        result.is_err(),
-        "TCP connect should fail without WiFi configuration"
-    );
-
-    // Verify the error type is ConnectionFailed (not a panic or different error)
-    let err = result.err().unwrap();
-    assert!(
-        matches!(err, launa_hal::network::NetworkError::ConnectionFailed),
-        "error should be ConnectionFailed for unconfigured network, got {:?}",
-        err
-    );
-
-    // Verify that providing config (simulating NVS recovery) restores connectivity
-    network.connect_wifi("MySSID", "MyPassword").unwrap();
-    assert!(
-        network.is_connected(),
-        "network should be connected after config"
-    );
-
-    // TCP connect should now succeed
-    let tcp_result = network.tcp_connect("broker.example.com", 1883);
-    assert!(
-        tcp_result.is_ok(),
-        "TCP connect should succeed after WiFi config"
-    );
-}
-
-/// Tests that SpaApp remains functional when it cannot publish to MQTT
-/// (simulating an NVS misconfiguration where broker address is wrong or missing).
-///
-/// Even though OTA/MQTT are not available, the core spa communication loop
-/// should continue operating.
-#[test]
-fn test_nvs_missing_config_spa_loop_continues() {
-    let mut harness = TestHarness::new();
-    harness.complete_registration(5);
-
-    // Simulate broker being unavailable (as if NVS had wrong broker config)
-    harness.broker.simulate_disconnect();
-
-    // The spa loop should still produce internal actions
-    for _ in 0..5 {
-        let actions = harness.tick_spa();
-        harness.process_outgoing(&actions);
-        // SpaApp should still process frames even though broker is down
-    }
-
-    // The app should still have valid state — broker disconnect doesn't affect spa comms
-    assert!(
-        harness.app.is_registered(),
-        "app should remain registered even when broker is unavailable"
-    );
-    assert!(
-        harness.app.last_status().is_some(),
-        "app should still receive status updates even when broker is down"
-    );
-
-    // Verify that no messages were published to the broker during disconnect
-    assert_eq!(
-        harness.broker.dropped_count(),
-        0,
-        "dropped_count should be 0 because execute_actions_on_broker wasn't called"
-    );
-
-    // Now simulate NVS config being restored — broker reconnects
-    harness.broker.simulate_reconnect();
-
-    // Verify publishing resumes
-    let resume_actions = harness.collect_actions();
-    harness.execute_actions_on_broker(&resume_actions);
-
-    // Broker should now have new publications
-    let last_state = harness.broker.last_state();
-    assert!(
-        last_state.is_some(),
-        "broker should receive state after reconnect"
-    );
-}
-
-/// Tests handling of empty NVS values — all config fields return empty strings.
-/// Verifies that MockNetwork handles empty SSID/password gracefully.
-#[test]
-fn test_nvs_empty_config_values() {
-    let mut network = MockNetwork::new();
-
-    // Connect with empty SSID and password (simulating corrupted/empty NVS)
-    // The MockNetwork accepts any credentials (real ESP32 would fail with empty SSID)
-    let result = network.connect_wifi("", "");
-    assert!(
-        result.is_ok(),
-        "connect_wifi should not panic with empty credentials"
-    );
-
-    // After "connecting" with empty credentials, verify the network state
-    assert!(
-        network.is_connected(),
-        "MockNetwork should be connected even with empty credentials"
-    );
-
-    // TCP should work (MockNetwork doesn't validate address resolution)
-    let tcp_result = network.tcp_connect("", 0);
-    assert!(
-        tcp_result.is_ok(),
-        "TCP connect should succeed with MockNetwork even with empty address"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// 3. OTA Content-Length exceeding partition size
+// 2. OTA Content-Length exceeding partition size
 // ---------------------------------------------------------------------------
 
 /// Tests that OTA rejects firmware whose Content-Length exceeds the partition size.

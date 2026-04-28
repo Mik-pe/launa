@@ -54,6 +54,12 @@ const HTTP_READ_BUF_SIZE: usize = 1024;
 /// OTA partition size in bytes (matches partitions.csv).
 const APP_PARTITION_SIZE: u32 = 0x140000;
 
+/// TCP socket timeout for OTA firmware downloads.
+const OTA_DOWNLOAD_TIMEOUT_SECS: u32 = 30;
+
+/// TCP socket timeout for the OTA connectivity test.
+const OTA_TCP_TEST_TIMEOUT_SECS: u32 = 10;
+
 /// TCP socket buffers for OTA, allocated once and reused across attempts.
 ///
 /// Without this, every `perform_ota_update` call would allocate 5 KiB via
@@ -115,7 +121,7 @@ pub async fn perform_ota_update(
     let tx: &'static mut [u8] =
         unsafe { &mut *(buffers.tx_buf as *mut [u8; OTA_SOCKET_TX_BUF_SIZE] as *mut [u8]) };
     let mut socket = TcpSocket::new(*stack, rx, tx);
-    socket.set_timeout(Some(Duration::from_secs(30)));
+    socket.set_timeout(Some(Duration::from_secs(OTA_DOWNLOAD_TIMEOUT_SECS as u64)));
 
     // Resolve host: try IPv4 parse first, then DNS
     let addr = match net_util::resolve_host(stack, &host).await {
@@ -304,7 +310,7 @@ pub async fn tcp_test(
     let tx: &'static mut [u8] =
         unsafe { &mut *(buffers.tx_buf as *mut [u8; OTA_SOCKET_TX_BUF_SIZE] as *mut [u8]) };
     let mut socket = TcpSocket::new(*stack, rx, tx);
-    socket.set_timeout(Some(Duration::from_secs(10)));
+    socket.set_timeout(Some(Duration::from_secs(OTA_TCP_TEST_TIMEOUT_SECS as u64)));
 
     info!("TCP_TEST: resolving host '{}'", host);
     let addr = match net_util::resolve_host(stack, &host).await {
