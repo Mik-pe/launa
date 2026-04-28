@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { useStatusHistory } from '../composables/useApi'
-import type { TimestampedEntry } from '../types'
+import { useStatusHistory, useAvailabilityHistory } from '../composables/useApi'
+import type { TimestampedEntry, AvailabilityEntry } from '../types'
 import LoadingSpinner from './LoadingSpinner.vue'
 
 interface ChartPoint {
@@ -26,6 +26,7 @@ interface TooltipData {
   time: string
   current_temp: number | null
   set_temp: number | null
+  is_offline: boolean
 }
 
 interface CompTooltipState {
@@ -44,7 +45,46 @@ interface Coord {
   y: number
 }
 
-const { data: history, loading, error, hoursRange, setHoursRange } = useStatusHistory(200, 10000)
+const { data: history, loading, error, hoursRange, setHoursRange: setStatusHoursRange } = useStatusHistory(200, 10000)
+const { data: availabilityData, setHoursRange: setAvailHoursRange } = useAvailabilityHistory(500, 10000)
+
+function setHoursRange(hours: number | null) {
+  setStatusHoursRange(hours)
+  setAvailHoursRange(hours)
+}
+
+// Compute offline periods from availability history
+const offlinePeriods = computed<{ start: Date; end: Date }[]>(() => {
+  const raw = availabilityData.value
+  if (!raw?.length) return []
+
+  // Normalize to chronological order
+  const sorted = [...raw]
+  if (sorted.length >= 2) {
+    const t0 = new Date(sorted[0].received_at).getTime()
+    const t1 = new Date(sorted[sorted.length - 1].received_at).getTime()
+    if (t0 > t1) sorted.reverse()
+  }
+
+  const periods: { start: Date; end: Date }[] = []
+  let offlineStart: Date | null = null
+  for (const entry of sorted) {
+    const t = new Date(entry.received_at)
+    if (entry.status !== 'online') {
+      if (!offlineStart) offlineStart = t
+    } else {
+      if (offlineStart) {
+        periods.push({ start: offlineStart, end: t })
+        offlineStart = null
+      }
+    }
+  }
+  // If currently offline, use now as the end
+  if (offlineStart) {
+    periods.push({ start: offlineStart, end: new Date() })
+  }
+  return periods
+})
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const tooltipData = ref<TooltipData | null>(null)
@@ -220,6 +260,25 @@ function drawChart(): void {
     ctx.fillText(pts[idx].time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), x, h - pad.bottom + 12)
   }
 
+  // Offline period shading
+  for (const period of offlinePeriods.value) {
+    const x1 = Math.max(xOf(period.start.getTime()), pad.left)
+    const x2 = Math.min(xOf(period.end.getTime()), pad.left + cw)
+    if (x2 > x1) {
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.06)'
+      ctx.fillRect(x1, pad.top, x2 - x1, ch)
+      // Dashed border at offline start
+      ctx.strokeStyle = 'rgba(239, 68, 68, 0.15)'
+      ctx.lineWidth = 1
+      ctx.setLineDash([4, 4])
+      ctx.beginPath()
+      ctx.moveTo(x1, pad.top)
+      ctx.lineTo(x1, pad.top + ch)
+      ctx.stroke()
+      ctx.setLineDash([])
+    }
+  }
+
   // Split points into contiguous segments (break at null values)
   function buildSegments(key: keyof ChartPoint): Coord[][] {
     const segments: Coord[][] = []
@@ -381,6 +440,15 @@ function drawChart(): void {
   ctx.beginPath(); ctx.moveTo(pad.left + 80, ly - 2); ctx.lineTo(pad.left + 96, ly - 2); ctx.stroke()
   ctx.setLineDash([])
   ctx.fillText('Target', pad.left + 102, ly - 2)
+
+  // Offline legend (only if there are offline periods)
+  if (offlinePeriods.value.length > 0) {
+    const offX = pad.left + 148
+    ctx.fillStyle = 'rgba(239, 68, 68, 0.15)'
+    ctx.fillRect(offX, ly - 5, 16, 7)
+    ctx.fillStyle = '#737373'
+    ctx.fillText('Offline', offX + 22, ly - 2)
+  }
 }
 
 function handleMouseMove(e: MouseEvent): void {
@@ -407,6 +475,7 @@ function handleMouseMove(e: MouseEvent): void {
     time: nearest.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
     current_temp: nearest.current_temp,
     set_temp: nearest.set_temp,
+    is_offline: offlinePeriods.value.some(p => nearest.time >= p.start && nearest.time <= p.end),
   }
 }
 
@@ -465,6 +534,16 @@ function drawCompChart(): void {
     const idx = Math.floor(i * (pts.length - 1) / (nLabels - 1))
     const x = xOf(pts[idx].time.getTime())
     ctx.fillText(pts[idx].time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), x, h - pad.bottom + 8)
+  }
+
+  // Offline period shading (comp chart)
+  for (const period of offlinePeriods.value) {
+    const x1 = Math.max(xOf(period.start.getTime()), pad.left)
+    const x2 = Math.min(xOf(period.end.getTime()), pad.left + cw)
+    if (x2 > x1) {
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.06)'
+      ctx.fillRect(x1, pad.top, x2 - x1, ch)
+    }
   }
 
   // Draw each component row
@@ -561,7 +640,7 @@ function handleCompMouseLeave(): void {
   compTooltipData.value = null
 }
 
-watch([points, displayPoints], () => nextTick(() => { drawChart(); drawCompChart() }), { deep: true })
+watch([points, displayPoints, offlinePeriods], () => nextTick(() => { drawChart(); drawCompChart() }), { deep: true })
 onMounted(() => {
   drawChart()
   drawCompChart()
@@ -623,6 +702,7 @@ function drawChartAndComp(): void {
         <Transition name="tooltip">
           <div v-if="tooltipData" class="absolute top-8 right-8 bg-neutral-800/95 backdrop-blur rounded-xl p-3.5 text-xs shadow-xl ring-1 ring-neutral-700 pointer-events-none min-w-[140px]">
             <p class="text-neutral-400 mb-2 font-medium">{{ tooltipData.time }}</p>
+            <div v-if="tooltipData.is_offline" class="mb-2 px-2 py-1 rounded bg-red-500/10 text-red-400 text-center font-medium">Device Offline</div>
             <div class="space-y-1.5">
               <div class="flex items-center justify-between gap-4">
                 <span class="flex items-center gap-1.5"><span class="w-2 h-0.5 rounded bg-orange-400" /> Current</span>

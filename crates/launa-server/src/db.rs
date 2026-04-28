@@ -83,6 +83,14 @@ impl Database {
                 received_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_sniff_device ON sniff_frames(device_id);
+
+            CREATE TABLE IF NOT EXISTS availability_history (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id   TEXT NOT NULL,
+                status      TEXT NOT NULL,
+                received_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_avail_device ON availability_history(device_id);
             ",
         )?;
         Ok(())
@@ -271,6 +279,60 @@ impl Database {
         self.clear_table("sniff_frames", device_id);
     }
 
+    pub fn insert_availability(&self, device_id: &str, status: &str) {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let _ = conn.execute(
+            "INSERT INTO availability_history (device_id, status, received_at) VALUES (?1, ?2, ?3)",
+            params![device_id, status, now],
+        );
+        self.trim_availability(&conn);
+    }
+
+    fn trim_availability(&self, conn: &Connection) {
+        let cutoff = (Utc::now() - Duration::days(STATUS_RETENTION_DAYS)).to_rfc3339();
+        let _ = conn.execute(
+            "DELETE FROM availability_history WHERE received_at < ?1",
+            params![cutoff],
+        );
+    }
+
+    pub fn get_availability_history(&self, device_id: &str, limit: u64) -> Vec<AvailabilityEntry> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT status, received_at FROM availability_history WHERE device_id = ?1 ORDER BY id DESC LIMIT ?2",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map(params![device_id, limit], |row| {
+                Ok(AvailabilityEntry {
+                    status: row.get(0)?,
+                    received_at: row.get(1)?,
+                })
+            })
+            .unwrap();
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
+    pub fn get_availability_history_since(&self, device_id: &str, since: &str) -> Vec<AvailabilityEntry> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT status, received_at FROM availability_history WHERE device_id = ?1 AND received_at >= ?2 ORDER BY id ASC",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map(params![device_id, since], |row| {
+                Ok(AvailabilityEntry {
+                    status: row.get(0)?,
+                    received_at: row.get(1)?,
+                })
+            })
+            .unwrap();
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
     /// Update device availability status and optional boot_id.
     ///
     /// Uses UPSERT so the first seen message for a device_id creates the row.
@@ -339,6 +401,12 @@ pub struct StatusEntry {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TimestampedEntry {
     pub payload: String,
+    pub received_at: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AvailabilityEntry {
+    pub status: String,
     pub received_at: String,
 }
 

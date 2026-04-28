@@ -59,3 +59,8 @@ export interface TimestampedEntry {
   payload: string
   received_at: string
 }
+
+export interface AvailabilityEntry {
+  status: string
+  received_at: string
+}

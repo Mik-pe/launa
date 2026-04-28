@@ -81,6 +81,7 @@ fn handle_availability(db: &Database, device_id: &str, payload: &str) {
         other => other,
     };
     db.update_device_status(device_id, status, None);
+    db.insert_availability(device_id, status);
 }
 
 fn handle_boot(db: &Database, device_id: &str, payload: &str) {

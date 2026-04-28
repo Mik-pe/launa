@@ -59,7 +59,8 @@ pub fn build_router(state: AppState) -> Router {
             "/alerts",
             axum::routing::get(get_alerts).delete(clear_alerts),
         )
-        .route("/sniff", axum::routing::get(get_sniff).delete(clear_sniff));
+        .route("/sniff", axum::routing::get(get_sniff).delete(clear_sniff))
+        .route("/availability/history", axum::routing::get(get_availability));
 
     Router::new()
         .route(
@@ -177,6 +178,19 @@ async fn get_sniff(
     Query(query): Query<LimitQuery>,
 ) -> Json<Vec<crate::db::TimestampedEntry>> {
     Json(state.db.get_sniff_frames(&device_id, query.limit))
+}
+
+async fn get_availability(
+    State(state): State<AppState>,
+    Path(device_id): Path<String>,
+    Query(query): Query<LimitQuery>,
+) -> Json<Vec<crate::db::AvailabilityEntry>> {
+    if let Some(hours) = query.hours {
+        let since = (Utc::now() - chrono::Duration::hours(hours as i64)).to_rfc3339();
+        Json(state.db.get_availability_history_since(&device_id, &since))
+    } else {
+        Json(state.db.get_availability_history(&device_id, query.limit))
+    }
 }
 
 async fn clear_logs(State(state): State<AppState>, Path(device_id): Path<String>) -> &'static str {
