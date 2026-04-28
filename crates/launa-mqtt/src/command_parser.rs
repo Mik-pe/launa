@@ -5,6 +5,7 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
+use alloc::vec::Vec;
 use launa_protocol::command::{Command, TempError, ToggleItem, ABSOLUTE_MAX_TEMP_F};
 use launa_protocol::status::{TempRange, TemperatureScale};
 
@@ -38,6 +39,7 @@ const ALLOWED_SUBTOPICS: &[&str] = &[
     "normal_operation",
     "clear_notification",
     "set_temperature",
+    "set_time",
 ];
 
 /// Result of parsing a command, including temperature validation status.
@@ -139,6 +141,7 @@ pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8]) -> P
         "normal_operation" => parse_toggle(payload_str, ToggleItem::NormalOperation),
         "clear_notification" => parse_toggle(payload_str, ToggleItem::ClearNotification),
         "set_temperature" => parse_set_temperature(payload_str),
+        "set_time" => parse_set_time(payload_str),
         _ => ParseResult::UnknownSubtopic(subtopic.to_string()),
     }
 }
@@ -223,6 +226,79 @@ fn parse_pump_timer(payload: &str, pump_index: u8) -> ParseResult {
             ParseResult::InvalidPayload(format!("timer minutes must be 1-120, got: {}", minutes))
         }
         Err(_) => ParseResult::InvalidPayload(format!("not a number: {:?}", payload)),
+    }
+}
+
+/// Parse a set-time command. Accepts `HH:MM` or JSON `{"hour":H,"minute":M}`.
+/// The 24h flag is derived from the hour value (>= 13 implies 24h).
+fn parse_set_time(payload: &str) -> ParseResult {
+    let trimmed = payload.trim();
+
+    // Try JSON: {"hour":H,"minute":M} or {"hour":H,"minute":M,"is_24h":bool}
+    if trimmed.starts_with('{') {
+        let hour = extract_json_number(trimmed, "hour");
+        let minute = extract_json_number(trimmed, "minute");
+        let is_24h = extract_json_bool(trimmed, "is_24h").unwrap_or(false);
+        match (hour, minute) {
+            (Some(h), Some(m)) => return validate_time(h, m, is_24h),
+            _ => {
+                return ParseResult::InvalidPayload(
+                    alloc::format!("invalid set_time JSON: {:?}", payload)
+                )
+            }
+        }
+    }
+
+    // Try HH:MM format
+    let parts: Vec<&str> = trimmed.split(':').collect();
+    if parts.len() == 2 {
+        if let (Ok(h), Ok(m)) = (parts[0].trim().parse::<u8>(), parts[1].trim().parse::<u8>()) {
+            return validate_time(h, m, false);
+        }
+    }
+
+    ParseResult::InvalidPayload(alloc::format!(
+        "invalid set_time payload, expected HH:MM or JSON: {:?}",
+        payload
+    ))
+}
+
+fn validate_time(hour: u8, minute: u8, is_24h: bool) -> ParseResult {
+    if hour > 23 || minute > 59 {
+        return ParseResult::InvalidPayload(alloc::format!(
+            "time out of range: {}:{} (hour 0-23, minute 0-59)",
+            hour, minute
+        ));
+    }
+    ParseResult::Valid(Command::SetTime {
+        hour,
+        minute,
+        is_24h,
+    })
+}
+
+/// Extract a numeric value from a simple JSON object by key name.
+fn extract_json_number(json: &str, key: &str) -> Option<u8> {
+    let pattern = alloc::format!("\"{}\":", key);
+    let start = json.find(&pattern)?;
+    let rest = &json[start + pattern.len()..];
+    let rest = rest.trim_start();
+    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+/// Extract a boolean value from a simple JSON object by key name.
+fn extract_json_bool(json: &str, key: &str) -> Option<bool> {
+    let pattern = alloc::format!("\"{}\":", key);
+    let start = json.find(&pattern)?;
+    let rest = &json[start + pattern.len()..];
+    let rest = rest.trim_start();
+    if rest.starts_with("true") {
+        Some(true)
+    } else if rest.starts_with("false") {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -556,5 +632,80 @@ mod tests {
             parse_command_ok(CMD_BASE, "launa/test_spa_001/command/pump1", b""),
             None,
         );
+    }
+
+    /// Set time commands: HH:MM format, JSON format, and error cases.
+    #[test]
+    fn test_set_time_hh_mm_format() {
+        let cases: &[(&[u8], u8, u8, bool)] = &[
+            (b"14:30", 14, 30, false),
+            (b"09:05", 9, 5, false),
+            (b"23:59", 23, 59, false),
+            (b"00:00", 0, 0, false),
+            (b" 8:07 ", 8, 7, false),
+        ];
+
+        for (i, (payload, h, m, is_24h)) in cases.iter().enumerate() {
+            let topic = format!("{}/set_time", CMD_BASE);
+            let result = parse_command(CMD_BASE, &topic, *payload);
+            assert_eq!(
+                result,
+                ParseResult::Valid(Command::SetTime {
+                    hour: *h,
+                    minute: *m,
+                    is_24h: *is_24h,
+                }),
+                "case {i}: set_time={}",
+                std::str::from_utf8(payload).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn test_set_time_json_format() {
+        let cases: &[(&[u8], u8, u8, bool)] = &[
+            (br#"{"hour":14,"minute":30}"#, 14, 30, false),
+            (br#"{"hour":9,"minute":5,"is_24h":true}"#, 9, 5, true),
+            (br#"{"hour":0,"minute":0,"is_24h":false}"#, 0, 0, false),
+            (br#"{"hour":23,"minute":59,"is_24h":true}"#, 23, 59, true),
+        ];
+
+        for (i, (payload, h, m, is_24h)) in cases.iter().enumerate() {
+            let topic = format!("{}/set_time", CMD_BASE);
+            let result = parse_command(CMD_BASE, &topic, *payload);
+            assert_eq!(
+                result,
+                ParseResult::Valid(Command::SetTime {
+                    hour: *h,
+                    minute: *m,
+                    is_24h: *is_24h,
+                }),
+                "case {i}: set_time={}",
+                std::str::from_utf8(payload).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn test_set_time_invalid() {
+        let cases: &[(&[u8], &str)] = &[
+            (b"25:00", "out of range"),
+            (b"12:60", "out of range"),
+            (b"abc", "invalid"),
+            (b"", "invalid"),
+            (b"14", "invalid"),
+            (b"24:00", "out of range"),
+        ];
+
+        for (i, (payload, _expected)) in cases.iter().enumerate() {
+            let topic = format!("{}/set_time", CMD_BASE);
+            let result = parse_command(CMD_BASE, &topic, *payload);
+            assert!(
+                matches!(result, ParseResult::InvalidPayload(_)),
+                "case {i}: set_time={}: expected InvalidPayload, got {:?}",
+                std::str::from_utf8(payload).unwrap(),
+                result
+            );
+        }
     }
 }

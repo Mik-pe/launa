@@ -10,7 +10,7 @@
 //! It handles automatic reconnection with exponential backoff and
 //! re-publishes discovery/state after reconnect.
 
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_futures::select::{select, Either};
 use embassy_time::{Duration, Timer};
@@ -21,6 +21,11 @@ use crate::types::FaultBuf;
 use crate::*;
 
 static MQTT_PUB_WARN: launa_core::RateLog = launa_core::RateLog::new();
+
+/// Monotonically increasing counter bumped each time the mqtt_task main loop
+/// completes an iteration. The main event loop reads this periodically; if the
+/// value hasn't changed in 30 seconds it means the MQTT task is frozen.
+pub(crate) static MQTT_TASK_TICK: AtomicU32 = AtomicU32::new(0);
 
 #[embassy_executor::task]
 pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
@@ -169,13 +174,14 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                     }
                     last_self_test = self_test;
                     last_sniff_mode = sniff_mode;
-                    last_wifi_rssi = wifi_rssi;
                     // Change detection: skip publish if state is identical to last
                     let changed = launa_mqtt::state_change::status_changed(
                         last_published_status.as_ref(),
                         &status,
                     );
-                    if is_stale || changed {
+                    let rssi_changed = wifi_rssi != last_wifi_rssi;
+                    last_wifi_rssi = wifi_rssi;
+                    if is_stale || changed || rssi_changed {
                         last_published_status = Some(status.clone());
                         last_published_fault = Some(fault);
                         if let Err(_) = mqtt.publish_state(&status, fault.as_str(), self_test, sniff_mode, wifi_rssi, self_test).await {
@@ -355,5 +361,8 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 }
             }
         }
+
+        // Bump the watchdog tick so the main loop can detect if this task freezes.
+        MQTT_TASK_TICK.fetch_add(1, Ordering::Relaxed);
     }
 }

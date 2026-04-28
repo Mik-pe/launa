@@ -651,12 +651,14 @@ async fn process_uart_frames(
 async fn init_wifi(
     spawner: Spawner,
     wifi_peripheral: esp_hal::peripherals::WIFI<'static>,
+    sw_int1: esp_hal::interrupt::software::SoftwareInterrupt<'static, 1>,
     rng: esp_hal::rng::Rng,
     ssid: &str,
     password: &str,
     hostname: &str,
+    mqtt_config: crate::wifi::MqttConfigArgs,
 ) -> crate::wifi::WifiStack {
-    match wifi::WifiStack::connect(spawner, wifi_peripheral, rng, ssid, password, hostname).await {
+    match wifi::WifiStack::connect(spawner, wifi_peripheral, sw_int1, rng, ssid, password, hostname, mqtt_config).await {
         Ok(stack) => stack,
         Err(e) => {
             error!(
@@ -666,36 +668,6 @@ async fn init_wifi(
             );
             Timer::after(Duration::from_secs(5)).await;
             esp_hal::system::software_reset();
-        }
-    }
-}
-
-/// Connect to MQTT broker with exponential backoff retries.
-///
-/// Makes up to 10 attempts with increasing backoff. Resets the device
-/// if all attempts fail.
-async fn connect_mqtt(
-    stack: &'static embassy_net::Stack<'static>,
-    config: &config::AppConfig,
-    bid: u32,
-) -> mqtt_client::MqttClient {
-    let mut attempt: u32 = 0;
-    loop {
-        attempt += 1;
-        match mqtt_client::MqttClient::connect(stack, config, bid).await {
-            Ok(m) => break m,
-            Err(e) => {
-                let backoff_secs = (5u64 << attempt.saturating_sub(1).min(4)).min(60);
-                error!(
-                    "MQTT connect attempt {} failed: {:?}, retrying in {}s",
-                    attempt, e, backoff_secs
-                );
-                Timer::after(Duration::from_secs(backoff_secs)).await;
-                if attempt >= 10 {
-                    error!("MQTT connect failed after 10 attempts, resetting");
-                    esp_hal::system::software_reset();
-                }
-            }
         }
     }
 }
@@ -761,6 +733,7 @@ async fn main(spawner: Spawner) {
 
     let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
     let sw_int = esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+    let sw_int1 = sw_int.software_interrupt1;
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
     // Configure TIMG1 as independent hardware watchdog (30s timeout)
@@ -839,45 +812,42 @@ async fn main(spawner: Spawner) {
 
     let uart_transport = transport::Rs485Transport::new(uart, None);
 
+    // Build MQTT config args for net_bootstrap (runs on InterruptExecutor)
+    let mqtt_config_args = crate::wifi::MqttConfigArgs {
+        device_id: app_config.device_id.clone(),
+        mqtt_host: app_config.mqtt_host.clone(),
+        mqtt_port: app_config.mqtt_port,
+        mqtt_user: app_config.mqtt_user.clone(),
+        mqtt_password: app_config.mqtt_password.clone(),
+        boot_id: boot_id(),
+    };
+
     let wifi_stack = init_wifi(
         spawner,
         peripherals.WIFI,
+        sw_int1,
         esp_hal::rng::Rng::new(),
         &app_config.wifi_ssid,
         &app_config.wifi_password,
         &app_config.device_id,
+        mqtt_config_args,
     )
     .await;
 
-    let bid = boot_id();
-    let mut mqtt = connect_mqtt(wifi_stack.stack, &app_config, bid).await;
-
-    // Fahrenheit default; mqtt_task will re-publish with correct scale after first status
-    let _ = mqtt.post_connect_publish(false).await;
-
     // Publish crash alarm from previous boot if present.
-    // This must happen after MQTT connect and before spawning the MQTT task.
+    // MQTT is now connected inside net_bootstrap on the InterruptExecutor,
+    // so we send via ALERT_CHANNEL instead of publishing directly.
     if let Some(ref crash) = pending_crash_alarm {
         let alarm_json = crash_info::crash_alarm_json(crash, FIRMWARE_VERSION);
-        let topics = launa_mqtt::topics::TopicBuilder::new(&mqtt.device_id);
-        let alert_topic = topics.alert_topic();
-        match mqtt.publish(&alert_topic, alarm_json.as_bytes(), 1, false).await {
-            Ok(()) => {
-                info!("Crash alarm published: reason={}", crash.reason.as_str());
-                drop(pending_crash_alarm.take());
-            }
-            Err(e) => {
-                warn!("Failed to publish crash alarm: {:?}, will retry via alert channel", e);
-                send_alert("error", &alloc::format!("crash_alarm_publish_failed:{}", crash.reason.as_str()));
-            }
-        }
+        let _ = ALERT_CHANNEL.try_send(Vec::from(alarm_json.as_bytes()));
+        info!("Crash alarm queued: reason={}", crash.reason.as_str());
+        drop(pending_crash_alarm.take());
     }
 
     validate_firmware(&mut ota);
 
-    // Spawn background tasks
-    spawner
-        .spawn(mqtt_task::mqtt_task(mqtt).unwrap());
+    // Spawn background tasks (uart_task on ThreadModeExecutor;
+    // mqtt_task is already spawned by net_bootstrap on InterruptExecutor)
     spawner
         .spawn(uart_task(uart_transport).unwrap());
 
@@ -913,9 +883,29 @@ async fn main(spawner: Spawner) {
     // a keep-alive ping on the RS-485 bus.
     let mut uart_tx_test_interval: Option<Instant> = None;
 
+    // MQTT task health: track the last tick value and when we last saw it change.
+    let mut mqtt_last_tick: u32 = mqtt_task::MQTT_TASK_TICK.load(Ordering::Relaxed);
+    let mut mqtt_last_tick_time: Instant = Instant::now();
+
     loop {
         // Feed the hardware watchdog each iteration
         wdt.feed();
+
+        // Check MQTT task health: if the tick counter hasn't changed in 30s,
+        // the MQTT task is frozen (cooperative executor starvation).
+        let mqtt_tick = mqtt_task::MQTT_TASK_TICK.load(Ordering::Relaxed);
+        if mqtt_tick != mqtt_last_tick {
+            mqtt_last_tick = mqtt_tick;
+            mqtt_last_tick_time = Instant::now();
+        } else if mqtt_last_tick_time.elapsed().as_secs() >= 30 {
+            warn!(
+                "MQTT task appears frozen (tick unchanged for {}s)",
+                mqtt_last_tick_time.elapsed().as_secs()
+            );
+            send_alert("error", "mqtt_task_frozen");
+            // Reset the timer so we don't spam alerts every tick
+            mqtt_last_tick_time = Instant::now();
+        }
 
         // Multiplex: wait for either a UART frame, an MQTT command, or a
         // 1-second tick timer. This replaces the old blocking receive() that

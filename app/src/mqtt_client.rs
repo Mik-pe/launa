@@ -223,10 +223,6 @@ impl MqttClient {
         let rx: &'static mut [u8] = unsafe { &mut *socket_rx_buf.get() };
         let tx: &'static mut [u8] = unsafe { &mut *socket_tx_buf.get() };
         let mut socket = TcpSocket::new(*stack, rx, tx);
-        // Socket timeout for detecting truly dead connections (broker unreachable,
-        // network partition). Keep-alive pings are handled by racing transport.read()
-        // against a timer in recv(), so this timeout only fires in catastrophic cases.
-        socket.set_timeout(Some(Duration::from_secs(60)));
 
         let addr = match net_util::resolve_host(stack, &config.mqtt_host).await {
             Some(a) => a,
@@ -364,7 +360,6 @@ impl MqttClient {
         let rx: &'static mut [u8] = unsafe { &mut *self.socket_rx_buf.get() };
         let tx: &'static mut [u8] = unsafe { &mut *self.socket_tx_buf.get() };
         let mut socket = TcpSocket::new(*self.stack, rx, tx);
-        socket.set_timeout(Some(Duration::from_secs(60)));
 
         let addr = match net_util::resolve_host(self.stack, &self.config_host).await {
             Some(a) => a,
@@ -608,6 +603,12 @@ impl MqttClient {
                     }
                 }
             }
+
+            // Explicit yield before attempting a socket read. Both mqtt_task
+            // and net_task (smoltcp poll) share the same InterruptExecutor and
+            // are cooperatively scheduled. Without this yield, a tight loop of
+            // socket reads could starve net_task, preventing packet processing.
+            Timer::after(Duration::from_millis(1)).await;
 
             // Race the socket read against a keep-alive timer. This ensures
             // we return to maybe_ping() at least every keep_alive/2 seconds
