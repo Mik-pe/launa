@@ -2,9 +2,17 @@ use anyhow::{bail, Context};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Shared OTA download state observed by the caller to track firmware download progress.
+pub struct OtaProgress {
+    /// Bytes sent so far in the current/last download. 0 = no connection yet.
+    pub bytes_sent: AtomicUsize,
+    /// Total firmware size in bytes.
+    pub total_bytes: usize,
+}
 
 /// Run the OTA server with an externally-controlled shutdown flag.
 /// Binds to `0.0.0.0:<port>` and serves the firmware file until `shutdown` is set.
@@ -14,6 +22,7 @@ pub fn serve(
     firmware_data: &[u8],
     quiet: bool,
     shutdown: &AtomicBool,
+    progress: &OtaProgress,
 ) -> anyhow::Result<()> {
     let firmware_data = Arc::new(firmware_data.to_vec());
     let addr = format!("0.0.0.0:{}", port);
@@ -25,10 +34,7 @@ pub fn serve(
 
     if !quiet {
         let bound_addr = listener.local_addr()?;
-        println!(
-            "OTA server running on http://{}/firmware.bin",
-            bound_addr
-        );
+        println!("OTA server running on http://{}/firmware.bin", bound_addr);
         println!("Firmware: {} bytes", firmware_data.len());
     }
 
@@ -83,9 +89,11 @@ pub fn serve(
                                                 peer_str, offset, e
                                             );
                                             ok = false;
+                                            progress.bytes_sent.store(offset, Ordering::SeqCst);
                                             break;
                                         }
                                         offset = end;
+                                        progress.bytes_sent.store(offset, Ordering::SeqCst);
                                         let pct = ((offset as u64 * 100) / total as u64) as u8;
                                         if pct >= last_pct + 1 || offset == total {
                                             let bar_len = 30;
@@ -176,5 +184,10 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         r.store(true, Ordering::SeqCst);
     });
 
-    serve(port, &firmware_data, quiet, &shutdown)
+    let progress = OtaProgress {
+        bytes_sent: AtomicUsize::new(0),
+        total_bytes: firmware_data.len(),
+    };
+
+    serve(port, &firmware_data, quiet, &shutdown, &progress)
 }

@@ -170,8 +170,20 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let server_shutdown_clone = server_shutdown.clone();
     let server_port = ota_port;
 
+    let ota_progress = std::sync::Arc::new(crate::ota_serve::OtaProgress {
+        bytes_sent: std::sync::atomic::AtomicUsize::new(0),
+        total_bytes: ota_bin_data.len(),
+    });
+    let ota_progress_clone = ota_progress.clone();
+
     let server_thread = std::thread::spawn(move || {
-        crate::ota_serve::serve(server_port, &ota_bin_data, true, &server_shutdown_clone)
+        crate::ota_serve::serve(
+            server_port,
+            &ota_bin_data,
+            true,
+            &server_shutdown_clone,
+            &ota_progress_clone,
+        )
     });
 
     // Wait for server to be ready (verify with TCP connect)
@@ -194,7 +206,9 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     // Auto-detect local IP since we host the OTA server on this machine.
     let ota_host = match local_ip_address::local_ip() {
         Ok(ip) => ip.to_string(),
-        Err(_) => bail!("Failed to auto-detect local IP address. Set ota.host in launa.toml or check network."),
+        Err(_) => bail!(
+            "Failed to auto-detect local IP address. Set ota.host in launa.toml or check network."
+        ),
     };
     println!("OTA server address: {}:{}", ota_host, ota_port);
     let firmware_url = format!("http://{}:{}/firmware.bin", ota_host, ota_port);
@@ -247,16 +261,62 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         .context("Failed to publish OTA command")?;
 
     // Step 5: Wait for device to download firmware and reboot
-    println!("[5/7] Waiting for device to download firmware and reboot (timeout 200s)...");
+    //
+    // Phase 1: Wait for the device to connect to our OTA server and start downloading.
+    //          If the device doesn't start downloading within 15s, it's not reachable.
+    // Phase 2: Wait for the device to come back online after flashing + rebooting.
+    //          No hard timeout — once download started, the device controls the pace.
+    //          But if download completed and we still haven't seen the device online
+    //          after 60s, something went wrong during flashing.
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(200);
-    let mut came_online = false;
-    let mut version_payload: Option<String> = None;
+    println!("[5/7] Waiting for device to connect and download firmware...");
 
-    for notification in connection.iter() {
-        if std::time::Instant::now() > deadline {
+    // Phase 1: Wait for download to start (15s timeout)
+    let connect_deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let bytes = ota_progress.bytes_sent.load(std::sync::atomic::Ordering::SeqCst);
+        if bytes > 0 {
+            println!("Device connected, firmware download started!");
             break;
         }
+        if std::time::Instant::now() > connect_deadline {
+            server_shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = server_thread.join();
+            bail!(
+                "OTA flash failed: device did not connect to OTA server within 15s.\n\
+                 Check that the device is online and can reach {}:{}.",
+                ota_host, ota_port
+            );
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    // Phase 2: Wait for download to finish, then for device to reboot and come online.
+    //          The MQTT event loop runs concurrently — we check both download progress
+    //          and MQTT messages in this loop.
+    let mut came_online = false;
+    let mut version_payload: Option<String> = None;
+    let mut download_complete = false;
+    let mut idle_since: Option<std::time::Instant> = None;
+
+    for notification in connection.iter() {
+        // Check download progress
+        let bytes = ota_progress.bytes_sent.load(std::sync::atomic::Ordering::SeqCst);
+        if !download_complete && bytes >= ota_progress.total_bytes {
+            download_complete = true;
+            println!("Firmware download complete! Waiting for device to flash and reboot...");
+            idle_since = Some(std::time::Instant::now());
+        }
+
+        // If download finished but device hasn't come back in 60s, something died
+        if download_complete {
+            if let Some(since) = idle_since {
+                if since.elapsed() > Duration::from_secs(60) {
+                    break;
+                }
+            }
+        }
+
         match notification {
             Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
                 if publish.topic == avail_topic {
@@ -292,29 +352,34 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     // Step 6: Verify firmware version
     println!("\n[6/7] Verifying firmware version...");
     if !came_online {
-        bail!("OTA flash failed: device did not come back online within 200s.");
+        if !download_complete {
+            bail!("OTA flash failed: firmware download did not complete.");
+        } else {
+            bail!("OTA flash failed: firmware was downloaded but device did not come back online within 60s. It may have failed to flash.");
+        }
     }
     match (&expected_version, &version_payload) {
-        (Some(expected), Some(payload)) => {
-            match extract_firmware_version(payload) {
-                Some(reported) => {
-                    if reported == *expected {
-                        println!("Firmware version verified: {} (matches expected)", reported);
-                    } else {
-                        bail!(
+        (Some(expected), Some(payload)) => match extract_firmware_version(payload) {
+            Some(reported) => {
+                if reported == *expected {
+                    println!("Firmware version verified: {} (matches expected)", reported);
+                } else {
+                    bail!(
                             "OTA flash failed: firmware version mismatch! Expected '{}', got '{}'. OTA was rejected or rolled back.",
                             expected, reported
                         );
-                    }
-                }
-                None => {
-                    println!("Warning: firmware_version field not found in state payload. Cannot fully verify.");
                 }
             }
-        }
+            None => {
+                println!("Warning: firmware_version field not found in state payload. Cannot fully verify.");
+            }
+        },
         (Some(expected), None) => {
             println!("Warning: no state payload received (device may not be connected to spa).");
-            println!("Expected version: {}. Connect device to spa and verify manually.", expected);
+            println!(
+                "Expected version: {}. Connect device to spa and verify manually.",
+                expected
+            );
         }
         (None, _) => {
             println!("Warning: could not determine expected version. Skipping version check.");
