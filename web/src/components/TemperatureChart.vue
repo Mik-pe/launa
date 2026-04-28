@@ -15,6 +15,7 @@ interface TooltipData {
   current_temp: number | null
   set_temp: number | null
   is_offline: boolean
+  offline_duration: string | null
 }
 
 interface CompTooltipState {
@@ -86,6 +87,17 @@ function downsampleTempPoints(pts: TempPoint[], maxPoints: number): TempPoint[] 
     if (first !== second) result.push(pts[second])
   }
   return result
+}
+
+function formatDuration(ms: number): string {
+  const mins = Math.floor(ms / 60000)
+  if (mins < 60) return `${mins}m`
+  const hrs = Math.floor(mins / 60)
+  const remainMins = mins % 60
+  if (hrs < 24) return remainMins > 0 ? `${hrs}h ${remainMins}m` : `${hrs}h`
+  const days = Math.floor(hrs / 24)
+  const remainHrs = hrs % 24
+  return remainHrs > 0 ? `${days}d ${remainHrs}h` : `${days}d`
 }
 
 const displayPoints = computed<TempPoint[]>(() => downsampleTempPoints(tempPoints.value, MAX_CHART_POINTS))
@@ -444,6 +456,16 @@ function drawChart(): void {
   // Crosshair
   if (mouseX.value >= 0 && pts.length >= 2) {
     const mx = mouseX.value
+    // Always draw vertical line at mouse position
+    ctx.strokeStyle = 'rgba(255,255,255,0.1)'
+    ctx.lineWidth = 1
+    ctx.setLineDash([])
+    ctx.beginPath()
+    ctx.moveTo(mx, pad.top)
+    ctx.lineTo(mx, pad.top + ch)
+    ctx.stroke()
+
+    // Highlight nearest data point with temp
     let nearest = null
     let minDist = Infinity
     for (const p of pts) {
@@ -455,13 +477,6 @@ function drawChart(): void {
     if (nearest) {
       const nx = xOf(nearest.time.getTime())
       const ny = yOf(nearest.current_temp ?? 0)
-      ctx.strokeStyle = 'rgba(255,255,255,0.1)'
-      ctx.lineWidth = 1
-      ctx.setLineDash([])
-      ctx.beginPath()
-      ctx.moveTo(nx, pad.top)
-      ctx.lineTo(nx, pad.top + ch)
-      ctx.stroke()
       ctx.beginPath()
       ctx.arc(nx, ny, 5, 0, Math.PI * 2)
       ctx.fillStyle = '#f97316'
@@ -534,7 +549,9 @@ function handleMouseMove(e: MouseEvent): void {
   const { tMin, tMax } = timeRange.value
   const cw = rect.width - chartPad.left - chartPad.right
   const clickTime = tMin + ((mx - chartPad.left) / cw) * (tMax - tMin)
+  const clickDate = new Date(clickTime)
 
+  // Find nearest data point for temperature values
   let nearest = pts[0]
   let minDist = Infinity
   for (const p of pts) {
@@ -542,11 +559,16 @@ function handleMouseMove(e: MouseEvent): void {
     if (d < minDist) { minDist = d; nearest = p }
   }
 
+  // Check if cursor is in an offline period
+  const offlinePeriod = offlinePeriods.value.find(p => clickDate >= p.start && clickDate <= p.end)
+  const offlineDuration = offlinePeriod ? formatDuration(clickDate.getTime() - offlinePeriod.start.getTime()) : null
+
   tooltipData.value = {
-    time: nearest.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-    current_temp: nearest.current_temp,
-    set_temp: nearest.set_temp,
-    is_offline: offlinePeriods.value.some(p => nearest.time >= p.start && nearest.time <= p.end),
+    time: clickDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    current_temp: offlinePeriod ? null : nearest.current_temp,
+    set_temp: offlinePeriod ? null : nearest.set_temp,
+    is_offline: !!offlinePeriod,
+    offline_duration: offlineDuration,
   }
 }
 
@@ -771,7 +793,7 @@ function drawChartAndComp(): void {
         <Transition name="tooltip">
           <div v-if="tooltipData" class="absolute top-8 right-8 bg-neutral-800/95 backdrop-blur rounded-xl p-3.5 text-xs shadow-xl ring-1 ring-neutral-700 pointer-events-none min-w-[140px]">
             <p class="text-neutral-400 mb-2 font-medium">{{ tooltipData.time }}</p>
-            <div v-if="tooltipData.is_offline" class="mb-2 px-2 py-1 rounded bg-red-500/10 text-red-400 text-center font-medium">Device Offline</div>
+            <div v-if="tooltipData.is_offline" class="mb-2 px-2 py-1 rounded bg-red-500/10 text-red-400 text-center font-medium">Device Offline<span v-if="tooltipData.offline_duration" class="text-red-400/60 ml-1">{{ tooltipData.offline_duration }}</span></div>
             <div class="space-y-1.5">
               <div class="flex items-center justify-between gap-4">
                 <span class="flex items-center gap-1.5"><span class="w-2 h-0.5 rounded bg-orange-400" /> Current</span>
