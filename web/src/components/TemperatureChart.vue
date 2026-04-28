@@ -186,10 +186,14 @@ const compSegments = computed<Map<string, CompSegment[]>>(() => {
 })
 
 const activeComponents = computed<ComponentDef[]>(() => {
-  return componentDefs.filter(comp => {
-    const segs = compSegments.value.get(comp.key)
-    return segs !== undefined && segs.length > 0
-  })
+  const events = graphData.value.components
+  if (!events?.length) return []
+  // Only show components that have at least one ON event in the dataset
+  const everOn = new Set<string>()
+  for (const e of events) {
+    if (e.state !== 0) everOn.add(e.component)
+  }
+  return componentDefs.filter(comp => everOn.has(comp.key))
 })
 
 // Raw time range from temperature data (or fallback), used for segment boundaries
