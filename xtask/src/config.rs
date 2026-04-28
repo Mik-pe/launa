@@ -42,9 +42,7 @@ pub struct OtaConfig {
 
 impl Default for OtaConfig {
     fn default() -> Self {
-        OtaConfig {
-            serve_port: 8081,
-        }
+        OtaConfig { serve_port: 8081 }
     }
 }
 

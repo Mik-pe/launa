@@ -407,6 +407,26 @@ impl DiscoveryBuilder {
             retain: false,
         });
 
+        // Clock sensor (displays current spa time HH:MM)
+        configs.push(DiscoveryMessage {
+            topic: topics.discovery_topic("sensor", "clock"),
+            payload: format!(
+                r#"{{"device":{},"origin":{},"name":"Clock","unique_id":"{}_clock","state_topic":"{}","value_template":"{{{{%02d:%02d|format(value_json.hour|default(0),value_json.minute|default(0))}}}}","availability_topic":"{}","icon":"mdi:clock-outline","entity_category":"diagnostic"}}"#,
+                device_info, origin, self.device_id, state_topic, avail_topic
+            ),
+            retain: false,
+        });
+
+        // Set time text input (accepts HH:MM)
+        configs.push(DiscoveryMessage {
+            topic: topics.discovery_topic("text", "set_time"),
+            payload: format!(
+                r#"{{"device":{},"origin":{},"name":"Set Time","unique_id":"{}_set_time","command_topic":"{}/set_time","availability_topic":"{}","pattern":"^([0-9]|1[0-9]|2[0-3]):[0-5][0-9]$","icon":"mdi:clock-edit-outline","entity_category":"config"}}"#,
+                device_info, origin, self.device_id, cmd_topic, avail_topic
+            ),
+            retain: false,
+        });
+
         configs
     }
 
@@ -766,8 +786,10 @@ mod tests {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             // Button entities are command-only (have payload_press, no state_topic)
+            // Text entities are command-only for set_time
             let is_button = v.get("payload_press").is_some();
-            if !is_optimistic && !is_button {
+            let is_text = topic.contains("/text/");
+            if !is_optimistic && !is_button && !is_text {
                 assert!(
                     v.get("state_topic").is_some(),
                     "missing 'state_topic' in {}",

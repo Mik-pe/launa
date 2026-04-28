@@ -22,14 +22,14 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, Either};
-use embassy_sync::channel::Channel;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::ram;
-use launa_hal::Transport as _;
 use launa_core::{AppAction, SpaApp};
+use launa_hal::Transport as _;
 use launa_protocol::command::Command;
 use launa_protocol::frame::{Frame, FrameDecoder};
 use log::{debug, error, info, warn};
@@ -40,9 +40,9 @@ use types::FaultBuf;
 mod clock;
 mod config;
 mod crash_info;
-mod logger;
 mod crypto;
 mod diagnostics;
+mod logger;
 mod macros;
 mod mqtt_client;
 mod net_util;
@@ -229,7 +229,8 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                                     first_frame_logged = true;
                                     info!(
                                         "UART: first frame decoded, type={:02X}{:02X}, len={}",
-                                        frame.message_type[0], frame.message_type[1],
+                                        frame.message_type[0],
+                                        frame.message_type[1],
                                         frame.payload.len()
                                     );
                                 }
@@ -238,7 +239,8 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                         }
                         let new_errors = decoder.frame_error_count();
                         if new_errors > prev_errors {
-                            FRAME_ERROR_COUNT.fetch_add(new_errors - prev_errors, Ordering::Relaxed);
+                            FRAME_ERROR_COUNT
+                                .fetch_add(new_errors - prev_errors, Ordering::Relaxed);
                         }
                     }
                     Ok(_) => {
@@ -280,13 +282,23 @@ const SELF_TEST_PUBLISH_INTERVAL_SECS: u64 = 1;
 /// Returns `None` if not connected (value is `i32::MIN`).
 fn read_wifi_rssi() -> Option<i32> {
     let rssi = wifi::WIFI_RSSI.load(Ordering::Relaxed);
-    if rssi == i32::MIN { None } else { Some(rssi) }
+    if rssi == i32::MIN {
+        None
+    } else {
+        Some(rssi)
+    }
 }
 
 /// Execute a batch of `AppAction` side effects from `SpaApp`.
 ///
 /// Maps each action to the corresponding IO operation (UART send, MQTT publish, etc.).
-async fn execute_actions(actions: &[AppAction], device_id: &str, self_test: bool, sniff_mode: bool, wifi_rssi: Option<i32>) {
+async fn execute_actions(
+    actions: &[AppAction],
+    device_id: &str,
+    self_test: bool,
+    sniff_mode: bool,
+    wifi_rssi: Option<i32>,
+) {
     for action in actions {
         match action {
             AppAction::SendFrame(bytes) => {
@@ -297,15 +309,20 @@ async fn execute_actions(actions: &[AppAction], device_id: &str, self_test: bool
                 fault,
                 recovering_from_stale,
             } => {
-                let fb = fault.as_ref().map_or(FaultBuf::EMPTY, |s| FaultBuf::from_string(s));
-                if STATE_CHANNEL.try_send(types::StateMessage {
-                    status: status.clone(),
-                    fault: fb,
-                    recovering_from_stale: *recovering_from_stale,
-                    self_test,
-                    sniff_mode,
-                    wifi_rssi,
-                }).is_err() {
+                let fb = fault
+                    .as_ref()
+                    .map_or(FaultBuf::EMPTY, |s| FaultBuf::from_string(s));
+                if STATE_CHANNEL
+                    .try_send(types::StateMessage {
+                        status: status.clone(),
+                        fault: fb,
+                        recovering_from_stale: *recovering_from_stale,
+                        self_test,
+                        sniff_mode,
+                        wifi_rssi,
+                    })
+                    .is_err()
+                {
                     debug!("STATE_CHANNEL full, dropping stale state update");
                 }
             }
@@ -330,8 +347,16 @@ async fn execute_actions(actions: &[AppAction], device_id: &str, self_test: bool
                 let uart_bytes = UART_BYTES_RECEIVED.load(Ordering::Relaxed);
                 let uart_active = UART_FIRST_BYTE_SEEN.load(Ordering::Relaxed);
                 publish_diagnostics(
-                    device_id, *uptime_secs, *frames_received, *unregistered_frames, *command_retries,
-                    *command_drops, frame_errors, uart_bytes, registration_state, uart_active,
+                    device_id,
+                    *uptime_secs,
+                    *frames_received,
+                    *unregistered_frames,
+                    *command_retries,
+                    *command_drops,
+                    frame_errors,
+                    uart_bytes,
+                    registration_state,
+                    uart_active,
                 );
             }
             AppAction::RequestOta { url } => {
@@ -354,10 +379,7 @@ async fn execute_actions(actions: &[AppAction], device_id: &str, self_test: bool
 fn publish_sniff_frame(frame: &Frame) {
     let hex_str = launa_protocol::hex::to_hex(&frame.payload);
 
-    let mt = alloc::format!(
-        "{:02X}{:02X}",
-        frame.message_type[0], frame.message_type[1]
-    );
+    let mt = alloc::format!("{:02X}{:02X}", frame.message_type[0], frame.message_type[1]);
     let crc_ok = Frame::parse(&frame.payload).is_ok();
 
     let json = alloc::format!(
@@ -399,7 +421,8 @@ async fn handle_mqtt_command(
                     // receives self_test: false without waiting for the
                     // next status change from the spa.
                     let actions = app.force_publish();
-                    execute_actions(&actions, device_id, false, *sniff_mode, read_wifi_rssi()).await;
+                    execute_actions(&actions, device_id, false, *sniff_mode, read_wifi_rssi())
+                        .await;
                 }
             }
         }
@@ -409,13 +432,27 @@ async fn handle_mqtt_command(
                 *sniff_mode = true;
                 // Immediately publish state so UI receives sniff_mode: true
                 let actions = app.force_publish();
-                execute_actions(&actions, device_id, self_test_state.is_some(), true, read_wifi_rssi()).await;
+                execute_actions(
+                    &actions,
+                    device_id,
+                    self_test_state.is_some(),
+                    true,
+                    read_wifi_rssi(),
+                )
+                .await;
             } else if !enable && *sniff_mode {
                 info!("Sniff mode disabled — resuming normal operation");
                 *sniff_mode = false;
                 // Immediately publish state so UI receives sniff_mode: false
                 let actions = app.force_publish();
-                execute_actions(&actions, device_id, self_test_state.is_some(), false, read_wifi_rssi()).await;
+                execute_actions(
+                    &actions,
+                    device_id,
+                    self_test_state.is_some(),
+                    false,
+                    read_wifi_rssi(),
+                )
+                .await;
             }
         }
         Command::Reboot => {
@@ -429,7 +466,14 @@ async fn handle_mqtt_command(
                 st.apply_command(&cmd);
             } else {
                 let actions = app.on_mqtt_command(cmd);
-                execute_actions(&actions, device_id, self_test_state.is_some(), *sniff_mode, read_wifi_rssi()).await;
+                execute_actions(
+                    &actions,
+                    device_id,
+                    self_test_state.is_some(),
+                    *sniff_mode,
+                    read_wifi_rssi(),
+                )
+                .await;
             }
         }
     }
@@ -444,7 +488,12 @@ async fn handle_ota_request<TG: esp_hal::timer::timg::TimerGroupInstance>(
     wifi_stack: &crate::wifi::WifiStack,
     ota: &mut Option<ota::EspOta>,
     ota_buffers: &mut Option<ota::OtaBuffers>,
-    ota_rx: &embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, alloc::string::String, 1>,
+    ota_rx: &embassy_sync::channel::Receiver<
+        'static,
+        CriticalSectionRawMutex,
+        alloc::string::String,
+        1,
+    >,
     wdt: &mut esp_hal::timer::timg::Wdt<TG>,
 ) {
     use launa_ota::OtaUpdate;
@@ -456,15 +505,13 @@ async fn handle_ota_request<TG: esp_hal::timer::timg::TimerGroupInstance>(
     if firmware_url.contains("?test=1") {
         info!("OTA: TCP test requested via ?test=1 parameter");
         match ota_buffers.as_mut() {
-            Some(b) => {
-                match ota::tcp_test(wifi_stack.stack, &firmware_url, b).await {
-                    Ok(()) => info!("OTA: TCP test PASSED"),
-                    Err(()) => {
-                        error!("OTA: TCP test FAILED");
-                        send_alert("error", "tcp_test_failed");
-                    }
+            Some(b) => match ota::tcp_test(wifi_stack.stack, &firmware_url, b).await {
+                Ok(()) => info!("OTA: TCP test PASSED"),
+                Err(()) => {
+                    error!("OTA: TCP test FAILED");
+                    send_alert("error", "tcp_test_failed");
                 }
-            }
+            },
             None => {
                 warn!("TCP test requested but buffers unavailable");
                 send_alert("error", "ota_unavailable_no_flash");
@@ -474,7 +521,10 @@ async fn handle_ota_request<TG: esp_hal::timer::timg::TimerGroupInstance>(
         match (ota.as_mut(), ota_buffers.as_mut()) {
             (Some(o), Some(b)) => {
                 info!("OTA: starting firmware download from main loop");
-                if let Err(()) = ota::perform_ota_update(wifi_stack.stack, o, &firmware_url, b, || wdt.feed()).await {
+                if let Err(()) =
+                    ota::perform_ota_update(wifi_stack.stack, o, &firmware_url, b, || wdt.feed())
+                        .await
+                {
                     error!("OTA update failed");
                     send_alert("error", "ota_update_failed");
                 }
@@ -566,21 +616,19 @@ fn receive_serial_config(timeout_secs: u64) -> Option<config::AppConfig> {
             "wifi.ssid" => app_config.wifi_ssid = value.clone(),
             "wifi.password" => app_config.wifi_password = value.clone(),
             "mqtt.host" => app_config.mqtt_host = value.clone(),
-            "mqtt.port" => {
-                match value.parse::<u16>() {
-                    Ok(p) => {
-                        app_config.mqtt_port = p;
-                    }
-                    Err(_) => {
-                        warn!("Invalid port: {}", value);
-                        uart_raw::write_bytes(
-                            alloc::format!("CONFIG_ERROR:invalid_port={}\n", value).as_bytes(),
-                        );
-                        uart_raw::flush();
-                        return None;
-                    }
+            "mqtt.port" => match value.parse::<u16>() {
+                Ok(p) => {
+                    app_config.mqtt_port = p;
                 }
-            }
+                Err(_) => {
+                    warn!("Invalid port: {}", value);
+                    uart_raw::write_bytes(
+                        alloc::format!("CONFIG_ERROR:invalid_port={}\n", value).as_bytes(),
+                    );
+                    uart_raw::flush();
+                    return None;
+                }
+            },
             "mqtt.user" => app_config.mqtt_user = value.clone(),
             "mqtt.password" => app_config.mqtt_password = value.clone(),
             "device.id" => app_config.device_id = value.clone(),
@@ -633,16 +681,29 @@ async fn process_uart_frames(
     }
 
     let actions = app.process_frame(&frame);
-    execute_actions(&actions, device_id, self_test_active, sniff_mode, read_wifi_rssi()).await;
+    execute_actions(
+        &actions,
+        device_id,
+        self_test_active,
+        sniff_mode,
+        read_wifi_rssi(),
+    )
+    .await;
 
     while let Ok(frame) = frame_rx.try_receive() {
         if sniff_mode {
             publish_sniff_frame(&frame);
         }
         let actions = app.process_frame(&frame);
-        execute_actions(&actions, device_id, self_test_active, sniff_mode, read_wifi_rssi()).await;
+        execute_actions(
+            &actions,
+            device_id,
+            self_test_active,
+            sniff_mode,
+            read_wifi_rssi(),
+        )
+        .await;
     }
-
 }
 
 /// Connect to WiFi with fatal error handling.
@@ -658,7 +719,18 @@ async fn init_wifi(
     hostname: &str,
     mqtt_config: crate::wifi::MqttConfigArgs,
 ) -> crate::wifi::WifiStack {
-    match wifi::WifiStack::connect(spawner, wifi_peripheral, sw_int1, rng, ssid, password, hostname, mqtt_config).await {
+    match wifi::WifiStack::connect(
+        spawner,
+        wifi_peripheral,
+        sw_int1,
+        rng,
+        ssid,
+        password,
+        hostname,
+        mqtt_config,
+    )
+    .await
+    {
         Ok(stack) => stack,
         Err(e) => {
             error!(
@@ -693,8 +765,9 @@ async fn tick_self_test(
 ) {
     self_test_state.tick();
     let now = Instant::now();
-    let should_publish = self_test_last_publish
-        .map_or(true, |t| t.elapsed().as_secs() >= SELF_TEST_PUBLISH_INTERVAL_SECS);
+    let should_publish = self_test_last_publish.map_or(true, |t| {
+        t.elapsed().as_secs() >= SELF_TEST_PUBLISH_INTERVAL_SECS
+    });
     if should_publish {
         let status = self_test_state.status();
         execute_actions(
@@ -729,10 +802,14 @@ async fn main(spawner: Spawner) {
     remote_log::init_remote_log();
 
     // Record boot timestamp for diagnostics uptime calculation
-    DIAGNOSTICS_START_SECS.store((Instant::now().as_millis() / 1000) as u32, Ordering::Relaxed);
+    DIAGNOSTICS_START_SECS.store(
+        (Instant::now().as_millis() / 1000) as u32,
+        Ordering::Relaxed,
+    );
 
     let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
-    let sw_int = esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+    let sw_int =
+        esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     let sw_int1 = sw_int.software_interrupt1;
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
@@ -765,7 +842,9 @@ async fn main(spawner: Spawner) {
             pending_crash_alarm = crash_info::read_crash_info(&mut nvs);
 
             // Expose NVS handle to panic handler for crash recording.
-            unsafe { crash_info::set_nvs_ptr(&mut nvs); }
+            unsafe {
+                crash_info::set_nvs_ptr(&mut nvs);
+            }
 
             nvs_handle = Some(nvs);
         }
@@ -848,8 +927,7 @@ async fn main(spawner: Spawner) {
 
     // Spawn background tasks (uart_task on ThreadModeExecutor;
     // mqtt_task is already spawned by net_bootstrap on InterruptExecutor)
-    spawner
-        .spawn(uart_task(uart_transport).unwrap());
+    spawner.spawn(uart_task(uart_transport).unwrap());
 
     info!("Entering main event loop");
 
@@ -910,14 +988,36 @@ async fn main(spawner: Spawner) {
         // Multiplex: wait for either a UART frame, an MQTT command, or a
         // 1-second tick timer. This replaces the old blocking receive() that
         // hung indefinitely when the spa was off (no OTA, no commands, no ticks).
-        match select(frame_rx.receive(), select(cmd_rx.receive(), Timer::after(tick_interval))).await {
+        match select(
+            frame_rx.receive(),
+            select(cmd_rx.receive(), Timer::after(tick_interval)),
+        )
+        .await
+        {
             // UART frame received
             Either::First(frame) => {
-                process_uart_frames(frame, &mut app, device_id_str, self_test_state.is_some(), sniff_mode, &frame_rx, &mut self_test_discard_warned).await;
+                process_uart_frames(
+                    frame,
+                    &mut app,
+                    device_id_str,
+                    self_test_state.is_some(),
+                    sniff_mode,
+                    &frame_rx,
+                    &mut self_test_discard_warned,
+                )
+                .await;
             }
             // MQTT command received
             Either::Second(Either::First(cmd)) => {
-                handle_mqtt_command(cmd, &mut app, &mut self_test_state, &mut sniff_mode, device_id_str, &mut self_test_last_publish).await;
+                handle_mqtt_command(
+                    cmd,
+                    &mut app,
+                    &mut self_test_state,
+                    &mut sniff_mode,
+                    device_id_str,
+                    &mut self_test_last_publish,
+                )
+                .await;
             }
             // Tick timer expired
             Either::Second(Either::Second(_)) => {}
@@ -925,7 +1025,15 @@ async fn main(spawner: Spawner) {
 
         // Drain MQTT commands (non-blocking)
         while let Ok(cmd) = cmd_rx.try_receive() {
-            handle_mqtt_command(cmd, &mut app, &mut self_test_state, &mut sniff_mode, device_id_str, &mut self_test_last_publish).await;
+            handle_mqtt_command(
+                cmd,
+                &mut app,
+                &mut self_test_state,
+                &mut sniff_mode,
+                device_id_str,
+                &mut self_test_last_publish,
+            )
+            .await;
         }
 
         // In self-test mode, tick the simulator and publish status periodically
@@ -935,12 +1043,26 @@ async fn main(spawner: Spawner) {
             self_test_last_publish = None;
             // Periodic tick: stale detection, registration timeout, diagnostics
             let tick_actions = app.tick();
-            execute_actions(&tick_actions, device_id_str, false, sniff_mode, read_wifi_rssi()).await;
+            execute_actions(
+                &tick_actions,
+                device_id_str,
+                false,
+                sniff_mode,
+                read_wifi_rssi(),
+            )
+            .await;
         }
 
         // Heap check (uses actual ESP32 free heap)
         let heap_actions = app.check_heap(esp_alloc::HEAP.free());
-        execute_actions(&heap_actions, device_id_str, self_test_state.is_some(), sniff_mode, read_wifi_rssi()).await;
+        execute_actions(
+            &heap_actions,
+            device_id_str,
+            self_test_state.is_some(),
+            sniff_mode,
+            read_wifi_rssi(),
+        )
+        .await;
 
         // UART health check: alert if no bytes received after 30s of uptime
         // Re-alert every 5 minutes until bytes are seen
@@ -966,7 +1088,10 @@ async fn main(spawner: Spawner) {
                     &[0x01, 0x02, client_hash[0], client_hash[1]],
                 ) {
                     Ok(encoded) => {
-                        info!("UART TX test: sending registration probe ({} bytes)", encoded.len());
+                        info!(
+                            "UART TX test: sending registration probe ({} bytes)",
+                            encoded.len()
+                        );
                         UART_TX_CHANNEL.send(encoded).await;
                     }
                     Err(e) => {
@@ -981,7 +1106,14 @@ async fn main(spawner: Spawner) {
         // Drain pump timer commands
         while let Ok((pump_index, minutes)) = pump_timer_rx.try_receive() {
             let actions = app.start_pump_timer(pump_index, minutes);
-            execute_actions(&actions, device_id_str, self_test_state.is_some(), sniff_mode, read_wifi_rssi()).await;
+            execute_actions(
+                &actions,
+                device_id_str,
+                self_test_state.is_some(),
+                sniff_mode,
+                read_wifi_rssi(),
+            )
+            .await;
             info!("Started pump {} timer for {} min", pump_index, minutes);
         }
     }

@@ -37,8 +37,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     }
 
     let config = crate::config::load()?;
-    let port_name =
-        crate::util::resolve_port(cli_port.as_deref(), Some(&config))?;
+    let port_name = crate::util::resolve_port(cli_port.as_deref(), Some(&config))?;
 
     // Build config payload
     let mut payload = String::from("CONFIG_START\r\n");
@@ -75,15 +74,15 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     //   DTR=LOW (GPIO0=HIGH), RTS=HIGH (EN=LOW=assert reset), then RTS=LOW (EN=HIGH=release)
     println!("Resetting ESP32...");
     port.write_data_terminal_ready(false)
-        .context("Failed to set DTR")?;  // GPIO0 = HIGH (normal boot, not download)
+        .context("Failed to set DTR")?; // GPIO0 = HIGH (normal boot, not download)
     port.write_request_to_send(true)
-        .context("Failed to set RTS")?;   // EN = LOW (assert reset)
+        .context("Failed to set RTS")?; // EN = LOW (assert reset)
     std::thread::sleep(Duration::from_millis(100));
     port.write_request_to_send(false)
-        .context("Failed to set RTS")?;   // EN = HIGH (release reset)
-    // Give ESP32 time to boot and enter the config window.
-    // Boot takes ~500ms, then the app waits 5s for serial config.
-    // Wait 1.5s to be safely past the bootloader and into the app.
+        .context("Failed to set RTS")?; // EN = HIGH (release reset)
+                                        // Give ESP32 time to boot and enter the config window.
+                                        // Boot takes ~500ms, then the app waits 5s for serial config.
+                                        // Wait 1.5s to be safely past the bootloader and into the app.
     println!("Waiting for ESP32 to boot...");
     std::thread::sleep(Duration::from_millis(1500));
 

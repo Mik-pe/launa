@@ -37,14 +37,12 @@ fn contains_ci(haystack: &str, needle: &str) -> bool {
     if needle_bytes.len() > haystack_bytes.len() {
         return false;
     }
-    haystack_bytes
-        .windows(needle_bytes.len())
-        .any(|window| {
-            window
-                .iter()
-                .zip(needle_bytes.iter())
-                .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
-        })
+    haystack_bytes.windows(needle_bytes.len()).any(|window| {
+        window
+            .iter()
+            .zip(needle_bytes.iter())
+            .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+    })
 }
 
 /// Crash reason codes stored as a u8 in NVS.
@@ -122,7 +120,8 @@ impl CrashReason {
         }
 
         // Index out of bounds
-        if contains_ci(message, "index out of bounds") || contains_ci(message, "range start index ") {
+        if contains_ci(message, "index out of bounds") || contains_ci(message, "range start index ")
+        {
             return Self::IndexOutOfBounds;
         }
 
@@ -180,7 +179,10 @@ pub(crate) fn write_crash_info(reason: CrashReason, message: &str) -> bool {
     let ns = esp_nvs::Key::from_str(CRASH_NAMESPACE);
 
     // Pre-check: only write if no crash flag already stored (avoid flash wear)
-    if nvs.get::<u8>(&ns, &esp_nvs::Key::from_str(KEY_MAGIC)).is_ok() {
+    if nvs
+        .get::<u8>(&ns, &esp_nvs::Key::from_str(KEY_MAGIC))
+        .is_ok()
+    {
         // Crash flag already present — skip write to preserve flash
         return false;
     }
@@ -227,12 +229,16 @@ pub fn read_crash_info(
     let ns = esp_nvs::Key::from_str(CRASH_NAMESPACE);
 
     // Check magic byte
-    let magic = nvs.get::<u8>(&ns, &esp_nvs::Key::from_str(KEY_MAGIC)).ok()?;
+    let magic = nvs
+        .get::<u8>(&ns, &esp_nvs::Key::from_str(KEY_MAGIC))
+        .ok()?;
     if magic != CRASH_MAGIC {
         return None;
     }
 
-    let reason_u8 = nvs.get::<u8>(&ns, &esp_nvs::Key::from_str(KEY_REASON)).ok()?;
+    let reason_u8 = nvs
+        .get::<u8>(&ns, &esp_nvs::Key::from_str(KEY_REASON))
+        .ok()?;
     let reason = CrashReason::from_u8(reason_u8);
     let message = nvs
         .get::<String>(&ns, &esp_nvs::Key::from_str(KEY_MESSAGE))

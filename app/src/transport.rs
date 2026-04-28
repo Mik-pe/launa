@@ -5,7 +5,7 @@
 //! (mock/sim) code.
 
 use embassy_time::{Duration, Timer};
-use esp_hal::gpio::{AnyPin, Output, OutputConfig, Level};
+use esp_hal::gpio::{AnyPin, Level, Output, OutputConfig};
 use esp_hal::uart::Uart;
 use esp_hal::Async;
 use launa_hal::transport::{Transport, TransportError};
@@ -29,22 +29,18 @@ impl Rs485Transport {
     /// - `de_pin`: Optional GPIO pin connected to the RS-485 transceiver's
     ///   DE (Driver Enable) input. When `None`, DE pin control is skipped
     ///   (useful for loopback testing or direct UART connections).
-    pub fn new(
-        uart: Uart<'static, Async>,
-        de_pin: Option<AnyPin<'static>>,
-    ) -> Self {
-        let de = de_pin.map(|pin| {
-            Output::new(pin, Level::Low, OutputConfig::default())
-        });
+    pub fn new(uart: Uart<'static, Async>, de_pin: Option<AnyPin<'static>>) -> Self {
+        let de = de_pin.map(|pin| Output::new(pin, Level::Low, OutputConfig::default()));
         Rs485Transport { uart, de_pin: de }
     }
 }
 
 impl Transport for Rs485Transport {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, TransportError> {
-        self.uart.read_async(buf).await.map_err(|_e| {
-            TransportError::Io
-        })
+        self.uart
+            .read_async(buf)
+            .await
+            .map_err(|_e| TransportError::Io)
     }
 
     async fn write(&mut self, data: &[u8]) -> Result<(), TransportError> {
@@ -57,9 +53,10 @@ impl Transport for Rs485Transport {
         // Write all bytes in a single DE assertion window
         let mut written = 0;
         while written < data.len() {
-            let n = self.uart.write(&data[written..]).map_err(|_e| {
-                TransportError::Io
-            })?;
+            let n = self
+                .uart
+                .write(&data[written..])
+                .map_err(|_e| TransportError::Io)?;
             written += n;
         }
 

@@ -86,8 +86,8 @@ fn test_ha_discovery_full_validation() {
 
     assert_eq!(
         configs.len(),
-        31,
-        "should produce exactly 31 discovery configs"
+        33,
+        "should produce exactly 33 discovery configs"
     );
 
     let mut topics_seen = std::collections::HashSet::new();
@@ -130,7 +130,9 @@ fn test_ha_discovery_full_validation() {
             .unwrap_or(false);
         // Button entities are command-only (have payload_press, no state_topic)
         let is_button = v.get("payload_press").is_some();
-        if !is_optimistic && !is_button {
+        // Text entities are command-only (no state_topic)
+        let is_text = topic.contains("/text/");
+        if !is_optimistic && !is_button && !is_text {
             assert!(
                 v.get("state_topic").is_some(),
                 "missing state_topic in {}",
@@ -150,7 +152,7 @@ fn test_ha_discovery_full_validation() {
             uid
         );
 
-        if !is_optimistic && !is_button {
+        if !is_optimistic && !is_button && !is_text {
             let st = v["state_topic"].as_str().unwrap();
             let uid = v["unique_id"].as_str().unwrap();
             let is_dedicated_topic = uid.ends_with("_diagnostics")

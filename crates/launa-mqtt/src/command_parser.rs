@@ -242,9 +242,10 @@ fn parse_set_time(payload: &str) -> ParseResult {
         match (hour, minute) {
             (Some(h), Some(m)) => return validate_time(h, m, is_24h),
             _ => {
-                return ParseResult::InvalidPayload(
-                    alloc::format!("invalid set_time JSON: {:?}", payload)
-                )
+                return ParseResult::InvalidPayload(alloc::format!(
+                    "invalid set_time JSON: {:?}",
+                    payload
+                ))
             }
         }
     }
@@ -267,7 +268,8 @@ fn validate_time(hour: u8, minute: u8, is_24h: bool) -> ParseResult {
     if hour > 23 || minute > 59 {
         return ParseResult::InvalidPayload(alloc::format!(
             "time out of range: {}:{} (hour 0-23, minute 0-59)",
-            hour, minute
+            hour,
+            minute
         ));
     }
     ParseResult::Valid(Command::SetTime {
@@ -283,7 +285,9 @@ fn extract_json_number(json: &str, key: &str) -> Option<u8> {
     let start = json.find(&pattern)?;
     let rest = &json[start + pattern.len()..];
     let rest = rest.trim_start();
-    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
     rest[..end].parse().ok()
 }
 

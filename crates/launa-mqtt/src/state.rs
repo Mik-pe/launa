@@ -69,6 +69,11 @@ pub fn status_to_json(
         _ => "unknown",
     };
 
+    let time_format = match status.time_format {
+        launa_protocol::status::TimeFormat::Hour12 => "12h",
+        launa_protocol::status::TimeFormat::Hour24 => "24h",
+    };
+
     let firmware_ver = match firmware_version {
         Some(v) => alloc::format!("\"{}\"", escape_json_string(v)),
         None => alloc::string::String::from("null"),
@@ -78,7 +83,7 @@ pub fn status_to_json(
     let device_fields = [pump_fields.as_str(), light_fields.as_str()].join(",");
 
     format!(
-        "{{\"current_temp\":{},\"set_temp\":{},\"is_heating\":{},{},\"blower\":{},\"circ_pump\":{},\"mister\":{},\"hold_mode\":{},\"heating_mode\":\"{}\",\"temp_range\":\"{}\",\"temp_scale\":\"{}\",\"hour\":{},\"minute\":{},\"notification_type\":{},\"panel_locked\":{},\"settings_lock\":{},\"m8_cycle_time\":{},\"last_fault\":{},\"firmware_version\":{},\"self_test\":{},\"sniff_mode\":{},\"wifi_rssi\":{}}}",
+        "{{\"current_temp\":{},\"set_temp\":{},\"is_heating\":{},{},\"blower\":{},\"circ_pump\":{},\"mister\":{},\"hold_mode\":{},\"heating_mode\":\"{}\",\"temp_range\":\"{}\",\"temp_scale\":\"{}\",\"time_format\":\"{}\",\"hour\":{},\"minute\":{},\"notification_type\":{},\"panel_locked\":{},\"settings_lock\":{},\"m8_cycle_time\":{},\"last_fault\":{},\"firmware_version\":{},\"self_test\":{},\"sniff_mode\":{},\"wifi_rssi\":{}}}",
         current_temp,
         status.set_temp,
         is_heating,
@@ -90,6 +95,7 @@ pub fn status_to_json(
         heating_mode,
         temp_range,
         temp_scale,
+        time_format,
         status.hour,
         status.minute,
         status.notification_type,
@@ -182,6 +188,7 @@ mod tests {
         assert_eq!(parsed["heating_mode"], "ready");
         assert_eq!(parsed["temp_range"], "high");
         assert_eq!(parsed["temp_scale"], "fahrenheit");
+        assert_eq!(parsed["time_format"], "24h");
         assert_eq!(parsed["hour"], 14);
         assert_eq!(parsed["minute"], 30);
         assert!(parsed["last_fault"].is_null());

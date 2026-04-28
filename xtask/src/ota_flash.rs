@@ -282,7 +282,9 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         let connect_deadline = std::time::Instant::now() + Duration::from_secs(15);
         let mut download_started = false;
         loop {
-            let bytes = ota_progress.bytes_sent.load(std::sync::atomic::Ordering::SeqCst);
+            let bytes = ota_progress
+                .bytes_sent
+                .load(std::sync::atomic::Ordering::SeqCst);
             if bytes > 0 {
                 println!("Device connected, firmware download started!");
                 download_started = true;
@@ -316,7 +318,9 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                 bail!(
                     "OTA flash failed: device did not connect to OTA server after {} attempts.\n\
                      Check that the device is online and can reach {}:{}.",
-                    MAX_OTA_ATTEMPTS, ota_host, ota_port
+                    MAX_OTA_ATTEMPTS,
+                    ota_host,
+                    ota_port
                 );
             }
         }
@@ -325,7 +329,9 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         let mut idle_since: Option<std::time::Instant> = None;
 
         for notification in connection.iter() {
-            let bytes = ota_progress.bytes_sent.load(std::sync::atomic::Ordering::SeqCst);
+            let bytes = ota_progress
+                .bytes_sent
+                .load(std::sync::atomic::Ordering::SeqCst);
             if !download_complete && bytes >= ota_progress.total_bytes {
                 download_complete = true;
                 println!("Firmware download complete! Waiting for device to flash and reboot...");
@@ -349,8 +355,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                             println!("\nDevice rebooted and came back online!");
                         }
                     }
-                    if came_online
-                        && (publish.topic == status_topic || publish.topic == diag_topic)
+                    if came_online && (publish.topic == status_topic || publish.topic == diag_topic)
                     {
                         let payload = String::from_utf8_lossy(&publish.payload).to_string();
                         if publish.topic == status_topic {
@@ -358,8 +363,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                         } else {
                             println!("\nDevice published diagnostics after OTA!");
                         }
-                        if version_payload.is_none()
-                            && extract_firmware_version(&payload).is_some()
+                        if version_payload.is_none() && extract_firmware_version(&payload).is_some()
                         {
                             version_payload = Some(payload);
                         }

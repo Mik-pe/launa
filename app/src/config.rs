@@ -66,22 +66,23 @@ impl AppConfig {
         let wifi_password = nvs_get_str(nvs, &ns, KEY_WIFI_PASS)
             .map(|v| crypto::maybe_decrypt(&v, aes, rng))
             .unwrap_or_else(|| String::from(Self::PLACEHOLDER_WIFI_PASS));
-        let mqtt_host = nvs_get_str(nvs, &ns, KEY_MQTT_HOST)
-            .unwrap_or_else(|| String::from("192.168.1.100"));
-        let mqtt_port = nvs.get::<u16>(&ns, &esp_nvs::Key::from_str(KEY_MQTT_PORT))
+        let mqtt_host =
+            nvs_get_str(nvs, &ns, KEY_MQTT_HOST).unwrap_or_else(|| String::from("192.168.1.100"));
+        let mqtt_port = nvs
+            .get::<u16>(&ns, &esp_nvs::Key::from_str(KEY_MQTT_PORT))
             .unwrap_or(1883);
-        let mqtt_user = nvs_get_str(nvs, &ns, KEY_MQTT_USER)
-            .unwrap_or_else(|| String::new());
+        let mqtt_user = nvs_get_str(nvs, &ns, KEY_MQTT_USER).unwrap_or_else(|| String::new());
         let mqtt_password = nvs_get_str(nvs, &ns, KEY_MQTT_PASS)
             .map(|v| crypto::maybe_decrypt(&v, aes, rng))
             .unwrap_or_else(|| String::new());
-        let device_id = nvs_get_str(nvs, &ns, KEY_DEVICE_ID)
-            .unwrap_or_else(|| String::from("launa_spa"));
-        let self_test = nvs.get::<bool>(&ns, &esp_nvs::Key::from_str(KEY_SELF_TEST))
+        let device_id =
+            nvs_get_str(nvs, &ns, KEY_DEVICE_ID).unwrap_or_else(|| String::from("launa_spa"));
+        let self_test = nvs
+            .get::<bool>(&ns, &esp_nvs::Key::from_str(KEY_SELF_TEST))
             .unwrap_or(false);
 
-        let has_placeholder_creds = wifi_ssid == Self::PLACEHOLDER_SSID
-            || wifi_password == Self::PLACEHOLDER_WIFI_PASS;
+        let has_placeholder_creds =
+            wifi_ssid == Self::PLACEHOLDER_SSID || wifi_password == Self::PLACEHOLDER_WIFI_PASS;
 
         if has_placeholder_creds {
             error!(
@@ -93,7 +94,9 @@ impl AppConfig {
         info!(
             "Config loaded: ssid=<{} chars> mqtt={}:{} device={}",
             wifi_ssid.len(),
-            mqtt_host, mqtt_port, device_id
+            mqtt_host,
+            mqtt_port,
+            device_id
         );
 
         AppConfig {
@@ -117,11 +120,21 @@ impl AppConfig {
     ) {
         let ns = esp_nvs::Key::from_str(NAMESPACE);
         nvs_set(nvs, &ns, KEY_WIFI_SSID, self.wifi_ssid.as_str());
-        nvs_set(nvs, &ns, KEY_WIFI_PASS, crypto::encrypt(&self.wifi_password, aes, rng).as_str());
+        nvs_set(
+            nvs,
+            &ns,
+            KEY_WIFI_PASS,
+            crypto::encrypt(&self.wifi_password, aes, rng).as_str(),
+        );
         nvs_set(nvs, &ns, KEY_MQTT_HOST, self.mqtt_host.as_str());
         nvs_set(nvs, &ns, KEY_MQTT_PORT, self.mqtt_port);
         nvs_set(nvs, &ns, KEY_MQTT_USER, self.mqtt_user.as_str());
-        nvs_set(nvs, &ns, KEY_MQTT_PASS, crypto::encrypt(&self.mqtt_password, aes, rng).as_str());
+        nvs_set(
+            nvs,
+            &ns,
+            KEY_MQTT_PASS,
+            crypto::encrypt(&self.mqtt_password, aes, rng).as_str(),
+        );
         nvs_set(nvs, &ns, KEY_DEVICE_ID, self.device_id.as_str());
         nvs_set(nvs, &ns, KEY_SELF_TEST, self.self_test);
         info!("Config saved to NVS");
@@ -144,7 +157,10 @@ impl AppConfig {
         match esp_nvs::Nvs::new(0x9000, 0x6000, flash_storage) {
             Ok(nvs) => Some(nvs),
             Err(e) => {
-                warn!("Failed to open NVS partition: {:?}, falling back to default config", e);
+                warn!(
+                    "Failed to open NVS partition: {:?}, falling back to default config",
+                    e
+                );
                 None
             }
         }
@@ -156,7 +172,8 @@ fn nvs_get_str(
     namespace: &esp_nvs::Key,
     key: &str,
 ) -> Option<String> {
-    nvs.get::<String>(namespace, &esp_nvs::Key::from_str(key)).ok()
+    nvs.get::<String>(namespace, &esp_nvs::Key::from_str(key))
+        .ok()
 }
 
 /// Write a value to NVS, logging a warning on failure.

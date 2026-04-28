@@ -3,7 +3,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use embassy_net::{IpAddress, Stack, dns::DnsQueryType};
+use embassy_net::{dns::DnsQueryType, IpAddress, Stack};
 use embassy_time::{Duration, Instant, Timer};
 use log::{error, info, warn};
 

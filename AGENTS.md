@@ -46,6 +46,12 @@ Requires `launa.toml` at project root (gitignored; copy from `launa.example.toml
 | `cargo xtask self-test` | Run hardware self-test on ESP32 |
 | `cargo xtask config-flash` | Write WiFi/MQTT config to ESP32 NVS |
 
+## Web Frontend
+
+- Located in `web/`, uses Vue 3 + Vite + Tailwind CSS 4
+- **Use `bun`** (not npm/node) for all web commands: `bun run build`, `bun run dev`, `bun run typecheck`
+- Bun is installed at `/opt/homebrew/bin/bun`
+
 ## Architecture
 
 - All workspace crates are `no_std`, pure Rust, desktop-testable

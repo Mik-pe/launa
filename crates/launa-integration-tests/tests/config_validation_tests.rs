@@ -697,8 +697,8 @@ fn test_mqtt_reconnect_republish_discovery() {
     broker.publish_discovery("test_spa");
     let initial_discovery_count = broker.discovery_payloads().len();
     assert_eq!(
-        initial_discovery_count, 31,
-        "should publish 31 discovery configs initially"
+        initial_discovery_count, 33,
+        "should publish 33 discovery configs initially"
     );
 
     // Phase 2: Disconnect
@@ -728,11 +728,11 @@ fn test_mqtt_reconnect_republish_discovery() {
     broker.publish_discovery("test_spa");
 
     let post_reconnect_discovery = broker.discovery_payloads();
-    // Should have original 31 + re-published 31 = 62 total
+    // Should have original 33 + re-published 33 = 66 total
     assert_eq!(
         post_reconnect_discovery.len(),
-        62,
-        "should have 62 discovery configs (31 original + 31 re-published)"
+        66,
+        "should have 66 discovery configs (33 original + 33 re-published)"
     );
     assert!(
         broker.publish_count() > pre_count,
@@ -799,8 +799,8 @@ fn test_mqtt_reconnect_discovery_in_broker() {
     let discovery_payloads = broker.discovery_payloads();
     assert_eq!(
         discovery_payloads.len(),
-        62,
-        "should have 62 discovery configs after re-publish (31*2)"
+        66,
+        "should have 66 discovery configs after re-publish (33*2)"
     );
 
     // Verify each discovery config is valid JSON
@@ -817,10 +817,13 @@ fn test_mqtt_reconnect_discovery_in_broker() {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         // Button entities are command-only (have payload_press, no state_topic)
-        let is_button = parsed
-            .get("payload_press")
-            .is_some();
-        if !is_optimistic && !is_button {
+        let is_button = parsed.get("payload_press").is_some();
+        // Text entities are command-only (no state_topic)
+        let is_text = parsed
+            .get("unique_id")
+            .and_then(|v| v.as_str())
+            .map_or(false, |id| id.ends_with("_set_time"));
+        if !is_optimistic && !is_button && !is_text {
             assert!(
                 parsed.get("state_topic").is_some(),
                 "discovery config should have state_topic"

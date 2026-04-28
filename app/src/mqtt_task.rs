@@ -42,12 +42,10 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
     #[cfg(feature = "remote-log")]
     let log_topic = topics.log_topic();
     let sniff_topic = topics.sniff_topic();
-    let mut last_scale_range: Option<
-        (
-            launa_protocol::status::TemperatureScale,
-            launa_protocol::status::TempRange,
-        ),
-    > = None;
+    let mut last_scale_range: Option<(
+        launa_protocol::status::TemperatureScale,
+        launa_protocol::status::TempRange,
+    )> = None;
     let mut last_self_test: bool = false;
     let mut last_sniff_mode: bool = false;
     let mut last_wifi_rssi: Option<i32> = None;
@@ -184,7 +182,17 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                     if is_stale || changed || rssi_changed {
                         last_published_status = Some(status.clone());
                         last_published_fault = Some(fault);
-                        if let Err(_) = mqtt.publish_state(&status, fault.as_str(), self_test, sniff_mode, wifi_rssi, self_test).await {
+                        if let Err(_) = mqtt
+                            .publish_state(
+                                &status,
+                                fault.as_str(),
+                                self_test,
+                                sniff_mode,
+                                wifi_rssi,
+                                self_test,
+                            )
+                            .await
+                        {
                             rate_warn!(MQTT_PUB_WARN, "MQTT state publish failed");
                         }
                     }
@@ -262,28 +270,31 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                         }
 
                         // Handle self-test toggle command
-                        let self_test_subtopic = alloc::format!("{}/self_test", cmd_base);
-                        if topic == self_test_subtopic {
+                        if topic.strip_prefix(&cmd_base) == Some("/self_test") {
                             let payload_str = core::str::from_utf8(&payload).unwrap_or("");
                             let enable = matches!(payload_str, "ON" | "on" | "1" | "true" | "TRUE");
-                            info!("MQTT self-test command: {}", if enable { "ON" } else { "OFF" });
+                            info!(
+                                "MQTT self-test command: {}",
+                                if enable { "ON" } else { "OFF" }
+                            );
                             cmd_sender.send(Command::SelfTest(enable)).await;
                             continue;
                         }
 
                         // Handle sniff mode toggle command
-                        let sniff_subtopic = alloc::format!("{}/sniff", cmd_base);
-                        if topic == sniff_subtopic {
+                        if topic.strip_prefix(&cmd_base) == Some("/sniff") {
                             let payload_str = core::str::from_utf8(&payload).unwrap_or("");
                             let enable = matches!(payload_str, "ON" | "on" | "1" | "true" | "TRUE");
-                            info!("MQTT sniff mode command: {}", if enable { "ON" } else { "OFF" });
+                            info!(
+                                "MQTT sniff mode command: {}",
+                                if enable { "ON" } else { "OFF" }
+                            );
                             cmd_sender.send(Command::Sniff(enable)).await;
                             continue;
                         }
 
                         // Handle reboot command
-                        let reboot_subtopic = alloc::format!("{}/reboot", cmd_base);
-                        if topic == reboot_subtopic {
+                        if topic.strip_prefix(&cmd_base) == Some("/reboot") {
                             info!("MQTT reboot command received");
                             cmd_sender.send(Command::Reboot).await;
                             continue;
@@ -317,12 +328,19 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                                 }
                             }
                         } else {
-                            let payload_str = core::str::from_utf8(&payload).unwrap_or("<non-utf8>");
-                            warn!("MQTT command not recognized: topic={} payload={}", topic, payload_str);
+                            let payload_str =
+                                core::str::from_utf8(&payload).unwrap_or("<non-utf8>");
+                            warn!(
+                                "MQTT command not recognized: topic={} payload={}",
+                                topic, payload_str
+                            );
                         }
                     }
                     None => {
-                        let reason = mqtt.last_disconnect.take().unwrap_or_else(|| alloc::string::String::from("unknown"));
+                        let reason = mqtt
+                            .last_disconnect
+                            .take()
+                            .unwrap_or_else(|| alloc::string::String::from("unknown"));
                         warn!("MQTT connection lost ({}), attempting reconnect...", reason);
                         MQTT_RECONNECT_COUNT.fetch_add(1, Ordering::Relaxed);
                         MQTT_LOSS_COUNT.fetch_add(1, Ordering::Relaxed);

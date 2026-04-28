@@ -37,7 +37,7 @@ const ENC_PREFIX: &str = "enc:";
 /// whatever factory-default values are present (all-zero or ADC cal data),
 /// which means encryption is still deterministic per-device.
 fn read_key() -> [u8; 16] {
-    use esp_hal::efuse::{BLK3_RESERVED_2, SECURE_VERSION, BLK3_RESERVED_6, BLK3_RESERVED_7};
+    use esp_hal::efuse::{BLK3_RESERVED_2, BLK3_RESERVED_6, BLK3_RESERVED_7, SECURE_VERSION};
 
     let mut key = [0u8; 16];
 
@@ -63,10 +63,7 @@ fn read_key() -> [u8; 16] {
     // This means the derived key is predictable (just the XOR constants),
     // providing no real security. Operators should run `cargo xtask provision`
     // to burn a random key into BLOCK3.
-    let all_zero = word2 == [0u8; 4]
-        && word4 == [0u8; 4]
-        && word6 == [0u8; 4]
-        && word7 == [0u8; 4];
+    let all_zero = word2 == [0u8; 4] && word4 == [0u8; 4] && word6 == [0u8; 4] && word7 == [0u8; 4];
     if all_zero {
         warn!("eFuse BLOCK3 is all zeros — encryption key is predictable! Run 'cargo xtask provision' to burn a random key.");
     }
@@ -163,7 +160,10 @@ pub fn maybe_decrypt(value: &str, aes: &mut Aes, _rng: &mut Rng) -> String {
 
     // Need at least 12 bytes nonce (24 hex chars) + 16 bytes ciphertext (32 hex chars)
     if hex_part.len() < 56 {
-        warn!("Encrypted value too short ({} hex chars), returning as-is", hex_part.len());
+        warn!(
+            "Encrypted value too short ({} hex chars), returning as-is",
+            hex_part.len()
+        );
         return String::from(value);
     }
 
@@ -177,7 +177,10 @@ pub fn maybe_decrypt(value: &str, aes: &mut Aes, _rng: &mut Rng) -> String {
 
     if combined.len() < 28 {
         // 12 (nonce) + 16 (one block minimum)
-        warn!("Encrypted value too short ({} bytes), returning as-is", combined.len());
+        warn!(
+            "Encrypted value too short ({} bytes), returning as-is",
+            combined.len()
+        );
         return String::from(value);
     }
 
@@ -186,7 +189,10 @@ pub fn maybe_decrypt(value: &str, aes: &mut Aes, _rng: &mut Rng) -> String {
 
     // Verify ciphertext is a multiple of 16 bytes
     if ciphertext.len() % 16 != 0 {
-        warn!("Ciphertext not block-aligned ({} bytes), returning as-is", ciphertext.len());
+        warn!(
+            "Ciphertext not block-aligned ({} bytes), returning as-is",
+            ciphertext.len()
+        );
         return String::from(value);
     }
 

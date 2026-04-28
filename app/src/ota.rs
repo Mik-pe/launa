@@ -21,8 +21,8 @@ use embassy_time::Duration;
 use embedded_io_async::Write as _;
 use launa_esp_ota::{EspOtaFlash, Partition};
 use launa_ota::http::{
-    extract_status_line, find_header_end, parse_content_length, parse_crc_from_url,
-    parse_http_url, validate_http_status,
+    extract_status_line, find_header_end, parse_content_length, parse_crc_from_url, parse_http_url,
+    validate_http_status,
 };
 use launa_ota::OtaUpdate;
 use log::{error, info};
@@ -173,10 +173,7 @@ pub async fn perform_ota_update(
 
         // Cap header size to prevent OOM on the 32 KiB heap
         if header_len + n > MAX_HEADER_SIZE {
-            error!(
-                "OTA: headers exceed {} bytes, aborting",
-                MAX_HEADER_SIZE
-            );
+            error!("OTA: headers exceed {} bytes, aborting", MAX_HEADER_SIZE);
             return Err(());
         }
         header_buf[header_len..header_len + n].copy_from_slice(&buf[..n]);
@@ -296,7 +293,10 @@ pub async fn tcp_test(
         }
     };
 
-    info!("TCP_TEST: parsed URL -> host={} port={} path={}", host, port, path);
+    info!(
+        "TCP_TEST: parsed URL -> host={} port={} path={}",
+        host, port, path
+    );
 
     // Reuse pre-allocated TCP socket buffers (same pattern as perform_ota_update)
     let rx: &'static mut [u8] =
@@ -309,7 +309,10 @@ pub async fn tcp_test(
     info!("TCP_TEST: resolving host '{}'", host);
     let addr = match net_util::resolve_host(stack, &host).await {
         Some(a) => {
-            info!("TCP_TEST: resolved {} -> {}.{}.{}.{}", host, a[0], a[1], a[2], a[3]);
+            info!(
+                "TCP_TEST: resolved {} -> {}.{}.{}.{}",
+                host, a[0], a[1], a[2], a[3]
+            );
             a
         }
         None => {
@@ -318,7 +321,10 @@ pub async fn tcp_test(
         }
     };
 
-    info!("TCP_TEST: connecting to {}.{}.{}.{}:{} ...", addr[0], addr[1], addr[2], addr[3], port);
+    info!(
+        "TCP_TEST: connecting to {}.{}.{}.{}:{} ...",
+        addr[0], addr[1], addr[2], addr[3], port
+    );
     if let Err(e) = socket
         .connect(IpEndpoint {
             addr: IpAddress::Ipv4(Ipv4Address::from_octets(addr)),
@@ -348,7 +354,10 @@ pub async fn tcp_test(
     loop {
         let n = match socket.read(&mut buf[total_read..]).await {
             Ok(0) => {
-                info!("TCP_TEST: server closed connection (total read: {} bytes)", total_read);
+                info!(
+                    "TCP_TEST: server closed connection (total read: {} bytes)",
+                    total_read
+                );
                 break;
             }
             Ok(n) => {
@@ -365,7 +374,10 @@ pub async fn tcp_test(
 
         // Stop after filling the buffer or reading ~512 bytes
         if total_read >= HTTP_READ_BUF_SIZE {
-            info!("TCP_TEST: buffer full ({} bytes), stopping read", total_read);
+            info!(
+                "TCP_TEST: buffer full ({} bytes), stopping read",
+                total_read
+            );
             break;
         }
     }
@@ -381,21 +393,36 @@ pub async fn tcp_test(
         let status_line = core::str::from_utf8(&response[..line_end]).unwrap_or("<non-utf8>");
         info!("TCP_TEST: HTTP status: {}", status_line);
     } else {
-        info!("TCP_TEST: raw response (no status line found): {:02x?}", &response[..total_read.min(64)]);
+        info!(
+            "TCP_TEST: raw response (no status line found): {:02x?}",
+            &response[..total_read.min(64)]
+        );
     }
 
     // Log first 32 bytes of response as hex for debugging
     let hex_len = total_read.min(32);
-    info!("TCP_TEST: first {} bytes: {:02x?}", hex_len, &response[..hex_len]);
+    info!(
+        "TCP_TEST: first {} bytes: {:02x?}",
+        hex_len,
+        &response[..hex_len]
+    );
 
     // Try to find and log the start of the body
     if let Some(pos) = response.windows(4).position(|w| w == b"\r\n\r\n") {
         let body_start = pos + 4;
         let body_len = total_read.saturating_sub(body_start).min(32);
         if body_len > 0 {
-            info!("TCP_TEST: body starts at offset {}, first {} bytes: {:02x?}", body_start, body_len, &response[body_start..body_start + body_len]);
+            info!(
+                "TCP_TEST: body starts at offset {}, first {} bytes: {:02x?}",
+                body_start,
+                body_len,
+                &response[body_start..body_start + body_len]
+            );
         } else {
-            info!("TCP_TEST: headers end at offset {} but no body data in this chunk", body_start);
+            info!(
+                "TCP_TEST: headers end at offset {} but no body data in this chunk",
+                body_start
+            );
         }
     }
 

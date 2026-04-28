@@ -61,7 +61,10 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::get(get_alerts).delete(clear_alerts),
         )
         .route("/sniff", axum::routing::get(get_sniff).delete(clear_sniff))
-        .route("/availability/history", axum::routing::get(get_availability));
+        .route(
+            "/availability/history",
+            axum::routing::get(get_availability),
+        );
 
     Router::new()
         .route(

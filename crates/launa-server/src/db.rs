@@ -185,7 +185,8 @@ impl Database {
         // Check if we should store a new sample
         let should_insert = match self.get_last_temp_sample(conn, device_id) {
             Some((last_temp, last_set, last_time)) => {
-                let elapsed = now.parse::<chrono::DateTime<chrono::Utc>>()
+                let elapsed = now
+                    .parse::<chrono::DateTime<chrono::Utc>>()
                     .ok()
                     .map(|t| t.signed_duration_since(last_time).num_seconds())
                     .unwrap_or(i64::MAX);
@@ -223,14 +224,18 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT current_temp, set_temp, received_at FROM temperature_history WHERE device_id = ?1 ORDER BY id DESC LIMIT 1",
         ).ok()?;
-        let mut rows = stmt.query_map(params![device_id], |row| {
-            let ct: Option<f64> = row.get(0)?;
-            let st: Option<f64> = row.get(1)?;
-            let ra: String = row.get(2)?;
-            Ok((ct, st, ra))
-        }).ok()?;
+        let mut rows = stmt
+            .query_map(params![device_id], |row| {
+                let ct: Option<f64> = row.get(0)?;
+                let st: Option<f64> = row.get(1)?;
+                let ra: String = row.get(2)?;
+                Ok((ct, st, ra))
+            })
+            .ok()?;
         rows.next().and_then(|r| r.ok()).and_then(|(ct, st, ra)| {
-            ra.parse::<chrono::DateTime<chrono::Utc>>().ok().map(|t| (ct, st, t))
+            ra.parse::<chrono::DateTime<chrono::Utc>>()
+                .ok()
+                .map(|t| (ct, st, t))
         })
     }
 
@@ -263,10 +268,12 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT state FROM component_events WHERE device_id = ?1 AND component = ?2 ORDER BY id DESC LIMIT 1",
         ).ok()?;
-        let mut rows = stmt.query_map(params![device_id, component], |row| {
-            let s: i32 = row.get(0)?;
-            Ok(s != 0)
-        }).ok()?;
+        let mut rows = stmt
+            .query_map(params![device_id, component], |row| {
+                let s: i32 = row.get(0)?;
+                Ok(s != 0)
+            })
+            .ok()?;
         rows.next().and_then(|r| r.ok())
     }
 
@@ -372,7 +379,11 @@ impl Database {
         rows.filter_map(|r| r.ok()).collect()
     }
 
-    pub fn get_temperature_history_since(&self, device_id: &str, since: &str) -> Vec<TemperatureSample> {
+    pub fn get_temperature_history_since(
+        &self,
+        device_id: &str,
+        since: &str,
+    ) -> Vec<TemperatureSample> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
@@ -490,7 +501,9 @@ impl Database {
                     "SELECT status FROM availability_history WHERE device_id = ?1 ORDER BY id DESC LIMIT 1",
                 )
                 .unwrap();
-            let mut rows = stmt.query_map(params![device_id], |row| row.get::<_, String>(0)).unwrap();
+            let mut rows = stmt
+                .query_map(params![device_id], |row| row.get::<_, String>(0))
+                .unwrap();
             rows.next().and_then(|r| r.ok())
         };
         if last.as_deref() != Some(status) {
@@ -528,7 +541,11 @@ impl Database {
         rows.filter_map(|r| r.ok()).collect()
     }
 
-    pub fn get_availability_history_since(&self, device_id: &str, since: &str) -> Vec<AvailabilityEntry> {
+    pub fn get_availability_history_since(
+        &self,
+        device_id: &str,
+        since: &str,
+    ) -> Vec<AvailabilityEntry> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
@@ -747,7 +764,11 @@ mod tests {
             "spa_001",
             &(Utc::now() - Duration::hours(1)).to_rfc3339(),
         );
-        assert_eq!(samples2.len(), 1, "Should not insert duplicate within interval");
+        assert_eq!(
+            samples2.len(),
+            1,
+            "Should not insert duplicate within interval"
+        );
     }
 
     #[test]
@@ -782,27 +803,25 @@ mod tests {
         // All 14 component fields: first insert records initial states for all
         let payload = r#"{"is_heating":false,"pump1_on":false,"pump2_on":false,"pump3_on":false,"pump4_on":false,"pump5_on":false,"pump6_on":false,"circ_pump":false,"blower":false,"light1":false,"light2":false,"light3":false,"light4":false,"mister":false}"#;
         db.insert_status("spa_001", payload);
-        let events = db.get_component_events_since(
-            "spa_001",
-            &(Utc::now() - Duration::hours(1)).to_rfc3339(),
+        let events = db
+            .get_component_events_since("spa_001", &(Utc::now() - Duration::hours(1)).to_rfc3339());
+        assert_eq!(
+            events.len(),
+            14,
+            "First insert should record initial states for all 14 components"
         );
-        assert_eq!(events.len(), 14, "First insert should record initial states for all 14 components");
 
         // Same state - no new events
         db.insert_status("spa_001", payload);
-        let events2 = db.get_component_events_since(
-            "spa_001",
-            &(Utc::now() - Duration::hours(1)).to_rfc3339(),
-        );
+        let events2 = db
+            .get_component_events_since("spa_001", &(Utc::now() - Duration::hours(1)).to_rfc3339());
         assert_eq!(events2.len(), 14, "No change should not add events");
 
         // Heater turns on
         let payload_on = r#"{"is_heating":true,"pump1_on":false,"pump2_on":false,"pump3_on":false,"pump4_on":false,"pump5_on":false,"pump6_on":false,"circ_pump":false,"blower":false,"light1":false,"light2":false,"light3":false,"light4":false,"mister":false}"#;
         db.insert_status("spa_001", payload_on);
-        let events3 = db.get_component_events_since(
-            "spa_001",
-            &(Utc::now() - Duration::hours(1)).to_rfc3339(),
-        );
+        let events3 = db
+            .get_component_events_since("spa_001", &(Utc::now() - Duration::hours(1)).to_rfc3339());
         assert_eq!(events3.len(), 15, "Should add event for heating change");
         assert_eq!(events3[14].component, "is_heating");
         assert_eq!(events3[14].state, 1);
