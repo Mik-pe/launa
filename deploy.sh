@@ -43,13 +43,14 @@ docker run --rm --platform linux/amd64 \
 cp -r web/dist/* /tmp/launa-deploy-web/
 
 echo "  Binary: $(du -h /tmp/launa-deploy/launa-server | cut -f1)"
-echo "  Web:    $(du -sh /tmp/launa-deploy/web | cut -f1)"
+echo "  Web:    $(du -sh /tmp/launa-deploy-web | cut -f1)"
 
 # Step 4: Deploy to Pi
 echo "[4/5] Deploying to $PI_HOST..."
 ssh -t "$PI_HOST" "sudo systemctl stop launa-server 2>/dev/null; sudo mkdir -p $PI_DIR/web/dist $PI_DIR/data && sudo chown -R \$(whoami):\$(id -gn) $PI_DIR"
 scp /tmp/launa-deploy/launa-server "$PI_HOST:$PI_DIR/launa-server"
-ssh "$PI_HOST" "rm -rf $PI_DIR/web/dist/*"
+ssh "$PI_HOST" "rm -rf $PI_DIR/web/dist"
+ssh "$PI_HOST" "mkdir -p $PI_DIR/web/dist"
 scp -r /tmp/launa-deploy-web/* "$PI_HOST:$PI_DIR/web/dist/"
 ssh "$PI_HOST" "chmod +x $PI_DIR/launa-server"
 
