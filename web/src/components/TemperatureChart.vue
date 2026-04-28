@@ -46,15 +46,19 @@ function setHoursRange(hours: number | null) {
   setAvailHoursRange(hours)
 }
 
-// Temperature points from the graph data
+// Temperature points from the graph data, with a synthetic "now" point extending the last values
 const tempPoints = computed<TempPoint[]>(() => {
   const temps = graphData.value.temperatures
   if (!temps?.length) return []
-  return temps.map(s => ({
+  const pts = temps.map(s => ({
     time: new Date(s.received_at),
     current_temp: s.current_temp,
     set_temp: s.set_temp,
   }))
+  // Append a synthetic point at "now" holding the last known values
+  const last = pts[pts.length - 1]
+  pts.push({ time: new Date(), current_temp: last.current_temp, set_temp: last.set_temp })
+  return pts
 })
 
 const MAX_CHART_POINTS = 600
@@ -491,6 +495,24 @@ function drawChart(): void {
     ctx.fillRect(offX, ly - 5, 16, 7)
     ctx.fillStyle = '#737373'
     ctx.fillText('Offline', offX + 22, ly - 2)
+  }
+
+  // "Now" line
+  const nowX = xOf(Date.now())
+  if (nowX > pad.left && nowX < pad.left + cw) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)'
+    ctx.lineWidth = 1
+    ctx.setLineDash([3, 3])
+    ctx.beginPath()
+    ctx.moveTo(nowX, pad.top)
+    ctx.lineTo(nowX, pad.top + ch)
+    ctx.stroke()
+    ctx.setLineDash([])
+    ctx.fillStyle = '#525252'
+    ctx.font = '9px system-ui, sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'bottom'
+    ctx.fillText('now', nowX, pad.top - 2)
   }
 }
 
