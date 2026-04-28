@@ -42,10 +42,10 @@ export function useSpaState() {
   }
 
   function onConnect() {
-    availability.value = 'reconnecting'
+    availability.value = 'pending'
     clearTimeout(reconnectingTimer!)
     reconnectingTimer = setTimeout(() => {
-      if (availability.value === 'reconnecting') {
+      if (availability.value === 'pending') {
         availability.value = 'offline'
       }
     }, RECONNECTING_TIMEOUT_MS)

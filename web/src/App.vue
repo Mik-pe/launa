@@ -17,13 +17,9 @@ import DiagnosticsView from './components/DiagnosticsView.vue'
 import SniffFramesView from './components/SniffFramesView.vue'
 
 const {
-  connected,
-  connecting,
-  connectionError,
-  initialConnect,
-  retryCount,
+  connectionInfo,
+  isOnline,
   spaState,
-  availability,
   alert: alertMsg,
   settings,
   saveSettings,
@@ -40,6 +36,7 @@ const {
   setSelfTest,
   sniffEnabled,
   setSniff,
+  retryCount,
 } = useMqtt()
 
 const showSettings = ref(false)
@@ -47,7 +44,7 @@ const activeTab = ref('control')
 const showToast = ref(false)
 const hasNewAlerts = ref(false)
 
-// Mirror the connectionErrorToast into a local ref so the template can react
+// Mirror the connection error toast into a local ref so the template can react
 watch(() => connectionErrorToast.value, (msg) => {
   showToast.value = !!msg
 })
@@ -100,13 +97,9 @@ function handleTempRange(val: string): void {
 <template>
   <div class="min-h-screen bg-neutral-950 pb-[env(safe-area-inset-bottom)]">
     <ConnectionBar
-      :connected="connected"
-      :connecting="connecting"
-      :availability="availability"
+      :connection-info="connectionInfo"
       :broker-url="settings.brokerUrl"
       :device-id="settings.deviceId"
-      :connection-error="connectionError"
-      :initial-connect="initialConnect"
       :spa-state="spaState"
       @open-settings="showSettings = true"
     />
@@ -141,13 +134,13 @@ function handleTempRange(val: string): void {
         <!-- Control tab (original dashboard) -->
         <template v-if="activeTab === 'control'">
           <!-- Not connected: show connecting state inline -->
-          <template v-if="!connected">
+          <template v-if="!isOnline">
             <div class="flex flex-col items-center justify-center py-20">
               <LoadingSpinner class="h-10 w-10 mb-4" />
               <p class="text-neutral-400 text-sm">
-                <template v-if="connecting">Connecting to MQTT broker{{ retryCount > 0 ? ` (retry ${retryCount})` : '' }}...</template>
-                <template v-else-if="connectionError">Connection failed: {{ connectionError }}</template>
-                <template v-else>Not connected</template>
+                <template v-if="connectionInfo.status === 'connecting'">Connecting to MQTT broker...</template>
+                <template v-else-if="connectionInfo.status === 'reconnecting'">Reconnecting to MQTT broker (retry {{ retryCount }})...</template>
+                <template v-else-if="connectionInfo.status === 'offline'">Device offline</template>
               </p>
             </div>
           </template>
@@ -171,14 +164,14 @@ function handleTempRange(val: string): void {
           <!-- Selects: Heat Mode, Temp Range -->
           <div class="bg-neutral-900 rounded-2xl ring-1 ring-neutral-800 overflow-hidden divide-y divide-neutral-800">
             <!-- Heat Mode: tristate cycle button -->
-            <div :class="['flex items-center justify-between gap-2 px-4 py-3 rounded-xl transition-all', availability !== 'online' ? 'opacity-40' : '']">
+            <div :class="['flex items-center justify-between gap-2 px-4 py-3 rounded-xl transition-all', !isOnline ? 'opacity-40' : '']">
               <div class="flex items-center gap-2">
                 <span class="text-sm font-medium text-neutral-400">Heat Mode</span>
                 <PendingDot v-if="isPending('heating_mode')" />
               </div>
               <button
-                @click="availability === 'online' && cycleHeatMode()"
-                :disabled="availability !== 'online'"
+                @click="isOnline && cycleHeatMode()"
+                :disabled="!isOnline"
                 :title="'Click to cycle: Ready → Rest → Ready in Rest → Ready'"
                 class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-neutral-800 text-white ring-1 ring-neutral-700 hover:bg-neutral-700 hover:ring-neutral-600 active:bg-neutral-800 transition-colors cursor-pointer select-none"
               >
@@ -191,7 +184,7 @@ function handleTempRange(val: string): void {
               :model-value="spaState?.temp_range ?? ''"
               :options="tempRangeOptions"
               :pending="isPending('temp_range')"
-              :disabled="availability !== 'online'"
+              :disabled="!isOnline"
               @update:model-value="handleTempRange"
             />
           </div>
@@ -200,7 +193,7 @@ function handleTempRange(val: string): void {
           <div class="bg-neutral-900 rounded-2xl ring-1 ring-neutral-800 p-4">
             <ControlsPanel
               :state="spaState"
-              :connected="connected && availability === 'online'"
+              :connected="isOnline"
               :is-pending="isPending"
               :visible-controls="visibleControls"
               @toggle="toggle"
@@ -217,7 +210,7 @@ function handleTempRange(val: string): void {
           <!-- Firmware & Reboot -->
           <div class="flex items-center justify-center gap-3 pb-4 text-xs text-neutral-600">
             <span v-if="spaState?.firmware_version">Firmware {{ spaState.firmware_version }}</span>
-            <button v-if="connected && availability === 'online'"
+            <button v-if="isOnline"
               @click="publish('reboot', 'ON')"
               class="px-2 py-0.5 rounded bg-neutral-700 hover:bg-red-700 text-neutral-300 text-xs transition-colors"
               title="Reboot device">
@@ -228,7 +221,7 @@ function handleTempRange(val: string): void {
         </template>
 
         <!-- Status tab -->
-        <StatusDashboard v-else-if="activeTab === 'status'" :spa-state="spaState" :connected="connected && availability === 'online'" :visible-controls="visibleControls" />
+        <StatusDashboard v-else-if="activeTab === 'status'" :spa-state="spaState" :connected="isOnline" :visible-controls="visibleControls" />
 
         <!-- Temperature chart tab -->
         <TemperatureChart v-else-if="activeTab === 'temperature'" />
