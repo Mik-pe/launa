@@ -7,7 +7,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use tracing::info;
 
-use crate::db::Database;
+use crate::db::{Database, GraphData};
 use crate::Config;
 
 pub fn start(config: &Config, db: Arc<Database>) -> Result<(), Box<dyn std::error::Error>> {
@@ -51,6 +51,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/logs", axum::routing::get(get_logs).delete(clear_logs))
         .route("/status", axum::routing::get(get_status))
         .route("/status/latest", axum::routing::get(get_latest_status))
+        .route("/status/graph", axum::routing::get(get_status_graph))
         .route(
             "/diagnostics",
             axum::routing::get(get_diagnostics).delete(clear_diagnostics),
@@ -147,6 +148,19 @@ async fn get_status(
     } else {
         Json(state.db.get_status_history(&device_id, query.limit))
     }
+}
+
+async fn get_status_graph(
+    State(state): State<AppState>,
+    Path(device_id): Path<String>,
+    Query(query): Query<LimitQuery>,
+) -> Json<GraphData> {
+    let hours = query.hours.unwrap_or(24);
+    let since = (Utc::now() - chrono::Duration::hours(hours as i64)).to_rfc3339();
+    Json(GraphData {
+        temperatures: state.db.get_temperature_history_since(&device_id, &since),
+        components: state.db.get_component_events_since(&device_id, &since),
+    })
 }
 
 async fn get_latest_status(

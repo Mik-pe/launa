@@ -64,3 +64,20 @@ export interface AvailabilityEntry {
   status: string
   received_at: string
 }
+
+export interface TemperatureSample {
+  current_temp: number | null
+  set_temp: number | null
+  received_at: string
+}
+
+export interface ComponentEvent {
+  component: string
+  state: number
+  received_at: string
+}
+
+export interface GraphData {
+  temperatures: TemperatureSample[]
+  components: ComponentEvent[]
+}

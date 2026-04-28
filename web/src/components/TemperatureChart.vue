@@ -1,25 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { useStatusHistory, useAvailabilityHistory } from '../composables/useApi'
-import type { TimestampedEntry, AvailabilityEntry } from '../types'
+import { useGraphHistory, useAvailabilityHistory } from '../composables/useApi'
+import type { AvailabilityEntry, TemperatureSample, ComponentEvent } from '../types'
 import LoadingSpinner from './LoadingSpinner.vue'
 
-interface ChartPoint {
+interface TempPoint {
   time: Date
   current_temp: number | null
   set_temp: number | null
-  is_heating: boolean
-  pump1_on: boolean
-  pump2_on: boolean
-  pump3_on: boolean
-  pump4_on: boolean
-  pump5_on: boolean
-  pump6_on: boolean
-  circ_pump: boolean
-  blower: boolean
-  light1: boolean
-  light2: boolean
-  mister: boolean
 }
 
 interface TooltipData {
@@ -45,93 +33,36 @@ interface Coord {
   y: number
 }
 
-const { data: history, loading, error, hoursRange, setHoursRange: setStatusHoursRange } = useStatusHistory(200, 10000)
-const { data: availabilityData, setHoursRange: setAvailHoursRange } = useAvailabilityHistory(500, 10000)
+interface CompSegment {
+  start: Date
+  end: Date
+}
+
+const { data: graphData, loading, error, hoursRange, setHoursRange: setGraphHoursRange } = useGraphHistory(30000)
+const { data: availabilityData, setHoursRange: setAvailHoursRange } = useAvailabilityHistory(500, 30000)
 
 function setHoursRange(hours: number | null) {
-  setStatusHoursRange(hours)
+  setGraphHoursRange(hours)
   setAvailHoursRange(hours)
 }
 
-// Compute offline periods from availability history
-const offlinePeriods = computed<{ start: Date; end: Date }[]>(() => {
-  const raw = availabilityData.value
-  if (!raw?.length) return []
-
-  // Normalize to chronological order
-  const sorted = [...raw]
-  if (sorted.length >= 2) {
-    const t0 = new Date(sorted[0].received_at).getTime()
-    const t1 = new Date(sorted[sorted.length - 1].received_at).getTime()
-    if (t0 > t1) sorted.reverse()
-  }
-
-  const periods: { start: Date; end: Date }[] = []
-  let offlineStart: Date | null = null
-  for (const entry of sorted) {
-    const t = new Date(entry.received_at)
-    if (entry.status !== 'online') {
-      if (!offlineStart) offlineStart = t
-    } else {
-      if (offlineStart) {
-        periods.push({ start: offlineStart, end: t })
-        offlineStart = null
-      }
-    }
-  }
-  // If currently offline, use now as the end
-  if (offlineStart) {
-    periods.push({ start: offlineStart, end: new Date() })
-  }
-  return periods
+// Temperature points from the graph data
+const tempPoints = computed<TempPoint[]>(() => {
+  const temps = graphData.value.temperatures
+  if (!temps?.length) return []
+  return temps.map(s => ({
+    time: new Date(s.received_at),
+    current_temp: s.current_temp,
+    set_temp: s.set_temp,
+  }))
 })
 
-const canvasRef = ref<HTMLCanvasElement | null>(null)
-const tooltipData = ref<TooltipData | null>(null)
-const mouseX = ref(-1)
+const MAX_CHART_POINTS = 600
 
-const points = computed<ChartPoint[]>(() => {
-  if (!history.value?.length) return []
-  const raw = [...history.value]
-  // Server limit-mode returns DESC (newest first); hours-mode returns ASC (oldest first).
-  // Detect order from first vs last timestamp and always produce chronological (ASC).
-  if (raw.length >= 2) {
-    const t0 = new Date(raw[0].received_at).getTime()
-    const t1 = new Date(raw[raw.length - 1].received_at).getTime()
-    if (t0 > t1) raw.reverse()
-  }
-  return raw.map(entry => {
-    try {
-      const payload = typeof entry.payload === 'string' ? JSON.parse(entry.payload) : entry.payload
-      return {
-        time: new Date(entry.received_at),
-        current_temp: payload?.current_temp ?? null,
-        set_temp: payload?.set_temp ?? null,
-        is_heating: !!payload?.is_heating,
-        pump1_on: !!payload?.pump1_on,
-        pump2_on: !!payload?.pump2_on,
-        pump3_on: !!payload?.pump3_on,
-        pump4_on: !!payload?.pump4_on,
-        pump5_on: !!payload?.pump5_on,
-        pump6_on: !!payload?.pump6_on,
-        circ_pump: !!payload?.circ_pump,
-        blower: !!payload?.blower,
-        light1: !!payload?.light1,
-        light2: !!payload?.light2,
-        mister: !!payload?.mister,
-      }
-    } catch {
-      return null
-    }
-  }).filter((p): p is ChartPoint => p != null)
-})
-
-const MAX_CHART_POINTS = 300
-
-function downsamplePoints(pts: ChartPoint[], maxPoints: number): ChartPoint[] {
+function downsampleTempPoints(pts: TempPoint[], maxPoints: number): TempPoint[] {
   if (pts.length <= maxPoints) return pts
   const bucketSize = pts.length / maxPoints
-  const result: ChartPoint[] = []
+  const result: TempPoint[] = []
   for (let i = 0; i < maxPoints; i++) {
     const start = Math.floor(i * bucketSize)
     const end = Math.min(Math.floor((i + 1) * bucketSize), pts.length)
@@ -153,10 +84,42 @@ function downsamplePoints(pts: ChartPoint[], maxPoints: number): ChartPoint[] {
   return result
 }
 
-const displayPoints = computed<ChartPoint[]>(() => downsamplePoints(points.value, MAX_CHART_POINTS))
+const displayPoints = computed<TempPoint[]>(() => downsampleTempPoints(tempPoints.value, MAX_CHART_POINTS))
 
+// Compute offline periods from availability history
+const offlinePeriods = computed<{ start: Date; end: Date }[]>(() => {
+  const raw = availabilityData.value
+  if (!raw?.length) return []
+
+  const sorted = [...raw]
+  if (sorted.length >= 2) {
+    const t0 = new Date(sorted[0].received_at).getTime()
+    const t1 = new Date(sorted[sorted.length - 1].received_at).getTime()
+    if (t0 > t1) sorted.reverse()
+  }
+
+  const periods: { start: Date; end: Date }[] = []
+  let offlineStart: Date | null = null
+  for (const entry of sorted) {
+    const t = new Date(entry.received_at)
+    if (entry.status !== 'online') {
+      if (!offlineStart) offlineStart = t
+    } else {
+      if (offlineStart) {
+        periods.push({ start: offlineStart, end: t })
+        offlineStart = null
+      }
+    }
+  }
+  if (offlineStart) {
+    periods.push({ start: offlineStart, end: new Date() })
+  }
+  return periods
+})
+
+// Component definitions
 interface ComponentDef {
-  key: keyof ChartPoint & string
+  key: string
   label: string
   color: string
 }
@@ -176,11 +139,97 @@ const componentDefs: ComponentDef[] = [
   { key: 'mister', label: 'Mister', color: '#06b6d4' },
 ]
 
-const activeComponents = computed<ComponentDef[]>(() => {
-  return componentDefs.filter(comp =>
-    points.value.some(p => p[comp.key])
-  )
+// Build ON segments from state-change events for each component
+const compSegments = computed<Map<string, CompSegment[]>>(() => {
+  const events = graphData.value.components
+  const map = new Map<string, CompSegment[]>()
+
+  if (!events?.length) return map
+
+  // Group events by component
+  const byComponent = new Map<string, ComponentEvent[]>()
+  for (const e of events) {
+    let list = byComponent.get(e.component)
+    if (!list) { list = []; byComponent.set(e.component, list) }
+    list.push(e)
+  }
+
+  // Use the time range from temperature data (or now) for segment boundaries
+  const { tMin, tMax } = rawTimeRange.value
+  const rangeStart = new Date(tMin)
+  const rangeEnd = new Date(tMax)
+
+  for (const [comp, evts] of byComponent) {
+    const segs: CompSegment[] = []
+    let segStart: Date | null = null
+
+    // If the first event is OFF, the component was ON before the window started
+    if (evts.length > 0 && evts[0].state === 0) {
+      segStart = rangeStart
+    }
+
+    for (const e of evts) {
+      const t = new Date(e.received_at)
+      if (e.state !== 0 && segStart === null) {
+        segStart = t
+      } else if (e.state === 0 && segStart !== null) {
+        segs.push({ start: segStart, end: t })
+        segStart = null
+      }
+    }
+    if (segStart !== null) {
+      segs.push({ start: segStart, end: rangeEnd })
+    }
+    map.set(comp, segs)
+  }
+  return map
 })
+
+const activeComponents = computed<ComponentDef[]>(() => {
+  return componentDefs.filter(comp => {
+    const segs = compSegments.value.get(comp.key)
+    return segs !== undefined && segs.length > 0
+  })
+})
+
+// Raw time range from temperature data (or fallback), used for segment boundaries
+const rawTimeRange = computed<{ tMin: number; tMax: number }>(() => {
+  const pts = displayPoints.value
+  if (pts.length >= 2) {
+    return { tMin: pts[0].time.getTime(), tMax: pts[pts.length - 1].time.getTime() }
+  }
+  const events = graphData.value.components
+  if (events?.length) {
+    const times = events.map(e => new Date(e.received_at).getTime())
+    return { tMin: Math.min(...times), tMax: Math.max(...times) }
+  }
+  const now = Date.now()
+  return { tMin: now - 3600000, tMax: now }
+})
+
+// Compute time range for drawing (same as rawTimeRange but exported for canvas)
+const timeRange = rawTimeRange
+
+// For component tooltip: reconstruct state at a given time from events
+function getComponentStateAtTime(time: Date, compKey: string): boolean {
+  const events = graphData.value.components
+  if (!events?.length) return false
+  const t = time.getTime()
+  let state = false
+  for (const e of events) {
+    if (e.component !== compKey) continue
+    if (new Date(e.received_at).getTime() <= t) {
+      state = e.state !== 0
+    } else {
+      break
+    }
+  }
+  return state
+}
+
+const canvasRef = ref<HTMLCanvasElement | null>(null)
+const tooltipData = ref<TooltipData | null>(null)
+const mouseX = ref(-1)
 
 const compCanvasRef = ref<HTMLCanvasElement | null>(null)
 const compTooltipData = ref<CompTooltipData | null>(null)
@@ -226,8 +275,7 @@ function drawChart(): void {
   const padT = Math.max((maxT - minT) * 0.15, 1)
   minT -= padT; maxT += padT
 
-  const tMin = pts[0].time.getTime()
-  const tMax = pts[pts.length - 1].time.getTime()
+  const { tMin, tMax } = timeRange.value
   const tRange = tMax - tMin || 1
 
   const xOf = (t: number) => pad.left + ((t - tMin) / tRange) * cw
@@ -267,7 +315,6 @@ function drawChart(): void {
     if (x2 > x1) {
       ctx.fillStyle = 'rgba(239, 68, 68, 0.06)'
       ctx.fillRect(x1, pad.top, x2 - x1, ch)
-      // Dashed border at offline start
       ctx.strokeStyle = 'rgba(239, 68, 68, 0.15)'
       ctx.lineWidth = 1
       ctx.setLineDash([4, 4])
@@ -280,7 +327,7 @@ function drawChart(): void {
   }
 
   // Split points into contiguous segments (break at null values)
-  function buildSegments(key: keyof ChartPoint): Coord[][] {
+  function buildSegments(key: keyof TempPoint): Coord[][] {
     const segments: Coord[][] = []
     let current: Coord[] = []
     for (const p of pts) {
@@ -298,7 +345,6 @@ function drawChart(): void {
     return segments
   }
 
-  // Draw gap indicators (dashed lines between segments)
   function drawGaps(segments: Coord[][]): void {
     if (segments.length < 2) return
     ctx.strokeStyle = 'rgba(255,255,255,0.06)'
@@ -315,13 +361,11 @@ function drawChart(): void {
     ctx.setLineDash([])
   }
 
-  // Bezier line helper with gradient fill
   function drawSmoothLine(coords: Coord[], strokeColor: string, fillColorTop: string | null, fillColorBottom: string | null): void {
     if (coords.length < 2) return
     ctx.beginPath()
     ctx.moveTo(coords[0].x, coords[0].y)
 
-    // Catmull-Rom to Bezier approximation
     for (let i = 0; i < coords.length - 1; i++) {
       const p0 = coords[Math.max(0, i - 1)]
       const p1 = coords[i]
@@ -337,13 +381,11 @@ function drawChart(): void {
       ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y)
     }
 
-    // Stroke
     ctx.strokeStyle = strokeColor
     ctx.lineWidth = 2.5
     ctx.setLineDash([])
     ctx.stroke()
 
-    // Gradient fill
     if (fillColorTop && fillColorBottom) {
       const last = coords[coords.length - 1]
       const first = coords[0]
@@ -381,7 +423,7 @@ function drawChart(): void {
   }
   drawGaps(curSegments)
 
-  // Draw dots on current temp (all segments)
+  // Draw dots on current temp
   for (const seg of curSegments) {
     for (const c of seg) {
       ctx.beginPath()
@@ -405,7 +447,6 @@ function drawChart(): void {
     if (nearest) {
       const nx = xOf(nearest.time.getTime())
       const ny = yOf(nearest.current_temp ?? 0)
-      // Vertical line
       ctx.strokeStyle = 'rgba(255,255,255,0.1)'
       ctx.lineWidth = 1
       ctx.setLineDash([])
@@ -413,7 +454,6 @@ function drawChart(): void {
       ctx.moveTo(nx, pad.top)
       ctx.lineTo(nx, pad.top + ch)
       ctx.stroke()
-      // Dot highlight
       ctx.beginPath()
       ctx.arc(nx, ny, 5, 0, Math.PI * 2)
       ctx.fillStyle = '#f97316'
@@ -441,7 +481,6 @@ function drawChart(): void {
   ctx.setLineDash([])
   ctx.fillText('Target', pad.left + 102, ly - 2)
 
-  // Offline legend (only if there are offline periods)
   if (offlinePeriods.value.length > 0) {
     const offX = pad.left + 148
     ctx.fillStyle = 'rgba(239, 68, 68, 0.15)'
@@ -459,8 +498,7 @@ function handleMouseMove(e: MouseEvent): void {
 
   const mx = mouseX.value
   const pts = displayPoints.value
-  const tMin = pts[0].time.getTime()
-  const tMax = pts[pts.length - 1].time.getTime()
+  const { tMin, tMax } = timeRange.value
   const cw = rect.width - chartPad.left - chartPad.right
   const clickTime = tMin + ((mx - chartPad.left) / cw) * (tMax - tMin)
 
@@ -506,8 +544,7 @@ function drawCompChart(): void {
   ctx.clearRect(0, 0, w, h)
 
   const comps = activeComponents.value
-  const pts = points.value
-  if (!comps.length || pts.length < 2) {
+  if (!comps.length) {
     ctx.fillStyle = '#525252'
     ctx.font = '13px system-ui, sans-serif'
     ctx.textAlign = 'center'
@@ -516,27 +553,26 @@ function drawCompChart(): void {
     return
   }
 
-  const rowH = ch / comps.length
-  const barH = Math.max(rowH * 0.6, 4)
-
-  const tMin = pts[0].time.getTime()
-  const tMax = pts[pts.length - 1].time.getTime()
+  const { tMin, tMax } = timeRange.value
   const tRange = tMax - tMin || 1
   const xOf = (t: number) => pad.left + ((t - tMin) / tRange) * cw
 
+  const rowH = ch / comps.length
+  const barH = Math.max(rowH * 0.6, 4)
+
   // Time labels
-  const nLabels = Math.min(6, pts.length)
+  const nLabels = 6
   ctx.textAlign = 'center'
   ctx.textBaseline = 'top'
   ctx.fillStyle = '#525252'
   ctx.font = '11px system-ui, sans-serif'
   for (let i = 0; i < nLabels; i++) {
-    const idx = Math.floor(i * (pts.length - 1) / (nLabels - 1))
-    const x = xOf(pts[idx].time.getTime())
-    ctx.fillText(pts[idx].time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), x, h - pad.bottom + 8)
+    const t = new Date(tMin + (tRange * i) / (nLabels - 1))
+    const x = xOf(t.getTime())
+    ctx.fillText(t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), x, h - pad.bottom + 8)
   }
 
-  // Offline period shading (comp chart)
+  // Offline period shading
   for (const period of offlinePeriods.value) {
     const x1 = Math.max(xOf(period.start.getTime()), pad.left)
     const x2 = Math.min(xOf(period.end.getTime()), pad.left + cw)
@@ -546,13 +582,12 @@ function drawCompChart(): void {
     }
   }
 
-  // Draw each component row
+  // Draw each component row using segments
   for (let ci = 0; ci < comps.length; ci++) {
     const comp = comps[ci]
     const yCenter = pad.top + rowH * ci + rowH / 2
     const yTop = yCenter - barH / 2
 
-    // Label
     ctx.fillStyle = '#737373'
     ctx.font = '11px system-ui, sans-serif'
     ctx.textAlign = 'right'
@@ -565,24 +600,26 @@ function drawCompChart(): void {
     ctx.roundRect(pad.left, yTop, cw, barH, 2)
     ctx.fill()
 
-    // Find contiguous ON segments and draw them
-    let segStart = null
-    for (let pi = 0; pi < pts.length; pi++) {
-      const on = pts[pi][comp.key]
-      if (on && segStart === null) {
-        segStart = pi
-      } else if (!on && segStart !== null) {
-        drawCompBar(ctx, pts, segStart, pi - 1, xOf, yTop, barH, comp.color)
-        segStart = null
+    // Draw ON segments from events
+    const segs = compSegments.value.get(comp.key)
+    if (segs) {
+      for (const seg of segs) {
+        const x1 = Math.max(xOf(seg.start.getTime()), pad.left)
+        const x2 = Math.min(xOf(seg.end.getTime()), pad.left + cw)
+        const barW = Math.max(x2 - x1, 2)
+        ctx.fillStyle = comp.color + '40'
+        ctx.beginPath()
+        ctx.roundRect(x1, yTop, barW, barH, 2)
+        ctx.fill()
+        ctx.strokeStyle = comp.color + '80'
+        ctx.lineWidth = 1
+        ctx.stroke()
       }
-    }
-    if (segStart !== null) {
-      drawCompBar(ctx, pts, segStart, pts.length - 1, xOf, yTop, barH, comp.color)
     }
   }
 
   // Crosshair
-  if (compMouseX.value >= 0 && pts.length >= 2) {
+  if (compMouseX.value >= 0) {
     const mx = compMouseX.value
     ctx.strokeStyle = 'rgba(255,255,255,0.1)'
     ctx.lineWidth = 1
@@ -593,44 +630,23 @@ function drawCompChart(): void {
   }
 }
 
-function drawCompBar(ctx: CanvasRenderingContext2D, pts: ChartPoint[], startIdx: number, endIdx: number, xOf: (t: number) => number, yTop: number, barH: number, color: string): void {
-  const x1 = xOf(pts[startIdx].time.getTime())
-  const x2 = xOf(pts[endIdx].time.getTime())
-  const barW = Math.max(x2 - x1, 2)
-  ctx.fillStyle = color + '40'
-  ctx.beginPath()
-  ctx.roundRect(x1, yTop, barW, barH, 2)
-  ctx.fill()
-  ctx.strokeStyle = color + '80'
-  ctx.lineWidth = 1
-  ctx.stroke()
-}
-
 function handleCompMouseMove(e: MouseEvent): void {
   const canvas = compCanvasRef.value
-  if (!canvas || points.value.length < 2 || !activeComponents.value.length) return
+  if (!canvas || !activeComponents.value.length) return
   const rect = canvas.getBoundingClientRect()
   compMouseX.value = e.clientX - rect.left
 
-  const pts = points.value
-  const tMin = pts[0].time.getTime()
-  const tMax = pts[pts.length - 1].time.getTime()
+  const { tMin, tMax } = timeRange.value
   const cw = rect.width - compPad.left - compPad.right
   const clickTime = tMin + ((compMouseX.value - compPad.left) / cw) * (tMax - tMin)
-
-  let nearest = pts[0]
-  let minDist = Infinity
-  for (const p of pts) {
-    const d = Math.abs(p.time.getTime() - clickTime)
-    if (d < minDist) { minDist = d; nearest = p }
-  }
+  const clickDate = new Date(clickTime)
 
   compTooltipData.value = {
-    time: nearest.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    time: clickDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
     states: activeComponents.value.map(c => ({
       label: c.label,
       color: c.color,
-      on: !!nearest[c.key],
+      on: getComponentStateAtTime(clickDate, c.key),
     })),
   }
 }
@@ -640,7 +656,7 @@ function handleCompMouseLeave(): void {
   compTooltipData.value = null
 }
 
-watch([points, displayPoints, offlinePeriods], () => nextTick(() => { drawChart(); drawCompChart() }), { deep: true })
+watch([tempPoints, displayPoints, compSegments, offlinePeriods], () => nextTick(() => { drawChart(); drawCompChart() }), { deep: true })
 onMounted(() => {
   drawChart()
   drawCompChart()
@@ -663,7 +679,7 @@ function drawChartAndComp(): void {
       <div class="flex items-center gap-3">
         <div class="flex bg-neutral-800 rounded-lg p-0.5">
           <button
-            v-for="range in [{ label: '1h', hours: 1 }, { label: '6h', hours: 6 }, { label: '24h', hours: 24 }, { label: '7d', hours: 168 }]"
+            v-for="range in [{ label: '1h', hours: 1 }, { label: '6h', hours: 6 }, { label: '24h', hours: 24 }, { label: '7d', hours: 168 }, { label: '14d', hours: 336 }]"
             :key="range.hours"
             class="px-2.5 py-1 text-xs rounded-md transition-colors"
             :class="hoursRange === range.hours ? 'bg-neutral-600 text-white' : 'text-neutral-400 hover:text-neutral-200'"
@@ -675,11 +691,11 @@ function drawChartAndComp(): void {
             @click="setHoursRange(null)"
           >Recent</button>
         </div>
-        <span class="text-xs text-neutral-500">{{ points.length }} pts</span>
+        <span class="text-xs text-neutral-500">{{ tempPoints.length }} temps / {{ graphData.components.length }} events</span>
       </div>
     </div>
 
-    <div v-if="loading && !points.length" class="flex flex-col items-center justify-center py-20 text-neutral-500">
+    <div v-if="loading && !tempPoints.length" class="flex flex-col items-center justify-center py-20 text-neutral-500">
       <LoadingSpinner class="h-8 w-8 mb-4" />
       <p class="text-sm">Loading history...</p>
     </div>
@@ -718,7 +734,7 @@ function drawChartAndComp(): void {
       </div>
 
       <!-- Component activity chart -->
-      <div v-if="activeComponents.length && points.length >= 2" class="bg-neutral-900 rounded-2xl p-4 ring-1 ring-neutral-800 relative">
+      <div v-if="activeComponents.length" class="bg-neutral-900 rounded-2xl p-4 ring-1 ring-neutral-800 relative">
         <h3 class="text-[11px] font-semibold text-neutral-500 uppercase tracking-[0.15em] mb-3 px-1">Component Activity</h3>
         <div :style="{ height: Math.max(activeComponents.length * 28 + 36, 100) + 'px' }">
           <canvas
