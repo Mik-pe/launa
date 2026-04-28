@@ -641,6 +641,10 @@ fn test_noise_stale_triggers_at_30s_silence() {
         let _ = harness.decoder.feed_slice(&spa_bytes);
     }
 
+    // Stale detection reset registration. Re-register the sim and app.
+    harness.sim.simulate_spa_reboot();
+    harness.complete_registration(10);
+
     // The first status after stale will carry the recovery flag.
     // Tick the spa and process through app to capture it.
     let spa_bytes = harness.sim.tick();

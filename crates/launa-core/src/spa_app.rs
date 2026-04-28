@@ -374,11 +374,9 @@ impl<'a> SpaApp<'a> {
                 }
             }
             IncomingMessage::NewClientQuery => {
-                self.registration.reset();
-                self.client_id = None;
-                self.command_queue.clear();
-                self.cmd_tracker.reset();
-                self.pump_timers.cancel_all();
+                // Already registered — ignore the periodic query.
+                // The spa sends FE BF 00 every ~2s to discover *new* clients.
+                // We already have a valid ID, so no action needed.
             }
             IncomingMessage::ClientIdAssignment { id } => {
                 self.client_id = Some(id);
@@ -489,9 +487,16 @@ impl<'a> SpaApp<'a> {
                 self.last_probe_time = Some(now);
             }
 
-            // Stale at 30s
+            // Stale at 30s — reset registration so we re-register on recovery.
+            // The spa may have rebooted and forgotten our client ID.
             if elapsed >= STALE_THRESHOLD_MS && !self.was_stale {
                 self.was_stale = true;
+                self.registration.reset();
+                self.client_id = None;
+                self.registration_started_at = None;
+                self.command_queue.clear();
+                self.cmd_tracker.reset();
+                self.pump_timers.cancel_all();
                 actions.push(AppAction::PublishAlert {
                     level: String::from("warn"),
                     message: String::from("spa_communication_lost"),
@@ -735,12 +740,19 @@ mod tests {
         // Get a status
         app.process_frame(&status_frame());
 
-        // Go stale
+        // Go stale — this resets registration
         clock.advance_ms(31_000);
         app.tick();
         assert!(app.is_stale());
+        assert!(!app.is_registered(), "stale should reset registration");
 
-        // Receive a new status → should recover
+        // Re-register (simulates spa sending NewClientQuery)
+        app.process_frame(&new_client_query_frame());
+        let _actions = app.process_frame(&client_id_assignment_frame(0x03));
+        assert!(app.is_registered());
+        assert!(app.client_id().is_some());
+
+        // Next status frame should recover from stale
         let actions = app.process_frame(&status_frame());
         assert!(!app.is_stale());
 
@@ -1049,24 +1061,21 @@ mod tests {
     }
 
     #[test]
-    fn test_bus_reset_reregistration() {
+    fn test_registered_ignores_new_client_query() {
         let (_clock, app) = make_app_with_clock();
         let mut app = app;
         app.force_registered(0x03);
 
-        // Bus reset — resets registration state, no frames sent
+        // Already registered — NewClientQuery should be ignored
         let actions = app.process_frame(&new_client_query_frame());
-        assert!(!app.is_registered());
-        assert_eq!(app.client_id(), None);
-        // When already registered, the frame goes through dispatch, which
-        // resets registration. No SendFrame is produced at this point.
-        // The next NewClientQuery from the spa will trigger re-registration.
-        assert!(actions.is_empty());
+        assert!(app.is_registered(), "should stay registered");
+        assert_eq!(app.client_id(), Some(0x03), "client ID should be preserved");
+        assert!(actions.is_empty(), "no actions from ignored NewClientQuery");
 
-        // Next NewClientQuery starts re-registration
+        // Receiving another NewClientQuery still ignored
         let actions = app.process_frame(&new_client_query_frame());
-        let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
-        assert!(has_send);
+        assert!(app.is_registered());
+        assert!(actions.is_empty());
     }
 
     #[test]
@@ -1394,14 +1403,14 @@ mod tests {
             .any(|a| matches!(a, AppAction::PublishStaleAvailability));
         assert!(has_stale_avail, "should publish stale availability at 30s");
         assert!(app.is_stale(), "should be stale after 30s silence");
+        assert!(!app.is_registered(), "stale should reset registration");
 
-        // Phase 4: More probes while stale
-        clock.advance_ms(10_000); // now 41s since last status
-        let actions = app.tick();
-        let has_probe2 = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
-        assert!(has_probe2, "should continue probing while stale");
+        // Phase 4: Communication resumes — re-register first
+        app.process_frame(&new_client_query_frame());
+        app.process_frame(&client_id_assignment_frame(0x03));
+        assert!(app.is_registered(), "should re-register after stale");
 
-        // Phase 5: Communication resumes — process a new status
+        // Phase 5: Status arrives → stale recovery
         let actions = app.process_frame(&status_frame());
         assert!(
             !app.is_stale(),

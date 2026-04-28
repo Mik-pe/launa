@@ -629,6 +629,10 @@ fn test_intermittent_bus_stale_detection_recovery() {
         harness.app.is_stale(),
         "should be stale after 35 ticks of bus silence"
     );
+    assert!(
+        !harness.app.is_registered(),
+        "stale should reset registration"
+    );
 
     // Verify stale alert was published
     let has_stale_alert = harness.broker.publish_count() > 0; // Broker should have recorded the stale alert
@@ -636,6 +640,13 @@ fn test_intermittent_bus_stale_detection_recovery() {
     // Phase 3: Bus recovers — resume normal operation
     harness.sim.set_command_success_rate(1.0);
     // Bus silence ends automatically after 35 ticks
+
+    // Simulate spa reboot: the spa forgot our ID after the communication loss.
+    // This makes the sim send NewClientQuery on the next tick so we can re-register.
+    harness.sim.simulate_spa_reboot();
+
+    // Re-register (stale reset registration, spa sends NewClientQuery)
+    harness.complete_registration(10);
 
     // Queue a new command to test recovery
     harness

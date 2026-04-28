@@ -210,25 +210,20 @@ fn test_spaapp_registration_with_interleaved_frames() {
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&raw_bytes);
 
+    // Process all frames — the NewClientQuery triggers ID request
+    let mut id_request_bytes = None;
     for frame in &frames {
-        app.process_frame(frame);
+        let actions = app.process_frame(frame);
+        // Capture the ID request from the registration handler
+        for a in &actions {
+            if let AppAction::SendFrame(data) = a {
+                id_request_bytes = Some(data.clone());
+            }
+        }
     }
     assert!(!app.is_registered(), "should not be registered yet");
-
-    let reg_frame = frames
-        .iter()
-        .find(|f| f.message_type == [0xFE, 0xBF])
-        .expect("should have registration query frame");
-    app.force_registered(0x03);
-    app.process_frame(&make_new_client_query_frame());
-    let actions = app.process_frame(reg_frame);
-    let id_request_bytes = actions
-        .iter()
-        .find_map(|a| match a {
-            AppAction::SendFrame(data) => Some(data.clone()),
-            _ => None,
-        })
-        .expect("should have ID request SendFrame");
+    let id_request_bytes =
+        id_request_bytes.expect("should have ID request SendFrame from NewClientQuery");
 
     let assignment_bytes = sim.process_incoming_bytes(&id_request_bytes);
     assert!(

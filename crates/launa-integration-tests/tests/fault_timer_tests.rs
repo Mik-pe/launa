@@ -297,13 +297,17 @@ fn test_power_cycle_mid_command_no_stuck_commands() {
     // Phase 2: Simulate spa reboot mid-command
     h.sim.simulate_spa_reboot();
 
-    // Tick — the reboot produces a NewClientQuery which resets SpaApp state
-    let _reboot_actions = h.collect_actions();
+    // After spa reboot, the sim sends NewClientQuery but SpaApp ignores it
+    // when already registered (same as real hardware). Registration is only
+    // reset when staleness is detected (no status frames for 30s).
+    // Advance past the stale threshold and tick the app to trigger detection.
+    h.advance_ms(31_000);
+    h.app.tick();
 
-    // SpaApp should be unregistered (bus reset detected)
+    // SpaApp should be unregistered (stale detection resets registration)
     assert!(
         !h.app.is_registered(),
-        "should be unregistered after spa reboot"
+        "should be unregistered after spa reboot + stale timeout"
     );
 
     // Command queue should be cleared (no stuck commands)

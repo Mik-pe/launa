@@ -381,10 +381,10 @@ fn test_stale_detection_and_recovery() {
     );
 
     // End bus silence — spa resumes sending status frames
-    // The sim will automatically resume after bus_silence_remaining reaches 0
-    // But we need to make sure we have ticks left. Let's clear the silence
-    // and verify recovery.
     // Bus silence was 35 ticks; we already did 35 ticks above, so silence is over.
+    // But stale detection reset registration, so we need to re-register first.
+    harness.sim.simulate_spa_reboot();
+    harness.complete_registration(10);
 
     // Now tick the spa — it should resume sending status frames
     let recovery_actions = harness.collect_actions();
@@ -441,14 +441,16 @@ fn test_spa_reboot_mid_session() {
     // Phase 2: Spa reboots
     harness.sim.simulate_spa_reboot();
 
-    // The sim is now unregistered, so the next tick will produce a NewClientQuery
-    // SpaApp should detect the NewClientQuery, reset registration, and clear command queue
-    let _reboot_actions = harness.collect_actions();
+    // After spa reboot, the sim sends NewClientQuery but SpaApp ignores it
+    // when already registered. We need stale detection to reset registration.
+    // Advance past the stale threshold and tick to trigger it.
+    harness.advance_ms(31_000);
+    harness.app.tick();
 
-    // SpaApp should detect the NewClientQuery and reset
+    // SpaApp should be unregistered after stale detection
     assert!(
         !harness.app.is_registered(),
-        "should be unregistered after spa reboot NewClientQuery"
+        "should be unregistered after spa reboot + stale timeout"
     );
     assert_eq!(
         harness.app.queued_command_count(),
@@ -465,11 +467,14 @@ fn test_spa_reboot_mid_session() {
         ticks
     );
 
+    // Get a status frame to clear the stale flag
+    harness.collect_actions();
+
     // Phase 4: Verify normal operation resumes
     // Pre-reboot stale state should NOT leak
     assert!(
         !harness.app.is_stale(),
-        "should not be stale after re-registration"
+        "should not be stale after re-registration + status"
     );
 
     // Status should resume being published
@@ -610,6 +615,11 @@ fn test_bus_silence_lifecycle() {
     }
 
     // Now silence is over, spa will produce frames again
+    // But app is unregistered (stale reset registration). Need to re-register.
+    // Sim is still registered, so reboot it to make it send NewClientQuery.
+    harness.sim.simulate_spa_reboot();
+    harness.complete_registration(10);
+
     let recovery_actions = harness.collect_actions();
 
     // Should recover from stale
@@ -943,33 +953,37 @@ fn test_rapid_reregistration_multiple_queries() {
     };
 
     // Feed 3 NewClientQuery frames directly — should not panic
+    // After fix, NewClientQuery is ignored when registered, so app stays registered.
     let mut all_actions = Vec::new();
     for _ in 0..3 {
         let actions = harness.app.process_frame(&new_client_query_frame);
         all_actions.extend(actions);
     }
 
-    // SpaApp should be unregistered (first NewClientQuery resets via dispatch,
-    // subsequent ones go through registration SM)
+    // SpaApp should still be registered (NewClientQuery is ignored when registered)
     assert!(
-        !harness.app.is_registered(),
-        "should be unregistered after NewClientQuery"
+        harness.app.is_registered(),
+        "should stay registered — NewClientQuery ignored"
     );
 
-    // Command queue should be cleared
+    // Command queue should NOT be cleared (no bus reset)
     assert_eq!(
         harness.app.queued_command_count(),
-        0,
-        "command queue should be cleared on bus reset"
+        1,
+        "command queue should NOT be cleared when ignoring NewClientQuery"
     );
 
-    // Phase 3: Re-registration via the harness (also resets sim state)
-    harness.sim.simulate_spa_reboot(); // reset sim registration too
-                                       // Force-reset the app's registration state machine to WaitingForQuery.
-                                       // After 3 NewClientQuery frames, the SM may be stuck in WaitingForAssignment.
-                                       // A fresh sim reboot produces a clean NewClientQuery on the next tick.
+    // Phase 3: Force stale to trigger registration reset
+    harness.advance_ms(31_000);
+    harness.app.tick();
+    assert!(
+        !harness.app.is_registered(),
+        "should be unregistered after stale detection"
+    );
+
+    // Now re-register via the harness
+    harness.sim.simulate_spa_reboot();
     harness.app.force_reset_registration();
-    // Reset the decoder to clear any partial state
     harness.decoder = FrameDecoder::new();
 
     let ticks = harness.complete_registration(10);
@@ -1318,8 +1332,9 @@ fn test_combined_stress_7_phase() {
         let _ = harness.sim.tick();
     }
 
-    // Now silence is over. collect_actions will tick the sim, get status,
-    // feed through app — this is the FIRST status after stale.
+    // Now silence is over. But stale reset registration, so re-register first.
+    harness.sim.simulate_spa_reboot();
+    harness.complete_registration(10);
     let recovery_actions = harness.collect_actions();
     assert!(
         !harness.app.is_stale(),
@@ -1340,10 +1355,12 @@ fn test_combined_stress_7_phase() {
     );
 
     harness.sim.simulate_spa_reboot();
-    let _reboot_actions = harness.collect_actions();
+    // NewClientQuery is ignored when registered — need stale timeout
+    harness.advance_ms(31_000);
+    harness.app.tick();
     assert!(
         !harness.app.is_registered(),
-        "Phase 6: should be unregistered after spa reboot"
+        "Phase 6: should be unregistered after spa reboot + stale"
     );
 
     let ticks = harness.complete_registration(5);

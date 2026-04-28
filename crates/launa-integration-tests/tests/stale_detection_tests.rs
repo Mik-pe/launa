@@ -43,6 +43,10 @@ fn test_spaapp_stale_detection_flow() {
     assert!(has_stale_avail, "should publish stale availability at 30s");
     assert!(has_alert, "should publish stale alert at 30s");
     assert!(app.is_stale());
+    assert!(!app.is_registered(), "stale should reset registration");
+
+    // Re-register (stale resets registration)
+    app.force_registered(0x03);
 
     let actions = app.process_frame(&make_status_frame());
     assert!(!app.is_stale());
@@ -141,6 +145,10 @@ fn test_spaapp_stale_detection_lifecycle() {
         "Phase 3: should publish stale availability at 30s"
     );
     assert!(app.is_stale(), "Phase 3: should be stale at 31s");
+    assert!(!app.is_registered(), "Phase 3: stale resets registration");
+
+    // Re-register (stale resets registration)
+    app.force_registered(0x03);
 
     let actions = app.process_frame(&make_status_frame());
     assert!(!app.is_stale(), "Phase 4: should recover after status");

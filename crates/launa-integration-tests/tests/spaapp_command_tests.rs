@@ -228,7 +228,7 @@ fn test_spaapp_registration_timeout() {
 }
 
 #[test]
-fn test_spaapp_bus_reset_reregistration() {
+fn test_spaapp_registered_ignores_new_client_query() {
     let (_clock, app) = make_spaapp();
     let mut app = app;
     app.force_registered(0x03);
@@ -237,14 +237,19 @@ fn test_spaapp_bus_reset_reregistration() {
 
     app.process_frame(&make_status_frame());
 
+    // NewClientQuery is now ignored when registered
     let actions = app.process_frame(&make_new_client_query_frame());
-    assert!(!app.is_registered(), "should reset registration");
-    assert_eq!(app.client_id(), None, "client_id should be cleared");
-    assert!(actions.is_empty());
+    assert!(app.is_registered(), "should stay registered");
+    assert_eq!(app.client_id(), Some(0x03), "client_id should be preserved");
+    assert!(actions.is_empty(), "no actions from ignored NewClientQuery");
 
+    // Still registered after another query
     let actions = app.process_frame(&make_new_client_query_frame());
-    let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
-    assert!(has_send, "should send ID request on re-registration");
+    assert!(
+        app.is_registered(),
+        "should stay registered on second query too"
+    );
+    assert!(actions.is_empty());
 }
 
 #[test]
