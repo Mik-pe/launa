@@ -27,6 +27,7 @@ const {
   disconnect,
   toggle,
   setTemperature,
+  setTime,
   isPending,
   publish,
   visibleControls,
@@ -256,10 +257,14 @@ function handleTempRange(val: string): void {
       :sniff-enabled="sniffEnabled"
       :self-test-pending="isPending('self_test')"
       :sniff-pending="isPending('sniff_mode')"
+      :spa-hour="spaState?.hour"
+      :spa-minute="spaState?.minute"
+      :spa-time-format="spaState?.time_format"
       @save="handleSave"
       @save-accessory-config="saveAccessoryConfig"
       @toggle-self-test="setSelfTest"
       @toggle-sniff="setSniff"
+      @set-time="setTime"
     />
   </div>
 </template>

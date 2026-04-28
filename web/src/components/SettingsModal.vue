@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
 import ToggleSwitch from './ToggleSwitch.vue'
+import ClockSetting from './ClockSetting.vue'
 import type { MqttSettings, AccessoryConfig } from '../types'
 
 const props = withDefaults(defineProps<{
@@ -11,6 +12,9 @@ const props = withDefaults(defineProps<{
   sniffEnabled?: boolean
   selfTestPending?: boolean
   sniffPending?: boolean
+  spaHour?: number
+  spaMinute?: number
+  spaTimeFormat?: '12h' | '24h'
 }>(), {
   modelValue: false,
   selfTestEnabled: false,
@@ -25,6 +29,7 @@ const emit = defineEmits<{
   'saveAccessoryConfig': [config: AccessoryConfig]
   'toggleSelfTest': [enabled: boolean]
   'toggleSniff': [enabled: boolean]
+  'setTime': [hour: number, minute: number, is24h: boolean]
 }>()
 
 const form = ref<MqttSettings>({ ...props.settings })
@@ -156,6 +161,17 @@ function toggleSniff(val: boolean): void {
               @update:model-value="toggleSniff"
             />
             <p class="text-xs text-neutral-500 mt-1 px-4">Capture raw RS-485 frames to MQTT</p>
+          </div>
+
+          <!-- Clock sync -->
+          <div class="pt-2 border-t border-neutral-700">
+            <ClockSetting
+              :spa-hour="spaHour"
+              :spa-minute="spaMinute"
+              :spa-time-format="spaTimeFormat"
+              :disabled="false"
+              @set-time="(h, m, is24h) => emit('setTime', h, m, is24h)"
+            />
           </div>
 
           <!-- Accessory Configuration -->

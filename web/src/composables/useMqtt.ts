@@ -206,6 +206,7 @@ export function useMqtt() {
     publish,
     toggle: (subtopic: string) => spa.toggle(subtopic, publish),
     setTemperature: (temp: number) => spa.setTemperature(temp, publish),
+    setTime: (hour: number, minute: number, is24h: boolean) => spa.setTime(hour, minute, is24h, publish),
     isPending: spa.isPending,
     visibleControls: accessory.visibleControls,
     serverConfig: accessory.serverConfig,

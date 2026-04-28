@@ -104,6 +104,15 @@ export function useSpaState() {
     publish('set_temperature', String(temp))
   }
 
+  function setTime(
+    hour: number,
+    minute: number,
+    is24h: boolean,
+    publish: (subtopic: string, payload: string | number | boolean) => void,
+  ) {
+    publish('set_time', JSON.stringify({ hour, minute, is_24h: is24h }))
+  }
+
   function isPending(key: string): boolean {
     return pendingKeys.value.has(key)
   }
@@ -142,6 +151,7 @@ export function useSpaState() {
     handleMessage,
     toggle,
     setTemperature,
+    setTime,
     isPending,
     setSelfTest,
     setSniff,

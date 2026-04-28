@@ -2,6 +2,7 @@ export interface SpaState {
   current_temp?: number | null
   set_temp?: number | null
   temp_scale?: 'celsius' | 'fahrenheit'
+  time_format?: '12h' | '24h'
   temp_range?: 'high' | 'low'
   heating_mode?: 'ready' | 'rest' | 'ready_in_rest'
   is_heating?: boolean
