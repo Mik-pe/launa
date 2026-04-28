@@ -483,15 +483,27 @@ impl Database {
     pub fn insert_availability(&self, device_id: &str, status: &str) {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().to_rfc3339();
-        let _ = conn.execute(
-            "INSERT INTO availability_history (device_id, status, received_at) VALUES (?1, ?2, ?3)",
-            params![device_id, status, now],
-        );
-        self.trim_availability(&conn);
+        // Only insert if the status changed from the last recorded value
+        let last = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT status FROM availability_history WHERE device_id = ?1 ORDER BY id DESC LIMIT 1",
+                )
+                .unwrap();
+            let mut rows = stmt.query_map(params![device_id], |row| row.get::<_, String>(0)).unwrap();
+            rows.next().and_then(|r| r.ok())
+        };
+        if last.as_deref() != Some(status) {
+            let _ = conn.execute(
+                "INSERT INTO availability_history (device_id, status, received_at) VALUES (?1, ?2, ?3)",
+                params![device_id, status, now],
+            );
+            self.trim_availability(&conn);
+        }
     }
 
     fn trim_availability(&self, conn: &Connection) {
-        let cutoff = (Utc::now() - Duration::days(STATUS_RETENTION_DAYS)).to_rfc3339();
+        let cutoff = (Utc::now() - Duration::days(GRAPH_RETENTION_DAYS)).to_rfc3339();
         let _ = conn.execute(
             "DELETE FROM availability_history WHERE received_at < ?1",
             params![cutoff],
