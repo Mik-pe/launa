@@ -114,7 +114,7 @@ export function useMqtt() {
           status: 'online',
           label: 'Online',
           color: 'bg-emerald-400',
-          tooltip: '',
+          tooltip: 'Device online',
           lastSeen: null,
           error: null,
         }

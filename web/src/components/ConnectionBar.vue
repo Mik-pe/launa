@@ -36,12 +36,25 @@ const wifiColor = computed(() => {
   return 'text-red-400'
 })
 
-const wifiTooltip = computed(() => {
-  if (wifiBars.value === null) return ''
-  if (wifiBars.value === -1) return 'WiFi signal unknown'
-  const rssi = props.spaState?.wifi_rssi
-  const label = wifiBars.value >= 4 ? 'Excellent' : wifiBars.value >= 3 ? 'Good' : wifiBars.value >= 2 ? 'Fair' : wifiBars.value >= 1 ? 'Weak' : 'No signal'
-  return `WiFi: ${label} (${rssi} dBm)`
+// Single combined tooltip: connection status + WiFi info
+const statusTooltip = computed(() => {
+  const parts: string[] = []
+  // Connection status
+  const ci = props.connectionInfo
+  if (ci.status === 'online') {
+    parts.push('Device online')
+  } else if (ci.tooltip) {
+    parts.push(ci.tooltip)
+  }
+  // WiFi info (only when we have data)
+  if (wifiBars.value !== null && wifiBars.value >= 0) {
+    const rssi = props.spaState?.wifi_rssi
+    const label = wifiBars.value >= 4 ? 'Excellent' : wifiBars.value >= 3 ? 'Good' : wifiBars.value >= 2 ? 'Fair' : wifiBars.value >= 1 ? 'Weak' : 'No signal'
+    parts.push(`WiFi: ${label} (${rssi} dBm)`)
+  } else if (wifiBars.value === -1) {
+    parts.push('WiFi signal unknown')
+  }
+  return parts.join(' · ')
 })
 </script>
 
@@ -64,14 +77,13 @@ const wifiTooltip = computed(() => {
     <div class="flex items-center gap-3 sm:gap-4 shrink-0">
       <div v-if="connectionInfo.error" class="flex items-center gap-1 text-xs text-red-400 max-w-[200px]">
         <svg class="w-4 h-4 shrink-0 sm:hidden" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" /></svg>
-        <span class="truncate hidden sm:inline max-w-[200px]" :title="connectionInfo.error">{{ connectionInfo.error }}</span>
+        <span class="truncate hidden sm:inline max-w-[200px]" :data-tooltip="connectionInfo.error">{{ connectionInfo.error }}</span>
       </div>
       <div class="flex items-center gap-2 text-sm"
-        :title="connectionInfo.tooltip">
+        :data-tooltip="statusTooltip">
         <!-- WiFi signal icon -->
         <svg v-if="wifiBars !== null"
           :class="['w-4 h-4', wifiColor]"
-          :title="wifiTooltip"
           viewBox="0 0 24 24" fill="currentColor">
           <circle cx="12" cy="19" r="1.5" />
           <path v-if="wifiBars >= 1" d="M8.46 14.54a5 5 0 017.08 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
@@ -92,7 +104,7 @@ const wifiTooltip = computed(() => {
       </div>
       <button @click="emit('open-settings')"
         class="w-8 h-8 flex items-center justify-center rounded-lg text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800 transition-colors cursor-pointer"
-        title="Settings">
+        data-tooltip="Settings">
         ⚙️
       </button>
     </div>

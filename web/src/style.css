@@ -1,1 +1,33 @@
 @import "tailwindcss";
+
+[data-tooltip] {
+  position: relative;
+}
+[data-tooltip]:not([data-tooltip=""])::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 10px;
+  background: #292524;
+  color: #e7e5e4;
+  border: 1px solid #44403c;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 50;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+[data-tooltip]:not([data-tooltip=""]):hover::after {
+  opacity: 1;
+}
+/* Flip tooltip above for elements not near the top */
+[data-tooltip-tooltip-above]:not([data-tooltip=""])::after {
+  top: auto;
+  bottom: calc(100% + 6px);
+}

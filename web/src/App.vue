@@ -172,7 +172,7 @@ function handleTempRange(val: string): void {
               <button
                 @click="isOnline && cycleHeatMode()"
                 :disabled="!isOnline"
-                :title="'Click to cycle: Ready → Rest → Ready in Rest → Ready'"
+                :data-tooltip="'Click to cycle: Ready → Rest → Ready in Rest → Ready'"
                 class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-neutral-800 text-white ring-1 ring-neutral-700 hover:bg-neutral-700 hover:ring-neutral-600 active:bg-neutral-800 transition-colors cursor-pointer select-none"
               >
                 <svg class="w-3 h-3 text-neutral-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
@@ -213,7 +213,7 @@ function handleTempRange(val: string): void {
             <button v-if="isOnline"
               @click="publish('reboot', 'ON')"
               class="px-2 py-0.5 rounded bg-neutral-700 hover:bg-red-700 text-neutral-300 text-xs transition-colors"
-              title="Reboot device">
+              data-tooltip="Reboot device">
               Reboot
             </button>
           </div>
@@ -247,15 +247,6 @@ function handleTempRange(val: string): void {
         {{ connectionErrorToast }}
       </div>
     </Transition>
-
-    <!-- Settings button (floating) -->
-    <button
-      @click="showSettings = true"
-      class="fixed bottom-6 right-6 w-12 h-12 bg-neutral-800 rounded-full shadow-lg ring-1 ring-neutral-700 flex items-center justify-center text-neutral-400 hover:text-neutral-200 hover:bg-neutral-700 transition-colors cursor-pointer z-40"
-      title="Settings"
-    >
-      ⚙️
-    </button>
 
     <SettingsModal
       v-model="showSettings"
