@@ -33,7 +33,7 @@ docker run --rm --platform linux/amd64 \
 
 # Step 3: Extract deploy artifacts from the target volume
 echo "[3/5] Preparing deploy artifacts..."
-rm -rf /tmp/launa-deploy
+rm -rf /tmp/launa-deploy /tmp/launa-deploy-web
 mkdir -p /tmp/launa-deploy /tmp/launa-deploy-web
 docker run --rm --platform linux/amd64 \
   -v launa-cargo-target:/project/target \
