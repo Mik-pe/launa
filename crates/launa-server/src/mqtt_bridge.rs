@@ -80,12 +80,18 @@ fn handle_availability(db: &Database, device_id: &str, payload: &str) {
         "stale" => "stale",
         other => other,
     };
+    if status == "online" {
+        info!("Device '{device_id}' connected (availability online)");
+    } else {
+        info!("Device '{device_id}' availability: {status}");
+    }
     db.update_device_status(device_id, status, None);
     db.insert_availability(device_id, status);
 }
 
 fn handle_boot(db: &Database, device_id: &str, payload: &str) {
     let boot_id = payload.trim().parse::<u32>().ok();
+    info!("Device '{device_id}' booted (boot_id={})", payload.trim());
     if let Some(bid) = boot_id {
         db.update_device_status(device_id, "online", Some(bid));
     }
