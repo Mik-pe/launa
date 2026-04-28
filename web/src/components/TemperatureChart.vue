@@ -198,16 +198,16 @@ const activeComponents = computed<ComponentDef[]>(() => {
 
 // Raw time range from temperature data (or fallback), used for segment boundaries
 const rawTimeRange = computed<{ tMin: number; tMax: number }>(() => {
+  const now = Date.now()
   const pts = displayPoints.value
   if (pts.length >= 2) {
-    return { tMin: pts[0].time.getTime(), tMax: pts[pts.length - 1].time.getTime() }
+    return { tMin: pts[0].time.getTime(), tMax: now }
   }
   const events = graphData.value.components
   if (events?.length) {
     const times = events.map(e => new Date(e.received_at).getTime())
-    return { tMin: Math.min(...times), tMax: Math.max(...times) }
+    return { tMin: Math.min(...times), tMax: now }
   }
-  const now = Date.now()
   return { tMin: now - 3600000, tMax: now }
 })
 
