@@ -497,10 +497,17 @@ function drawChart(): void {
     ctx.fillText('Offline', offX + 22, ly - 2)
   }
 
-  // "Now" line
+  // "Now" marker: fade overlay + dashed line on projected region
   const nowX = xOf(Date.now())
   if (nowX > pad.left && nowX < pad.left + cw) {
-    ctx.strokeStyle = 'rgba(255,255,255,0.08)'
+    const fadeStart = Math.max(pad.left, nowX - 80)
+    const fadeGrad = ctx.createLinearGradient(fadeStart, 0, nowX, 0)
+    fadeGrad.addColorStop(0, 'rgba(10,10,10,0)')
+    fadeGrad.addColorStop(1, 'rgba(10,10,10,0.5)')
+    ctx.fillStyle = fadeGrad
+    ctx.fillRect(fadeStart, pad.top, nowX - fadeStart, ch)
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)'
     ctx.lineWidth = 1
     ctx.setLineDash([3, 3])
     ctx.beginPath()
@@ -642,6 +649,26 @@ function drawCompChart(): void {
         ctx.stroke()
       }
     }
+  }
+
+  // "Now" marker: gradient fade overlay on projected region
+  const nowX = xOf(Date.now())
+  if (nowX > pad.left && nowX < pad.left + cw) {
+    const fadeStart = Math.max(pad.left, nowX - 80)
+    const fadeGrad = ctx.createLinearGradient(fadeStart, 0, nowX, 0)
+    fadeGrad.addColorStop(0, 'rgba(10,10,10,0)')
+    fadeGrad.addColorStop(1, 'rgba(10,10,10,0.5)')
+    ctx.fillStyle = fadeGrad
+    ctx.fillRect(fadeStart, pad.top, nowX - fadeStart, ch)
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)'
+    ctx.lineWidth = 1
+    ctx.setLineDash([3, 3])
+    ctx.beginPath()
+    ctx.moveTo(nowX, pad.top)
+    ctx.lineTo(nowX, pad.top + ch)
+    ctx.stroke()
+    ctx.setLineDash([])
   }
 
   // Crosshair
