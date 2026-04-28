@@ -8,29 +8,29 @@
 
 extern crate alloc;
 
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use alloc::format;
 use core::cell::UnsafeCell;
+use embassy_futures::select::{select, Either};
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{IpAddress, IpEndpoint, Ipv4Address, Stack};
 use embassy_time::{Duration, Instant, Timer};
-use embedded_io_async::{self, Read, Write, ErrorType};
-use launa_mqtt::topics::TopicBuilder;
+use embedded_io_async::{self, ErrorType, Read, Write};
+use launa_core::{RateLimiter, RATE_LIMIT_MAX_COMMANDS, RATE_LIMIT_WINDOW_MS};
 use launa_mqtt::command_parser::{self, ParseResult};
 use launa_mqtt::discovery::DiscoveryBuilder;
-use launa_mqtt::state::status_to_json;
 use launa_mqtt::packet::{decode_remaining_length, try_extract_packet};
-use embassy_futures::select::{select, Either};
+use launa_mqtt::state::status_to_json;
+use launa_mqtt::topics::TopicBuilder;
 use launa_mqtt::v5_codec::{
     encode_connect, encode_disconnect, encode_pingreq, encode_pingresp, encode_puback,
     encode_publish, encode_subscribe, parse_connack, parse_suback, ConnectConfig,
 };
-use launa_core::{RateLimiter, RATE_LIMIT_MAX_COMMANDS, RATE_LIMIT_WINDOW_MS};
 
-use launa_protocol::command::{Command, validate_set_temperature};
-use launa_protocol::status::{TemperatureScale, TempRange, StatusUpdate};
-use log::{info, warn, debug, error};
+use launa_protocol::command::{validate_set_temperature, Command};
+use launa_protocol::status::{StatusUpdate, TempRange, TemperatureScale};
+use log::{debug, error, info, warn};
 
 use crate::config::AppConfig;
 use crate::mk_static;
@@ -117,11 +117,21 @@ const MQTT_SOCKET_BUF_SIZE: usize = 1024;
 /// Size of the stack-allocated read buffer used in the MQTT recv loop.
 const MQTT_RECV_BUF_SIZE: usize = 512;
 
+/// Pre-allocated socket buffers shared across connect/reconnect cycles.
+///
+/// Allocated once via `mk_static!` in `MqttClient::new()` and reused for
+/// every subsequent TCP connection. This avoids leaking heap memory on
+/// connect retries (each `mk_static!` call permanently allocates a new
+/// static — calling it in a loop would leak 2 KiB per attempt).
+pub struct SocketBuffers {
+    rx: &'static UnsafeCell<[u8; MQTT_SOCKET_BUF_SIZE]>,
+    tx: &'static UnsafeCell<[u8; MQTT_SOCKET_BUF_SIZE]>,
+}
+
 pub struct MqttClient {
     transport: Option<TcpTransport>,
     stack: &'static Stack<'static>,
-    socket_rx_buf: &'static UnsafeCell<[u8; MQTT_SOCKET_BUF_SIZE]>,
-    socket_tx_buf: &'static UnsafeCell<[u8; MQTT_SOCKET_BUF_SIZE]>,
+    buffers: SocketBuffers,
     pub device_id: String,
     keep_alive: u16,
     config_host: String,
@@ -147,7 +157,13 @@ pub enum MqttError {
 }
 
 /// Parse incoming MQTT command using launa-mqtt's command parser.
-pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8], scale: Option<TemperatureScale>, range: Option<TempRange>) -> Option<MqttAction> {
+pub fn parse_command(
+    command_topic_base: &str,
+    topic: &str,
+    payload: &[u8],
+    scale: Option<TemperatureScale>,
+    range: Option<TempRange>,
+) -> Option<MqttAction> {
     match command_parser::parse_command(command_topic_base, topic, payload) {
         ParseResult::Valid(Command::SetTemperature(temp)) => {
             if let (Some(s), Some(r)) = (scale, range) {
@@ -173,22 +189,37 @@ pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8], scal
                         Some(MqttAction::Command(Command::SetTemperature(wire_value)))
                     }
                     Err(e) => {
-                        warn!("MQTT temperature {} rejected for {:?}/{:?}: {:?}", temp, s, r, e);
+                        warn!(
+                            "MQTT temperature {} rejected for {:?}/{:?}: {:?}",
+                            temp, s, r, e
+                        );
                         None
                     }
                 }
             } else {
-                warn!("MQTT temperature {} rejected: scale/range not yet known (no status received)", temp);
+                warn!(
+                    "MQTT temperature {} rejected: scale/range not yet known (no status received)",
+                    temp
+                );
                 None
             }
         }
         ParseResult::Valid(cmd) => Some(MqttAction::Command(cmd)),
-        ParseResult::TimerPump { minutes, pump_index } => {
+        ParseResult::TimerPump {
+            minutes,
+            pump_index,
+        } => {
             info!("MQTT pump timer: pump {} for {} min", pump_index, minutes);
-            Some(MqttAction::StartPumpTimer { pump: pump_index, minutes })
+            Some(MqttAction::StartPumpTimer {
+                pump: pump_index,
+                minutes,
+            })
         }
         ParseResult::TemperatureOutOfRange { raw_value, .. } => {
-            warn!("MQTT command rejected: temperature {} out of range", raw_value);
+            warn!(
+                "MQTT command rejected: temperature {} out of range",
+                raw_value
+            );
             None
         }
         ParseResult::UnknownSubtopic(sub) => {
@@ -203,57 +234,28 @@ pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8], scal
 }
 
 impl MqttClient {
-    pub async fn connect(
-        stack: &'static Stack<'static>,
-        config: &AppConfig,
-        boot_id: u32,
-    ) -> Result<Self, MqttError> {
-        // Allocate socket buffers once — wrapped in UnsafeCell so we can safely
-        // reborrow across reconnects without raw-pointer aliasing UB.
-        let socket_rx_buf = mk_static!(UnsafeCell<[u8; MQTT_SOCKET_BUF_SIZE]>, UnsafeCell::new([0u8; MQTT_SOCKET_BUF_SIZE]));
-        let socket_tx_buf = mk_static!(UnsafeCell<[u8; MQTT_SOCKET_BUF_SIZE]>, UnsafeCell::new([0u8; MQTT_SOCKET_BUF_SIZE]));
+    /// Create a new MqttClient with pre-allocated socket buffers.
+    ///
+    /// Socket buffers are allocated once via `mk_static!` here. They are reused
+    /// across all subsequent `connect()` / `reconnect()` calls, preventing heap
+    /// leaks on connect retries (each `mk_static!` call permanently claims memory).
+    pub fn new(stack: &'static Stack<'static>, config: &AppConfig, boot_id: u32) -> Self {
+        let socket_rx_buf = mk_static!(
+            UnsafeCell<[u8; MQTT_SOCKET_BUF_SIZE]>,
+            UnsafeCell::new([0u8; MQTT_SOCKET_BUF_SIZE])
+        );
+        let socket_tx_buf = mk_static!(
+            UnsafeCell<[u8; MQTT_SOCKET_BUF_SIZE]>,
+            UnsafeCell::new([0u8; MQTT_SOCKET_BUF_SIZE])
+        );
 
-        // SAFETY: This is the first and only borrow of these newly-allocated
-        // buffers. No other task or code path has access to them yet. The
-        // TcpSocket takes exclusive ownership of the &mut slices. When the
-        // socket is later dropped in reconnect(), the single-task ownership
-        // invariant allows us to reborrow from the UnsafeCell fields.
-        // This is sound because MqttClient is owned by a single embassy task
-        // (mqtt_task) — no concurrent access is possible.
-        let rx: &'static mut [u8] = unsafe { &mut *socket_rx_buf.get() };
-        let tx: &'static mut [u8] = unsafe { &mut *socket_tx_buf.get() };
-        let mut socket = TcpSocket::new(*stack, rx, tx);
-
-        let addr = match net_util::resolve_host(stack, &config.mqtt_host).await {
-            Some(a) => a,
-            None => {
-                error!(
-                    "MQTT: DNS resolution failed for '{}' — check hostname and DNS config",
-                    config.mqtt_host
-                );
-                return Err(MqttError::ConnectionFailed);
-            }
-        };
-        let endpoint = IpEndpoint {
-            addr: IpAddress::Ipv4(Ipv4Address::from_octets(addr)),
-            port: config.mqtt_port,
-        };
-
-        socket.connect(endpoint).await.map_err(|e| {
-            error!(
-                "MQTT: TCP connect to {}:{} failed: {:?} — broker unreachable or firewall blocked",
-                config.mqtt_host, config.mqtt_port, e
-            );
-            MqttError::ConnectionFailed
-        })?;
-
-        let transport = TcpTransport::new(socket);
-
-        let mut client = MqttClient {
-            transport: Some(transport),
+        MqttClient {
+            transport: None,
             stack,
-            socket_rx_buf,
-            socket_tx_buf,
+            buffers: SocketBuffers {
+                rx: socket_rx_buf,
+                tx: socket_tx_buf,
+            },
             device_id: config.device_id.clone(),
             keep_alive: DEFAULT_KEEP_ALIVE_SECS,
             config_host: config.mqtt_host.clone(),
@@ -266,20 +268,77 @@ impl MqttClient {
             rate_limiter: RateLimiter::new(),
             last_disconnect: None,
             boot_id,
+        }
+    }
+
+    /// Connect to the MQTT broker (TCP connect + MQTT CONNECT handshake).
+    ///
+    /// Can be called on a fresh client or after a previous disconnect.
+    /// Uses the pre-allocated socket buffers from `new()`.
+    pub async fn connect(&mut self) -> Result<(), MqttError> {
+        // Drop any existing transport first
+        self.transport.take();
+
+        // SAFETY: The old TcpSocket was dropped above (if any), releasing its
+        // borrow on the shared socket buffers. We are the only task accessing
+        // these buffers: MqttClient is owned by a single embassy task
+        // (mqtt_task), so no concurrent access is possible.
+        let rx: &'static mut [u8] = unsafe { &mut *self.buffers.rx.get() };
+        let tx: &'static mut [u8] = unsafe { &mut *self.buffers.tx.get() };
+        let mut socket = TcpSocket::new(*self.stack, rx, tx);
+
+        let addr = match net_util::resolve_host(self.stack, &self.config_host).await {
+            Some(a) => a,
+            None => {
+                error!(
+                    "MQTT: DNS resolution failed for '{}' — check hostname and DNS config",
+                    self.config_host
+                );
+                return Err(MqttError::ConnectionFailed);
+            }
+        };
+        let endpoint = IpEndpoint {
+            addr: IpAddress::Ipv4(Ipv4Address::from_octets(addr)),
+            port: self.config_port,
         };
 
-        let client_id = format!("launa_{}", config.device_id);
-        let topics = TopicBuilder::new(&config.device_id);
+        socket.connect(endpoint).await.map_err(|e| {
+            error!(
+                "MQTT: TCP connect to {}:{} failed: {:?} — broker unreachable or firewall blocked",
+                self.config_host, self.config_port, e
+            );
+            MqttError::ConnectionFailed
+        })?;
+
+        self.transport = Some(TcpTransport::new(socket));
+        self.rx_buffer.clear();
+        self.next_packet_id = 1;
+        self.last_outgoing = Instant::now();
+
+        let client_id = format!("launa_{}", self.device_id);
+        let topics = TopicBuilder::new(&self.device_id);
         let avail_topic = topics.availability_topic();
-        let config_user = client.config_user.clone();
-        let config_password = client.config_password.clone();
-        let username = if config_user.is_empty() { None } else { Some(config_user.as_str()) };
-        let password = if config_password.is_empty() { None } else { Some(config_password.as_str()) };
+        let config_user = self.config_user.clone();
+        let config_password = self.config_password.clone();
+        let username = if config_user.is_empty() {
+            None
+        } else {
+            Some(config_user.as_str())
+        };
+        let password = if config_password.is_empty() {
+            None
+        } else {
+            Some(config_password.as_str())
+        };
 
-        client.send_connect(&client_id, &avail_topic, username, password).await?;
+        self.send_connect(&client_id, &avail_topic, username, password)
+            .await?;
 
-        info!("MQTT connected to {}:{}", config.mqtt_host, config.mqtt_port);
-        Ok(client)
+        info!(
+            "MQTT connected to {}:{}",
+            self.config_host, self.config_port
+        );
+        Ok(())
     }
 
     /// Whether the MQTT transport is currently connected.
@@ -298,7 +357,10 @@ impl MqttClient {
 
     async fn send_bytes(&mut self, data: &[u8]) -> Result<(), MqttError> {
         let transport = self.transport.as_mut().ok_or(MqttError::PublishFailed)?;
-        transport.write_all(data).await.map_err(|_| MqttError::PublishFailed)?;
+        transport
+            .write_all(data)
+            .await
+            .map_err(|_| MqttError::PublishFailed)?;
         self.last_outgoing = Instant::now();
         Ok(())
     }
@@ -311,7 +373,10 @@ impl MqttClient {
         let mut pos = 0;
         while pos < min_bytes {
             if Instant::now() >= deadline {
-                warn!("MQTT read_exact timed out: got {} bytes, need {}", pos, min_bytes);
+                warn!(
+                    "MQTT read_exact timed out: got {} bytes, need {}",
+                    pos, min_bytes
+                );
                 return Err(MqttError::ReadFailed);
             }
             let transport = self.transport.as_mut().ok_or(MqttError::ReadFailed)?;
@@ -345,62 +410,16 @@ impl MqttClient {
         }
     }
 
+    /// Reconnect to the MQTT broker.
+    ///
+    /// Delegates to `connect()` which handles dropping the old transport,
+    /// reborrowing socket buffers, TCP connect, and MQTT handshake.
     pub async fn reconnect(&mut self) -> Result<(), MqttError> {
-        info!("MQTT reconnecting to {}:{}...", self.config_host, self.config_port);
-
-        // Drop old transport first — this drops the old TcpSocket and releases
-        // its borrow on the shared socket buffers.
-        self.transport.take();
-
-        // SAFETY: The old TcpSocket was dropped above via self.transport.take(),
-        // releasing its borrow on the shared socket buffers. We are the only task
-        // accessing these buffers: MqttClient is owned by a single embassy task
-        // (mqtt_task), so no concurrent access is possible. The UnsafeCell allows
-        // us to obtain a fresh mutable reference without raw-pointer aliasing UB.
-        let rx: &'static mut [u8] = unsafe { &mut *self.socket_rx_buf.get() };
-        let tx: &'static mut [u8] = unsafe { &mut *self.socket_tx_buf.get() };
-        let mut socket = TcpSocket::new(*self.stack, rx, tx);
-
-        let addr = match net_util::resolve_host(self.stack, &self.config_host).await {
-            Some(a) => a,
-            None => {
-                error!(
-                    "MQTT: DNS resolution failed for '{}' during reconnect — check hostname and DNS config",
-                    self.config_host
-                );
-                return Err(MqttError::ConnectionFailed);
-            }
-        };
-        let endpoint = IpEndpoint {
-            addr: IpAddress::Ipv4(Ipv4Address::from_octets(addr)),
-            port: self.config_port,
-        };
-
-        socket.connect(endpoint).await.map_err(|e| {
-            error!(
-                "MQTT: TCP reconnect to {}:{} failed: {:?} — broker unreachable or firewall blocked",
-                self.config_host, self.config_port, e
-            );
-            MqttError::ConnectionFailed
-        })?;
-
-        self.transport = Some(TcpTransport::new(socket));
-        self.rx_buffer.clear();
-        self.next_packet_id = 1;
-        self.last_outgoing = Instant::now();
-
-        let client_id = format!("launa_{}", self.device_id);
-        let topics = TopicBuilder::new(&self.device_id);
-        let avail_topic = topics.availability_topic();
-        let config_user = self.config_user.clone();
-        let config_password = self.config_password.clone();
-        let username = if config_user.is_empty() { None } else { Some(config_user.as_str()) };
-        let password = if config_password.is_empty() { None } else { Some(config_password.as_str()) };
-
-        self.send_connect(&client_id, &avail_topic, username, password).await?;
-
-        info!("MQTT reconnected to {}:{}", self.config_host, self.config_port);
-        Ok(())
+        info!(
+            "MQTT reconnecting to {}:{}...",
+            self.config_host, self.config_port
+        );
+        self.connect().await
     }
 
     /// Reconnect to the broker and re-publish the full post-connect sequence:
@@ -415,7 +434,14 @@ impl MqttClient {
         self.post_connect_publish(celsius).await?;
         if let Some(state) = last_state {
             if let Err(e) = self
-                .publish_state(state.status, state.fault, state.self_test, state.sniff_mode, state.wifi_rssi, state.self_test)
+                .publish_state(
+                    state.status,
+                    state.fault,
+                    state.self_test,
+                    state.sniff_mode,
+                    state.wifi_rssi,
+                    state.self_test,
+                )
                 .await
             {
                 warn!("Reconnect: publish state failed: {:?}", e);
@@ -456,10 +482,15 @@ impl MqttClient {
         };
         let packet = encode_connect(&config);
 
-        self.send_bytes(&packet).await.map_err(|_| MqttError::ConnectionFailed)?;
+        self.send_bytes(&packet)
+            .await
+            .map_err(|_| MqttError::ConnectionFailed)?;
 
         let mut buf = [0u8; 64];
-        let n = self.read_exact(&mut buf, 4).await.map_err(|_| MqttError::ConnectionFailed)?;
+        let n = self
+            .read_exact(&mut buf, 4)
+            .await
+            .map_err(|_| MqttError::ConnectionFailed)?;
         if parse_connack(&buf[..n]).is_err() {
             error!(
                 "MQTT: CONNACK rejected by {}:{} — check username/password and client ID. Raw: {:?}",
@@ -490,7 +521,9 @@ impl MqttClient {
     pub async fn subscribe(&mut self, topic: &str) -> Result<(), MqttError> {
         let pkt_id = self.allocate_packet_id();
         let packet = encode_subscribe(topic, pkt_id);
-        self.send_bytes(&packet).await.map_err(|_| MqttError::SubscribeFailed)?;
+        self.send_bytes(&packet)
+            .await
+            .map_err(|_| MqttError::SubscribeFailed)?;
 
         // Read packets until we get our SUBACK. After a reconnect, the broker
         // may send PUBACKs for QoS 1 publishes (up to 28 discovery + 1
@@ -510,10 +543,12 @@ impl MqttClient {
             let mut rl_buf = [0u8; 4];
             let mut rl_bytes: usize = 0;
             loop {
-                self.read_exact(&mut rl_buf[rl_bytes..rl_bytes + 1], 1).await.map_err(|_| {
-                    warn!("MQTT packet remaining length read failed");
-                    MqttError::SubscribeFailed
-                })?;
+                self.read_exact(&mut rl_buf[rl_bytes..rl_bytes + 1], 1)
+                    .await
+                    .map_err(|_| {
+                        warn!("MQTT packet remaining length read failed");
+                        MqttError::SubscribeFailed
+                    })?;
                 rl_bytes += 1;
                 if rl_buf[rl_bytes - 1] & 0x80 == 0 || rl_bytes >= 4 {
                     break;
@@ -534,10 +569,12 @@ impl MqttClient {
                 return Err(MqttError::SubscribeFailed);
             }
             if remaining_len > 0 {
-                self.read_exact(&mut payload_buf[..remaining_len], remaining_len).await.map_err(|_| {
-                    warn!("MQTT packet payload read failed");
-                    MqttError::SubscribeFailed
-                })?;
+                self.read_exact(&mut payload_buf[..remaining_len], remaining_len)
+                    .await
+                    .map_err(|_| {
+                        warn!("MQTT packet payload read failed");
+                        MqttError::SubscribeFailed
+                    })?;
             }
 
             let packet_type = header_buf[0] >> 4;
@@ -598,7 +635,8 @@ impl MqttClient {
                     Some(Some(result)) => return Some(result),
                     Some(None) => continue,
                     None => {
-                        self.last_disconnect = Some(alloc::format!("FATAL PKT type {}", packet[0] >> 4));
+                        self.last_disconnect =
+                            Some(alloc::format!("FATAL PKT type {}", packet[0] >> 4));
                         return None;
                     }
                 }
@@ -625,31 +663,30 @@ impl MqttClient {
             let read_fut = transport.read(&mut buf);
             let ping_deadline = Duration::from_secs(self.keep_alive as u64 / 2);
             match select(read_fut, Timer::after(ping_deadline)).await {
-                Either::First(read_result) => {
-                    match read_result {
-                        Ok(0) => {
-                            self.last_disconnect = Some(alloc::format!("FIN retries={}", read_retries));
+                Either::First(read_result) => match read_result {
+                    Ok(0) => {
+                        self.last_disconnect = Some(alloc::format!("FIN retries={}", read_retries));
+                        return None;
+                    }
+                    Ok(n) => {
+                        read_retries = 0;
+                        if self.rx_buffer.len() + n > RX_BUFFER_MAX_SIZE {
+                            self.last_disconnect = Some(String::from("BUF OVERFLOW"));
+                            self.rx_buffer.clear();
                             return None;
                         }
-                        Ok(n) => {
-                            read_retries = 0;
-                            if self.rx_buffer.len() + n > RX_BUFFER_MAX_SIZE {
-                                self.last_disconnect = Some(String::from("BUF OVERFLOW"));
-                                self.rx_buffer.clear();
-                                return None;
-                            }
-                            self.rx_buffer.extend_from_slice(&buf[..n]);
-                        }
-                        Err(_) => {
-                            read_retries += 1;
-                            if read_retries > 100 {
-                                self.last_disconnect = Some(alloc::format!("STUCK retries={}", read_retries));
-                                return None;
-                            }
-                            Timer::after(Duration::from_secs(1)).await;
-                        }
+                        self.rx_buffer.extend_from_slice(&buf[..n]);
                     }
-                }
+                    Err(_) => {
+                        read_retries += 1;
+                        if read_retries > 100 {
+                            self.last_disconnect =
+                                Some(alloc::format!("STUCK retries={}", read_retries));
+                            return None;
+                        }
+                        Timer::after(Duration::from_secs(1)).await;
+                    }
+                },
                 Either::Second(_) => {
                     // Timer expired before data arrived — loop back to maybe_ping()
                     continue;
@@ -670,7 +707,9 @@ impl MqttClient {
     /// - `None` — fatal: connection should be terminated (malformed PUBLISH, or
     ///   broker-initiated DISCONNECT)
     async fn process_packets(&mut self, packet: &[u8]) -> Option<Option<(String, Vec<u8>)>> {
-        if packet.is_empty() { return Some(None); }
+        if packet.is_empty() {
+            return Some(None);
+        }
         let packet_type = packet[0] >> 4;
 
         match packet_type {
@@ -680,21 +719,30 @@ impl MqttClient {
                 let (_remaining, header_size) = decode_remaining_length(packet)?;
                 let mut idx = header_size;
 
-                if idx + 2 > packet.len() { return None; }
+                if idx + 2 > packet.len() {
+                    return None;
+                }
                 let topic_len = u16::from_be_bytes([packet[idx], packet[idx + 1]]) as usize;
                 idx += 2;
-                if idx + topic_len > packet.len() { return None; }
-                let topic = String::from(core::str::from_utf8(&packet[idx..idx + topic_len]).unwrap_or(""));
+                if idx + topic_len > packet.len() {
+                    return None;
+                }
+                let topic =
+                    String::from(core::str::from_utf8(&packet[idx..idx + topic_len]).unwrap_or(""));
                 idx += topic_len;
 
                 let mut pkt_id: Option<u16> = None;
                 if qos > 0 {
-                    if idx + 2 > packet.len() { return None; }
+                    if idx + 2 > packet.len() {
+                        return None;
+                    }
                     pkt_id = Some(u16::from_be_bytes([packet[idx], packet[idx + 1]]));
                     idx += 2;
                 }
 
-                if idx > packet.len() { return None; }
+                if idx > packet.len() {
+                    return None;
+                }
                 // MQTT 3.1.1: no properties field — payload starts immediately after topic (+ pkt_id if QoS>0)
                 let payload = Vec::from(&packet[idx..]);
 
@@ -709,9 +757,18 @@ impl MqttClient {
 
                 Some(Some((topic, payload)))
             }
-            PACKET_PUBACK => { debug!("MQTT PUBACK received"); Some(None) }
-            PACKET_SUBACK => { debug!("MQTT SUBACK received"); Some(None) }
-            PACKET_PINGRESP => { debug!("MQTT PINGRESP"); Some(None) }
+            PACKET_PUBACK => {
+                debug!("MQTT PUBACK received");
+                Some(None)
+            }
+            PACKET_SUBACK => {
+                debug!("MQTT SUBACK received");
+                Some(None)
+            }
+            PACKET_PINGRESP => {
+                debug!("MQTT PINGRESP");
+                Some(None)
+            }
             PACKET_PINGREQ => {
                 let _ = self.send_bytes(&encode_pingresp()).await;
                 Some(None)
@@ -723,14 +780,32 @@ impl MqttClient {
                 warn!("MQTT DISCONNECT received from broker");
                 None
             }
-            _ => { debug!("MQTT packet type {} (unhandled)", packet_type); Some(None) }
+            _ => {
+                debug!("MQTT packet type {} (unhandled)", packet_type);
+                Some(None)
+            }
         }
     }
 
-    pub async fn publish_state(&mut self, status: &StatusUpdate, last_fault: Option<&str>, self_test: bool, sniff_mode: bool, wifi_rssi: Option<i32>, retain: bool) -> Result<(), MqttError> {
+    pub async fn publish_state(
+        &mut self,
+        status: &StatusUpdate,
+        last_fault: Option<&str>,
+        self_test: bool,
+        sniff_mode: bool,
+        wifi_rssi: Option<i32>,
+        retain: bool,
+    ) -> Result<(), MqttError> {
         let topics = TopicBuilder::new(&self.device_id);
         let state_topic = topics.state_topic();
-        let json = status_to_json(status, last_fault, Some(crate::FIRMWARE_VERSION), self_test, sniff_mode, wifi_rssi);
+        let json = status_to_json(
+            status,
+            last_fault,
+            Some(crate::FIRMWARE_VERSION),
+            self_test,
+            sniff_mode,
+            wifi_rssi,
+        );
         self.publish(&state_topic, json.as_bytes(), 1, retain).await
     }
 
@@ -738,12 +813,14 @@ impl MqttClient {
         let topics = TopicBuilder::new(&self.device_id);
         let avail_topic = topics.availability_topic();
         let payload = if online { "online" } else { "offline" };
-        self.publish(&avail_topic, payload.as_bytes(), 1, true).await?;
+        self.publish(&avail_topic, payload.as_bytes(), 1, true)
+            .await?;
         // When coming online, also publish boot_id so the web GUI can detect reboots
         if online {
             let boot_topic = topics.boot_topic();
             let boot_payload = alloc::format!("{}", self.boot_id);
-            self.publish(&boot_topic, boot_payload.as_bytes(), 1, true).await?;
+            self.publish(&boot_topic, boot_payload.as_bytes(), 1, true)
+                .await?;
         }
         Ok(())
     }
@@ -785,7 +862,10 @@ impl MqttClient {
         let count = configs.len();
 
         for msg in &configs {
-            if let Err(e) = self.publish(&msg.topic, msg.payload.as_bytes(), 1, msg.retain).await {
+            if let Err(e) = self
+                .publish(&msg.topic, msg.payload.as_bytes(), 1, msg.retain)
+                .await
+            {
                 warn!("Failed to publish discovery for {}: {:?}", msg.topic, e);
                 // Continue publishing remaining entities — single failure
                 // should not block others.
@@ -834,7 +914,8 @@ impl MqttClient {
         } else {
             warn!(
                 "MQTT command rate limited: exceeded {} commands per {}s window",
-                RATE_LIMIT_MAX_COMMANDS, RATE_LIMIT_WINDOW_MS / 1000
+                RATE_LIMIT_MAX_COMMANDS,
+                RATE_LIMIT_WINDOW_MS / 1000
             );
             false
         }

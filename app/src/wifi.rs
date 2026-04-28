@@ -10,26 +10,23 @@ extern crate alloc;
 use core::sync::atomic::{AtomicI32, Ordering};
 
 use embassy_executor::{SendSpawner, Spawner};
-use embassy_net::{DhcpConfig, Runner, StackResources, Config as NetConfig, Stack};
+use embassy_net::{Config as NetConfig, DhcpConfig, Runner, Stack, StackResources};
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 use esp_hal::interrupt::software::SoftwareInterrupt;
 use esp_hal::rng::Rng;
 use esp_radio::wifi::{
-    Config as WifiConfig,
-    ControllerConfig,
-    Interface,
-    WifiController,
-    sta::StationConfig,
+    sta::StationConfig, Config as WifiConfig, ControllerConfig, Interface, WifiController,
 };
 use log::{error, info, warn};
 
-use crate::WIFI_RECONNECT_SIGNAL;
 use crate::mk_static;
+use crate::WIFI_RECONNECT_SIGNAL;
 
 /// Signal from net_bootstrap to WifiStack::connect() indicating the Stack
 /// has been created and STACK_PTR is valid.
-static STACK_READY_SIGNAL: Signal<embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, ()> = Signal::new();
+static STACK_READY_SIGNAL: Signal<embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, ()> =
+    Signal::new();
 
 /// Stack pointer set by net_bootstrap, read by WifiStack::connect().
 /// Uses AtomicUsize because raw pointers are not Send/Sync.
@@ -120,7 +117,10 @@ async fn net_bootstrap(args: NetBootstrapArgs) {
     let stack_ref = mk_static!(Stack<'static>, stack);
 
     // Signal the Stack reference back to WifiStack::connect().
-    STACK_PTR.store(stack_ref as *const Stack<'static> as usize, core::sync::atomic::Ordering::Release);
+    STACK_PTR.store(
+        stack_ref as *const Stack<'static> as usize,
+        core::sync::atomic::Ordering::Release,
+    );
     STACK_READY_SIGNAL.signal(());
 
     // Get a Spawner for this executor so we can spawn more tasks here.
@@ -139,14 +139,17 @@ async fn net_bootstrap(args: NetBootstrapArgs) {
         mqtt_password: args.mqtt_config.mqtt_password,
         self_test: false,
     };
-    let mut mqtt = {
+    // Allocate socket buffers once via MqttClient::new(), then connect with
+    // retries. This ensures mk_static! is only called once, preventing heap
+    // leaks on connect retries (each mk_static! permanently claims memory).
+    let mut mqtt =
+        crate::mqtt_client::MqttClient::new(stack_ref, &mqtt_config, args.mqtt_config.boot_id);
+    {
         let mut attempt = 0u32;
         loop {
             attempt += 1;
-            match crate::mqtt_client::MqttClient::connect(
-                stack_ref, &mqtt_config, args.mqtt_config.boot_id,
-            ).await {
-                Ok(m) => break m,
+            match mqtt.connect().await {
+                Ok(()) => break,
                 Err(e) => {
                     let backoff = launa_core::network::backoff_secs(attempt);
                     error!(
@@ -201,7 +204,10 @@ impl WifiStack {
                 .with_password(alloc::string::String::from(password)),
         );
 
-        info!("Starting WiFi... (free heap: {} bytes)", esp_alloc::HEAP.free());
+        info!(
+            "Starting WiFi... (free heap: {} bytes)",
+            esp_alloc::HEAP.free()
+        );
         let (controller, interfaces) = esp_radio::wifi::new(
             wifi_peripheral,
             ControllerConfig::default().with_initial_config(station_config),
@@ -243,20 +249,25 @@ impl WifiStack {
             esp_rtos::embassy::InterruptExecutor::new(sw_int1)
         );
         let send_spawner: SendSpawner = net_executor.start(esp_hal::interrupt::Priority::Priority1);
-        send_spawner.spawn(net_bootstrap(NetBootstrapArgs {
-            interface: wifi_interface,
-            net_config,
-            seed,
-            mqtt_config,
-        }).map_err(|e| {
-            error!("Failed to spawn net_bootstrap: {:?}", e);
-            esp_radio::wifi::WifiError::Failed
-        })?);
+        send_spawner.spawn(
+            net_bootstrap(NetBootstrapArgs {
+                interface: wifi_interface,
+                net_config,
+                seed,
+                mqtt_config,
+            })
+            .map_err(|e| {
+                error!("Failed to spawn net_bootstrap: {:?}", e);
+                esp_radio::wifi::WifiError::Failed
+            })?,
+        );
 
         // Wait for net_bootstrap to create the Stack and signal it back
         STACK_READY_SIGNAL.wait().await;
         // SAFETY: net_bootstrap stored a valid &'static Stack pointer.
-        let stack = unsafe { &*(STACK_PTR.load(core::sync::atomic::Ordering::Acquire) as *const Stack<'static>) };
+        let stack = unsafe {
+            &*(STACK_PTR.load(core::sync::atomic::Ordering::Acquire) as *const Stack<'static>)
+        };
 
         info!("Waiting for DHCP...");
         stack.wait_config_up().await;
