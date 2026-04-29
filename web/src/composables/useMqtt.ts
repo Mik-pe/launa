@@ -193,9 +193,14 @@ export function useMqtt() {
   // Convenience: is the device fully online and usable?
   const isOnline = computed(() => connectionInfo.value.status === 'online')
 
+  // Whether the device has completed RS-485 registration with the spa controller.
+  // When unregistered, controls are disabled but status is still visible.
+  const isRegistered = computed(() => spa.spaState.value?.registration_state === 'registered')
+
   return {
     connectionInfo,
     isOnline,
+    isRegistered,
     spaState: spa.spaState,
     alert: spa.alert,
     settings: conn.settings,

@@ -230,6 +230,7 @@ impl<'a> SpaApp<'a> {
                 status: status.clone(),
                 fault: self.last_fault.clone(),
                 recovering_from_stale: false,
+                registration_state: self.registration_state_str(),
             });
         }
         actions
@@ -250,8 +251,9 @@ impl<'a> SpaApp<'a> {
     pub fn process_frame(&mut self, frame: &Frame) -> Vec<AppAction> {
         let now = self.clock.now();
         let mut actions = Vec::new();
+        let reg_state = self.registration_state_str();
 
-        // Handle registration
+        // Handle registration when unregistered
         if !self.registration.is_registered() {
             self.unregistered_frames_received += 1;
             let action = self
@@ -317,7 +319,8 @@ impl<'a> SpaApp<'a> {
                 }
                 RegistrationAction::None => {}
             }
-            return actions;
+            // Don't return — fall through to dispatch status frames so the
+            // web UI can display spa state even while unregistered.
         }
 
         // Dispatch incoming message
@@ -325,30 +328,35 @@ impl<'a> SpaApp<'a> {
 
         match message {
             IncomingMessage::StatusUpdate(status) => {
-                self.frames_received += 1;
-
-                // Verify pending commands — queue retries for next Ready window
-                let result = self.cmd_tracker.verify(&status, now);
-                for cmd in result.retries {
-                    self.command_queue.push_back(cmd);
+                if self.registration.is_registered() {
+                    self.frames_received += 1;
                 }
 
-                // Tick pump timers — queue expired commands for next Ready window
-                let expired = self.pump_timers.tick_all(now, &status.pumps);
-                for cmd in expired {
-                    self.command_queue.push_back(cmd);
-                }
+                // Command tracking only works when registered (need client ID)
+                if self.registration.is_registered() {
+                    let result = self.cmd_tracker.verify(&status, now);
+                    for cmd in result.retries {
+                        self.command_queue.push_back(cmd);
+                    }
 
-                // Hold mode safety timeout — queue for next Ready window
-                if let Some(cmd) = self.hold_timer.tick(now, status.is_hold) {
-                    self.command_queue.push_back(cmd);
+                    let expired = self.pump_timers.tick_all(now, &status.pumps);
+                    for cmd in expired {
+                        self.command_queue.push_back(cmd);
+                    }
+
+                    if let Some(cmd) = self.hold_timer.tick(now, status.is_hold) {
+                        self.command_queue.push_back(cmd);
+                    }
                 }
 
                 self.last_status = Some(status.clone());
                 self.last_status_time = Some(now);
                 self.last_probe_time = Some(now);
 
-                let recovering = self.was_stale;
+                // Only recover from stale when registered — stale detection
+                // resets registration, and the recovery flag should only be
+                // set once registration is re-established.
+                let recovering = self.was_stale && self.registration.is_registered();
                 if recovering {
                     self.was_stale = false;
                 }
@@ -357,20 +365,23 @@ impl<'a> SpaApp<'a> {
                     status,
                     fault: self.last_fault.clone(),
                     recovering_from_stale: recovering,
+                    registration_state: reg_state,
                 });
             }
             IncomingMessage::Ready => {
-                // Dequeue one command or send NothingToSend
-                if let Some(cmd) = self.command_queue.pop_front() {
-                    let encoded = encode_command(&cmd);
-                    actions.push(AppAction::SendFrame(encoded));
-                    if let Some(ref pre_status) = self.last_status {
-                        self.cmd_tracker.track(cmd, pre_status, now);
+                // Only handle Ready when registered — commands require a client ID
+                if self.registration.is_registered() {
+                    if let Some(cmd) = self.command_queue.pop_front() {
+                        let encoded = encode_command(&cmd);
+                        actions.push(AppAction::SendFrame(encoded));
+                        if let Some(ref pre_status) = self.last_status {
+                            self.cmd_tracker.track(cmd, pre_status, now);
+                        }
+                    } else if let Some(cid) = self.client_id {
+                        let cmd = Command::NothingToSend { client_id: cid };
+                        let encoded = encode_command(&cmd);
+                        actions.push(AppAction::SendFrame(encoded));
                     }
-                } else if let Some(cid) = self.client_id {
-                    let cmd = Command::NothingToSend { client_id: cid };
-                    let encoded = encode_command(&cmd);
-                    actions.push(AppAction::SendFrame(encoded));
                 }
             }
             IncomingMessage::NewClientQuery => {
@@ -507,6 +518,7 @@ impl<'a> SpaApp<'a> {
                         status: stale_status.clone(),
                         fault: self.last_fault.clone(),
                         recovering_from_stale: false,
+                        registration_state: self.registration_state_str(),
                     });
                     actions.push(AppAction::PublishStaleAvailability);
                 }

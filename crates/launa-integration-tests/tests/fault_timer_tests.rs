@@ -86,6 +86,7 @@ fn test_fault_appears_and_clears_lifecycle() {
         false,
         false,
         None,
+        "registered",
     );
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert!(
@@ -859,7 +860,8 @@ fn test_rapid_temperature_race_last_wins() {
 
     // Verify MQTT state reflects the final temperature
     if let Some(status) = h.app.last_status() {
-        let json = launa_mqtt::state::status_to_json(status, None, None, false, false, None);
+        let json =
+            launa_mqtt::state::status_to_json(status, None, None, false, false, None, "registered");
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(
             parsed["set_temp"], 102.0,

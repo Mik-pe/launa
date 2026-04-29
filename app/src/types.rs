@@ -14,6 +14,8 @@ pub(crate) struct StateMessage {
     pub sniff_mode: bool,
     /// WiFi RSSI in dBm, or `None` if not available.
     pub wifi_rssi: Option<i32>,
+    /// Current registration state as a static string.
+    pub registration_state: &'static str,
 }
 
 // Re-export FaultBuf from launa-core for convenience

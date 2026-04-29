@@ -19,6 +19,7 @@ import SniffFramesView from './components/SniffFramesView.vue'
 const {
   connectionInfo,
   isOnline,
+  isRegistered,
   spaState,
   alert: alertMsg,
   settings,
@@ -155,25 +156,33 @@ function handleTempRange(val: string): void {
             <span>{{ alertMsg }}</span>
           </div>
 
+          <!-- Registration banner -->
+          <div v-if="isOnline && !isRegistered"
+            class="bg-orange-950/50 border border-orange-800/50 text-orange-300 rounded-xl px-4 py-3 text-sm flex items-center gap-2">
+            <span>🔌</span>
+            <span>Not registered with spa controller — controls disabled. Attempting to connect...</span>
+          </div>
+
           <!-- Temperature -->
           <TemperatureCard
             :state="spaState"
             :pending="isPending('set_temp')"
-            @set-temperature="setTemperature"
+            :disabled="!isRegistered"
+            @set-temperature="isRegistered && setTemperature($event)"
           />
 
           <!-- Selects: Heat Mode, Temp Range -->
           <div class="bg-neutral-900 rounded-2xl ring-1 ring-neutral-800 overflow-hidden divide-y divide-neutral-800">
             <!-- Heat Mode: tristate cycle button -->
-            <div :class="['flex items-center justify-between gap-2 px-4 py-3 rounded-xl transition-all', !isOnline ? 'opacity-40' : '']">
+            <div :class="['flex items-center justify-between gap-2 px-4 py-3 rounded-xl transition-all', (!isOnline || !isRegistered) ? 'opacity-40' : '']">
               <div class="flex items-center gap-2">
                 <span class="text-sm font-medium text-neutral-400">Heat Mode</span>
                 <PendingDot v-if="isPending('heating_mode')" />
               </div>
               <button
-                @click="isOnline && cycleHeatMode()"
-                :disabled="!isOnline"
-                :data-tooltip="'Click to cycle: Ready → Rest → Ready in Rest → Ready'"
+                @click="isOnline && isRegistered && cycleHeatMode()"
+                :disabled="!isOnline || !isRegistered"
+                :data-tooltip="!isRegistered ? 'Waiting for spa registration...' : 'Click to cycle: Ready → Rest → Ready in Rest → Ready'"
                 class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-neutral-800 text-white ring-1 ring-neutral-700 hover:bg-neutral-700 hover:ring-neutral-600 active:bg-neutral-800 transition-colors cursor-pointer select-none"
               >
                 <svg class="w-3 h-3 text-neutral-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
@@ -185,7 +194,8 @@ function handleTempRange(val: string): void {
               :model-value="spaState?.temp_range ?? ''"
               :options="tempRangeOptions"
               :pending="isPending('temp_range')"
-              :disabled="!isOnline"
+              :disabled="!isOnline || !isRegistered"
+              :disabled-reason="!isRegistered ? 'Waiting for spa registration...' : undefined"
               @update:model-value="handleTempRange"
             />
           </div>
@@ -194,9 +204,10 @@ function handleTempRange(val: string): void {
           <div class="bg-neutral-900 rounded-2xl ring-1 ring-neutral-800 p-4">
             <ControlsPanel
               :state="spaState"
-              :connected="isOnline"
+              :connected="isOnline && isRegistered"
               :is-pending="isPending"
               :visible-controls="visibleControls"
+              :disabled-reason="!isRegistered ? 'Waiting for spa registration...' : undefined"
               @toggle="toggle"
             />
           </div>
@@ -211,7 +222,7 @@ function handleTempRange(val: string): void {
           <!-- Firmware & Reboot -->
           <div class="flex items-center justify-center gap-3 pb-4 text-xs text-neutral-600">
             <span v-if="spaState?.firmware_version">Firmware {{ spaState.firmware_version }}</span>
-            <button v-if="isOnline"
+            <button v-if="isOnline && isRegistered"
               @click="publish('reboot', 'ON')"
               class="px-2 py-0.5 rounded bg-neutral-700 hover:bg-red-700 text-neutral-300 text-xs transition-colors"
               data-tooltip="Reboot device">

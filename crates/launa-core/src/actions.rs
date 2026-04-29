@@ -19,6 +19,7 @@ pub enum AppAction {
         status: StatusUpdate,
         fault: Option<String>,
         recovering_from_stale: bool,
+        registration_state: &'static str,
     },
 
     /// Publish availability status to MQTT.

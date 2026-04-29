@@ -51,6 +51,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
     let mut last_wifi_rssi: Option<i32> = None;
     let mut last_published_status: Option<StatusUpdate> = None;
     let mut last_published_fault: Option<FaultBuf> = None;
+    let mut last_registration_state: &str = "waiting_for_query";
     let mut heartbeat_secs: u32 = 0;
 
     info!("MQTT task started");
@@ -72,6 +73,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                     self_test: last_self_test,
                     sniff_mode: last_sniff_mode,
                     wifi_rssi: last_wifi_rssi,
+                    registration_state: last_registration_state,
                 }
             });
             crate::net_util::reconnect_with_backoff(
@@ -163,15 +165,19 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                     let self_test = msg.self_test;
                     let sniff_mode = msg.sniff_mode;
                     let wifi_rssi = msg.wifi_rssi;
+                    let registration_state = msg.registration_state;
                     last_scale_range = Some((status.temperature_scale, status.temp_range));
                     // Force re-publish when self_test or sniff_mode changes so the
                     // first state after mode toggle always reaches the broker.
                     let mode_changed = self_test != last_self_test || sniff_mode != last_sniff_mode;
-                    if mode_changed {
+                    // Also force re-publish when registration_state changes.
+                    let reg_changed = registration_state != last_registration_state;
+                    if mode_changed || reg_changed {
                         last_published_status = None;
                     }
                     last_self_test = self_test;
                     last_sniff_mode = sniff_mode;
+                    last_registration_state = registration_state;
                     // Change detection: skip publish if state is identical to last
                     let changed = launa_mqtt::state_change::status_changed(
                         last_published_status.as_ref(),
@@ -190,6 +196,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                                 sniff_mode,
                                 wifi_rssi,
                                 self_test,
+                                registration_state,
                             )
                             .await
                         {
@@ -355,6 +362,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                                 self_test: last_self_test,
                                 sniff_mode: last_sniff_mode,
                                 wifi_rssi: last_wifi_rssi,
+                                registration_state: last_registration_state,
                             }
                         });
                         crate::net_util::reconnect_with_backoff(

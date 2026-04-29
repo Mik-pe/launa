@@ -21,8 +21,15 @@ fn test_status_to_mqtt_json() {
 
     match msg {
         IncomingMessage::StatusUpdate(status) => {
-            let json_str =
-                launa_mqtt::state::status_to_json(&status, None, None, false, false, None);
+            let json_str = launa_mqtt::state::status_to_json(
+                &status,
+                None,
+                None,
+                false,
+                false,
+                None,
+                "registered",
+            );
             let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
             assert_eq!(parsed["current_temp"], 100.0);
@@ -59,8 +66,15 @@ fn test_full_pipeline_status_frame_to_mqtt_json() {
     let msg = dispatch_frame(&frames[0]);
     match msg {
         IncomingMessage::StatusUpdate(status) => {
-            let json_str =
-                launa_mqtt::state::status_to_json(&status, None, None, false, false, None);
+            let json_str = launa_mqtt::state::status_to_json(
+                &status,
+                None,
+                None,
+                false,
+                false,
+                None,
+                "registered",
+            );
             let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
             assert_eq!(parsed["current_temp"], 100.0);

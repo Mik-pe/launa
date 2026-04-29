@@ -132,8 +132,15 @@ impl TestHarness {
         for action in actions {
             match action {
                 AppAction::PublishState { status, .. } => {
-                    let json =
-                        launa_mqtt::state::status_to_json(status, None, None, false, false, None);
+                    let json = launa_mqtt::state::status_to_json(
+                        status,
+                        None,
+                        None,
+                        false,
+                        false,
+                        None,
+                        "registered",
+                    );
                     let topic = launa_mqtt::topics::TopicBuilder::new("test_spa").state_topic();
                     self.broker.publish(&topic, &json);
                 }

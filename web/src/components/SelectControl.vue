@@ -7,6 +7,7 @@ const props = withDefaults(defineProps<{
   options?: { value: string; label: string }[]
   disabled: boolean
   pending: boolean
+  disabledReason?: string
 }>(), {
   options: () => [],
 })
@@ -17,7 +18,8 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div :class="['flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-0 px-4 py-3 rounded-xl transition-all', disabled ? 'opacity-40' : '']">
+  <div :class="['flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-0 px-4 py-3 rounded-xl transition-all', disabled ? 'opacity-40' : '']"
+    :data-tooltip="disabled && disabledReason ? disabledReason : undefined">
     <div class="flex items-center gap-2">
       <span class="text-sm font-medium text-neutral-400">{{ label }}</span>
       <PendingDot v-if="pending" />

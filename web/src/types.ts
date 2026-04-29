@@ -28,6 +28,7 @@ export interface SpaState {
   self_test?: boolean
   sniff_mode?: boolean
   wifi_rssi?: number | null
+  registration_state?: string
 }
 
 export interface MqttSettings {
@@ -48,11 +49,6 @@ export interface LogEntry {
   level: string
   message: string
   timestamp_ms: number
-  received_at: string
-}
-
-export interface StatusEntry {
-  payload: string
   received_at: string
 }
 

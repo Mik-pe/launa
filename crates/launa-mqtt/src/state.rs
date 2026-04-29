@@ -23,6 +23,7 @@ pub fn status_to_json(
     self_test: bool,
     sniff_mode: bool,
     wifi_rssi: Option<i32>,
+    registration_state: &str,
 ) -> String {
     let current_temp = match status.current_temp {
         Some(t) => format!("{}", t.raw_value()),
@@ -83,7 +84,7 @@ pub fn status_to_json(
     let device_fields = [pump_fields.as_str(), light_fields.as_str()].join(",");
 
     format!(
-        "{{\"current_temp\":{},\"set_temp\":{},\"is_heating\":{},{},\"blower\":{},\"circ_pump\":{},\"mister\":{},\"hold_mode\":{},\"heating_mode\":\"{}\",\"temp_range\":\"{}\",\"temp_scale\":\"{}\",\"time_format\":\"{}\",\"hour\":{},\"minute\":{},\"notification_type\":{},\"panel_locked\":{},\"settings_lock\":{},\"m8_cycle_time\":{},\"last_fault\":{},\"firmware_version\":{},\"self_test\":{},\"sniff_mode\":{},\"wifi_rssi\":{}}}",
+        "{{\"current_temp\":{},\"set_temp\":{},\"is_heating\":{},{},\"blower\":{},\"circ_pump\":{},\"mister\":{},\"hold_mode\":{},\"heating_mode\":\"{}\",\"temp_range\":\"{}\",\"temp_scale\":\"{}\",\"time_format\":\"{}\",\"hour\":{},\"minute\":{},\"notification_type\":{},\"panel_locked\":{},\"settings_lock\":{},\"m8_cycle_time\":{},\"last_fault\":{},\"firmware_version\":{},\"self_test\":{},\"sniff_mode\":{},\"wifi_rssi\":{},\"registration_state\":\"{}\"}}",
         current_temp,
         status.set_temp,
         is_heating,
@@ -110,6 +111,7 @@ pub fn status_to_json(
         self_test,
         sniff_mode,
         wifi_rssi.map_or(String::from("null"), |r| format!("{}", r)),
+        registration_state,
     )
 }
 
@@ -161,7 +163,7 @@ mod tests {
     #[test]
     fn test_status_to_json_all_fields() {
         let status = sample_status();
-        let json_str = status_to_json(&status, None, None, false, false, None);
+        let json_str = status_to_json(&status, None, None, false, false, None, "registered");
 
         // Verify it is valid JSON by parsing it back
         let parsed: serde_json::Value =
@@ -198,6 +200,7 @@ mod tests {
         assert_eq!(parsed["panel_locked"], false);
         assert_eq!(parsed["settings_lock"], false);
         assert_eq!(parsed["m8_cycle_time"], 0);
+        assert_eq!(parsed["registration_state"], "registered");
     }
 
     #[test]
@@ -207,7 +210,7 @@ mod tests {
         status.panel_locked = true;
         status.settings_lock = true;
         status.m8_cycle_time = 30;
-        let json_str = status_to_json(&status, None, None, false, false, None);
+        let json_str = status_to_json(&status, None, None, false, false, None, "registered");
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["notification_type"], 4);
         assert_eq!(parsed["panel_locked"], true);
@@ -216,10 +219,26 @@ mod tests {
     }
 
     #[test]
+    fn test_status_to_json_registration_state_unregistered() {
+        let status = sample_status();
+        let json_str = status_to_json(
+            &status,
+            None,
+            None,
+            false,
+            false,
+            None,
+            "waiting_for_assignment",
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["registration_state"], "waiting_for_assignment");
+    }
+
+    #[test]
     fn test_status_to_json_null_temp() {
         let mut status = sample_status();
         status.current_temp = None;
-        let json_str = status_to_json(&status, None, None, false, false, None);
+        let json_str = status_to_json(&status, None, None, false, false, None, "registered");
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert!(parsed["current_temp"].is_null());
     }
@@ -233,7 +252,7 @@ mod tests {
         ] {
             let mut status = sample_status();
             status.heating_mode = mode;
-            let json_str = status_to_json(&status, None, None, false, false, None);
+            let json_str = status_to_json(&status, None, None, false, false, None, "registered");
             let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
             assert_eq!(parsed["heating_mode"], expected);
         }
@@ -245,7 +264,7 @@ mod tests {
         status.pumps[0] = PumpState::High;
         status.pumps[1] = PumpState::Low;
         status.pumps[2] = PumpState::Off;
-        let json_str = status_to_json(&status, None, None, false, false, None);
+        let json_str = status_to_json(&status, None, None, false, false, None, "registered");
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["pump1_on"], true);
         assert_eq!(parsed["pump2_on"], true);
@@ -257,7 +276,7 @@ mod tests {
         let mut status = sample_status();
         status.temperature_scale = TemperatureScale::Celsius;
         status.temp_range = TempRange::Low;
-        let json_str = status_to_json(&status, None, None, false, false, None);
+        let json_str = status_to_json(&status, None, None, false, false, None, "registered");
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["temp_scale"], "celsius");
         assert_eq!(parsed["temp_range"], "low");
@@ -267,7 +286,7 @@ mod tests {
     fn test_status_to_json_is_heating_false() {
         let mut status = sample_status();
         status.is_heating = false;
-        let json_str = status_to_json(&status, None, None, false, false, None);
+        let json_str = status_to_json(&status, None, None, false, false, None, "registered");
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["is_heating"], false);
     }
@@ -282,6 +301,7 @@ mod tests {
             false,
             false,
             None,
+            "registered",
         );
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["last_fault"], "HeaterDry: code 27");
@@ -290,7 +310,15 @@ mod tests {
     #[test]
     fn test_status_to_json_with_firmware_version() {
         let status = sample_status();
-        let json_str = status_to_json(&status, None, Some("1.2.3"), false, false, None);
+        let json_str = status_to_json(
+            &status,
+            None,
+            Some("1.2.3"),
+            false,
+            false,
+            None,
+            "registered",
+        );
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["firmware_version"], "1.2.3");
     }
@@ -306,6 +334,7 @@ mod tests {
             false,
             false,
             None,
+            "registered",
         );
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["last_fault"], "Fault:\\path\\to\\issue");
@@ -322,6 +351,7 @@ mod tests {
             false,
             false,
             None,
+            "registered",
         );
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["last_fault"], "Line1\nLine2\tTabbed");
@@ -332,7 +362,15 @@ mod tests {
         // Control characters (0x00-0x1F) must be escaped as \uXXXX
         let status = sample_status();
         let fault = alloc::format!("Bad{}char", '\x07'); // BEL character
-        let json_str = status_to_json(&status, Some(&fault), None, false, false, None);
+        let json_str = status_to_json(
+            &status,
+            Some(&fault),
+            None,
+            false,
+            false,
+            None,
+            "registered",
+        );
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["last_fault"], "Bad\u{0007}char");
     }
@@ -340,7 +378,15 @@ mod tests {
     #[test]
     fn test_escape_json_string_carriage_return() {
         let status = sample_status();
-        let json_str = status_to_json(&status, Some("Line1\rLine2"), None, false, false, None);
+        let json_str = status_to_json(
+            &status,
+            Some("Line1\rLine2"),
+            None,
+            false,
+            false,
+            None,
+            "registered",
+        );
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["last_fault"], "Line1\rLine2");
     }
@@ -350,7 +396,15 @@ mod tests {
         // A string containing all escapable characters at once
         let status = sample_status();
         let fault = alloc::format!("a\\b\"c\nd\re\tf{}g", '\x01');
-        let json_str = status_to_json(&status, Some(&fault), None, false, false, None);
+        let json_str = status_to_json(
+            &status,
+            Some(&fault),
+            None,
+            false,
+            false,
+            None,
+            "registered",
+        );
         // The main assertion: the JSON must parse successfully
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(
@@ -363,7 +417,15 @@ mod tests {
     fn test_escape_json_string_firmware_with_special_chars() {
         // Firmware version field also gets proper escaping
         let status = sample_status();
-        let json_str = status_to_json(&status, None, Some("v1.0\nbeta"), false, false, None);
+        let json_str = status_to_json(
+            &status,
+            None,
+            Some("v1.0\nbeta"),
+            false,
+            false,
+            None,
+            "registered",
+        );
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["firmware_version"], "v1.0\nbeta");
     }
@@ -379,6 +441,7 @@ mod tests {
             false,
             false,
             None,
+            "registered",
         );
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["last_fault"], "Heater \"dry\" fire");
@@ -389,7 +452,15 @@ mod tests {
         // Null byte must be escaped as \u0000
         let status = sample_status();
         let fault = alloc::format!("before{}after", '\x00');
-        let json_str = status_to_json(&status, Some(&fault), None, false, false, None);
+        let json_str = status_to_json(
+            &status,
+            Some(&fault),
+            None,
+            false,
+            false,
+            None,
+            "registered",
+        );
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["last_fault"], "before\u{0000}after");
     }
@@ -405,7 +476,7 @@ mod tests {
             PumpState::Low,
             PumpState::High,
         ];
-        let json_str = status_to_json(&status, None, None, false, false, None);
+        let json_str = status_to_json(&status, None, None, false, false, None, "registered");
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["pump1_on"], true);
         assert_eq!(parsed["pump2_on"], true);
@@ -421,7 +492,7 @@ mod tests {
         status.pumps[0] = PumpState::Off; // Turn off pump1 (was Low in sample)
         status.pumps[4] = PumpState::High;
         status.pumps[5] = PumpState::Low;
-        let json_str = status_to_json(&status, None, None, false, false, None);
+        let json_str = status_to_json(&status, None, None, false, false, None, "registered");
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["pump5_on"], true);
         assert_eq!(parsed["pump6_on"], true);
@@ -436,7 +507,7 @@ mod tests {
     fn test_status_to_json_hold_mode_active() {
         let mut status = sample_status();
         status.is_hold = true;
-        let json_str = status_to_json(&status, None, None, false, false, None);
+        let json_str = status_to_json(&status, None, None, false, false, None, "registered");
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["hold_mode"], true);
     }
@@ -446,7 +517,7 @@ mod tests {
         let mut status = sample_status();
         status.pumps = [PumpState::Off; 6];
         status.is_heating = true; // Heating flag can still be set
-        let json_str = status_to_json(&status, None, None, false, false, None);
+        let json_str = status_to_json(&status, None, None, false, false, None, "registered");
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["pump1_on"], false);
         assert_eq!(parsed["is_heating"], true);
@@ -456,7 +527,7 @@ mod tests {
     fn test_status_to_json_mister_on() {
         let mut status = sample_status();
         status.mister = true;
-        let json_str = status_to_json(&status, None, None, false, false, None);
+        let json_str = status_to_json(&status, None, None, false, false, None, "registered");
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["mister"], true);
     }

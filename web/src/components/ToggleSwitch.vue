@@ -8,10 +8,12 @@ const props = withDefaults(defineProps<{
   pending?: boolean
   readOnly?: boolean
   icon?: string
+  tooltip?: string
 }>(), {
   pending: false,
   readOnly: false,
   icon: '',
+  tooltip: '',
 })
 
 const emit = defineEmits<{
@@ -28,6 +30,7 @@ function toggle(): void {
   <button
     @click="toggle"
     :disabled="disabled"
+    :title="disabled && tooltip ? tooltip : undefined"
     :class="[
       'flex items-center justify-between w-full px-4 py-3 rounded-xl transition-all duration-200',
       readOnly

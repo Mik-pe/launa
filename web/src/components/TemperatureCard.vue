@@ -3,10 +3,13 @@ import { computed, ref, watch } from 'vue'
 import PendingDot from './PendingDot.vue'
 import type { SpaState } from '../types'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   state: SpaState | null
   pending: boolean
-}>()
+  disabled?: boolean
+}>(), {
+  disabled: false,
+})
 
 const emit = defineEmits<{
   'set-temperature': [temp: number]
@@ -48,6 +51,7 @@ watch(setTemp, (v) => {
 const displayTarget = computed(() => localTarget.value ?? setTemp.value)
 
 function adjustTemp(delta: number): void {
+  if (props.disabled) return
   const isCelsius = tempScale.value === 'C'
   const isLow = props.state?.temp_range === 'low'
   const min = isCelsius ? (isLow ? 10 : 26) : (isLow ? 50 : 80)
@@ -89,11 +93,19 @@ function adjustTemp(delta: number): void {
       </div>
       <div class="flex gap-2">
         <button @click="adjustTemp(-1)"
-          class="flex-1 bg-neutral-700 hover:bg-neutral-600 active:bg-neutral-800 rounded-lg py-3 sm:py-2.5 text-lg font-medium transition-colors cursor-pointer select-none">
+          :disabled="disabled"
+          :class="[
+            'flex-1 rounded-lg py-3 sm:py-2.5 text-lg font-medium transition-colors select-none',
+            disabled ? 'bg-neutral-700/50 text-neutral-600 cursor-not-allowed' : 'bg-neutral-700 hover:bg-neutral-600 active:bg-neutral-800 cursor-pointer'
+          ]">
           −
         </button>
         <button @click="adjustTemp(1)"
-          class="flex-1 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 rounded-lg py-3 sm:py-2.5 text-lg font-medium transition-colors cursor-pointer select-none">
+          :disabled="disabled"
+          :class="[
+            'flex-1 rounded-lg py-3 sm:py-2.5 text-lg font-medium transition-colors select-none',
+            disabled ? 'bg-blue-600/50 text-blue-300/50 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 active:bg-blue-700 cursor-pointer'
+          ]">
           +
         </button>
       </div>

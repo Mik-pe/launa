@@ -7,6 +7,7 @@ const props = withDefaults(defineProps<{
   connected: boolean
   isPending: (key: string) => boolean
   visibleControls?: Record<string, boolean>
+  disabledReason?: string
 }>(), {
   visibleControls: () => ({}),
 })
@@ -39,6 +40,7 @@ function getSpaProp(s: SpaState | null | undefined, key: string): unknown {
           :model-value="!!getSpaProp(state, 'pump'+i+'_on')"
           :disabled="!connected"
           :pending="isPending('pump'+i+'_on')"
+          :tooltip="disabledReason"
           @update:model-value="toggleItem('pump'+i, getSpaProp(state, 'pump'+i+'_on'))"
           :icon="i <= 2 ? '🌀' : '⚙️'"
         />
@@ -56,6 +58,7 @@ function getSpaProp(s: SpaState | null | undefined, key: string): unknown {
           :model-value="!!getSpaProp(state, 'light'+i)"
           :disabled="!connected"
           :pending="isPending('light'+i)"
+          :tooltip="disabledReason"
           @update:model-value="toggleItem('light'+i, getSpaProp(state, 'light'+i))"
           icon="💡"
         />
@@ -72,6 +75,7 @@ function getSpaProp(s: SpaState | null | undefined, key: string): unknown {
           :model-value="!!state?.blower"
           :disabled="!connected"
           :pending="isPending('blower')"
+          :tooltip="disabledReason"
           @update:model-value="toggleItem('blower', state?.blower)"
           icon="💨"
         />
@@ -89,6 +93,7 @@ function getSpaProp(s: SpaState | null | undefined, key: string): unknown {
           :model-value="!!state?.mister"
           :disabled="!connected"
           :pending="isPending('mister')"
+          :tooltip="disabledReason"
           @update:model-value="toggleItem('mister', state?.mister)"
           icon="💨"
         />
@@ -104,6 +109,7 @@ function getSpaProp(s: SpaState | null | undefined, key: string): unknown {
           :model-value="!!state?.hold_mode"
           :disabled="!connected"
           :pending="isPending('hold_mode')"
+          :tooltip="disabledReason"
           @update:model-value="toggleItem('hold_mode', state?.hold_mode)"
           icon="⏸️"
         />
@@ -111,12 +117,14 @@ function getSpaProp(s: SpaState | null | undefined, key: string): unknown {
           label="AUX 1"
           :model-value="false"
           :disabled="!connected"
+          :tooltip="disabledReason"
           @update:model-value="toggleItem('aux1', false)"
         />
         <ToggleSwitch
           label="AUX 2"
           :model-value="false"
           :disabled="!connected"
+          :tooltip="disabledReason"
           @update:model-value="toggleItem('aux2', false)"
         />
       </div>

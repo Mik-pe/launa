@@ -51,6 +51,7 @@ pub struct LastState<'a> {
     pub self_test: bool,
     pub sniff_mode: bool,
     pub wifi_rssi: Option<i32>,
+    pub registration_state: &'a str,
 }
 
 pub struct TcpTransport {
@@ -444,6 +445,7 @@ impl MqttClient {
                     state.sniff_mode,
                     state.wifi_rssi,
                     state.self_test,
+                    state.registration_state,
                 )
                 .await
             {
@@ -799,6 +801,7 @@ impl MqttClient {
         sniff_mode: bool,
         wifi_rssi: Option<i32>,
         retain: bool,
+        registration_state: &str,
     ) -> Result<(), MqttError> {
         let topics = TopicBuilder::new(&self.device_id);
         let state_topic = topics.state_topic();
@@ -809,6 +812,7 @@ impl MqttClient {
             self_test,
             sniff_mode,
             wifi_rssi,
+            registration_state,
         );
         self.publish(&state_topic, json.as_bytes(), 1, retain).await
     }

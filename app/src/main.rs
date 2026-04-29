@@ -343,6 +343,7 @@ async fn execute_actions(
                 status,
                 fault,
                 recovering_from_stale,
+                registration_state,
             } => {
                 let fb = fault
                     .as_ref()
@@ -355,6 +356,7 @@ async fn execute_actions(
                         self_test,
                         sniff_mode,
                         wifi_rssi,
+                        registration_state,
                     })
                     .is_err()
                 {
@@ -804,6 +806,7 @@ async fn tick_self_test(
                 status: status.clone(),
                 fault: None,
                 recovering_from_stale: false,
+                registration_state: "registered",
             }],
             device_id,
             true,
