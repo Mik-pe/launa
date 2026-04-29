@@ -58,7 +58,7 @@ Type=simple
 User=$PI_USER
 WorkingDirectory=$PI_DIR
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-ExecStart=$PI_DIR/launa-server --web-dir $PI_DIR/web --db-path $PI_DIR/data/launa.db --http-port 80
+ExecStart=$PI_DIR/launa-server --web-dir $PI_DIR/web --state-path $PI_DIR/data/launa-state.json --http-port 80
 Restart=on-failure
 RestartSec=5
 

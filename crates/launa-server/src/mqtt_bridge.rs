@@ -1,12 +1,15 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use rumqttd::local::{LinkRx, LinkTx};
 use rumqttd::{Broker, Notification};
 use tracing::{error, info, warn};
 
-use crate::db::Database;
+use crate::memory::{MemoryStore, COMPONENT_FIELDS};
 
-pub fn start(broker: &Broker, db: Arc<Database>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn start(
+    broker: &Broker,
+    mem: Arc<RwLock<MemoryStore>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (mut link_tx, mut link_rx) = broker.link("data-store")?;
     link_tx.subscribe("launa/#")?;
 
@@ -15,24 +18,20 @@ pub fn start(broker: &Broker, db: Arc<Database>) -> Result<(), Box<dyn std::erro
     std::thread::Builder::new()
         .name("mqtt-bridge".into())
         .spawn(move || {
-            run_bridge(&mut link_tx, &mut link_rx, &db);
+            run_bridge(&mut link_tx, &mut link_rx, &mem);
         })?;
 
     Ok(())
 }
 
-fn run_bridge(_link_tx: &mut LinkTx, link_rx: &mut LinkRx, db: &Database) {
+fn run_bridge(_link_tx: &mut LinkTx, link_rx: &mut LinkRx, mem: &RwLock<MemoryStore>) {
     loop {
         match link_rx.recv() {
             Ok(Some(Notification::Forward(forward))) => {
-                handle_forward(db, &forward.publish);
+                handle_forward(mem, &forward.publish);
             }
-            Ok(Some(_notification)) => {
-                // Acknowledgments, disconnects, etc. - ignore
-            }
-            Ok(None) => {
-                // Empty notification, continue
-            }
+            Ok(Some(_)) => {}
+            Ok(None) => {}
             Err(e) => {
                 error!("MQTT bridge recv error: {e:?}");
                 break;
@@ -42,7 +41,7 @@ fn run_bridge(_link_tx: &mut LinkTx, link_rx: &mut LinkRx, db: &Database) {
     warn!("MQTT bridge loop exited");
 }
 
-fn handle_forward(db: &Database, publish: &rumqttd::protocol::Publish) {
+fn handle_forward(mem: &RwLock<MemoryStore>, publish: &rumqttd::protocol::Publish) {
     let topic = match std::str::from_utf8(&publish.topic) {
         Ok(t) => t,
         Err(_) => return,
@@ -61,87 +60,123 @@ fn handle_forward(db: &Database, publish: &rumqttd::protocol::Publish) {
     let subtopic = parts[2];
 
     match subtopic {
-        "availability" => handle_availability(db, device_id, payload),
-        "boot" => handle_boot(db, device_id, payload),
-        "state" => db.insert_status(device_id, payload),
-        "log" => handle_log(db, device_id, payload),
-        "diagnostics" => db.insert_diagnostics(device_id, payload),
-        "alert" => db.insert_alert(device_id, payload),
-        "sniff" => db.insert_sniff_frame(device_id, payload),
+        "availability" => handle_availability(mem, device_id, payload),
+        "boot" => handle_boot(mem, device_id, payload),
+        "state" => handle_state(mem, device_id, payload),
+        "log" => handle_log(mem, device_id, payload),
+        "diagnostics" => {
+            mem.write().unwrap().insert_diagnostics(device_id, payload);
+        }
+        "alert" => {
+            mem.write().unwrap().insert_alert(device_id, payload);
+        }
+        "sniff" => {
+            mem.write().unwrap().insert_sniff_frame(device_id, payload);
+        }
         _ => {}
     }
 }
 
-fn handle_availability(db: &Database, device_id: &str, payload: &str) {
-    // Payload is a plain string: "online", "offline", or "stale"
-    let status = match payload.trim() {
-        "online" => "online",
-        "offline" => "offline",
-        "stale" => "stale",
-        other => other,
+/// Parse state JSON outside the lock, then take a brief write lock for insertion.
+fn handle_state(mem: &RwLock<MemoryStore>, device_id: &str, payload: &str) {
+    let val = match serde_json::from_str::<serde_json::Value>(payload) {
+        Ok(v) => v,
+        Err(_) => return,
     };
+
+    // Extract temperature fields outside the lock
+    let current_temp = val.get("current_temp").and_then(|v| v.as_f64());
+    let set_temp = val.get("set_temp").and_then(|v| v.as_f64());
+
+    // Extract component states outside the lock
+    let component_states: Vec<(&str, bool)> = COMPONENT_FIELDS
+        .iter()
+        .filter_map(|&field| val.get(field).and_then(|v| v.as_bool()).map(|b| (field, b)))
+        .collect();
+
+    // Brief write lock for insertion only
+    let mut store = mem.write().unwrap();
+    store.insert_temperature_sample(device_id, current_temp, set_temp);
+    store.insert_component_changes(device_id, &component_states);
+}
+
+fn handle_availability(mem: &RwLock<MemoryStore>, device_id: &str, payload: &str) {
+    let status = payload.trim();
     if status == "online" {
         info!("Device '{device_id}' connected (availability online)");
     } else {
         info!("Device '{device_id}' availability: {status}");
     }
-    db.update_device_status(device_id, status, None);
-    db.insert_availability(device_id, status);
+    let mut store = mem.write().unwrap();
+    store.update_device_status(device_id, status, None);
+    store.insert_availability(device_id, status);
 }
 
-fn handle_boot(db: &Database, device_id: &str, payload: &str) {
+fn handle_boot(mem: &RwLock<MemoryStore>, device_id: &str, payload: &str) {
     let boot_id = payload.trim().parse::<u32>().ok();
     info!("Device '{device_id}' booted (boot_id={})", payload.trim());
-    if let Some(bid) = boot_id {
-        db.update_device_status(device_id, "online", Some(bid));
-    }
+    mem.write()
+        .unwrap()
+        .update_device_status(device_id, "online", boot_id);
 }
 
-fn handle_log(db: &Database, device_id: &str, payload: &str) {
-    // Log payloads are JSON: {"level":"warn","message":"...","ts":12345}
-    let val: serde_json::Value = match serde_json::from_str(payload) {
-        Ok(v) => v,
-        Err(_) => {
-            db.insert_log(device_id, "unknown", payload, 0);
-            return;
+/// Parse log JSON outside the lock, then take a brief write lock for insertion.
+fn handle_log(mem: &RwLock<MemoryStore>, device_id: &str, payload: &str) {
+    let (level, message, timestamp_ms) = match serde_json::from_str::<serde_json::Value>(payload) {
+        Ok(val) => {
+            let level = val["level"].as_str().unwrap_or("unknown");
+            let message = val["message"].as_str().unwrap_or(payload);
+            let ts = val["ts"].as_u64().unwrap_or(0);
+            (level.to_string(), message.to_string(), ts)
         }
+        Err(_) => ("unknown".to_string(), payload.to_string(), 0),
     };
 
-    let level = val["level"].as_str().unwrap_or("unknown");
-    let message = val["message"].as_str().unwrap_or(payload);
-    let timestamp_ms = val["ts"].as_u64().unwrap_or(0);
-
-    db.insert_log(device_id, level, message, timestamp_ms);
+    mem.write()
+        .unwrap()
+        .insert_log(device_id, &level, &message, timestamp_ms);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Database;
+    use crate::memory::MemoryStore;
     use rumqttd::protocol::Publish;
 
     fn make_publish(topic: &str, payload: &str) -> Publish {
         Publish::new(topic.to_string(), payload.to_string(), false)
     }
 
+    fn test_store() -> RwLock<MemoryStore> {
+        RwLock::new(MemoryStore::new())
+    }
+
     #[test]
-    fn test_handle_forward_state() {
-        let db = Database::open_in_memory().unwrap();
-        let publish = make_publish("launa/spa_001/state", r#"{"current_temp":100}"#);
-        handle_forward(&db, &publish);
-        let status = db.get_latest_status("spa_001").unwrap();
-        assert!(status.payload.contains("100"));
+    fn test_handle_forward_state_stores_graph_data() {
+        let mem = test_store();
+        let publish = make_publish(
+            "launa/spa_001/state",
+            r#"{"current_temp":100.0,"set_temp":104.0}"#,
+        );
+        handle_forward(&mem, &publish);
+        let since = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+        let samples = mem
+            .read()
+            .unwrap()
+            .get_temperature_history_since("spa_001", &since);
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].current_temp, Some(100.0));
     }
 
     #[test]
     fn test_handle_forward_log() {
-        let db = Database::open_in_memory().unwrap();
+        let mem = test_store();
         let publish = make_publish(
             "launa/spa_001/log",
             r#"{"level":"warn","message":"Temperature high","ts":12345}"#,
         );
-        handle_forward(&db, &publish);
-        let logs = db.get_logs("spa_001", 10);
+        handle_forward(&mem, &publish);
+        let logs = mem.read().unwrap().get_logs("spa_001", 10);
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].level, "warn");
         assert_eq!(logs[0].message, "Temperature high");
@@ -150,64 +185,67 @@ mod tests {
 
     #[test]
     fn test_handle_forward_diagnostics() {
-        let db = Database::open_in_memory().unwrap();
+        let mem = test_store();
         let publish = make_publish("launa/spa_001/diagnostics", r#"{"uptime":1234}"#);
-        handle_forward(&db, &publish);
-        let diags = db.get_diagnostics("spa_001", 10);
+        handle_forward(&mem, &publish);
+        let diags = mem.read().unwrap().get_diagnostics("spa_001", 10);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].payload.contains("uptime"));
     }
 
     #[test]
     fn test_handle_forward_alert() {
-        let db = Database::open_in_memory().unwrap();
+        let mem = test_store();
         let publish = make_publish("launa/spa_001/alert", r#"{"msg":"overheat"}"#);
-        handle_forward(&db, &publish);
-        let alerts = db.get_alerts("spa_001", 10);
+        handle_forward(&mem, &publish);
+        let alerts = mem.read().unwrap().get_alerts("spa_001", 10);
         assert_eq!(alerts.len(), 1);
     }
 
     #[test]
     fn test_handle_forward_sniff() {
-        let db = Database::open_in_memory().unwrap();
+        let mem = test_store();
         let publish = make_publish("launa/spa_001/sniff", r#"{"hex":"aabbcc"}"#);
-        handle_forward(&db, &publish);
-        let sniffs = db.get_sniff_frames("spa_001", 10);
+        handle_forward(&mem, &publish);
+        let sniffs = mem.read().unwrap().get_sniff_frames("spa_001", 10);
         assert_eq!(sniffs.len(), 1);
     }
 
     #[test]
     fn test_handle_forward_unknown_subtopic_ignored() {
-        let db = Database::open_in_memory().unwrap();
+        let mem = test_store();
         let publish = make_publish("launa/spa_001/command", r#"{"cmd":"set_temp"}"#);
-        handle_forward(&db, &publish);
-        assert!(db.get_latest_status("spa_001").is_none());
+        handle_forward(&mem, &publish);
+        assert!(mem.read().unwrap().get_logs("spa_001", 10).is_empty());
     }
 
     #[test]
     fn test_handle_forward_invalid_topic_ignored() {
-        let db = Database::open_in_memory().unwrap();
+        let mem = test_store();
         let publish = make_publish("homeassistant/sensor/spa_001/temp/config", "{}");
-        handle_forward(&db, &publish);
-        assert!(db.get_latest_status("spa_001").is_none());
+        handle_forward(&mem, &publish);
+        assert!(mem.read().unwrap().get_logs("spa_001", 10).is_empty());
     }
 
     #[test]
     fn test_handle_log_malformed_json_stored_as_unknown() {
-        let db = Database::open_in_memory().unwrap();
+        let mem = test_store();
         let publish = make_publish("launa/spa_001/log", "not json at all");
-        handle_forward(&db, &publish);
-        let logs = db.get_logs("spa_001", 10);
+        handle_forward(&mem, &publish);
+        let logs = mem.read().unwrap().get_logs("spa_001", 10);
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].level, "unknown");
         assert_eq!(logs[0].message, "not json at all");
     }
 
     #[test]
-    fn test_handle_forward_availability_ignored() {
-        let db = Database::open_in_memory().unwrap();
+    fn test_handle_forward_availability() {
+        let mem = test_store();
         let publish = make_publish("launa/spa_001/availability", "online");
-        handle_forward(&db, &publish);
-        assert!(db.get_latest_status("spa_001").is_none());
+        handle_forward(&mem, &publish);
+        let status = mem.read().unwrap().get_device_status("spa_001").unwrap();
+        assert_eq!(status.status, "online");
+        let history = mem.read().unwrap().get_availability_history("spa_001", 10);
+        assert_eq!(history.len(), 1);
     }
 }

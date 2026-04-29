@@ -66,7 +66,7 @@ Type=simple
 User=mikpe
 WorkingDirectory=/opt/launa
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-ExecStart=/opt/launa/launa-server --web-dir /opt/launa/web --db-path /opt/launa/data/launa.db --http-port 80
+ExecStart=/opt/launa/launa-server --web-dir /opt/launa/web --state-path /opt/launa/data/launa-state.json --http-port 80
 Restart=on-failure
 RestartSec=5
 

@@ -1,15 +1,15 @@
 use rumqttd::{Broker, Config as MqttConfig};
 
-use crate::Config;
+use crate::error::Result;
 
 /// Build the MQTT broker config and return the Broker.
 /// Caller must call `broker.start()` to begin accepting connections.
-pub fn build(config: &Config) -> Result<Broker, Box<dyn std::error::Error>> {
-    let mqtt_config = build_config(config)?;
+pub fn build(mqtt_tcp_port: u16, mqtt_ws_port: u16) -> Result<Broker> {
+    let mqtt_config = build_config(mqtt_tcp_port, mqtt_ws_port)?;
     Ok(Broker::new(mqtt_config))
 }
 
-fn build_config(config: &Config) -> Result<MqttConfig, Box<dyn std::error::Error>> {
+fn build_config(mqtt_tcp_port: u16, mqtt_ws_port: u16) -> Result<MqttConfig> {
     let toml_str = format!(
         r#"
 id = 0
@@ -42,7 +42,7 @@ next_connection_delay_ms = 1
     max_payload_size = 20480
     max_inflight_count = 100
 "#,
-        config.mqtt_tcp_port, config.mqtt_ws_port
+        mqtt_tcp_port, mqtt_ws_port
     );
 
     let config: MqttConfig = config::Config::builder()

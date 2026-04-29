@@ -22,9 +22,9 @@ struct Cli {
     #[arg(long)]
     web_dir: Option<String>,
 
-    /// Path to the SQLite database file
+    /// Path to the JSON state file (saved on shutdown, loaded on startup)
     #[arg(long)]
-    db_path: Option<String>,
+    state_path: Option<String>,
 }
 
 fn main() {
@@ -34,37 +34,36 @@ fn main() {
 
     let cli = Cli::parse();
 
-    let web_dir = cli.web_dir.map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("web")
-    });
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
 
-    let db_path = cli.db_path.map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("launa.db")
-    });
+    let web_dir = cli
+        .web_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| project_root.join("web"));
+
+    let state_path = cli
+        .state_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| project_root.join("launa-state.json"));
 
     let config = Config {
         mqtt_tcp_port: cli.mqtt_port,
         mqtt_ws_port: cli.ws_port,
         http_port: cli.http_port,
         web_dir,
-        db_path,
+        state_path,
     };
 
     info!("Launa MQTT broker starting...");
     info!("  MQTT TCP:  0.0.0.0:{}", config.mqtt_tcp_port);
     info!("  MQTT WS:   0.0.0.0:{}", config.mqtt_ws_port);
     info!("  Web UI:    http://localhost:{}", config.http_port);
-    info!("  Database:  {:?}", config.db_path);
+    info!("  State:     {:?}", config.state_path);
 
     if let Err(e) = launa_server::run(config) {
         eprintln!("Error: {e}");

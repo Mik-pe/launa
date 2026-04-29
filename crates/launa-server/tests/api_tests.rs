@@ -1,23 +1,20 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use axum_test::TestServer;
 use serde_json::json;
 
-use launa_server::db::Database;
-use launa_server::web::{build_router, AccessoryConfig, AppState};
+use launa_server::memory::MemoryStore;
+use launa_server::web::{build_router, AppState};
 
-fn test_server_with_db() -> (TestServer, Arc<Database>) {
-    let db = Arc::new(Database::open_in_memory().unwrap());
-    let state = AppState {
-        accessory_config: Arc::new(Mutex::new(AccessoryConfig::default())),
-        db: db.clone(),
-    };
+fn test_server() -> (TestServer, Arc<RwLock<MemoryStore>>) {
+    let mem = Arc::new(RwLock::new(MemoryStore::new()));
+    let state = AppState { mem: mem.clone() };
     let server = TestServer::new(build_router(state));
-    (server, db)
+    (server, mem)
 }
 
 fn test_server_empty() -> TestServer {
-    test_server_with_db().0
+    test_server().0
 }
 
 #[tokio::test]
@@ -26,7 +23,12 @@ async fn test_get_config_defaults() {
 
     let resp = server.get("/api/config").await;
     resp.assert_status_ok();
-    resp.assert_json(&AccessoryConfig::default());
+    resp.assert_json(&json!({
+        "pumps": 2,
+        "lights": 1,
+        "blower": true,
+        "mister": false,
+    }));
 }
 
 #[tokio::test]
@@ -49,7 +51,6 @@ async fn test_set_config() {
         "mister": true,
     }));
 
-    // Verify persisted via GET
     let get_resp = server.get("/api/config").await;
     get_resp.assert_json(&json!({
         "pumps": 4,
@@ -82,6 +83,36 @@ async fn test_set_config_clamps_values() {
 }
 
 #[tokio::test]
+async fn test_list_devices_empty() {
+    let server = test_server_empty();
+
+    let resp = server.get("/api/devices").await;
+    resp.assert_status_ok();
+    resp.assert_json(&json!([]));
+}
+
+#[tokio::test]
+async fn test_list_devices_returns_known() {
+    let (server, mem) = test_server();
+    mem.write()
+        .unwrap()
+        .update_device_status("spa_001", "online", Some(1));
+    mem.write()
+        .unwrap()
+        .update_device_status("spa_002", "offline", None);
+
+    let resp = server.get("/api/devices").await;
+    resp.assert_status_ok();
+
+    let devices: Vec<serde_json::Value> = resp.json();
+    assert_eq!(devices.len(), 2);
+    assert_eq!(devices[0]["device_id"], "spa_001");
+    assert_eq!(devices[0]["status"], "online");
+    assert_eq!(devices[1]["device_id"], "spa_002");
+    assert_eq!(devices[1]["status"], "offline");
+}
+
+#[tokio::test]
 async fn test_device_logs_empty() {
     let server = test_server_empty();
 
@@ -92,17 +123,22 @@ async fn test_device_logs_empty() {
 
 #[tokio::test]
 async fn test_device_logs_returns_data() {
-    let (server, db) = test_server_with_db();
-    db.insert_log("launa_spa", "info", "system started", 1000);
-    db.insert_log("launa_spa", "warn", "temp high", 2000);
-    db.insert_log("other_device", "error", "fault", 3000);
+    let (server, mem) = test_server();
+    mem.write()
+        .unwrap()
+        .insert_log("launa_spa", "info", "system started", 1000);
+    mem.write()
+        .unwrap()
+        .insert_log("launa_spa", "warn", "temp high", 2000);
+    mem.write()
+        .unwrap()
+        .insert_log("other_device", "error", "fault", 3000);
 
     let resp = server.get("/api/devices/launa_spa/logs").await;
     resp.assert_status_ok();
 
     let logs: Vec<serde_json::Value> = resp.json();
     assert_eq!(logs.len(), 2);
-    // Most recent first
     assert_eq!(logs[0]["level"], "warn");
     assert_eq!(logs[0]["message"], "temp high");
     assert_eq!(logs[1]["level"], "info");
@@ -111,9 +147,11 @@ async fn test_device_logs_returns_data() {
 
 #[tokio::test]
 async fn test_device_logs_limit() {
-    let (server, db) = test_server_with_db();
+    let (server, mem) = test_server();
     for i in 0..10 {
-        db.insert_log("dev1", "info", &format!("msg {i}"), i);
+        mem.write()
+            .unwrap()
+            .insert_log("dev1", "info", &format!("msg {i}"), i);
     }
 
     let resp = server.get("/api/devices/dev1/logs?limit=3").await;
@@ -124,40 +162,11 @@ async fn test_device_logs_limit() {
 }
 
 #[tokio::test]
-async fn test_device_status_empty() {
-    let server = test_server_empty();
-
-    let resp = server.get("/api/devices/launa_spa/status").await;
-    resp.assert_status_ok();
-    resp.assert_json(&json!([]));
-}
-
-#[tokio::test]
-async fn test_device_latest_status_empty() {
-    let server = test_server_empty();
-
-    let resp = server.get("/api/devices/launa_spa/status/latest").await;
-    resp.assert_status_ok();
-    resp.assert_json(&json!(null));
-}
-
-#[tokio::test]
-async fn test_device_latest_status_returns_most_recent() {
-    let (server, db) = test_server_with_db();
-    db.insert_status("launa_spa", r#"{"current_temp":38}"#);
-    db.insert_status("launa_spa", r#"{"current_temp":39}"#);
-
-    let resp = server.get("/api/devices/launa_spa/status/latest").await;
-    resp.assert_status_ok();
-
-    let status: serde_json::Value = resp.json();
-    assert_eq!(status["payload"], r#"{"current_temp":39}"#);
-}
-
-#[tokio::test]
 async fn test_device_alerts() {
-    let (server, db) = test_server_with_db();
-    db.insert_alert("launa_spa", r#"{"msg":"overheat"}"#);
+    let (server, mem) = test_server();
+    mem.write()
+        .unwrap()
+        .insert_alert("launa_spa", r#"{"msg":"overheat"}"#);
 
     let resp = server.get("/api/devices/launa_spa/alerts").await;
     resp.assert_status_ok();
@@ -169,8 +178,10 @@ async fn test_device_alerts() {
 
 #[tokio::test]
 async fn test_device_diagnostics() {
-    let (server, db) = test_server_with_db();
-    db.insert_diagnostics("launa_spa", r#"{"uptime":1234}"#);
+    let (server, mem) = test_server();
+    mem.write()
+        .unwrap()
+        .insert_diagnostics("launa_spa", r#"{"uptime":1234}"#);
 
     let resp = server.get("/api/devices/launa_spa/diagnostics").await;
     resp.assert_status_ok();
@@ -182,8 +193,10 @@ async fn test_device_diagnostics() {
 
 #[tokio::test]
 async fn test_device_sniff_frames() {
-    let (server, db) = test_server_with_db();
-    db.insert_sniff_frame("launa_spa", r#"{"hex":"aabbcc"}"#);
+    let (server, mem) = test_server();
+    mem.write()
+        .unwrap()
+        .insert_sniff_frame("launa_spa", r#"{"hex":"aabbcc"}"#);
 
     let resp = server.get("/api/devices/launa_spa/sniff").await;
     resp.assert_status_ok();
@@ -195,9 +208,13 @@ async fn test_device_sniff_frames() {
 
 #[tokio::test]
 async fn test_device_isolation() {
-    let (server, db) = test_server_with_db();
-    db.insert_log("device_a", "info", "msg a", 100);
-    db.insert_log("device_b", "info", "msg b", 200);
+    let (server, mem) = test_server();
+    mem.write()
+        .unwrap()
+        .insert_log("device_a", "info", "msg a", 100);
+    mem.write()
+        .unwrap()
+        .insert_log("device_b", "info", "msg b", 200);
 
     let resp_a = server.get("/api/devices/device_a/logs").await;
     let logs_a: Vec<serde_json::Value> = resp_a.json();
