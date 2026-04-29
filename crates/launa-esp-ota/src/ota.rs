@@ -250,16 +250,31 @@ where
 
     fn mark_valid(&mut self) -> Result<(), OtaError> {
         info!("OTA: marking firmware as valid (boot confirmed)");
-        let detected = self.detect_running_partition()?;
-        if detected == self.running {
+
+        // Read both otadata entries and check CRC validity.
+        let (entry0, valid0, entry1, valid1) = crate::flash::read_otadata_entries(&mut self.flash)?;
+        let running_slot = self.running.index();
+
+        // Check if the running partition's otadata slot has a valid CRC
+        // and points to the correct partition.
+        let running_entry = if running_slot == 0 { &entry0 } else { &entry1 };
+        let running_valid = if running_slot == 0 { valid0 } else { valid1 };
+        let running_seq = if running_valid { crate::flash::seq_from_entry(running_entry) } else { 0 };
+        let running_correct = running_seq > 0 && (running_seq - 1) % 2 == running_slot as u32;
+
+        let other_valid = if running_slot == 0 { valid1 } else { valid0 };
+
+        if running_correct && other_valid {
             debug!(
-                "OTA: running partition {:?} confirmed in otadata",
+                "OTA: running partition {:?} confirmed in otadata (both slots valid)",
                 self.running
             );
         } else {
+            // Active slot is corrupt/wrong or the other slot is invalid.
+            // Rewrite both to ensure redundancy.
             warn!(
-                "OTA: detected {:?} but expected running {:?}, updating otadata",
-                detected, self.running
+                "OTA: otadata needs repair (running slot valid={}, correct={}, other valid={}), rewriting",
+                running_valid, running_correct, other_valid
             );
             set_boot_partition(&mut self.flash, self.running)?;
         }
@@ -306,7 +321,7 @@ mod tests {
     use crate::crypto::crc32;
     use crate::flash::{
         set_boot_partition, u32_from_le, OTADATA_OFFSET, OTA_0_SIZE, OTA_1_OFFSET, OTA_1_SIZE,
-        OTA_ENTRY_SIZE, OTA_SEQ_OFFSET, OTA_SEQ_SIZE, SECTOR_SIZE,
+        OTA_CRC_OFFSET, OTA_ENTRY_SIZE, OTA_SEQ_OFFSET, OTA_SEQ_SIZE, SECTOR_SIZE,
     };
     use embedded_storage::nor_flash::{ErrorType, NorFlashError};
 
@@ -696,13 +711,12 @@ mod tests {
 
     #[test]
     fn test_both_otadata_slots_survive_sequential_writes() {
-        // Write slot 0 first, then slot 1, and verify slot 0 is still intact.
+        // Write slot 0 first, then slot 1, and verify both slots remain valid.
         let flash = MockFlash::new(total_flash_size());
         let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
 
-        // First: write to slot 0 via set_boot_partition(Ota0)
-        // We need direct access, so use rollback which targets the running partition
-        // EspOtaFlash running=Ota0 → set_boot_partition targets Ota0
+        // First: set_boot_partition(Ota0) on clean flash seeds both slots.
+        // Slot 0 gets seq=1 (Ota0), slot 1 gets seeded with seq=2 (Ota1).
         set_boot_partition(&mut ota.flash, Partition::Ota0).unwrap();
         let slot0_entry_after_first = read_otadata_entry(&ota.flash, 0);
         let slot0_seq_after_first = seq_from_entry(&slot0_entry_after_first);
@@ -710,12 +724,16 @@ mod tests {
             slot0_seq_after_first, 1,
             "slot 0 seq should be 1 after first write"
         );
+        // Slot 1 was seeded because it was empty
+        let slot1_seq_after_first = seq_from_entry(&read_otadata_entry(&ota.flash, 1));
+        assert_eq!(slot1_seq_after_first, 2, "slot 1 should be seeded with seq=2");
 
-        // Now write to slot 1
+        // Now write to slot 1 (Ota1) — slot 0 is already valid so only slot 1 is updated
         set_boot_partition(&mut ota.flash, Partition::Ota1).unwrap();
         let slot1_entry = read_otadata_entry(&ota.flash, 1);
         let slot1_seq = seq_from_entry(&slot1_entry);
-        assert_eq!(slot1_seq, 2, "slot 1 seq should be 2 (Ota1 needs even seq)");
+        // max_seq was 2, next even seq > 2 for Ota1 is 4
+        assert_eq!(slot1_seq, 4, "slot 1 seq should be 4 (Ota1 needs even seq, >2)");
 
         // Verify slot 0 is STILL intact (not destroyed by slot 1 erase)
         let slot0_entry_after_second = read_otadata_entry(&ota.flash, 0);
@@ -733,40 +751,41 @@ mod tests {
     #[test]
     fn test_both_otadata_slots_survive_alternating_writes() {
         // Write to slots in alternating order multiple times.
+        // With seeding, the first write to a clean flash will seed both slots.
         let flash = MockFlash::new(total_flash_size());
         let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
 
-        // slot 0 → seq 1 (Ota0 needs odd)
+        // First write on clean flash: set Ota0 → slot 0 gets seq=1, slot 1 seeded with seq=2
         set_boot_partition(&mut ota.flash, Partition::Ota0).unwrap();
         assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 0)), 1);
-        assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 1)), 0);
+        assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 1)), 2);
 
-        // slot 1 → seq 2 (Ota1 needs even)
+        // set Ota1: max_seq=2, next even for Ota1 is 4 → slot 1 gets seq=4, slot 0 unchanged
         set_boot_partition(&mut ota.flash, Partition::Ota1).unwrap();
         assert_eq!(
             seq_from_entry(&read_otadata_entry(&ota.flash, 0)),
             1,
             "slot 0 lost after slot 1 write"
         );
-        assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 1)), 2);
+        assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 1)), 4);
 
-        // slot 0 → seq 3 (next odd after 2)
+        // set Ota0: max_seq=4, next odd for Ota0 is 5 → slot 0 gets seq=5, slot 1 unchanged
         set_boot_partition(&mut ota.flash, Partition::Ota0).unwrap();
-        assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 0)), 3);
+        assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 0)), 5);
         assert_eq!(
             seq_from_entry(&read_otadata_entry(&ota.flash, 1)),
-            2,
+            4,
             "slot 1 lost after slot 0 write"
         );
 
-        // slot 1 → seq 4 (next even after 3)
+        // set Ota1: max_seq=5, next even for Ota1 is 6 → slot 1 gets seq=6
         set_boot_partition(&mut ota.flash, Partition::Ota1).unwrap();
         assert_eq!(
             seq_from_entry(&read_otadata_entry(&ota.flash, 0)),
-            3,
+            5,
             "slot 0 lost after slot 1 write"
         );
-        assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 1)), 4);
+        assert_eq!(seq_from_entry(&read_otadata_entry(&ota.flash, 1)), 6);
     }
 
     #[test]
@@ -1027,5 +1046,191 @@ mod tests {
 
         let mut ota2 = EspOtaFlash::new(ota.flash, Partition::Ota1);
         ota2.mark_valid().unwrap();
+    }
+
+    #[test]
+    fn test_read_otadata_sequences_validates_crc() {
+        // Corrupt the CRC of slot 1 and verify read_otadata_sequences returns 0 for it.
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+
+        // Write valid entries to both slots
+        set_boot_partition(&mut ota.flash, Partition::Ota0).unwrap();
+        // Both slots should be valid now
+        let (seq_0, seq_1) = crate::flash::read_otadata_sequences(&mut ota.flash).unwrap();
+        assert_eq!(seq_0, 1, "slot 0 should have seq 1");
+        assert!(seq_1 > 0, "slot 1 should be seeded");
+
+        // Corrupt slot 1's CRC
+        let slot1_crc_offset = (OTADATA_OFFSET + SECTOR_SIZE) as usize + OTA_CRC_OFFSET;
+        ota.flash.data[slot1_crc_offset] ^= 0xFF; // Flip CRC bytes
+
+        // Slot 1 should now be reported as invalid (seq=0)
+        let (seq_0_after, seq_1_after) =
+            crate::flash::read_otadata_sequences(&mut ota.flash).unwrap();
+        assert_eq!(seq_0_after, 1, "slot 0 still valid");
+        assert_eq!(seq_1_after, 0, "slot 1 should be 0 after CRC corruption");
+    }
+
+    #[test]
+    fn test_mark_valid_skips_write_when_both_slots_valid() {
+        // mark_valid should NOT rewrite when both otadata slots have valid CRCs
+        // and the running partition's entry is correct.
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+
+        // Perform a full OTA cycle
+        ota.begin().unwrap();
+        let mut fw = alloc::vec![0xABu8; 256];
+        fw[0] = 0xE9;
+        ota.write(&fw).unwrap();
+        ota.finalize().unwrap();
+
+        // Snapshot the flash after finalize (both slots seeded)
+        let flash_snapshot = ota.flash.data.clone();
+
+        // Simulate boot from ota_1
+        let mut ota2 = EspOtaFlash::new(ota.flash, Partition::Ota1);
+        ota2.mark_valid().unwrap();
+
+        // Flash should be unchanged — mark_valid detected both slots valid, no write needed
+        assert_eq!(
+            ota2.flash.data, flash_snapshot,
+            "mark_valid should not write flash when both slots are valid"
+        );
+    }
+
+    #[test]
+    fn test_mark_valid_repairs_corrupted_active_slot() {
+        // If the running partition's otadata slot has a corrupted CRC,
+        // mark_valid should detect it and rewrite both slots.
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+
+        // Full OTA cycle
+        ota.begin().unwrap();
+        let mut fw = alloc::vec![0xABu8; 256];
+        fw[0] = 0xE9;
+        ota.write(&fw).unwrap();
+        ota.finalize().unwrap();
+
+        // Corrupt slot 1's CRC (ota_1 is the target, which becomes running after reboot)
+        let slot1_crc_offset = (OTADATA_OFFSET + SECTOR_SIZE) as usize + OTA_CRC_OFFSET;
+        ota.flash.data[slot1_crc_offset] ^= 0xFF;
+
+        // Verify it's actually corrupted
+        let (_, valid0, _, valid1) = crate::flash::read_otadata_entries(&mut ota.flash).unwrap();
+        assert!(valid0, "slot 0 should still be valid");
+        assert!(!valid1, "slot 1 should be invalid after CRC corruption");
+
+        // mark_valid should repair
+        let mut ota2 = EspOtaFlash::new(ota.flash, Partition::Ota1);
+        ota2.mark_valid().unwrap();
+
+        // Both slots should be valid now
+        let (_, valid0_after, _, valid1_after) =
+            crate::flash::read_otadata_entries(&mut ota2.flash).unwrap();
+        assert!(valid0_after, "slot 0 should be valid after repair");
+        assert!(valid1_after, "slot 1 should be valid after repair");
+
+        // And detect_running_partition should correctly find Ota1
+        let detected = ota2.detect_running_partition().unwrap();
+        assert_eq!(detected, Partition::Ota1);
+    }
+
+    #[test]
+    fn test_mark_valid_repairs_missing_other_slot() {
+        // If the other slot is erased/invalid, mark_valid should rewrite.
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+
+        // Manually write only slot 1 (simulating old behavior where only one slot was written)
+        set_boot_partition(&mut ota.flash, Partition::Ota1).unwrap();
+        // Now erase slot 0 to simulate it being invalid
+        let sector_base = OTADATA_OFFSET;
+        for b in &mut ota.flash.data[sector_base as usize..(sector_base + SECTOR_SIZE) as usize] {
+            *b = 0xFF;
+        }
+
+        // Verify: slot 0 invalid, slot 1 valid
+        let (_, valid0, _, valid1) = crate::flash::read_otadata_entries(&mut ota.flash).unwrap();
+        assert!(!valid0, "slot 0 should be invalid (erased)");
+        assert!(valid1, "slot 1 should be valid");
+
+        // mark_valid with running=Ota1 should repair by seeding slot 0
+        let mut ota2 = EspOtaFlash::new(ota.flash, Partition::Ota1);
+        ota2.mark_valid().unwrap();
+
+        // Both slots should now be valid
+        let (_, valid0_after, _, valid1_after) =
+            crate::flash::read_otadata_entries(&mut ota2.flash).unwrap();
+        assert!(valid0_after, "slot 0 should be valid after repair");
+        assert!(valid1_after, "slot 1 should still be valid");
+    }
+
+    #[test]
+    fn test_first_ota_seeds_both_otadata_slots() {
+        // Simulate the exact scenario from the bug: first OTA from factory.
+        // After USB flash, otadata is erased. OTA writes to ota_1.
+        // Both slots should be valid after finalize.
+        let flash = MockFlash::new(total_flash_size());
+
+        // Simulate factory boot: create_ota detects both slots = 0 → defaults to Ota0
+        let mut temp = EspOtaFlash::new(flash, Partition::Ota0);
+        let running = temp.detect_running_partition().unwrap();
+        assert_eq!(running, Partition::Ota0, "should default to Ota0 on clean flash");
+        let storage = temp.into_flash();
+
+        // OTA update (running thinks it's Ota0, so target is Ota1)
+        let mut ota = EspOtaFlash::new(storage, running);
+        ota.begin().unwrap();
+        let mut fw = alloc::vec![0xABu8; 256];
+        fw[0] = 0xE9;
+        ota.write(&fw).unwrap();
+        ota.finalize().unwrap();
+
+        // Both slots should be valid after finalize
+        let (entry0, valid0, entry1, valid1) =
+            crate::flash::read_otadata_entries(&mut ota.flash).unwrap();
+        assert!(valid0, "slot 0 should be valid after first OTA");
+        assert!(valid1, "slot 1 should be valid after first OTA");
+
+        let seq_0 = crate::flash::seq_from_entry(&entry0);
+        let seq_1 = crate::flash::seq_from_entry(&entry1);
+        // Slot 1 should have higher seq (boot partition = ota_1)
+        assert!(seq_1 > seq_0, "slot 1 should have higher seq than slot 0");
+
+        // detect_running should find Ota1
+        let detected = ota.detect_running_partition().unwrap();
+        assert_eq!(detected, Partition::Ota1);
+    }
+
+    #[test]
+    fn test_single_corruption_survives_after_seeding() {
+        // After OTA with seeding, corrupt one slot and verify the other still works.
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+
+        // Full OTA
+        ota.begin().unwrap();
+        let mut fw = alloc::vec![0xABu8; 256];
+        fw[0] = 0xE9;
+        ota.write(&fw).unwrap();
+        ota.finalize().unwrap();
+
+        // Corrupt slot 1 entirely (simulate brownout)
+        let slot1_start = (OTADATA_OFFSET + SECTOR_SIZE) as usize;
+        for b in &mut ota.flash.data[slot1_start..slot1_start + OTA_ENTRY_SIZE] {
+            *b = 0x00;
+        }
+
+        // Slot 0 should still be valid and detectable
+        let (_, valid0, _, _) = crate::flash::read_otadata_entries(&mut ota.flash).unwrap();
+        assert!(valid0, "slot 0 should survive slot 1 corruption");
+
+        // detect_running should still find a valid partition via slot 0
+        let detected = ota.detect_running_partition().unwrap();
+        // Slot 0 has seq=1 which maps to Ota0
+        assert_eq!(detected, Partition::Ota0);
     }
 }

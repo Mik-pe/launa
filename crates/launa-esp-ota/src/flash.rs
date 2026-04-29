@@ -142,8 +142,54 @@ pub(crate) fn aligned_write<S: NorFlash>(
     Ok(())
 }
 
+/// Read a single otadata entry from flash.
+fn read_otadata_entry<S: ReadNorFlash>(
+    flash: &mut S,
+    slot: usize,
+) -> Result<[u8; OTA_ENTRY_SIZE], OtaError> {
+    let offset = OTADATA_OFFSET + slot as u32 * SECTOR_SIZE;
+    let mut buf = [0u8; OTA_ENTRY_SIZE];
+    ReadNorFlash::read(flash, offset, &mut buf).map_err(|_| OtaError::FlashError {
+        address: offset,
+    })?;
+    Ok(buf)
+}
+
+/// Check if an otadata entry has a valid CRC.
+/// Matches ESP-IDF `bootloader_common_ota_select_valid`: CRC must match and
+/// ota_seq must not be 0xFFFFFFFF (erased).
+pub(crate) fn otadata_entry_valid(entry: &[u8; OTA_ENTRY_SIZE]) -> bool {
+    let raw_seq = u32_from_le(&entry[OTA_SEQ_OFFSET..OTA_SEQ_OFFSET + OTA_SEQ_SIZE]);
+    if raw_seq == 0xFFFFFFFF {
+        return false;
+    }
+    let stored_crc = u32_from_le(&entry[OTA_CRC_OFFSET..OTA_CRC_OFFSET + OTA_CRC_SIZE]);
+    let computed_crc = crc32_ota(&entry[OTA_SEQ_OFFSET..OTA_SEQ_OFFSET + OTA_SEQ_SIZE]);
+    stored_crc == computed_crc
+}
+
+/// Extract the sequence number from an otadata entry, treating erased (0xFFFFFFFF) as 0.
+pub(crate) fn seq_from_entry(entry: &[u8; OTA_ENTRY_SIZE]) -> u32 {
+    let raw = u32_from_le(&entry[OTA_SEQ_OFFSET..OTA_SEQ_OFFSET + OTA_SEQ_SIZE]);
+    if raw == 0xFFFFFFFF {
+        0
+    } else {
+        raw
+    }
+}
+
+/// Read both otadata entries with CRC validation.
+/// Returns `[(entry, valid), (entry, valid)]` for slots 0 and 1.
+pub(crate) fn read_otadata_entries<S: NorFlash + ReadNorFlash>(
+    flash: &mut S,
+) -> Result<([u8; OTA_ENTRY_SIZE], bool, [u8; OTA_ENTRY_SIZE], bool), OtaError> {
+    let entry0 = read_otadata_entry(flash, 0)?;
+    let entry1 = read_otadata_entry(flash, 1)?;
+    Ok((entry0, otadata_entry_valid(&entry0), entry1, otadata_entry_valid(&entry1)))
+}
+
 /// Read the sequence numbers from the otadata partition.
-/// Returns (seq_0, seq_1) where each is 0 if the slot is empty/erased.
+/// Returns (seq_0, seq_1) where each is 0 if the slot is empty/erased/invalid CRC.
 ///
 /// The two otadata entries reside in separate 4 KiB sectors:
 ///   slot 0 at OTADATA_OFFSET
@@ -151,38 +197,55 @@ pub(crate) fn aligned_write<S: NorFlash>(
 pub(crate) fn read_otadata_sequences<S: NorFlash + ReadNorFlash>(
     flash: &mut S,
 ) -> Result<(u32, u32), OtaError> {
-    // Each otadata entry is in its own 4 KiB sector
-    let mut buf0 = [0u8; OTA_ENTRY_SIZE];
-    ReadNorFlash::read(flash, OTADATA_OFFSET, &mut buf0).map_err(|_| OtaError::FlashError {
-        address: OTADATA_OFFSET,
+    let (entry0, valid0, entry1, valid1) = read_otadata_entries(flash)?;
+    let seq_0 = if valid0 { seq_from_entry(&entry0) } else { 0 };
+    let seq_1 = if valid1 { seq_from_entry(&entry1) } else { 0 };
+    Ok((seq_0, seq_1))
+}
+
+/// Build a 32-byte `esp_ota_select_entry_t` for the given sequence number.
+fn build_otadata_entry(seq: u32) -> [u8; OTA_ENTRY_SIZE] {
+    let mut entry = [0xFFu8; OTA_ENTRY_SIZE];
+    entry[OTA_SEQ_OFFSET..OTA_SEQ_OFFSET + OTA_SEQ_SIZE].copy_from_slice(&seq.to_le_bytes());
+    let crc = crc32_ota(&entry[OTA_SEQ_OFFSET..OTA_SEQ_OFFSET + OTA_SEQ_SIZE]);
+    entry[OTA_CRC_OFFSET..OTA_CRC_OFFSET + OTA_CRC_SIZE].copy_from_slice(&crc.to_le_bytes());
+    entry
+}
+
+/// Write an otadata entry to a specific slot via read-modify-write.
+fn write_otadata_slot<S: NorFlash + ReadNorFlash>(
+    flash: &mut S,
+    slot: usize,
+    entry: &[u8; OTA_ENTRY_SIZE],
+) -> Result<(), OtaError> {
+    let slot_offset = OTADATA_OFFSET + slot as u32 * SECTOR_SIZE;
+    let mut sector_buf = [0xFFu8; SECTOR_SIZE as usize];
+    ReadNorFlash::read(flash, slot_offset, &mut sector_buf).map_err(|_| OtaError::FlashError {
+        address: slot_offset,
     })?;
-
-    let slot1_offset = OTADATA_OFFSET + SECTOR_SIZE;
-    let mut buf1 = [0u8; OTA_ENTRY_SIZE];
-    ReadNorFlash::read(flash, slot1_offset, &mut buf1).map_err(|_| OtaError::FlashError {
-        address: slot1_offset,
-    })?;
-
-    // Sequence number is at offset 0, little-endian
-    let raw_0 = u32_from_le(&buf0[OTA_SEQ_OFFSET..OTA_SEQ_OFFSET + OTA_SEQ_SIZE]);
-    let raw_1 = u32_from_le(&buf1[OTA_SEQ_OFFSET..OTA_SEQ_OFFSET + OTA_SEQ_SIZE]);
-
-    // Treat 0xFFFFFFFF (erased flash) as empty/0
-    fn sanitize(raw: u32) -> u32 {
-        if raw == 0xFFFFFFFF {
-            0
-        } else {
-            raw
-        }
-    }
-
-    Ok((sanitize(raw_0), sanitize(raw_1)))
+    sector_buf[..OTA_ENTRY_SIZE].copy_from_slice(entry);
+    flash
+        .erase(slot_offset, slot_offset + SECTOR_SIZE)
+        .map_err(|_| OtaError::FlashError {
+            address: slot_offset,
+        })?;
+    flash
+        .write(slot_offset, &sector_buf)
+        .map_err(|_| OtaError::FlashError {
+            address: slot_offset,
+        })?;
+    Ok(())
 }
 
 /// Write an otadata entry to set the boot partition.
 ///
 /// The bootloader compares sequence numbers and boots from the slot
 /// with the higher value. We increment the target slot's sequence.
+///
+/// If the other otadata slot is empty/invalid, we also seed it with a valid
+/// entry for the complementary partition. This ensures both slots are always
+/// valid after an OTA, so a single-sector corruption cannot leave both invalid
+/// (which would cause a silent fallback to the factory partition).
 ///
 /// Format matches ESP-IDF `esp_ota_select_entry_t`:
 /// - ota_seq at bytes 0-3 (little-endian)
@@ -193,7 +256,9 @@ pub(crate) fn set_boot_partition<S: NorFlash + ReadNorFlash>(
     flash: &mut S,
     partition: Partition,
 ) -> Result<(), OtaError> {
-    let (seq_0, seq_1) = read_otadata_sequences(flash)?;
+    let (entry0, valid0, entry1, valid1) = read_otadata_entries(flash)?;
+    let seq_0 = if valid0 { seq_from_entry(&entry0) } else { 0 };
+    let seq_1 = if valid1 { seq_from_entry(&entry1) } else { 0 };
 
     // ESP-IDF bootloader maps ota_seq to partition via:
     //   ota_slot = (ota_seq - 1) % app_count
@@ -218,54 +283,50 @@ pub(crate) fn set_boot_partition<S: NorFlash + ReadNorFlash>(
     // Ensure it maps correctly (paranoia check)
     debug_assert_eq!((new_seq - 1) % 2, target_index);
 
-    // Build esp_ota_select_entry_t (32 bytes)
-    let mut entry = [0xFFu8; OTA_ENTRY_SIZE];
-    // ota_seq at bytes 0-3 (little-endian)
-    entry[OTA_SEQ_OFFSET..OTA_SEQ_OFFSET + OTA_SEQ_SIZE].copy_from_slice(&new_seq.to_le_bytes());
-    // seq_label at bytes 4-23: leave as 0xFF (erased)
-    // ota_state at bytes 24-27: leave as 0xFFFFFFFF (ESP_OTA_IMG_UNDEFINED)
-    // crc at bytes 28-31: CRC-32/ISO-HDLP of ota_seq (4 bytes)
-    let crc = crc32_ota(&entry[OTA_SEQ_OFFSET..OTA_SEQ_OFFSET + OTA_SEQ_SIZE]);
-    entry[OTA_CRC_OFFSET..OTA_CRC_OFFSET + OTA_CRC_SIZE].copy_from_slice(&crc.to_le_bytes());
+    // Write the target partition's entry to its otadata slot
+    let target_slot = partition.index();
+    let target_entry = build_otadata_entry(new_seq);
+    write_otadata_slot(flash, target_slot, &target_entry)?;
 
-    // Each otadata slot is in its own 4 KiB sector
-    let slot_offset = OTADATA_OFFSET + (partition.index() as u32 * SECTOR_SIZE);
-
-    // Read-modify-write the sector to preserve any other data
-    let sector_base = slot_offset; // slot is at the start of its sector
-    let mut sector_buf = [0xFFu8; SECTOR_SIZE as usize];
-    ReadNorFlash::read(flash, sector_base, &mut sector_buf).map_err(|_| OtaError::FlashError {
-        address: sector_base,
-    })?;
-
-    let entry_offset = (slot_offset - sector_base) as usize;
-    sector_buf[entry_offset..entry_offset + OTA_ENTRY_SIZE].copy_from_slice(&entry);
-
-    flash
-        .erase(sector_base, sector_base + SECTOR_SIZE)
-        .map_err(|_| OtaError::FlashError {
-            address: sector_base,
-        })?;
-
-    flash
-        .write(sector_base, &sector_buf)
-        .map_err(|_| OtaError::FlashError {
-            address: sector_base,
-        })?;
+    // Seed the other slot if it's empty/invalid, so both slots are always valid.
+    let other_slot = 1 - target_slot;
+    let other_valid = if other_slot == 0 { valid0 } else { valid1 };
+    if !other_valid {
+        // Find a sequence for the complementary partition that is lower than new_seq
+        let other_index = other_slot as u32;
+        let other_seq = if max_seq == 0 {
+            // First ever OTA: other partition has no prior entry.
+            // Use the complementary starting seq (1 for Ota0, 2 for Ota1).
+            other_index + 1
+        } else {
+            // Use the previous max seq (which mapped to the other partition or
+            // find a seq < new_seq for the other partition).
+            let mut candidate = new_seq - 1;
+            while candidate > 0 && (candidate - 1) % 2 != other_index {
+                candidate -= 1;
+            }
+            if candidate == 0 {
+                other_index + 1
+            } else {
+                candidate
+            }
+        };
+        let other_entry = build_otadata_entry(other_seq);
+        write_otadata_slot(flash, other_slot, &other_entry)?;
+    }
 
     Ok(())
 }
 
 /// Determine which partition is currently booted by reading otadata.
 ///
-/// The bootloader picks the otadata slot with the higher valid sequence number,
-/// then maps it to a partition via `(ota_seq - 1) % 2`.
+/// Only considers slots with valid CRCs, matching the ESP-IDF bootloader behavior.
+/// Picks the slot with the higher valid sequence number, then maps it to a
+/// partition via `(ota_seq - 1) % 2`.
 pub(crate) fn detect_running_partition<S: NorFlash + ReadNorFlash>(
     flash: &mut S,
 ) -> Result<Partition, OtaError> {
     let (seq_0, seq_1) = read_otadata_sequences(flash)?;
-    // The bootloader picks the slot with the higher sequence.
-    // We assume the CRC is valid (otherwise the device wouldn't have booted).
     let running_seq = if seq_1 > seq_0 { seq_1 } else { seq_0 };
     if running_seq == 0 {
         // No valid otadata — default to Ota0
