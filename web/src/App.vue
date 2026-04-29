@@ -97,7 +97,7 @@ function handleTempRange(val: string): void {
 </script>
 
 <template>
-  <div class="min-h-screen bg-neutral-950 pb-[env(safe-area-inset-bottom)]">
+  <div class="min-h-screen bg-neutral-950 overflow-x-hidden pb-[env(safe-area-inset-bottom)]">
     <ConnectionBar
       :connection-info="connectionInfo"
       :broker-url="settings.brokerUrl"
