@@ -58,30 +58,65 @@ mod rate_log;
 mod self_test;
 
 /// Custom panic handler: logs panic location, stores crash info to NVS,
-/// waits 500ms for log flush, then triggers a software reset.
+/// waits for UART flush, then triggers a software reset.
 /// Replaces esp-backtrace's default infinite loop to allow automatic recovery
 /// from panics. Crash info is published via MQTT on next boot.
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     // Write directly to UART0 registers — don't use the logger since
     // the panic might have occurred while holding the logger lock.
-    let msg = core::format_args!("PANIC: {}\n", info);
-    let mut buf = [0u8; 256];
-    let mut writer = SliceWrite::new(&mut buf);
-    let _ = core::fmt::Write::write_fmt(&mut writer, msg);
-    let written = writer.len();
 
-    uart_raw::write_bytes(&buf[..written]);
-    uart_raw::flush();
+    // Print heap free first — uses only stack, no allocation.
+    let heap_free = esp_alloc::HEAP.free();
+    {
+        let heap_msg = core::format_args!("\nHEAP free: {} bytes\n", heap_free);
+        let mut heap_buf = [0u8; 48];
+        let mut w = SliceWrite::new(&mut heap_buf);
+        let _ = core::fmt::Write::write_fmt(&mut w, heap_msg);
+        let heap_len = w.len();
+        uart_raw::write_bytes(&heap_buf[..heap_len]);
+        uart_raw::flush();
+    }
 
-    // Write crash info to NVS (pre-check prevents repeated writes in crash loops)
-    let panic_msg = core::str::from_utf8(&buf[..written]).unwrap_or("PANIC");
-    let reason = crash_info::CrashReason::classify(panic_msg);
-    crash_info::write_crash_info(reason, panic_msg);
+    // Print location — short format (filename only) to avoid truncation.
+    if let Some(loc) = info.location() {
+        let file = loc.file();
+        let filename = file.rsplit('/').next().unwrap_or(file);
+        let loc_msg = core::format_args!(
+            "PANIC {}:{}\n",
+            filename,
+            loc.line(),
+        );
+        let mut loc_buf = [0u8; 80];
+        let mut w = SliceWrite::new(&mut loc_buf);
+        let _ = core::fmt::Write::write_fmt(&mut w, loc_msg);
+        let loc_len = w.len();
+        uart_raw::write_bytes(&loc_buf[..loc_len]);
+        uart_raw::flush();
+    }
 
-    // Busy-wait ~500ms to allow UART TX to fully transmit.
-    /// Approximate iterations for ~500ms delay at 240 MHz with loop overhead.
-    const PANIC_DELAY_ITERATIONS: u32 = 5_000_000;
+    // Print full panic message (may be long for OOM).
+    // Use heap check: if heap is zero/critically low, skip the full
+    // message since format! would re-trigger OOM → infinite recursion.
+    if heap_free > 256 {
+        let msg = core::format_args!("MSG: {}\n", info);
+        let mut buf = [0u8; 1024];
+        let mut writer = SliceWrite::new(&mut buf);
+        let _ = core::fmt::Write::write_fmt(&mut writer, msg);
+        let written = writer.len();
+        uart_raw::write_bytes(&buf[..written]);
+        // Flush twice to ensure all bytes are sent before the delay
+        uart_raw::flush();
+        uart_raw::flush();
+
+        // Write crash info to NVS (pre-check prevents repeated writes in crash loops)
+        let panic_msg = core::str::from_utf8(&buf[..written]).unwrap_or("PANIC");
+        let reason = crash_info::CrashReason::classify(panic_msg);
+        crash_info::write_crash_info(reason, panic_msg);
+    }
+
+    // Busy-wait ~1s to allow UART TX to fully transmit.
+    const PANIC_DELAY_ITERATIONS: u32 = 10_000_000;
     let mut counter: u32 = 0;
     while counter < PANIC_DELAY_ITERATIONS {
         counter += 1;
@@ -712,22 +747,16 @@ async fn process_uart_frames(
 async fn init_wifi(
     spawner: Spawner,
     wifi_peripheral: esp_hal::peripherals::WIFI<'static>,
-    sw_int1: esp_hal::interrupt::software::SoftwareInterrupt<'static, 1>,
     rng: esp_hal::rng::Rng,
-    ssid: &str,
-    password: &str,
-    hostname: &str,
-    mqtt_config: crate::wifi::MqttConfigArgs,
+    app_config: &config::AppConfig,
 ) -> crate::wifi::WifiStack {
     match wifi::WifiStack::connect(
         spawner,
         wifi_peripheral,
-        sw_int1,
         rng,
-        ssid,
-        password,
-        hostname,
-        mqtt_config,
+        &app_config.wifi_ssid,
+        &app_config.wifi_password,
+        &app_config.device_id,
     )
     .await
     {
@@ -810,7 +839,6 @@ async fn main(spawner: Spawner) {
     let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
     let sw_int =
         esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
-    let sw_int1 = sw_int.software_interrupt1;
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
     // Configure TIMG1 as independent hardware watchdog (30s timeout)
@@ -891,31 +919,51 @@ async fn main(spawner: Spawner) {
 
     let uart_transport = transport::Rs485Transport::new(uart, None);
 
-    // Build MQTT config args for net_bootstrap (runs on InterruptExecutor)
-    let mqtt_config_args = crate::wifi::MqttConfigArgs {
-        device_id: app_config.device_id.clone(),
-        mqtt_host: app_config.mqtt_host.clone(),
-        mqtt_port: app_config.mqtt_port,
-        mqtt_user: app_config.mqtt_user.clone(),
-        mqtt_password: app_config.mqtt_password.clone(),
-        boot_id: boot_id(),
-    };
-
     let wifi_stack = init_wifi(
         spawner,
         peripherals.WIFI,
-        sw_int1,
         esp_hal::rng::Rng::new(),
-        &app_config.wifi_ssid,
-        &app_config.wifi_password,
-        &app_config.device_id,
-        mqtt_config_args,
+        &app_config,
     )
     .await;
 
+    // Create MqttClient on the stack. Socket buffers inside are pre-allocated
+    // via mk_static! in new() — only the struct itself is stack-local, and it
+    // moves into the embassy task on spawn.
+    let mut mqtt = mqtt_client::MqttClient::new(wifi_stack.stack, &app_config, boot_id());
+
+    // Connect to MQTT broker on the ThreadModeExecutor. The heavy formatting
+    // in connect/discovery code runs here to avoid overflowing the shared
+    // interrupt/task stack on ESP32/Xtensa.
+    info!("Connecting to MQTT broker...");
+    {
+        let mut attempt = 0u32;
+        loop {
+            attempt += 1;
+            match mqtt.connect().await {
+                Ok(()) => break,
+                Err(e) => {
+                    let backoff = launa_core::network::backoff_secs(attempt);
+                    error!(
+                        "MQTT connect attempt {} failed: {:?}, retrying in {}s",
+                        attempt, e, backoff
+                    );
+                    if attempt >= 10 {
+                        error!("MQTT connect failed after {} attempts, resetting", attempt);
+                        esp_hal::system::software_reset();
+                    }
+                    Timer::after(Duration::from_secs(backoff)).await;
+                }
+            }
+        }
+    }
+    if let Err(e) = mqtt.post_connect_publish(false).await {
+        warn!("Post-connect publish failed: {:?}", e);
+    }
+
     // Publish crash alarm from previous boot if present.
-    // MQTT is now connected inside net_bootstrap on the InterruptExecutor,
-    // so we send via ALERT_CHANNEL instead of publishing directly.
+    // MQTT is now connected, so we send via ALERT_CHANNEL for the mqtt_task
+    // to publish.
     if let Some(ref crash) = pending_crash_alarm {
         let alarm_json = crash_info::crash_alarm_json(crash, FIRMWARE_VERSION);
         let _ = ALERT_CHANNEL.try_send(Vec::from(alarm_json.as_bytes()));
@@ -925,8 +973,8 @@ async fn main(spawner: Spawner) {
 
     validate_firmware(&mut ota);
 
-    // Spawn background tasks (uart_task on ThreadModeExecutor;
-    // mqtt_task is already spawned by net_bootstrap on InterruptExecutor)
+    // Spawn background tasks on the ThreadModeExecutor.
+    spawner.spawn(mqtt_task::mqtt_task(mqtt).unwrap());
     spawner.spawn(uart_task(uart_transport).unwrap());
 
     info!("Entering main event loop");
