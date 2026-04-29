@@ -646,9 +646,10 @@ impl MqttClient {
             }
 
             // Explicit yield before attempting a socket read. Both mqtt_task
-            // and net_task (smoltcp poll) share the same InterruptExecutor and
-            // are cooperatively scheduled. Without this yield, a tight loop of
-            // socket reads could starve net_task, preventing packet processing.
+            // and net_task (smoltcp poll) share the same ThreadModeExecutor
+            // and are cooperatively scheduled. Without this yield, a tight
+            // loop of socket reads could starve net_task, preventing packet
+            // processing.
             Timer::after(Duration::from_millis(1)).await;
 
             // Race the socket read against a keep-alive timer. This ensures
