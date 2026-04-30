@@ -1007,6 +1007,22 @@ async fn main(spawner: Spawner) {
 
     let tick_interval = Duration::from_secs(1);
 
+    // TEMP: Spam registration frame to test if spa responds
+    {
+        let uart_tx = UART_TX_CHANNEL.sender();
+        let reg_frame = launa_protocol::frame::FrameEncoder::encode(
+            [0xFE, 0xBF],
+            &[0x01, 0x02, 0xE3, 0x56],
+        ).expect("encode failed");
+        warn!("SPAM: sending registration frame 30 times, 1s apart...");
+        for i in 0..30 {
+            uart_tx.send(reg_frame.clone()).await;
+            warn!("SPAM: sent reg frame {}", i + 1);
+            Timer::after(Duration::from_secs(1)).await;
+        }
+        warn!("SPAM: done. Entering normal main loop.");
+    }
+
     // Periodic UART TX test: send a registration probe every 15s when no bytes
     // have been received, to verify the UART TX path works. This also acts as
     // a keep-alive ping on the RS-485 bus.
