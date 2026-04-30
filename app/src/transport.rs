@@ -11,6 +11,13 @@ use esp_hal::Async;
 use launa_hal::transport::{Transport, TransportError};
 use log::{trace, warn};
 
+/// Delay before releasing DE after flush failure, allowing the shift register
+/// to drain at any practical baud rate (~100 bit-times at 115200).
+const DE_SAFETY_DELAY_US: u64 = 1000;
+
+/// Default DE assert-to-data delay in microseconds.
+const DE_ASSERT_DELAY_US: u64 = 50;
+
 /// RS-485 half-duplex UART transport for Balboa spa communication.
 ///
 /// Wraps an async UART and optional DE (Driver Enable) pin for RS-485
@@ -20,18 +27,61 @@ use log::{trace, warn};
 pub struct Rs485Transport {
     uart: Uart<'static, Async>,
     de_pin: Option<Output<'static>>,
+    /// Microseconds to wait after asserting DE before sending data.
+    de_assert_delay_us: u64,
+}
+
+/// RAII guard that ensures DE pin is set LOW when dropped, even if write()
+/// returns early due to an error. Prevents the RS-485 bus from being held
+/// in transmit mode indefinitely.
+struct DeGuard<'a> {
+    de: Option<&'a mut Output<'static>>,
+    released: bool,
+}
+
+impl DeGuard<'_> {
+    /// Explicitly release the DE pin (set LOW) and mark as released so
+    /// Drop does not try again.
+    fn release(&mut self) {
+        if let Some(de) = self.de.as_mut() {
+            de.set_low();
+        }
+        self.released = true;
+    }
+}
+
+impl Drop for DeGuard<'_> {
+    fn drop(&mut self) {
+        if !self.released {
+            if let Some(de) = self.de.as_mut() {
+                de.set_low();
+            }
+        }
+    }
 }
 
 impl Rs485Transport {
     /// Create a new RS-485 transport.
     ///
-    /// - `uart`: An async UART peripheral configured for 115200 baud.
+    /// - `uart`: An async UART peripheral configured for 19200 baud.
     /// - `de_pin`: Optional GPIO pin connected to the RS-485 transceiver's
     ///   DE (Driver Enable) input. When `None`, DE pin control is skipped
-    ///   (useful for loopback testing or direct UART connections).
+    ///   (useful for auto-direction transceivers or direct UART connections).
     pub fn new(uart: Uart<'static, Async>, de_pin: Option<AnyPin<'static>>) -> Self {
         let de = de_pin.map(|pin| Output::new(pin, Level::Low, OutputConfig::default()));
-        Rs485Transport { uart, de_pin: de }
+        Rs485Transport {
+            uart,
+            de_pin: de,
+            de_assert_delay_us: DE_ASSERT_DELAY_US,
+        }
+    }
+
+    /// Set the DE assert-to-data delay in microseconds.
+    ///
+    /// Some transceivers need longer to enable the driver after DE goes HIGH;
+    /// others enable in <1 µs. Adjust to match your transceiver's datasheet.
+    pub fn set_de_assert_delay(&mut self, delay_us: u64) {
+        self.de_assert_delay_us = delay_us;
     }
 }
 
@@ -44,60 +94,69 @@ impl Transport for Rs485Transport {
     }
 
     async fn write(&mut self, data: &[u8]) -> Result<(), TransportError> {
+        // RAII guard ensures DE is released even on early return due to errors.
+        let mut guard = DeGuard {
+            de: self.de_pin.as_mut(),
+            released: false,
+        };
+
         // Assert DE pin for transmit
-        if let Some(ref mut de) = self.de_pin {
+        if let Some(de) = guard.de.as_mut() {
             de.set_high();
-            Timer::after(Duration::from_micros(50)).await;
+            if self.de_assert_delay_us > 0 {
+                Timer::after(Duration::from_micros(self.de_assert_delay_us)).await;
+            }
         }
 
         // For auto-direction RS-485 transceivers (no DE pin), the driver
         // enables on the start bit's falling edge — but the turn-on delay
-        // can corrupt that first byte. Send a throwaway preamble byte so the
+        // can corrupt that first byte. Send a 0x00 preamble byte so the
         // real data starts with the driver already enabled.
         //
-        // This relies on the second write() landing in the TX FIFO within
-        // one stop-bit time (~52 µs at 19200 baud) so the hardware transmits
-        // both as a contiguous bitstream with no idle gap. An ISR or task
-        // switch exceeding that window could cause a gap, re-disabling the
-        // driver and corrupting the first real byte.
-        if self.de_pin.is_none() && !data.is_empty() {
-            let preamble = [0x00];
+        // The preamble and data are merged into a single buffer and written
+        // in one loop to eliminate the timing gap between two separate write
+        // calls. A preemption between writes could let the transceiver
+        // disable and re-enable, corrupting the first real byte.
+        if guard.de.is_none() && !data.is_empty() {
+            // Stack-allocated buffer: 1 preamble byte + data.
+            // heapless is already a dependency; use a Vec to avoid fixed size.
+            let mut buf = heapless::Vec::<u8, 256>::new();
+            buf.push(0x00).ok(); // preamble — discard if buf is full (impossible at 1 byte)
+            buf.extend_from_slice(data).ok(); // truncate if data > 255 bytes
+            let merged = &buf[..];
             let mut written = 0;
-            while written < preamble.len() {
+            while written < merged.len() {
                 let n = self
                     .uart
-                    .write(&preamble[written..])
+                    .write_async(&merged[written..])
+                    .await
                     .map_err(|_e| TransportError::Io)?;
                 written += n;
             }
-            // Do NOT flush — keep the driver enabled for the actual data.
+        } else {
+            // Write all bytes using the async API
+            let mut written = 0;
+            while written < data.len() {
+                let n = self
+                    .uart
+                    .write_async(&data[written..])
+                    .await
+                    .map_err(|_e| TransportError::Io)?;
+                written += n;
+            }
         }
 
-        // Write all bytes in a single DE assertion window
-        let mut written = 0;
-        while written < data.len() {
-            let n = self
-                .uart
-                .write(&data[written..])
-                .map_err(|_e| TransportError::Io)?;
-            written += n;
-        }
+        // Async flush: yields to the executor while waiting for the TX FIFO
+        // and shift register to drain, instead of blocking the CPU.
+        let flush_result = self.uart.flush_async().await;
 
-        // Flush TX FIFO + shift register to ensure all bytes are on the wire
-        // before releasing DE pin. esp-hal flush() blocks until TX is complete.
-        let flush_result = self.uart.flush();
-
-        // Always release DE pin: on success, TX is confirmed complete; on
-        // failure, a safety delay gives the hardware shift register time to
-        // finish draining before we drop DE.
-        if let Some(ref mut de) = self.de_pin {
+        // Always release DE pin via the guard.
+        if guard.de.is_some() {
             if flush_result.is_err() {
                 warn!("UART flush failed — safety delay before releasing DE pin");
-                // 1 ms is enough for the shift register to drain at any
-                // practical baud rate (≈100 bit-times at 115200).
-                Timer::after(Duration::from_millis(1)).await;
+                Timer::after(Duration::from_micros(DE_SAFETY_DELAY_US)).await;
             }
-            de.set_low();
+            guard.release();
         }
 
         if let Err(_e) = flush_result {
@@ -109,6 +168,9 @@ impl Transport for Rs485Transport {
     }
 
     async fn flush(&mut self) -> Result<(), TransportError> {
-        self.uart.flush().map_err(|_| TransportError::Io)
+        self.uart
+            .flush_async()
+            .await
+            .map_err(|_| TransportError::Io)
     }
 }
