@@ -208,20 +208,6 @@ impl<'a> SpaApp<'a> {
     ///
     /// Called after repeated registration failures (timeout waiting for
     /// ClientIdAssignment). XORs the attempt counter into both hash bytes
-    /// so subsequent ID requests use a different identity. The counter is
-    /// NOT reset, ensuring each rotation produces a unique hash.
-    fn rotate_client_hash(&mut self) {
-        let attempt = self.failed_registration_attempts;
-        self.client_hash[0] ^= attempt;
-        self.client_hash[1] ^= attempt.wrapping_mul(0x37);
-        log::warn!(
-            "REG: rotating client hash to {:02X}{:02X} after {} failed attempts",
-            self.client_hash[0],
-            self.client_hash[1],
-            attempt,
-        );
-    }
-
     /// Force-publish the current state, bypassing change detection.
     ///
     /// Used when a mode toggle (self-test, sniff) changes the `self_test` or
@@ -456,9 +442,6 @@ impl<'a> SpaApp<'a> {
             if let Some(started) = self.registration_started_at {
                 if now.elapsed_since(started) >= REGISTRATION_TIMEOUT_MS {
                     self.failed_registration_attempts += 1;
-                    if self.failed_registration_attempts >= REGISTRATION_HASH_ROTATE_THRESHOLD {
-                        self.rotate_client_hash();
-                    }
                     actions.push(AppAction::PublishAlert {
                         level: String::from("warn"),
                         message: String::from("registration_timeout"),
@@ -817,26 +800,7 @@ mod tests {
             app.tick(); // triggers timeout, increments counter
         }
 
-        // Hash should have changed from the original
-        assert_ne!(app.client_hash, original_hash);
-    }
-
-    #[test]
-    fn test_hash_does_not_rotate_on_few_failures() {
-        let (clock, app) = make_app_with_clock();
-        let mut app = app;
-        let original_hash = app.client_hash;
-
-        // Simulate 9 failed attempts (below threshold of 10)
-        for _ in 0..9 {
-            app.process_frame(&new_client_query_frame());
-            clock.advance_ms(6_000);
-            app.tick();
-        }
-
-        // Hash should NOT have changed yet
-        assert_eq!(app.client_hash, original_hash);
-        assert_eq!(app.failed_registration_attempts, 9);
+        assert_eq!(app.failed_registration_attempts, 10);
     }
 
     #[test]
@@ -858,31 +822,6 @@ mod tests {
 
         assert!(app.is_registered());
         assert_eq!(app.failed_registration_attempts, 0);
-    }
-
-    #[test]
-    fn test_hash_rotates_multiple_times() {
-        let (clock, app) = make_app_with_clock();
-        let mut app = app;
-        let original_hash = app.client_hash;
-
-        // First rotation after 10 failures
-        for _ in 0..10 {
-            app.process_frame(&new_client_query_frame());
-            clock.advance_ms(6_000);
-            app.tick();
-        }
-        let hash_after_first = app.client_hash;
-        assert_ne!(hash_after_first, original_hash);
-
-        // Second rotation after another 10 failures
-        for _ in 0..10 {
-            app.process_frame(&new_client_query_frame());
-            clock.advance_ms(6_000);
-            app.tick();
-        }
-        assert_ne!(app.client_hash, hash_after_first);
-        assert_ne!(app.client_hash, original_hash);
     }
 
     #[test]
