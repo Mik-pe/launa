@@ -131,6 +131,11 @@ impl<'a> SpaApp<'a> {
         self.client_id
     }
 
+    /// The current client hash used for RS-485 registration.
+    pub fn client_hash(&self) -> [u8; 2] {
+        self.client_hash
+    }
+
     /// The last received status, if any.
     pub fn last_status(&self) -> Option<&StatusUpdate> {
         self.last_status.as_ref()
