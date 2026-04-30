@@ -325,63 +325,71 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                                     // Handle Ready frame: send any queued registration response
                                     // Note: Ready can be 10 BF 06 (unregistered) or <ID> BF 06 (registered).
                                     // We match any XX BF with payload 06 when a reg response is pending.
-                                    else if (reg_state == 1 || reg_state == 3)
-                                        && frame.message_type[1] == 0xBF
-                                        && frame.payload.first() == Some(&0x06)
-                                    {
-                                        if reg_state == 1 {
-                                            // Send ID request now (bus is free)
-                                            let hash_h = CLIENT_HASH_H.load(Ordering::Relaxed) as u8;
-                                            let hash_l = CLIENT_HASH_L.load(Ordering::Relaxed) as u8;
-                                            match launa_protocol::frame::FrameEncoder::encode(
-                                                [0xFE, 0xBF],
-                                                &[0x01, 0x02, hash_h, hash_l],
-                                            ) {
-                                                Ok(encoded) => {
-                                                    if let Err(_) =
-                                                        transport.write(&encoded).await
-                                                    {
-                                                        rate_error!(
-                                                            UART_WRITE_ERR,
-                                                            "UART write error: reg request"
-                                                        );
-                                                    } else {
-                                                        REG_FAST_STATE.store(2, Ordering::Relaxed);
-                                                        warn!(
-                                                            "REG fast-path: sent ID request {:02X}{:02X}",
-                                                            hash_h, hash_l
-                                                        );
+                                    else if reg_state == 1 || reg_state == 3 {
+                                        // Diagnostic: log every frame while waiting for Ready
+                                        warn!(
+                                            "REG fast-path: checking frame {:02X}{:02X} payload {:02X?} (state={})",
+                                            frame.message_type[0], frame.message_type[1],
+                                            frame.payload.first(),
+                                            reg_state
+                                        );
+                                        if frame.message_type[1] == 0xBF
+                                            && frame.payload.first() == Some(&0x06)
+                                        {
+                                            if reg_state == 1 {
+                                                // Send ID request now (bus is free)
+                                                let hash_h = CLIENT_HASH_H.load(Ordering::Relaxed) as u8;
+                                                let hash_l = CLIENT_HASH_L.load(Ordering::Relaxed) as u8;
+                                                match launa_protocol::frame::FrameEncoder::encode(
+                                                    [0xFE, 0xBF],
+                                                    &[0x01, 0x02, hash_h, hash_l],
+                                                ) {
+                                                    Ok(encoded) => {
+                                                        if let Err(_) =
+                                                            transport.write(&encoded).await
+                                                        {
+                                                            rate_error!(
+                                                                UART_WRITE_ERR,
+                                                                "UART write error: reg request"
+                                                            );
+                                                        } else {
+                                                            REG_FAST_STATE.store(2, Ordering::Relaxed);
+                                                            warn!(
+                                                                "REG fast-path: sent ID request {:02X}{:02X}",
+                                                                hash_h, hash_l
+                                                            );
+                                                        }
+                                                    }
+                                                    Err(_) => {
+                                                        warn!("REG fast-path: encode failed");
                                                     }
                                                 }
-                                                Err(_) => {
-                                                    warn!("REG fast-path: encode failed");
-                                                }
-                                            }
-                                        } else if reg_state == 3 {
-                                            // Send ACK now (bus is free)
-                                            let id = PENDING_CLIENT_ID.load(Ordering::Relaxed) as u8;
-                                            match launa_protocol::frame::FrameEncoder::encode(
-                                                [id, 0xBF],
-                                                &[0x03],
-                                            ) {
-                                                Ok(encoded) => {
-                                                    if let Err(_) =
-                                                        transport.write(&encoded).await
-                                                    {
-                                                        rate_error!(
-                                                            UART_WRITE_ERR,
-                                                            "UART write error: reg ack"
-                                                        );
-                                                    } else {
-                                                        REG_FAST_STATE.store(4, Ordering::Relaxed);
-                                                        info!(
-                                                            "REG fast-path: registered with ID 0x{:02X}",
-                                                            id
-                                                        );
+                                            } else if reg_state == 3 {
+                                                // Send ACK now (bus is free)
+                                                let id = PENDING_CLIENT_ID.load(Ordering::Relaxed) as u8;
+                                                match launa_protocol::frame::FrameEncoder::encode(
+                                                    [id, 0xBF],
+                                                    &[0x03],
+                                                ) {
+                                                    Ok(encoded) => {
+                                                        if let Err(_) =
+                                                            transport.write(&encoded).await
+                                                        {
+                                                            rate_error!(
+                                                                UART_WRITE_ERR,
+                                                                "UART write error: reg ack"
+                                                            );
+                                                        } else {
+                                                            REG_FAST_STATE.store(4, Ordering::Relaxed);
+                                                            info!(
+                                                                "REG fast-path: registered with ID 0x{:02X}",
+                                                                id
+                                                            );
+                                                        }
                                                     }
-                                                }
-                                                Err(_) => {
-                                                    warn!("REG fast-path: ack encode failed");
+                                                    Err(_) => {
+                                                        warn!("REG fast-path: ack encode failed");
+                                                    }
                                                 }
                                             }
                                         }
