@@ -50,6 +50,25 @@ impl Transport for Rs485Transport {
             Timer::after(Duration::from_micros(50)).await;
         }
 
+        // For auto-direction RS-485 transceivers (no DE pin), the first byte
+        // is often corrupted because the auto-direction circuit needs the
+        // start bit's falling edge to enable the driver. Send a 0x00 preamble
+        // as part of the same write to "prime" the circuit. 0x00 has the
+        // longest LOW period (start bit + 8 data bits = 9 bit-times LOW),
+        // giving the circuit maximum time to enable.
+        if self.de_pin.is_none() && !data.is_empty() {
+            let preamble = [0x00];
+            let mut written = 0;
+            while written < preamble.len() {
+                let n = self
+                    .uart
+                    .write(&preamble[written..])
+                    .map_err(|_e| TransportError::Io)?;
+                written += n;
+            }
+            // Do NOT flush — keep the driver enabled for the actual data.
+        }
+
         // Write all bytes in a single DE assertion window
         let mut written = 0;
         while written < data.len() {
