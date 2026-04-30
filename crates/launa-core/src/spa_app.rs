@@ -12,7 +12,7 @@ use launa_hal::{Clock, Timestamp};
 use launa_protocol::command::Command;
 use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
 use launa_protocol::frame::{Frame, FrameEncoder};
-use launa_protocol::registration::{RegistrationAction, RegistrationStateMachine};
+use launa_protocol::registration::{RegistrationAction, RegistrationState, RegistrationStateMachine};
 use launa_protocol::status::StatusUpdate;
 
 use crate::actions::AppAction;
@@ -22,7 +22,8 @@ use crate::rate_log::RateLog;
 use crate::timers::{HoldModeTimer, PumpTimerManager};
 use crate::types::{
     DIAGNOSTICS_INTERVAL_MS, MAX_COMMAND_QUEUE, REGISTRATION_HASH_ROTATE_THRESHOLD,
-    REGISTRATION_TIMEOUT_MS, STALE_PROBE_INTERVAL_MS, STALE_THRESHOLD_MS,
+    REGISTRATION_PROBE_INTERVAL_MS, REGISTRATION_TIMEOUT_MS, STALE_PROBE_INTERVAL_MS,
+    STALE_THRESHOLD_MS,
 };
 
 /// The core application logic, extracted from the ESP32 main loop.
@@ -81,6 +82,15 @@ pub struct SpaApp<'a> {
     /// REGISTRATION_HASH_ROTATE_THRESHOLD attempts, the hash is rotated
     /// to try a different identity on the bus.
     failed_registration_attempts: u8,
+
+    /// Timestamp of the last frame received while unregistered.
+    /// Used to detect that the spa bus is alive even though we haven't
+    /// completed registration (e.g., spa rebooted and forgot our ID).
+    last_unregistered_frame_time: Option<Timestamp>,
+
+    /// Timestamp of the last proactive registration probe (unsolicited ID
+    /// request sent because we're unregistered but receiving bus traffic).
+    last_registration_probe_time: Option<Timestamp>,
 }
 
 impl<'a> SpaApp<'a> {
@@ -118,6 +128,8 @@ impl<'a> SpaApp<'a> {
             boot_time: now,
             client_hash,
             failed_registration_attempts: 0,
+            last_unregistered_frame_time: None,
+            last_registration_probe_time: None,
         }
     }
 
@@ -202,6 +214,8 @@ impl<'a> SpaApp<'a> {
         self.registration.reset();
         self.client_id = None;
         self.registration_started_at = None;
+        self.last_unregistered_frame_time = None;
+        self.last_registration_probe_time = None;
     }
 
     /// Rotate the client hash to try a different identity on the bus.
@@ -247,6 +261,7 @@ impl<'a> SpaApp<'a> {
         // Handle registration when unregistered
         if !self.registration.is_registered() {
             self.unregistered_frames_received += 1;
+            self.last_unregistered_frame_time = Some(now);
             let action = self
                 .registration
                 .process(frame.message_type, &frame.payload);
@@ -302,6 +317,8 @@ impl<'a> SpaApp<'a> {
                             self.client_id = Some(id);
                             self.registration_started_at = None;
                             self.failed_registration_attempts = 0;
+                            self.last_unregistered_frame_time = None;
+                            self.last_registration_probe_time = None;
                         }
                         Err(e) => {
                             log::error!("REG: failed to encode ID ack: {:?}", e);
@@ -460,6 +477,50 @@ impl<'a> SpaApp<'a> {
                     self.no_query_alert_sent = true;
                 }
             }
+
+            // Proactive registration probe: if we're receiving bus traffic
+            // (spa is alive) but haven't seen a new-client query, send an
+            // unsolicited ID request. This handles the case where the spa
+            // rebooted and forgot our client ID but doesn't send FE BF 00
+            // because it thinks no new clients exist.
+            //
+            // Only probe when the SM is in WaitingForQuery and no active
+            // registration attempt is in progress (guards against firing
+            // after a timeout reset within the same tick()).
+            let sm_waiting_for_query = matches!(
+                self.registration.state(),
+                RegistrationState::WaitingForQuery
+            );
+            if sm_waiting_for_query && self.registration_started_at.is_none() {
+                let seen_frames_recently = self
+                    .last_unregistered_frame_time
+                    .is_some_and(|t| now.elapsed_since(t) < STALE_THRESHOLD_MS);
+                let should_probe = self
+                    .last_registration_probe_time
+                    .is_none_or(|t| now.elapsed_since(t) >= REGISTRATION_PROBE_INTERVAL_MS);
+
+                if seen_frames_recently && should_probe {
+                    log::info!(
+                        "REG: proactive probe — bus active but no query received, sending ID request"
+                    );
+                    match FrameEncoder::encode(
+                        [0xFE, 0xBF],
+                        &[0x01, 0x02, self.client_hash[0], self.client_hash[1]],
+                    ) {
+                        Ok(encoded) => {
+                            actions.push(AppAction::SendFrame(encoded));
+                            self.registration_started_at = Some(now);
+                            self.last_registration_probe_time = Some(now);
+                            // Transition SM so we're ready for the assignment
+                            self.registration
+                                .process([0xFE, 0xBF], &[0x00]); // simulate query
+                        }
+                        Err(e) => {
+                            log::error!("REG: failed to encode proactive probe: {:?}", e);
+                        }
+                    }
+                }
+            }
         } else {
             self.registration_started_at = None;
             self.no_query_alert_sent = false;
@@ -492,6 +553,8 @@ impl<'a> SpaApp<'a> {
                 self.registration.reset();
                 self.client_id = None;
                 self.registration_started_at = None;
+                self.last_unregistered_frame_time = None;
+                self.last_registration_probe_time = None;
                 self.command_queue.clear();
                 self.cmd_tracker.reset();
                 self.pump_timers.cancel_all();
@@ -790,7 +853,7 @@ mod tests {
     fn test_hash_rotates_after_repeated_registration_failures() {
         let (clock, app) = make_app_with_clock();
         let mut app = app;
-        let original_hash = app.client_hash;
+        let _original_hash = app.client_hash;
 
         // Simulate 10 failed registration attempts (query → timeout, no assignment)
         for _ in 0..10 {
@@ -800,6 +863,119 @@ mod tests {
         }
 
         assert_eq!(app.failed_registration_attempts, 10);
+    }
+
+    /// Proactive registration probe: when unregistered but receiving bus
+    /// traffic (status frames from the spa), SpaApp should send an
+    /// unsolicited ID request after REGISTRATION_PROBE_INTERVAL_MS to
+    /// handle the case where the spa rebooted and forgot our client ID
+    /// but doesn't send FE BF 00 (new-client query).
+    #[test]
+    fn test_proactive_registration_probe_when_bus_active() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+
+        // Simulate receiving status frames while unregistered — the spa is
+        // alive but not sending new-client queries.
+        let status = status_frame();
+        app.process_frame(&status);
+        assert!(!app.is_registered(), "should start unregistered");
+
+        // Advance past the probe interval (10s)
+        clock.advance_ms(11_000);
+        let actions = app.tick();
+
+        // Should send a proactive ID request (SendFrame with FE BF 01)
+        let has_probe = actions.iter().any(|a| {
+            matches!(a, AppAction::SendFrame(data) if data.contains(&0xFE) && data.contains(&0xBF) && data.contains(&0x01))
+        });
+        assert!(has_probe, "should send proactive ID request when bus is active");
+
+        // Now the spa responds with an ID assignment
+        app.process_frame(&client_id_assignment_frame(0x07));
+        assert!(app.is_registered());
+        assert_eq!(app.client_id(), Some(0x07));
+    }
+
+    /// Proactive registration probe should NOT fire when no frames have been
+    /// received (no bus traffic — spa may be powered off).
+    #[test]
+    fn test_proactive_probe_not_sent_when_no_bus_traffic() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+
+        // Advance past the probe interval without receiving any frames
+        clock.advance_ms(11_000);
+        let actions = app.tick();
+
+        let has_probe = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(
+            !has_probe,
+            "should NOT send proactive probe when no bus traffic"
+        );
+    }
+
+    /// Proactive probe should not fire while a registration is already in
+    /// progress (WaitingForAssignment after sending ID request).
+    #[test]
+    fn test_proactive_probe_not_sent_while_registration_in_progress() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+
+        // Trigger normal registration: spa sends query, we respond with ID request
+        app.process_frame(&new_client_query_frame());
+        assert!(!app.is_registered());
+        // SM is now in WaitingForAssignment, registration_started_at is set
+
+        // Receive a status frame (bus is active)
+        app.process_frame(&status_frame());
+
+        // Advance 3s — still within the 5s registration timeout
+        clock.advance_ms(3_000);
+        let actions = app.tick();
+
+        // Should NOT send another probe — registration is still in progress
+        let probe_count = actions.iter().filter(|a| matches!(a, AppAction::SendFrame(_))).count();
+        assert_eq!(
+            probe_count, 0,
+            "should NOT send proactive probe while registration is in progress"
+        );
+    }
+
+    /// After a successful proactive probe and registration, the probe fields
+    /// should be cleared so they don't affect future registration cycles.
+    #[test]
+    fn test_proactive_probe_fields_cleared_after_registration() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+
+        // Trigger proactive probe
+        app.process_frame(&status_frame());
+        clock.advance_ms(11_000);
+        app.tick();
+
+        // Complete registration
+        app.process_frame(&client_id_assignment_frame(0x05));
+        assert!(app.is_registered());
+
+        // Establish a status baseline (so stale detection can work)
+        app.process_frame(&status_frame());
+
+        // Go stale (30s)
+        clock.advance_ms(31_000);
+        app.tick();
+        assert!(!app.is_registered(), "stale should reset registration");
+
+        // Receive frames again (unregistered), advance past probe interval
+        app.process_frame(&status_frame());
+        clock.advance_ms(11_000);
+        let actions = app.tick();
+
+        // Should send another proactive probe
+        let has_probe = actions.iter().any(|a| {
+            matches!(a, AppAction::SendFrame(_))
+        });
+        assert!(has_probe, "should send probe again after stale recovery cycle");
     }
 
     #[test]
