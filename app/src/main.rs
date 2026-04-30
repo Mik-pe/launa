@@ -458,13 +458,25 @@ fn read_wifi_rssi() -> Option<i32> {
 /// This function must be called after any SpaApp operation that may change
 /// registration state (process_frame, tick, hash rotation, stale detection).
 fn sync_reg_fast_path(app: &SpaApp<'_>) {
+    // Only sync from SpaApp when the fast-path is in an idle state.
+    // States 1 (query received, waiting for Ready) and 3 (assigned, waiting
+    // for Ready) are transient states managed entirely by the uart_task;
+    // overwriting them from the slow path would break the sequence.
+    let prev = REG_FAST_STATE.load(Ordering::Relaxed);
+    if prev == 1 || prev == 3 {
+        // Fast-path is mid-sequence; only sync the hash (may have rotated).
+        let hash = app.client_hash();
+        CLIENT_HASH_H.store(hash[0] as u32, Ordering::Relaxed);
+        CLIENT_HASH_L.store(hash[1] as u32, Ordering::Relaxed);
+        return;
+    }
+
     let new_state = match app.registration_state_str() {
         "waiting_for_query" => 0u32,
         "waiting_for_assignment" => 2u32,
         "registered" => 4u32,
         _ => 0u32,
     };
-    let prev = REG_FAST_STATE.load(Ordering::Relaxed);
     if prev != new_state {
         REG_FAST_STATE.store(new_state, Ordering::Relaxed);
     }
