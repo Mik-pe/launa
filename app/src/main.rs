@@ -288,14 +288,12 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                 }
                 // Drain any pending TX after processing RX
                 while let Ok(data) = uart_rx.try_receive() {
-                    warn!("UART TX: {:02X?}", &data[..data.len().min(16)]);
                     if let Err(_) = transport.write(&data).await {
                         rate_error!(UART_WRITE_ERR, "UART write error: Io (drain)");
                     }
                 }
             }
             Either::Second(data) => {
-                warn!("UART TX: {:02X?}", &data[..data.len().min(16)]);
                 if let Err(_) = transport.write(&data).await {
                     rate_error!(UART_WRITE_ERR, "UART write error: Io");
                 }
