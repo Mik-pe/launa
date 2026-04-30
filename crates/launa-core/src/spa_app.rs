@@ -310,8 +310,7 @@ impl<'a> SpaApp<'a> {
                 }
                 RegistrationAction::None => {}
             }
-            // Don't return — fall through to dispatch status frames so the
-            // web UI can display spa state even while unregistered.
+            return actions;
         }
 
         // Dispatch incoming message
