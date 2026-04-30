@@ -221,28 +221,6 @@ static ALERT_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::ne
 /// Channel for sending raw sniff frame JSON from main loop to MQTT task.
 static SNIFF_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
 
-/// Client hash for RS-485 registration (2 bytes, set once at boot).
-/// Shared between main loop and uart_task for fast-path registration responses.
-static CLIENT_HASH_H: AtomicU32 = AtomicU32::new(0);
-static CLIENT_HASH_L: AtomicU32 = AtomicU32::new(0);
-
-/// Pending client ID assigned by the spa, stored by uart_task fast-path
-/// when the FE BF 02 <ID> frame is decoded. Used to send the ACK on the
-/// next Ready frame.
-static PENDING_CLIENT_ID: AtomicU32 = AtomicU32::new(0);
-
-/// Registration fast-path state machine, shared between uart_task and main loop.
-/// uart_task reads this to decide whether to handle registration inline.
-/// Main loop updates it when the SpaApp state machine changes.
-///
-/// Values:
-///   0 = unregistered, waiting for query (uart_task should handle FE BF 00)
-///   1 = query received, waiting for Ready to send ID request
-///   2 = ID request sent, waiting for assignment (uart_task should handle FE BF 02)
-///   3 = assigned, waiting for Ready to send ACK
-///   4 = registered (uart_task should NOT handle registration frames)
-static REG_FAST_STATE: AtomicU32 = AtomicU32::new(0);
-
 #[embassy_executor::task]
 async fn uart_task(mut transport: transport::Rs485Transport) {
     static UART_READ_ERR: launa_core::RateLog = launa_core::RateLog::new();
@@ -291,111 +269,6 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                                         frame.payload.len()
                                     );
                                 }
-
-                                // Fast-path registration: the Balboa spa sends the
-                                // FE BF 00 registration query, then a Ready (10 BF 06)
-                                // frame immediately after. The client must respond on
-                                // the Ready frame (when the bus is free), NOT during
-                                // the query frame (which would cause a bus collision).
-                                let reg_state = REG_FAST_STATE.load(Ordering::Relaxed);
-                                if reg_state != 4 {
-                                    // Handle the registration query: queue the response
-                                    if frame.message_type == [0xFE, 0xBF]
-                                        && frame.payload.first() == Some(&0x00)
-                                        && reg_state == 0
-                                    {
-                                        // Spa sent "any new clients?" — prepare ID request
-                                        // but don't send yet; wait for the next Ready frame.
-                                        REG_FAST_STATE.store(1, Ordering::Relaxed);
-                                        warn!("REG fast-path: query received, waiting for Ready");
-                                    }
-                                    // Handle the ID assignment: queue the ACK
-                                    else if frame.message_type == [0xFE, 0xBF]
-                                        && frame.payload.len() >= 2
-                                        && frame.payload[0] == 0x02
-                                        && reg_state == 2
-                                    {
-                                        // Spa assigned client ID — prepare ACK
-                                        // but don't send yet; wait for the next Ready frame.
-                                        REG_FAST_STATE.store(3, Ordering::Relaxed);
-                                        let id = frame.payload[1];
-                                        PENDING_CLIENT_ID.store(id as u32, Ordering::Relaxed);
-                                        warn!("REG fast-path: assigned ID 0x{:02X}, waiting for Ready", id);
-                                    }
-                                    // Handle Ready frame: send any queued registration response
-                                    // Note: Ready can be 10 BF 06 (unregistered) or <ID> BF 06 (registered).
-                                    // We match any XX BF with payload 06 when a reg response is pending.
-                                    else if reg_state == 1 || reg_state == 3 {
-                                        // Diagnostic: log every frame while waiting for Ready
-                                        warn!(
-                                            "REG fast-path: checking frame {:02X}{:02X} payload {:02X?} (state={})",
-                                            frame.message_type[0], frame.message_type[1],
-                                            frame.payload.first(),
-                                            reg_state
-                                        );
-                                        if frame.message_type[1] == 0xBF
-                                            && frame.payload.first() == Some(&0x06)
-                                        {
-                                            if reg_state == 1 {
-                                                // Send ID request now (bus is free)
-                                                let hash_h = CLIENT_HASH_H.load(Ordering::Relaxed) as u8;
-                                                let hash_l = CLIENT_HASH_L.load(Ordering::Relaxed) as u8;
-                                                match launa_protocol::frame::FrameEncoder::encode(
-                                                    [0xFE, 0xBF],
-                                                    &[0x01, 0x02, hash_h, hash_l],
-                                                ) {
-                                                    Ok(encoded) => {
-                                                        if let Err(_) =
-                                                            transport.write(&encoded).await
-                                                        {
-                                                            rate_error!(
-                                                                UART_WRITE_ERR,
-                                                                "UART write error: reg request"
-                                                            );
-                                                        } else {
-                                                            REG_FAST_STATE.store(2, Ordering::Relaxed);
-                                                            warn!(
-                                                                "REG fast-path: sent ID request {:02X}{:02X}",
-                                                                hash_h, hash_l
-                                                            );
-                                                        }
-                                                    }
-                                                    Err(_) => {
-                                                        warn!("REG fast-path: encode failed");
-                                                    }
-                                                }
-                                            } else if reg_state == 3 {
-                                                // Send ACK now (bus is free)
-                                                let id = PENDING_CLIENT_ID.load(Ordering::Relaxed) as u8;
-                                                match launa_protocol::frame::FrameEncoder::encode(
-                                                    [id, 0xBF],
-                                                    &[0x03],
-                                                ) {
-                                                    Ok(encoded) => {
-                                                        if let Err(_) =
-                                                            transport.write(&encoded).await
-                                                        {
-                                                            rate_error!(
-                                                                UART_WRITE_ERR,
-                                                                "UART write error: reg ack"
-                                                            );
-                                                        } else {
-                                                            REG_FAST_STATE.store(4, Ordering::Relaxed);
-                                                            info!(
-                                                                "REG fast-path: registered with ID 0x{:02X}",
-                                                                id
-                                                            );
-                                                        }
-                                                    }
-                                                    Err(_) => {
-                                                        warn!("REG fast-path: ack encode failed");
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
                                 frame_sender.send(frame).await;
                             }
                         }
@@ -451,41 +324,6 @@ fn read_wifi_rssi() -> Option<i32> {
     }
 }
 
-/// Sync SpaApp registration state to the uart_task fast-path atomics.
-///
-/// The uart_task uses `REG_FAST_STATE` and `CLIENT_HASH_*` to respond to
-/// registration frames immediately without going through the main loop.
-/// This function must be called after any SpaApp operation that may change
-/// registration state (process_frame, tick, hash rotation, stale detection).
-fn sync_reg_fast_path(app: &SpaApp<'_>) {
-    // Only sync from SpaApp when the fast-path is in an idle state.
-    // States 1 (query received, waiting for Ready) and 3 (assigned, waiting
-    // for Ready) are transient states managed entirely by the uart_task;
-    // overwriting them from the slow path would break the sequence.
-    let prev = REG_FAST_STATE.load(Ordering::Relaxed);
-    if prev == 1 || prev == 3 {
-        // Fast-path is mid-sequence; only sync the hash (may have rotated).
-        let hash = app.client_hash();
-        CLIENT_HASH_H.store(hash[0] as u32, Ordering::Relaxed);
-        CLIENT_HASH_L.store(hash[1] as u32, Ordering::Relaxed);
-        return;
-    }
-
-    let new_state = match app.registration_state_str() {
-        "waiting_for_query" => 0u32,
-        "waiting_for_assignment" => 2u32,
-        "registered" => 4u32,
-        _ => 0u32,
-    };
-    if prev != new_state {
-        REG_FAST_STATE.store(new_state, Ordering::Relaxed);
-    }
-    // Always sync the current hash (may have rotated due to repeated failures)
-    let hash = app.client_hash();
-    CLIENT_HASH_H.store(hash[0] as u32, Ordering::Relaxed);
-    CLIENT_HASH_L.store(hash[1] as u32, Ordering::Relaxed);
-}
-
 /// Execute a batch of `AppAction` side effects from `SpaApp`.
 ///
 /// Maps each action to the corresponding IO operation (UART send, MQTT publish, etc.).
@@ -499,34 +337,7 @@ async fn execute_actions(
     for action in actions {
         match action {
             AppAction::SendFrame(bytes) => {
-                // Suppress duplicate registration frames when the uart_task
-                // fast-path has already sent them. Registration frames have
-                // message type FE BF (ID request) or XX BF with payload 03
-                // (ID ack). The fast-path handles these inline with zero
-                // latency; the slow path via SpaApp would send duplicates.
-                let reg_fast = REG_FAST_STATE.load(Ordering::Relaxed);
-                let is_dup_reg = if bytes.len() >= 6 {
-                    // Check for FE BF registration request or ID BF 03 ack
-                    let inner_start = if bytes[0] == 0x7E { 1 } else { 0 };
-                    if bytes.len() > inner_start + 3 {
-                        let mt_hi = bytes[inner_start + 1];
-                        let mt_lo = bytes[inner_start + 2];
-                        // FE BF XX = registration request (fast-path state >= 2 means already sent)
-                        // or XX BF 03 = ID ack (fast-path state == 4 means already sent)
-                        (mt_hi == 0xFE && mt_lo == 0xBF && reg_fast >= 2)
-                            || (mt_lo == 0xBF
-                                && bytes.len() > inner_start + 4
-                                && bytes[inner_start + 3] == 0x03
-                                && reg_fast == 4)
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-                if !is_dup_reg {
-                    UART_TX_CHANNEL.send(bytes.clone()).await;
-                }
+                UART_TX_CHANNEL.send(bytes.clone()).await;
             }
             AppAction::PublishState {
                 status,
@@ -1187,9 +998,6 @@ async fn main(spawner: Spawner) {
         }
         [(h >> 8) as u8, h as u8]
     };
-    // Store client hash for uart_task fast-path registration
-    CLIENT_HASH_H.store(client_hash[0] as u32, Ordering::Relaxed);
-    CLIENT_HASH_L.store(client_hash[1] as u32, Ordering::Relaxed);
     let mut app = SpaApp::with_client_hash(&clock, client_hash);
     let device_id_str: &str = &app_config.device_id;
     let mut self_test_state: Option<self_test::SelfTestState> = None;
@@ -1249,7 +1057,6 @@ async fn main(spawner: Spawner) {
                     &mut self_test_discard_warned,
                 )
                 .await;
-                sync_reg_fast_path(&app);
             }
             // MQTT command received
             Either::Second(Either::First(cmd)) => {
@@ -1295,8 +1102,6 @@ async fn main(spawner: Spawner) {
                 read_wifi_rssi(),
             )
             .await;
-            // Sync after tick (registration timeout may reset state, hash may rotate)
-            sync_reg_fast_path(&app);
         }
 
         // Heap check (uses actual ESP32 free heap)
