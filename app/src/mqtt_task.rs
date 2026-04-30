@@ -52,7 +52,6 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
     let mut last_published_status: Option<StatusUpdate> = None;
     let mut last_published_fault: Option<FaultBuf> = None;
     let mut last_registration_state: &str = "waiting_for_query";
-    let mut heartbeat_secs: u32 = 0;
 
     info!("MQTT task started");
 
@@ -380,11 +379,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 // Timer expired — loop back to check channels above.
                 // This ensures self-test status updates and other channel
                 // data are published even when no MQTT messages arrive.
-                heartbeat_secs += 1;
-                if heartbeat_secs >= 10 {
-                    info!("heartbeat");
-                    heartbeat_secs = 0;
-                }
+
             }
         }
 
