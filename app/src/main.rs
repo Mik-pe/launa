@@ -1012,7 +1012,7 @@ async fn main(spawner: Spawner) {
         let uart_tx = UART_TX_CHANNEL.sender();
         let reg_frame = launa_protocol::frame::FrameEncoder::encode(
             [0xFE, 0xBF],
-            &[0x01, 0x02, 0xE3, 0x56],
+            &[0x01, 0x02, 0xF1, 0x73],
         ).expect("encode failed");
         warn!("SPAM: sending registration frame 30 times, 1s apart...");
         for i in 0..30 {
