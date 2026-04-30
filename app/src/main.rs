@@ -323,7 +323,10 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                                         warn!("REG fast-path: assigned ID 0x{:02X}, waiting for Ready", id);
                                     }
                                     // Handle Ready frame: send any queued registration response
-                                    else if frame.message_type == [0x10, 0xBF]
+                                    // Note: Ready can be 10 BF 06 (unregistered) or <ID> BF 06 (registered).
+                                    // We match any XX BF with payload 06 when a reg response is pending.
+                                    else if (reg_state == 1 || reg_state == 3)
+                                        && frame.message_type[1] == 0xBF
                                         && frame.payload.first() == Some(&0x06)
                                     {
                                         if reg_state == 1 {
@@ -356,7 +359,6 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                                             }
                                         } else if reg_state == 3 {
                                             // Send ACK now (bus is free)
-                                            // Read the assigned ID stored when the FE BF 02 frame was decoded.
                                             let id = PENDING_CLIENT_ID.load(Ordering::Relaxed) as u8;
                                             match launa_protocol::frame::FrameEncoder::encode(
                                                 [id, 0xBF],
