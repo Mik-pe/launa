@@ -50,15 +50,6 @@ impl Transport for Rs485Transport {
             Timer::after(Duration::from_micros(50)).await;
         }
 
-        // For auto-direction RS-485 transceivers (no DE pin), send a preamble
-        // byte to give the transceiver time to detect TX activity and enable
-        // the driver. Without this, the first byte of the frame can be lost
-        // or corrupted due to the transceiver's enable latency.
-        if self.de_pin.is_none() {
-            let _ = self.uart.write(&[0x00]);
-            let _ = self.uart.flush();
-        }
-
         // Write all bytes in a single DE assertion window
         let mut written = 0;
         while written < data.len() {
