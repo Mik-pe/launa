@@ -192,7 +192,6 @@ Requires `launa.toml` at project root (gitignored; copy from `launa.example.toml
 | `cargo xtask ota-serve` | Serve firmware `.bin` over HTTP for OTA |
 | `cargo xtask sniff-decode` | Decode sniffer frames from MQTT in real-time |
 | `cargo xtask spa-sim` | Simulate a spa controller over USB-RS485 |
-| `cargo xtask self-test` | Run hardware self-test on ESP32 |
 | `cargo xtask provision` | Burn AES key to ESP32 eFuse BLOCK3 for encrypted NVS |
 | `cargo xtask listen` | Subscribe to MQTT topics from the broker |
 
@@ -268,7 +267,7 @@ host = ""                  # OTA server address (defaults to mqtt.host)
 | `launa-integration-tests` | 140+ tests exercising SpaApp through sim pipeline |
 | `launa-server` | MQTT broker (rumqttd) + web UI server + SQLite history database |
 | `app/` | ESP32 firmware binary (esp-hal + embassy) — excluded from workspace |
-| `xtask/` | Host-side tooling (flash, monitor, OTA, sniffer, sim, self-test) |
+| `xtask/` | Host-side tooling (flash, monitor, OTA, sniffer, sim) |
 
 All workspace crates are `no_std`, pure Rust, and desktop-testable. The `app/` crate is ESP32-only (`esp-hal` 1.0 + `embassy` + `esp-radio` + `rust-mqtt` + `esp-nvs`). No ESP-IDF C SDK — pure Rust throughout.
 

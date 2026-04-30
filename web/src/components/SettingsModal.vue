@@ -8,18 +8,14 @@ const props = withDefaults(defineProps<{
   modelValue?: boolean
   settings: MqttSettings
   accessoryConfig: AccessoryConfig
-  selfTestEnabled?: boolean
   sniffEnabled?: boolean
-  selfTestPending?: boolean
   sniffPending?: boolean
   spaHour?: number
   spaMinute?: number
   spaTimeFormat?: '12h' | '24h'
 }>(), {
   modelValue: false,
-  selfTestEnabled: false,
   sniffEnabled: false,
-  selfTestPending: false,
   sniffPending: false,
 })
 
@@ -27,7 +23,6 @@ const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   'save': [settings: MqttSettings]
   'saveAccessoryConfig': [config: AccessoryConfig]
-  'toggleSelfTest': [enabled: boolean]
   'toggleSniff': [enabled: boolean]
   'setTime': [hour: number, minute: number, is24h: boolean]
 }>()
@@ -77,10 +72,6 @@ function save(): void {
 
 function close(): void {
   emit('update:modelValue', false)
-}
-
-function toggleSelfTest(val: boolean): void {
-  emit('toggleSelfTest', val)
 }
 
 function toggleSniff(val: boolean): void {
@@ -137,18 +128,6 @@ function toggleSniff(val: boolean): void {
                   class="w-full px-3 py-2 bg-neutral-800 border border-neutral-700 rounded-lg text-sm text-white placeholder-neutral-600 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
               </div>
             </div>
-          </div>
-
-          <!-- Self-Test Mode -->
-          <div class="pt-2 border-t border-neutral-700">
-            <ToggleSwitch
-              label="Self-Test Mode"
-              :model-value="selfTestEnabled"
-              :pending="selfTestPending"
-              :disabled="false"
-              @update:model-value="toggleSelfTest"
-            />
-            <p class="text-xs text-neutral-500 mt-1 px-4">Simulate spa state without hardware</p>
           </div>
 
           <!-- Sniff Mode -->

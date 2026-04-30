@@ -12,7 +12,9 @@ use launa_hal::{Clock, Timestamp};
 use launa_protocol::command::Command;
 use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
 use launa_protocol::frame::{Frame, FrameEncoder};
-use launa_protocol::registration::{RegistrationAction, RegistrationState, RegistrationStateMachine};
+use launa_protocol::registration::{
+    RegistrationAction, RegistrationState, RegistrationStateMachine,
+};
 use launa_protocol::status::StatusUpdate;
 
 use crate::actions::AppAction;
@@ -224,7 +226,7 @@ impl<'a> SpaApp<'a> {
     /// ClientIdAssignment). XORs the attempt counter into both hash bytes
     /// Force-publish the current state, bypassing change detection.
     ///
-    /// Used when a mode toggle (self-test, sniff) changes the `self_test` or
+    /// Used when a mode toggle (sniff) changes the `sniff_mode`
     /// `sniff_mode` flags in the state JSON but the underlying `StatusUpdate`
     /// hasn't changed. Without this, the MQTT task's change detection would
     /// suppress the publish and the UI would never see the mode change.
@@ -512,8 +514,7 @@ impl<'a> SpaApp<'a> {
                             self.registration_started_at = Some(now);
                             self.last_registration_probe_time = Some(now);
                             // Transition SM so we're ready for the assignment
-                            self.registration
-                                .process([0xFE, 0xBF], &[0x00]); // simulate query
+                            self.registration.process([0xFE, 0xBF], &[0x00]); // simulate query
                         }
                         Err(e) => {
                             log::error!("REG: failed to encode proactive probe: {:?}", e);
@@ -889,7 +890,10 @@ mod tests {
         let has_probe = actions.iter().any(|a| {
             matches!(a, AppAction::SendFrame(data) if data.contains(&0xFE) && data.contains(&0xBF) && data.contains(&0x01))
         });
-        assert!(has_probe, "should send proactive ID request when bus is active");
+        assert!(
+            has_probe,
+            "should send proactive ID request when bus is active"
+        );
 
         // Now the spa responds with an ID assignment
         app.process_frame(&client_id_assignment_frame(0x07));
@@ -935,7 +939,10 @@ mod tests {
         let actions = app.tick();
 
         // Should NOT send another probe — registration is still in progress
-        let probe_count = actions.iter().filter(|a| matches!(a, AppAction::SendFrame(_))).count();
+        let probe_count = actions
+            .iter()
+            .filter(|a| matches!(a, AppAction::SendFrame(_)))
+            .count();
         assert_eq!(
             probe_count, 0,
             "should NOT send proactive probe while registration is in progress"
@@ -972,10 +979,11 @@ mod tests {
         let actions = app.tick();
 
         // Should send another proactive probe
-        let has_probe = actions.iter().any(|a| {
-            matches!(a, AppAction::SendFrame(_))
-        });
-        assert!(has_probe, "should send probe again after stale recovery cycle");
+        let has_probe = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
+        assert!(
+            has_probe,
+            "should send probe again after stale recovery cycle"
+        );
     }
 
     #[test]

@@ -46,7 +46,6 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
         launa_protocol::status::TemperatureScale,
         launa_protocol::status::TempRange,
     )> = None;
-    let mut last_self_test: bool = false;
     let mut last_sniff_mode: bool = false;
     let mut last_wifi_rssi: Option<i32> = None;
     let mut last_published_status: Option<StatusUpdate> = None;
@@ -69,7 +68,6 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 mqtt_client::LastState {
                     status,
                     fault: fault_str,
-                    self_test: last_self_test,
                     sniff_mode: last_sniff_mode,
                     wifi_rssi: last_wifi_rssi,
                     registration_state: last_registration_state,
@@ -161,20 +159,18 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                     let status = msg.status;
                     let fault = msg.fault;
                     let is_stale = msg.recovering_from_stale;
-                    let self_test = msg.self_test;
                     let sniff_mode = msg.sniff_mode;
                     let wifi_rssi = msg.wifi_rssi;
                     let registration_state = msg.registration_state;
                     last_scale_range = Some((status.temperature_scale, status.temp_range));
-                    // Force re-publish when self_test or sniff_mode changes so the
+                    // Force re-publish when sniff_mode changes so the
                     // first state after mode toggle always reaches the broker.
-                    let mode_changed = self_test != last_self_test || sniff_mode != last_sniff_mode;
+                    let mode_changed = sniff_mode != last_sniff_mode;
                     // Also force re-publish when registration_state changes.
                     let reg_changed = registration_state != last_registration_state;
                     if mode_changed || reg_changed {
                         last_published_status = None;
                     }
-                    last_self_test = self_test;
                     last_sniff_mode = sniff_mode;
                     last_registration_state = registration_state;
                     // Change detection: skip publish if state is identical to last
@@ -191,10 +187,8 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                             .publish_state(
                                 &status,
                                 fault.as_str(),
-                                self_test,
                                 sniff_mode,
                                 wifi_rssi,
-                                self_test,
                                 registration_state,
                             )
                             .await
@@ -275,18 +269,6 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                             continue;
                         }
 
-                        // Handle self-test toggle command
-                        if topic.strip_prefix(&cmd_base) == Some("/self_test") {
-                            let payload_str = core::str::from_utf8(&payload).unwrap_or("");
-                            let enable = matches!(payload_str, "ON" | "on" | "1" | "true" | "TRUE");
-                            info!(
-                                "MQTT self-test command: {}",
-                                if enable { "ON" } else { "OFF" }
-                            );
-                            cmd_sender.send(Command::SelfTest(enable)).await;
-                            continue;
-                        }
-
                         // Handle sniff mode toggle command
                         if topic.strip_prefix(&cmd_base) == Some("/sniff") {
                             let payload_str = core::str::from_utf8(&payload).unwrap_or("");
@@ -329,9 +311,6 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                                     info!("MQTT pump timer: pump {} for {} min", pump, minutes);
                                     PUMP_TIMER_CHANNEL.send((pump, minutes)).await;
                                 }
-                                mqtt_client::MqttAction::SelfTest(_) => {
-                                    // Handled above before parse_command; unreachable here
-                                }
                             }
                         } else {
                             let payload_str =
@@ -358,7 +337,6 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                             mqtt_client::LastState {
                                 status,
                                 fault: fault_str,
-                                self_test: last_self_test,
                                 sniff_mode: last_sniff_mode,
                                 wifi_rssi: last_wifi_rssi,
                                 registration_state: last_registration_state,

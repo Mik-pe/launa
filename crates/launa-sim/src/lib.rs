@@ -30,7 +30,6 @@ extern crate alloc;
 #[cfg(feature = "std")]
 pub mod clock;
 pub mod lcg;
-pub mod self_test;
 #[cfg(feature = "std")]
 pub mod sim_broker;
 #[cfg(feature = "std")]

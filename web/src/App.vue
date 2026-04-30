@@ -34,8 +34,6 @@ const {
   visibleControls,
   serverConfig,
   saveAccessoryConfig,
-  selfTestEnabled,
-  setSelfTest,
   sniffEnabled,
   setSniff,
   retryCount,
@@ -264,16 +262,13 @@ function handleTempRange(val: string): void {
       v-model="showSettings"
       :settings="settings"
       :accessory-config="serverConfig ?? { pumps: 2, lights: 1, blower: true, mister: false }"
-      :self-test-enabled="selfTestEnabled"
       :sniff-enabled="sniffEnabled"
-      :self-test-pending="isPending('self_test')"
       :sniff-pending="isPending('sniff_mode')"
       :spa-hour="spaState?.hour"
       :spa-minute="spaState?.minute"
       :spa-time-format="spaState?.time_format"
       @save="handleSave"
       @save-accessory-config="saveAccessoryConfig"
-      @toggle-self-test="setSelfTest"
       @toggle-sniff="setSniff"
       @set-time="setTime"
     />

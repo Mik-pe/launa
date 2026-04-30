@@ -11,7 +11,7 @@ The app connects to the [launa-server](../crates/launa-server) MQTT broker over 
 - **History** — temperature chart with configurable time range
 - **Logs / Alerts / Diagnostics** — server-backed log and alert viewers with polling
 - **Sniff** — raw RS-485 frame viewer for protocol debugging
-- **Settings** — MQTT broker URL, device ID, accessory config, self-test and sniff toggles
+- **Settings** — MQTT broker URL, device ID, accessory config, sniff toggle
 
 ## Tech Stack
 

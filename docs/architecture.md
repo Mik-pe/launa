@@ -148,7 +148,6 @@ Host-side Cargo xtask tooling. Not part of the firmware.
 - OTA build + serve + trigger
 - Spa simulator (USB-RS485)
 - Sniffer frame decoder
-- Hardware self-test
 - NVS config flash
 
 ### `app/` (ESP32 firmware binary)

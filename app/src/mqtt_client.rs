@@ -41,14 +41,12 @@ use crate::net_util;
 pub enum MqttAction {
     Command(Command),
     StartPumpTimer { pump: u8, minutes: u32 },
-    SelfTest(bool),
 }
 
 /// Parameters for re-publishing last known state after reconnect.
 pub struct LastState<'a> {
     pub status: &'a StatusUpdate,
     pub fault: Option<&'a str>,
-    pub self_test: bool,
     pub sniff_mode: bool,
     pub wifi_rssi: Option<i32>,
     pub registration_state: &'a str,
@@ -441,10 +439,8 @@ impl MqttClient {
                 .publish_state(
                     state.status,
                     state.fault,
-                    state.self_test,
                     state.sniff_mode,
                     state.wifi_rssi,
-                    state.self_test,
                     state.registration_state,
                 )
                 .await
@@ -797,7 +793,6 @@ impl MqttClient {
         &mut self,
         status: &StatusUpdate,
         last_fault: Option<&str>,
-        self_test: bool,
         sniff_mode: bool,
         wifi_rssi: Option<i32>,
         retain: bool,
@@ -809,7 +804,6 @@ impl MqttClient {
             status,
             last_fault,
             Some(crate::FIRMWARE_VERSION),
-            self_test,
             sniff_mode,
             wifi_rssi,
             registration_state,

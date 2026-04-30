@@ -19,7 +19,6 @@ export function useSpaState() {
   const availability = ref('offline')
   const alertMessage = ref<string | null>(null)
   const pendingKeys = ref(new Set<string>())
-  const selfTestEnabled = ref(false)
   const sniffEnabled = ref(false)
   let reconnectingTimer: ReturnType<typeof setTimeout> | null = null
   let lastBootId: string | null = null
@@ -58,9 +57,6 @@ export function useSpaState() {
       try {
         const state = JSON.parse(payload) as SpaState
         spaState.value = state
-        if (typeof state.self_test === 'boolean') {
-          selfTestEnabled.value = state.self_test
-        }
         if (typeof state.sniff_mode === 'boolean') {
           sniffEnabled.value = state.sniff_mode
         }
@@ -117,14 +113,6 @@ export function useSpaState() {
     return pendingKeys.value.has(key)
   }
 
-  function setSelfTest(
-    enabled: boolean,
-    publish: (subtopic: string, payload: string | number | boolean) => void,
-  ) {
-    addPending('self_test')
-    publish('self_test', enabled ? 'ON' : 'OFF')
-  }
-
   function setSniff(
     enabled: boolean,
     publish: (subtopic: string, payload: string | number | boolean) => void,
@@ -145,7 +133,6 @@ export function useSpaState() {
     availability,
     alert: alertMessage,
     pendingKeys,
-    selfTestEnabled,
     sniffEnabled,
     onConnect,
     handleMessage,
@@ -153,7 +140,6 @@ export function useSpaState() {
     setTemperature,
     setTime,
     isPending,
-    setSelfTest,
     setSniff,
     cleanup,
   }

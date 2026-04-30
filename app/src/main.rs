@@ -55,7 +55,6 @@ mod uart_raw;
 mod wifi;
 
 mod rate_log;
-mod self_test;
 
 /// Custom panic handler: logs panic location, stores crash info to NVS,
 /// waits for UART flush, then triggers a software reset.
@@ -310,9 +309,6 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
 
 mod mqtt_task;
 
-/// Self-test status publish interval in seconds.
-const SELF_TEST_PUBLISH_INTERVAL_SECS: u64 = 1;
-
 /// Read the current WiFi RSSI from the shared atomic.
 /// Returns `None` if not connected (value is `i32::MIN`).
 fn read_wifi_rssi() -> Option<i32> {
@@ -330,7 +326,6 @@ fn read_wifi_rssi() -> Option<i32> {
 async fn execute_actions(
     actions: &[AppAction],
     device_id: &str,
-    self_test: bool,
     sniff_mode: bool,
     wifi_rssi: Option<i32>,
 ) {
@@ -353,7 +348,6 @@ async fn execute_actions(
                         status: status.clone(),
                         fault: fb,
                         recovering_from_stale: *recovering_from_stale,
-                        self_test,
                         sniff_mode,
                         wifi_rssi,
                         registration_state,
@@ -432,37 +426,14 @@ fn publish_sniff_frame(frame: &Frame) {
     }
 }
 
-/// Handle an incoming MQTT command, routing through self-test or SpaApp.
+/// Handle an incoming MQTT command, routing through SpaApp.
 async fn handle_mqtt_command(
     cmd: Command,
     app: &mut SpaApp<'_>,
-    self_test_state: &mut Option<self_test::SelfTestState>,
     sniff_mode: &mut bool,
     device_id: &str,
-    self_test_last_publish: &mut Option<Instant>,
 ) {
     match cmd {
-        Command::SelfTest(enable) => {
-            if enable {
-                if self_test_state.is_none() {
-                    info!("Self-test mode enabled");
-                    *self_test_state = Some(self_test::SelfTestState::new());
-                    // Reset publish timer so first status is published immediately
-                    *self_test_last_publish = None;
-                }
-            } else {
-                if self_test_state.is_some() {
-                    info!("Self-test mode disabled, resuming normal operation");
-                    *self_test_state = None;
-                    // Immediately publish current spa state so the UI
-                    // receives self_test: false without waiting for the
-                    // next status change from the spa.
-                    let actions = app.force_publish();
-                    execute_actions(&actions, device_id, false, *sniff_mode, read_wifi_rssi())
-                        .await;
-                }
-            }
-        }
         Command::Sniff(enable) => {
             if enable && !*sniff_mode {
                 info!("Sniff mode enabled — publishing raw RS-485 frames");
@@ -472,7 +443,6 @@ async fn handle_mqtt_command(
                 execute_actions(
                     &actions,
                     device_id,
-                    self_test_state.is_some(),
                     true,
                     read_wifi_rssi(),
                 )
@@ -485,7 +455,6 @@ async fn handle_mqtt_command(
                 execute_actions(
                     &actions,
                     device_id,
-                    self_test_state.is_some(),
                     false,
                     read_wifi_rssi(),
                 )
@@ -499,19 +468,14 @@ async fn handle_mqtt_command(
             esp_hal::system::software_reset();
         }
         _ => {
-            if let Some(ref mut st) = self_test_state {
-                st.apply_command(&cmd);
-            } else {
-                let actions = app.on_mqtt_command(cmd);
-                execute_actions(
-                    &actions,
-                    device_id,
-                    self_test_state.is_some(),
-                    *sniff_mode,
-                    read_wifi_rssi(),
-                )
-                .await;
-            }
+            let actions = app.on_mqtt_command(cmd);
+            execute_actions(
+                &actions,
+                device_id,
+                *sniff_mode,
+                read_wifi_rssi(),
+            )
+            .await;
         }
     }
 }
@@ -692,26 +656,13 @@ fn receive_serial_config(timeout_secs: u64) -> Option<config::AppConfig> {
 ///
 /// Process incoming UART frames through SpaApp for state updates and commands.
 /// In sniff mode, also publishes raw frames to the sniff channel as a side effect.
-/// In self-test mode, discards all UART frames with a one-time warning.
 async fn process_uart_frames(
     frame: Frame,
     app: &mut SpaApp<'_>,
     device_id: &str,
-    self_test_active: bool,
     sniff_mode: bool,
     frame_rx: &embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, Frame, 4>,
-    self_test_discard_warned: &mut bool,
 ) {
-    if self_test_active {
-        // When in self-test mode, drain and discard UART frames with a one-time warning
-        if !*self_test_discard_warned {
-            warn!("Self-test active: discarding spa frames (self-test generates its own state)");
-            *self_test_discard_warned = true;
-        }
-        while frame_rx.try_receive().is_ok() {}
-        return;
-    }
-
     // In sniff mode, publish raw frames as a side effect alongside normal processing.
     if sniff_mode {
         publish_sniff_frame(&frame);
@@ -721,7 +672,6 @@ async fn process_uart_frames(
     execute_actions(
         &actions,
         device_id,
-        self_test_active,
         sniff_mode,
         read_wifi_rssi(),
     )
@@ -735,7 +685,6 @@ async fn process_uart_frames(
         execute_actions(
             &actions,
             device_id,
-            self_test_active,
             sniff_mode,
             read_wifi_rssi(),
         )
@@ -784,37 +733,6 @@ fn validate_firmware(ota: &mut Option<ota::EspOta>) {
         } else {
             info!("Firmware marked valid (boot validation passed)");
         }
-    }
-}
-
-/// Run self-test tick logic: advance simulator state and publish status periodically.
-async fn tick_self_test(
-    self_test_state: &mut self_test::SelfTestState,
-    device_id: &str,
-    sniff_mode: bool,
-    self_test_last_publish: &mut Option<Instant>,
-) {
-    self_test_state.tick();
-    let now = Instant::now();
-    let should_publish = self_test_last_publish.map_or(true, |t| {
-        t.elapsed().as_secs() >= SELF_TEST_PUBLISH_INTERVAL_SECS
-    });
-    if should_publish {
-        let status = self_test_state.status();
-        execute_actions(
-            &[AppAction::PublishState {
-                status: status.clone(),
-                fault: None,
-                recovering_from_stale: false,
-                registration_state: "registered",
-            }],
-            device_id,
-            true,
-            sniff_mode,
-            read_wifi_rssi(),
-        )
-        .await;
-        *self_test_last_publish = Some(now);
     }
 }
 
@@ -1000,10 +918,7 @@ async fn main(spawner: Spawner) {
     };
     let mut app = SpaApp::with_client_hash(&clock, client_hash);
     let device_id_str: &str = &app_config.device_id;
-    let mut self_test_state: Option<self_test::SelfTestState> = None;
     let mut sniff_mode: bool = false;
-    let mut self_test_last_publish: Option<Instant> = None;
-    let mut self_test_discard_warned: bool = false;
 
     let tick_interval = Duration::from_secs(1);
 
@@ -1052,10 +967,8 @@ async fn main(spawner: Spawner) {
                     frame,
                     &mut app,
                     device_id_str,
-                    self_test_state.is_some(),
                     sniff_mode,
                     &frame_rx,
-                    &mut self_test_discard_warned,
                 )
                 .await;
             }
@@ -1064,10 +977,8 @@ async fn main(spawner: Spawner) {
                 handle_mqtt_command(
                     cmd,
                     &mut app,
-                    &mut self_test_state,
                     &mut sniff_mode,
                     device_id_str,
-                    &mut self_test_last_publish,
                 )
                 .await;
             }
@@ -1080,37 +991,27 @@ async fn main(spawner: Spawner) {
             handle_mqtt_command(
                 cmd,
                 &mut app,
-                &mut self_test_state,
                 &mut sniff_mode,
                 device_id_str,
-                &mut self_test_last_publish,
             )
             .await;
         }
 
-        // In self-test mode, tick the simulator and publish status periodically
-        if let Some(ref mut st) = self_test_state {
-            tick_self_test(st, device_id_str, sniff_mode, &mut self_test_last_publish).await;
-        } else {
-            self_test_last_publish = None;
-            // Periodic tick: stale detection, registration timeout, diagnostics
-            let tick_actions = app.tick();
-            execute_actions(
-                &tick_actions,
-                device_id_str,
-                false,
-                sniff_mode,
-                read_wifi_rssi(),
-            )
-            .await;
-        }
+        // Periodic tick: stale detection, registration timeout, diagnostics
+        let tick_actions = app.tick();
+        execute_actions(
+            &tick_actions,
+            device_id_str,
+            sniff_mode,
+            read_wifi_rssi(),
+        )
+        .await;
 
         // Heap check (uses actual ESP32 free heap)
         let heap_actions = app.check_heap(esp_alloc::HEAP.free());
         execute_actions(
             &heap_actions,
             device_id_str,
-            self_test_state.is_some(),
             sniff_mode,
             read_wifi_rssi(),
         )
@@ -1130,7 +1031,7 @@ async fn main(spawner: Spawner) {
 
         // UART TX test: every 15s when no bytes received, send a test frame
         // to verify the UART TX path and check if the spa responds.
-        if UART_FIRST_BYTE_SEEN.load(Ordering::Relaxed) == 0 && !self_test_state.is_some() {
+        if UART_FIRST_BYTE_SEEN.load(Ordering::Relaxed) == 0 {
             let should_test = uart_tx_test_interval.is_none_or(|t| t.elapsed().as_secs() >= 15);
             if should_test {
                 uart_tx_test_interval = Some(Instant::now());
@@ -1161,7 +1062,6 @@ async fn main(spawner: Spawner) {
             execute_actions(
                 &actions,
                 device_id_str,
-                self_test_state.is_some(),
                 sniff_mode,
                 read_wifi_rssi(),
             )

@@ -43,9 +43,7 @@ Requires `launa.toml` at project root (gitignored; copy from `launa.example.toml
 | `cargo xtask spa-sim` | Simulate spa over RS-485 |
 | `cargo xtask ota-serve` | Serve firmware .bin over HTTP for OTA |
 | `cargo xtask ota-flash` | Build + serve + trigger OTA |
-| `cargo xtask self-test` | Run hardware self-test on ESP32 |
 | `cargo xtask config-flash` | Write WiFi/MQTT config to ESP32 NVS |
-
 ## Web Frontend
 
 - Located in `web/`, uses Vue 3 + Vite + Tailwind CSS 4

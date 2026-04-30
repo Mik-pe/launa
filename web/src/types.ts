@@ -25,7 +25,6 @@ export interface SpaState {
   minute?: number
   firmware_version?: string
   last_fault?: string
-  self_test?: boolean
   sniff_mode?: boolean
   wifi_rssi?: number | null
   registration_state?: string

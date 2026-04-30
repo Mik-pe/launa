@@ -155,8 +155,8 @@ All software development is complete. The firmware compiles for xtensa-esp32-non
 - **Robustness**: CommandTracker (ACK/retry/drop), stale-status detection (5s probe, 30s stale), heap monitoring, HoldModeTimer (60min safety), bounded command queue, exponential backoff on reconnect, alert throttling
 - **Security**: Encrypted NVS config (AES-128-CTR via ESP32 hardware AES, eFuse key), cargo xtask provision
 - **Testing**: SpaSim with error injection (command failure, bus silence, corrupt frames), SimBroker with connection loss simulation, SpaApp architecture (all logic in launa-core, ESP32 is thin IO wiring), 24-hour simulation, stress tests
-- **xtask**: flash (--monitor), monitor, sniff-decode, spa-sim, ota-serve, ota-flash, self-test, config-flash, provision
-- **Features**: sniffer mode, hw-test mode, pump timers, light color cycling, Pump1-6 + Light1-2 support
+- **xtask**: flash (--monitor), monitor, sniff-decode, spa-sim, ota-serve, ota-flash, config-flash, provision
+- **Features**: sniffer mode, pump timers, light color cycling, Pump1-6 + Light1-2 support
 
 ## Logic Flaws & Bugs (Deep Audit 2026-04-16)
 
@@ -257,8 +257,8 @@ Crate-by-crate review for clean code, deduplication, bad tests, and UX. Five par
 
 - [x] **Extract `dispatch_frame()` mega-function into message-type handlers** (`launa-protocol/src/dispatcher.rs`): Refactored into `handle_status()`, `handle_config()`, `handle_registration()` etc.
 - [x] **Break `SpaSim` god object into focused subsystems** (`launa-sim/src/spa_sim/mod.rs`): Extracted into focused modules (error injection, fault manager, frame splitter, etc.).
-- [x] **Break `main()` god function into named functions** (`app/src/main.rs`): Extracted `init_wifi()`, `handle_ota_request()`, `handle_mqtt_command()`, `tick_self_test()`, `execute_actions()`, `process_uart_frames()`.
-- [x] **Replace `STATE_CHANNEL` 5-tuple with named struct** (`app/src/main.rs`): Now uses `types::StateMessage { status, fault, recovering_from_stale, self_test, sniff_mode, wifi_rssi }`.
+- [x] **Break `main()` god function into named functions** (`app/src/main.rs`): Extracted `init_wifi()`, `handle_ota_request()`, `handle_mqtt_command()`, `execute_actions()`, `process_uart_frames()`.
+- [x] **Replace `STATE_CHANNEL` 5-tuple with named struct** (`app/src/main.rs`): Now uses `types::StateMessage { status, fault, recovering_from_stale, sniff_mode, wifi_rssi }`.
 - [x] **Extract reconnect-and-sync helper** (`app/src/mqtt_task.rs`): Post-reconnect sequence extracted into `net_util::reconnect_with_backoff()`.
 - [x] **Extract shared `LoadingSpinner.vue` component** (`web/src/`): `LoadingSpinner.vue` component extracted and imported by App, StatusDashboard, TemperatureChart, LogViewer, AlertsView, DiagnosticsView, SniffFramesView.
 - [x] **Split `useMqtt.ts` god composable** (`web/src/composables/useMqtt.ts`): Split into `useMqttConnection.ts`, `useSpaState.ts`, `useAccessoryConfig.ts`.
@@ -275,7 +275,7 @@ Crate-by-crate review for clean code, deduplication, bad tests, and UX. Five par
 - [x] **Deduplicate `parsePayload()` function** (`web/src/`): Extracted to `utils/format.ts`, imported by AlertsView, DiagnosticsView, SniffFramesView.
 - [x] **Extract `<PendingDot>` component** (`web/src/`): `PendingDot.vue` extracted, imported by App.vue, ToggleSwitch, SelectControl, TemperatureCard.
 - [x] **Deduplicate xtask CLI argument parsing** (`xtask/src/*.rs`): Extracted shared `Args` struct in `util.rs`, used by all xtask modules.
-- [x] **Deduplicate xtask serial port resolution** (`xtask/src/`): Extracted `resolve_port()` and `resolve_port_or()` in `util.rs`, used by monitor, self_test, provision.
+- [x] **Deduplicate xtask serial port resolution** (`xtask/src/`): Extracted `resolve_port()` and `resolve_port_or()` in `util.rs`, used by monitor, provision.
 
 ### MEDIUM — Bad Tests
 
@@ -295,7 +295,6 @@ Crate-by-crate review for clean code, deduplication, bad tests, and UX. Five par
 - [x] **Settings modal has no input validation** (`web/src/components/SettingsModal.vue`): Validates required fields (broker URL, device ID) with error messages.
 - [ ] **Tab bar has no new-content indicators** (`web/src/App.vue`): Badge tracking exists for alerts but not fully wired to all tabs.
 - [x] **Config fallback has unclear error on blank ESP32** (`app/src/config.rs`): Logs "FATAL: No valid config found in NVS. Use 'cargo xtask config-flash' to write configuration." on placeholder creds.
-- [x] **Self-test silently discards real spa frames** (`app/src/main.rs`): One-time warning logged on first discard: "Self-test active: discarding spa frames".
 - [ ] **OTA `?test=1` URL hack is undocumented and fragile** (`app/src/main.rs`): Query parameter triggers TCP connectivity test. Accidental inclusion silently skips OTA. Use dedicated MQTT topic.
 - [x] **MQTT error messages lack actionable context** (`app/src/mqtt_client.rs`): DNS failure includes hostname. TCP failure includes host:port and "broker unreachable or firewall blocked". CONNACK errors include reason string.
 

@@ -137,7 +137,6 @@ impl TestHarness {
                         None,
                         None,
                         false,
-                        false,
                         None,
                         "registered",
                     );

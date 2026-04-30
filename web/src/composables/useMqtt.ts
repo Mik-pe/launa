@@ -216,8 +216,6 @@ export function useMqtt() {
     visibleControls: accessory.visibleControls,
     serverConfig: accessory.serverConfig,
     saveAccessoryConfig: accessory.saveAccessoryConfig,
-    selfTestEnabled: spa.selfTestEnabled,
-    setSelfTest: (enabled: boolean) => spa.setSelfTest(enabled, publish),
     sniffEnabled: spa.sniffEnabled,
     setSniff: (enabled: boolean) => spa.setSniff(enabled, publish),
   }
