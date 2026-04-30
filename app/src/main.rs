@@ -288,12 +288,14 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                 }
                 // Drain any pending TX after processing RX
                 while let Ok(data) = uart_rx.try_receive() {
+                    warn!("UART TX: {:02X?}", &data[..data.len().min(16)]);
                     if let Err(_) = transport.write(&data).await {
                         rate_error!(UART_WRITE_ERR, "UART write error: Io (drain)");
                     }
                 }
             }
             Either::Second(data) => {
+                warn!("UART TX: {:02X?}", &data[..data.len().min(16)]);
                 if let Err(_) = transport.write(&data).await {
                     rate_error!(UART_WRITE_ERR, "UART write error: Io");
                 }
@@ -1020,13 +1022,14 @@ async fn main(spawner: Spawner) {
         // Feed the hardware watchdog each iteration
         wdt.feed();
 
-        // Check MQTT task health: if the tick counter hasn't changed in 30s,
-        // the MQTT task is frozen (cooperative executor starvation).
+        // Check MQTT task health: if the tick counter hasn't changed in 120s,
+        // the MQTT task is frozen (cooperative executor starvation). Threshold
+        // accounts for reconnect backoff (up to 60s per attempt).
         let mqtt_tick = mqtt_task::MQTT_TASK_TICK.load(Ordering::Relaxed);
         if mqtt_tick != mqtt_last_tick {
             mqtt_last_tick = mqtt_tick;
             mqtt_last_tick_time = Instant::now();
-        } else if mqtt_last_tick_time.elapsed().as_secs() >= 30 {
+        } else if mqtt_last_tick_time.elapsed().as_secs() >= 120 {
             warn!(
                 "MQTT task appears frozen (tick unchanged for {}s)",
                 mqtt_last_tick_time.elapsed().as_secs()
