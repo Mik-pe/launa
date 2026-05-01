@@ -929,9 +929,13 @@ async fn main(spawner: Spawner) {
         .with_rx(peripherals.GPIO16)
         .into_async();
 
-    info!("RS-485 UART initialized (no DE pin, auto-direction transceiver)");
-
-    let uart_transport = transport::Rs485Transport::new(uart, None);
+    // Use GPIO4 as explicit DE (Driver Enable) pin for RS-485 transceiver.
+    // Even with auto-direction transceivers, explicit DE control ensures
+    // the driver is asserted before data is sent. If GPIO4 is not connected
+    // to the transceiver, the pin will just toggle harmlessly.
+    let de_pin = Some(esp_hal::gpio::AnyPin::from(peripherals.GPIO4));
+    let uart_transport = transport::Rs485Transport::new(uart, de_pin);
+    info!("RS-485 UART initialized with DE pin on GPIO4");
 
     let wifi_stack = init_wifi(
         spawner,
