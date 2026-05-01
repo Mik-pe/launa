@@ -22,7 +22,11 @@ use log::{trace, warn};
 const DE_SAFETY_DELAY_US: u64 = 1000;
 
 /// Default DE assert-to-data delay in microseconds.
-const DE_ASSERT_DELAY_US: u64 = 50;
+///
+/// Some auto-direction transceivers or opto-isolated designs need a longer
+/// DE assert time. 2ms provides ~230 bit-times at 115200 baud, enough for
+/// the transceiver to fully enable the driver and the bus to settle.
+const DE_ASSERT_DELAY_US: u64 = 2000;
 
 /// RS-485 half-duplex UART transport for Balboa spa communication.
 ///
