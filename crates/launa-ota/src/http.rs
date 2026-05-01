@@ -36,7 +36,9 @@ pub fn validate_http_status(headers: &[u8]) -> bool {
         return false;
     }
     // Check the 3-digit status code is "200"
-    headers[code_start] == b'2' && headers[code_start + 1] == b'0' && headers[code_start + 2] == b'0'
+    headers[code_start] == b'2'
+        && headers[code_start + 1] == b'0'
+        && headers[code_start + 2] == b'0'
 }
 
 /// Extract the status line from HTTP headers for error logging.
@@ -483,10 +485,7 @@ mod tests {
 
         // No trailing CRLF — header after \r\n
         let headers = b"HTTP/1.1 200 OK\r\nX-Value:42";
-        assert_eq!(
-            find_header_value_start(headers, b"X-Value:"),
-            Some(25)
-        );
+        assert_eq!(find_header_value_start(headers, b"X-Value:"), Some(25));
     }
 
     #[test]
@@ -510,10 +509,7 @@ mod tests {
 
         // Neither at line start — should return None
         let headers = b"X-Comment: Content-Length: embedded\r\n\r\n";
-        assert_eq!(
-            find_header_value_start(headers, b"Content-Length: "),
-            None
-        );
+        assert_eq!(find_header_value_start(headers, b"Content-Length: "), None);
     }
 
     #[test]
@@ -533,10 +529,7 @@ mod tests {
         );
 
         // Find the last header
-        assert_eq!(
-            find_header_value_start(headers, b"Server: "),
-            Some(72)
-        );
+        assert_eq!(find_header_value_start(headers, b"Server: "), Some(72));
     }
 
     #[test]

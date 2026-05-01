@@ -202,6 +202,26 @@ fn uptime_secs() -> u64 {
     now.saturating_sub(start) as u64
 }
 
+/// Fast-path registration state shared between uart_task and main loop.
+///
+/// The Balboa spa controller has a tight response window after sending
+/// FE BF 00 (NewClientQuery). Reference implementations respond synchronously
+/// within the same serial read loop. Our async architecture (uart_task →
+/// FRAME_CHANNEL → main loop → UART_TX_CHANNEL → uart_task) introduces
+/// too much latency (~10-50ms+), causing the spa to miss our ID request.
+///
+/// These atomics allow uart_task to check registration status and client hash
+/// without going through the async channel hop, enabling an immediate
+/// synchronous response to NewClientQuery frames.
+static REGISTRATION_COMPLETE: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+static CLIENT_HASH_H: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+static CLIENT_HASH_L: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(1);
+/// Set by uart_task when the fast path has already sent the ID request.
+/// The main loop checks this to avoid sending a duplicate.
+static FAST_PATH_ID_REQUEST_SENT: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 static FRAME_CHANNEL: Channel<CriticalSectionRawMutex, Frame, 4> = Channel::new();
 static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
 static UART_TX_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
@@ -230,7 +250,19 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
     let uart_rx = UART_TX_CHANNEL.receiver();
     let mut buf = [0u8; 128];
     let mut first_bytes_logged = false;
-    let mut first_frame_logged = false;
+
+    // Pre-encoded ID request frame for byte-level fast path.
+    // Computed once at task start so we can write it with zero allocation.
+    let id_request_frame = {
+        let hash_h = CLIENT_HASH_H.load(Ordering::Relaxed);
+        let hash_l = CLIENT_HASH_L.load(Ordering::Relaxed);
+        launa_protocol::registration::RegistrationMessage::NewClientResponse {
+            device_type: 0x02,
+            client_hash: [hash_h, hash_l],
+        }
+        .encode()
+        .unwrap_or_default()
+    };
 
     info!("UART task started");
 
@@ -241,14 +273,46 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                 match result {
                     Ok(n) if n > 0 => {
                         UART_BYTES_RECEIVED.fetch_add(n as u32, Ordering::Relaxed);
+
                         if !first_bytes_logged {
                             first_bytes_logged = true;
                             UART_FIRST_BYTE_SEEN.store(1, Ordering::Relaxed);
-                            // Log first few raw bytes for diagnostics
                             let hex_dump: Vec<u8> = buf[..n.min(16)].to_vec();
                             let hex_str = launa_protocol::hex::to_hex(&hex_dump);
                             info!("UART: first {} bytes from spa bus: {}", n, hex_str);
                         }
+
+                        // Byte-level fast path for registration: scan raw RX bytes
+                        // for a complete FE BF 00 (NewClientQuery) frame pattern.
+                        // Respond IMMEDIATELY before feeding bytes to the frame decoder.
+                        // The spa expects a response within ~1ms of the query; the
+                        // frame decoder + async channel path takes ~6ms, which is too slow.
+                        if !REGISTRATION_COMPLETE.load(Ordering::Relaxed) && !id_request_frame.is_empty() {
+                            // FEBF query is: 7E 05 FE BF 00 <CRC> 7E (7 bytes total)
+                            // The payload byte 0x00 is at index 4, preceded by FE BF at indices 2,3
+                            // We scan for FE BF 00 and verify 7E markers around it
+                            for i in 2..n.saturating_sub(2) {
+                                if buf[i] == 0xFE
+                                    && buf[i + 1] == 0xBF
+                                    && buf[i + 2] == 0x00
+                                {
+                                    // Verify: buf[i-2] should be 0x7E (start), buf[i-1] is length (0x05)
+                                    // buf[i+3] is CRC, buf[i+4] should be 0x7E (end)
+                                    let has_start = i >= 2 && buf[i - 2] == 0x7E;
+                                    let has_end = i + 4 < n && buf[i + 4] == 0x7E;
+                                    let has_end_crc1 = i + 3 < n && buf[i + 3] == 0x7E && i + 4 >= n;
+
+                                    if has_start && (has_end || has_end_crc1) {
+                                        info!("UART: byte-level fast-path FEBF00 detected, sending ID request");
+                                        let _ = transport.write(&id_request_frame).await;
+                                        // Signal main loop to skip duplicate send
+                                        FAST_PATH_ID_REQUEST_SENT.store(true, Ordering::Release);
+                                        break; // Only respond once per read
+                                    }
+                                }
+                            }
+                        }
+
                         // Periodic raw byte logging (every ~1000 bytes)
                         let total = UART_BYTES_RECEIVED.load(Ordering::Relaxed);
                         if total % 1000 < n as u32 {
@@ -259,15 +323,21 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                         let prev_errors = decoder.frame_error_count();
                         for &byte in &buf[..n] {
                             if let Some(frame) = decoder.feed(byte) {
-                                if !first_frame_logged {
-                                    first_frame_logged = true;
+                                // Only log non-10BF frames (10BF Ready floods the log)
+                                if frame.message_type != [0x10, 0xBF] {
                                     info!(
-                                        "UART: first frame decoded, type={:02X}{:02X}, len={}",
+                                        "UART: decoded frame type={:02X}{:02X} len={}",
                                         frame.message_type[0],
                                         frame.message_type[1],
                                         frame.payload.len()
                                     );
                                 }
+
+                                // NOTE: Frame-level fast-path removed in favor of byte-level
+                                // fast-path above (responds before decoder processes bytes).
+                                // The frame-level check is now redundant since byte-level
+                                // already handles it.
+
                                 frame_sender.send(frame).await;
                             }
                         }
@@ -293,6 +363,8 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                 }
             }
             Either::Second(data) => {
+                let hex = launa_protocol::hex::to_hex(&data);
+                info!("UART TX: {} bytes: {}", data.len(), hex);
                 if let Err(_) = transport.write(&data).await {
                     rate_error!(UART_WRITE_ERR, "UART write error: Io");
                 }
@@ -668,7 +740,15 @@ async fn process_uart_frames(
         publish_sniff_frame(&frame);
     }
 
-    let actions = app.process_frame(&frame);
+    let mut actions = app.process_frame(&frame);
+
+    // If the uart_task fast-path already sent the ID request, suppress the
+    // duplicate SendFrame action from the main loop. The RegistrationStateMachine
+    // still transitions correctly (WaitingForQuery → WaitingForAssignment).
+    if FAST_PATH_ID_REQUEST_SENT.swap(false, Ordering::AcqRel) {
+        actions.retain(|a| !matches!(a, AppAction::SendFrame(_)));
+    }
+
     execute_actions(
         &actions,
         device_id,
@@ -681,7 +761,10 @@ async fn process_uart_frames(
         if sniff_mode {
             publish_sniff_frame(&frame);
         }
-        let actions = app.process_frame(&frame);
+        let mut actions = app.process_frame(&frame);
+        if FAST_PATH_ID_REQUEST_SENT.swap(false, Ordering::AcqRel) {
+            actions.retain(|a| !matches!(a, AppAction::SendFrame(_)));
+        }
         execute_actions(
             &actions,
             device_id,
@@ -908,14 +991,12 @@ async fn main(spawner: Spawner) {
     let clock = clock::EmbassyClock::new();
     // Derive a unique 2-byte client hash from the device ID for RS-485 registration.
     // Uses a simple FNV-1a-like hash so each device gets a distinct channel assignment.
-    let client_hash = {
-        let mut h: u16 = 0x811C;
-        for &b in app_config.device_id.as_bytes() {
-            h ^= b as u16;
-            h = h.wrapping_mul(0x0101);
-        }
-        [(h >> 8) as u8, h as u8]
-    };
+    // TEMPORARY: hardcoded to F1 73 (cribskip reference) to test if hash matters.
+    let client_hash = [0xF1, 0x73];
+    // Store client hash in atomics so uart_task fast-path can read it
+    // without async channel communication.
+    CLIENT_HASH_H.store(client_hash[0], Ordering::Relaxed);
+    CLIENT_HASH_L.store(client_hash[1], Ordering::Relaxed);
     let mut app = SpaApp::with_client_hash(&clock, client_hash);
     let device_id_str: &str = &app_config.device_id;
     let mut sniff_mode: bool = false;
@@ -1007,6 +1088,11 @@ async fn main(spawner: Spawner) {
         )
         .await;
 
+        // Sync fast-path registration state atomics with SpaApp state.
+        // Must run after both process_uart_frames() and tick() since both
+        // can change registration status (tick resets it on stale/timeout).
+        REGISTRATION_COMPLETE.store(app.is_registered(), Ordering::Relaxed);
+
         // Heap check (uses actual ESP32 free heap)
         let heap_actions = app.check_heap(esp_alloc::HEAP.free());
         execute_actions(
@@ -1035,11 +1121,12 @@ async fn main(spawner: Spawner) {
             let should_test = uart_tx_test_interval.is_none_or(|t| t.elapsed().as_secs() >= 15);
             if should_test {
                 uart_tx_test_interval = Some(Instant::now());
-                // Send a registration request: FE BF 01 02 F1 73
-                match launa_protocol::frame::FrameEncoder::encode(
-                    [0xFE, 0xBF],
-                    &[0x01, 0x02, client_hash[0], client_hash[1]],
-                ) {
+                // Send a registration request: FE BF 01 02 <hash>
+                let msg = launa_protocol::registration::RegistrationMessage::NewClientResponse {
+                    device_type: 0x02,
+                    client_hash,
+                };
+                match msg.encode() {
                     Ok(encoded) => {
                         info!(
                             "UART TX test: sending registration probe ({} bytes)",

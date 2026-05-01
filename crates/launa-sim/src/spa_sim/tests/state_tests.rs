@@ -81,11 +81,14 @@ fn test_simulate_spa_reboot_reregistration() {
     // The assignment frame is FE BF 02 <id>
     let id_frame = &assignment_frames[0];
     let msg = launa_protocol::dispatcher::dispatch_frame(id_frame);
-    let launa_protocol::dispatcher::IncomingMessage::ClientIdAssignment { id } = msg else {
-        panic!("Expected ClientIdAssignment, got {:?}", msg);
+    let launa_protocol::dispatcher::IncomingMessage::Registration(
+        launa_protocol::registration::RegistrationMessage::ClientIdAssignment { channel, .. },
+    ) = msg
+    else {
+        panic!("Expected Registration(ClientIdAssignment), got {:?}", msg);
     };
     // Send ack
-    let ack = launa_protocol::frame::FrameEncoder::encode([id, 0xBF], &[0x03]).unwrap();
+    let ack = launa_protocol::frame::FrameEncoder::encode([channel, 0xBF], &[0x03]).unwrap();
     let ack_frames = decoder.feed_slice(&ack);
     sim.process_frame(&ack_frames[0]);
 
@@ -590,7 +593,8 @@ fn test_filter_cycle_stop_manual_toggle_off() {
     // Manually toggle pump off (simulating filter cycle end)
     let (mt, payload) =
         launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
-            .encode().unwrap();
+            .encode()
+            .unwrap();
     let encoded = launa_protocol::frame::FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
 

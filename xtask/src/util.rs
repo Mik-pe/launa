@@ -240,7 +240,10 @@ pub fn parse_partitions_csv(path: &Path) -> anyhow::Result<Vec<PartitionEntry>> 
 }
 
 /// Find a partition by name from a parsed partition table.
-pub fn find_partition<'a>(entries: &'a [PartitionEntry], name: &str) -> anyhow::Result<&'a PartitionEntry> {
+pub fn find_partition<'a>(
+    entries: &'a [PartitionEntry],
+    name: &str,
+) -> anyhow::Result<&'a PartitionEntry> {
     entries
         .iter()
         .find(|e| e.name == name)

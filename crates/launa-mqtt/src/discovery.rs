@@ -966,7 +966,10 @@ mod tests {
         // and sw_version produce valid JSON in ALL discovery payloads.
         let builder = builder_with_special_chars();
         let configs = builder.build();
-        assert!(configs.len() >= 27, "expected at least 27 configs (base count)");
+        assert!(
+            configs.len() >= 27,
+            "expected at least 27 configs (base count)"
+        );
 
         for (topic, json_str) in &configs {
             let _: serde_json::Value = serde_json::from_str(json_str).unwrap_or_else(|e| {

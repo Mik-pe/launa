@@ -247,7 +247,9 @@ impl Command {
             Command::SettingsRequest(SettingsType::Preferences) => {
                 Ok(([0x0A, 0xBF], vec![0x22, 0x08, 0x00, 0x00]))
             }
-            Command::FaultLogRequest { entry } => Ok(([0x0A, 0xBF], vec![0x22, 0x20, *entry, 0x00])),
+            Command::FaultLogRequest { entry } => {
+                Ok(([0x0A, 0xBF], vec![0x22, 0x20, *entry, 0x00]))
+            }
             Command::NothingToSend { client_id } => Ok(([*client_id, 0xBF], vec![0x07])),
             Command::Sniff(_) => Ok(([0x00, 0x00], Vec::new())), // not sent to spa
             Command::Reboot => Ok(([0x00, 0x00], Vec::new())),   // not sent to spa

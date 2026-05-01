@@ -13,9 +13,6 @@ pub(crate) const DEFAULT_HOLD_MODE_TIMEOUT_MS: u64 = 60 * 60 * 1000;
 pub(crate) const STALE_PROBE_INTERVAL_MS: u64 = 5_000;
 pub(crate) const STALE_THRESHOLD_MS: u64 = 30_000;
 pub(crate) const REGISTRATION_TIMEOUT_MS: u64 = 5_000;
-/// Interval for proactive registration probes when unregistered but
-/// receiving bus traffic (spa is alive but hasn't sent a new-client query).
-pub(crate) const REGISTRATION_PROBE_INTERVAL_MS: u64 = 10_000;
 pub(crate) const DIAGNOSTICS_INTERVAL_MS: u64 = 60_000;
 
 pub(crate) const HEAP_CHECK_INTERVAL_MS: u64 = 30_000;

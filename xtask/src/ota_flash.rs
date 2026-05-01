@@ -247,8 +247,9 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     }
 
     // Step 4: Publish OTA command and wait for device to download + reboot.
-    //          Retry up to 3 attempts if the device doesn't start downloading within 15s.
-    const MAX_OTA_ATTEMPTS: usize = 3;
+    const MAX_TRIGGER_ATTEMPTS: usize = 3;
+    const DOWNLOAD_START_TIMEOUT_SECS: u64 = 30;
+    const REBOOT_TIMEOUT_SECS: u64 = 120;
 
     let ota_topic = format!("launa/{}/ota", device_id);
     let ota_payload = serde_json::json!({ "url": firmware_url });
@@ -256,31 +257,56 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut version_payload: Option<String> = None;
     let mut download_complete = false;
 
-    for attempt in 1..=MAX_OTA_ATTEMPTS {
-        if attempt > 1 {
-            // Reset OTA progress so we can detect a fresh download
-            ota_progress
-                .bytes_sent
-                .store(0, std::sync::atomic::Ordering::SeqCst);
+    // Publish the OTA command once. The MQTT message is QoS 1 (AtLeastOnce)
+    // so the broker will deliver it even if the device is briefly disconnected.
+    // Do NOT republish on retries — the device may have already received it and
+    // started downloading; a second OTA command would queue up and trigger an
+    // unwanted re-OTA after reboot.
+    println!("\n[4/6] Publishing OTA command to device...");
+    client
+        .publish(
+            &ota_topic,
+            rumqttc::QoS::AtLeastOnce,
+            false,
+            ota_payload.to_string().as_bytes(),
+        )
+        .context("Failed to publish OTA command")?;
+    println!("OTA command published. Waiting for device to start download...");
+
+    // Phase 1: Wait for the device to connect to the OTA server and start downloading.
+    // The device must: receive MQTT → forward URL to main loop → start HTTP download.
+    // This can take several seconds depending on where in the event loop the
+    // device is when the MQTT message arrives.
+    let mut download_started = false;
+    for attempt in 1..=MAX_TRIGGER_ATTEMPTS {
+        // Check if download already started (from a previous attempt's MQTT message)
+        let bytes = ota_progress
+            .bytes_sent
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if bytes > 0 {
+            download_started = true;
+            break;
         }
 
-        println!(
-            "\n[4/6] Triggering OTA on device (attempt {}/{})...",
-            attempt, MAX_OTA_ATTEMPTS
-        );
-        client
-            .publish(
-                &ota_topic,
-                rumqttc::QoS::AtLeastOnce,
-                false,
-                ota_payload.to_string().as_bytes(),
-            )
-            .context("Failed to publish OTA command")?;
+        if attempt > 1 {
+            // Re-publish only if we haven't seen any download activity.
+            // The broker may have lost the message or the device didn't process it.
+            println!(
+                "No download activity, re-publishing OTA command (attempt {}/{})...",
+                attempt, MAX_TRIGGER_ATTEMPTS
+            );
+            client
+                .publish(
+                    &ota_topic,
+                    rumqttc::QoS::AtLeastOnce,
+                    false,
+                    ota_payload.to_string().as_bytes(),
+                )
+                .context("Failed to re-publish OTA command")?;
+        }
 
-        // Phase 1: Wait for download to start (15s timeout)
-        println!("[4/6] Waiting for device to connect and download firmware...");
-        let connect_deadline = std::time::Instant::now() + Duration::from_secs(15);
-        let mut download_started = false;
+        let phase1_deadline =
+            std::time::Instant::now() + Duration::from_secs(DOWNLOAD_START_TIMEOUT_SECS);
         loop {
             let bytes = ota_progress
                 .bytes_sent
@@ -290,60 +316,66 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                 download_started = true;
                 break;
             }
-            if std::time::Instant::now() > connect_deadline {
+            if std::time::Instant::now() > phase1_deadline {
                 break;
             }
-            std::thread::sleep(Duration::from_millis(500));
-        }
-
-        if !download_started {
-            if attempt < MAX_OTA_ATTEMPTS {
-                println!(
-                    "Device did not connect within 15s, retrying ({}/{} attempts remaining)...",
-                    MAX_OTA_ATTEMPTS - attempt,
-                    MAX_OTA_ATTEMPTS - 1
-                );
-                // Drain any pending MQTT events before retrying
-                let drain_deadline = std::time::Instant::now() + Duration::from_secs(1);
-                for notification in connection.iter() {
-                    if std::time::Instant::now() > drain_deadline {
-                        break;
-                    }
-                    let _ = notification;
+            // Also drain MQTT events to keep the connection alive
+            let drain_deadline = std::time::Instant::now() + Duration::from_millis(500);
+            for notification in connection.iter() {
+                if std::time::Instant::now() > drain_deadline {
+                    break;
                 }
-                continue;
-            } else {
-                server_shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
-                let _ = server_thread.join();
-                bail!(
-                    "OTA flash failed: device did not connect to OTA server after {} attempts.\n\
-                     Check that the device is online and can reach {}:{}.",
-                    MAX_OTA_ATTEMPTS,
-                    ota_host,
-                    ota_port
-                );
+                let _ = notification;
             }
         }
 
-        // Phase 2: Wait for download to finish, then for device to reboot and come online.
-        let mut idle_since: Option<std::time::Instant> = None;
+        if download_started {
+            break;
+        }
+    }
 
+    if !download_started {
+        server_shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = server_thread.join();
+        bail!(
+            "OTA flash failed: device did not start downloading after {} attempts ({}s timeout each).\n\
+             Check that the device is online and can reach {}:{}.",
+            MAX_TRIGGER_ATTEMPTS,
+            DOWNLOAD_START_TIMEOUT_SECS,
+            ota_host,
+            ota_port
+        );
+    }
+
+    // Phase 2: Wait for download to finish, then for device to reboot and come online.
+    // Total timeout covers: download completion + flash write + reboot + WiFi connect + MQTT connect.
+    println!(
+        "Download in progress, waiting up to {}s for device to reboot and come online...",
+        REBOOT_TIMEOUT_SECS
+    );
+    let phase2_deadline = std::time::Instant::now() + Duration::from_secs(REBOOT_TIMEOUT_SECS);
+
+    loop {
+        if std::time::Instant::now() > phase2_deadline {
+            break;
+        }
+
+        // Check download progress
+        let bytes = ota_progress
+            .bytes_sent
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if !download_complete && bytes >= ota_progress.total_bytes {
+            download_complete = true;
+            println!("Firmware download complete! Waiting for device to flash and reboot...");
+        }
+
+        // Poll MQTT for device status with a short timeout
+        let poll_deadline = std::time::Instant::now() + Duration::from_secs(1);
         for notification in connection.iter() {
-            let bytes = ota_progress
-                .bytes_sent
-                .load(std::sync::atomic::Ordering::SeqCst);
-            if !download_complete && bytes >= ota_progress.total_bytes {
-                download_complete = true;
-                println!("Firmware download complete! Waiting for device to flash and reboot...");
-                idle_since = Some(std::time::Instant::now());
-            }
-
-            if download_complete {
-                if let Some(since) = idle_since {
-                    if since.elapsed() > Duration::from_secs(60) {
-                        break;
-                    }
-                }
+            if std::time::Instant::now() > poll_deadline
+                || std::time::Instant::now() > phase2_deadline
+            {
+                break;
             }
 
             match notification {
@@ -374,14 +406,17 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    eprintln!("MQTT error: {}", e);
+                    // Don't spam — the xtask MQTT connection may flake during device reboot
+                    if !download_complete {
+                        eprintln!("MQTT error: {}", e);
+                    }
                 }
             }
         }
 
-        // If download started (Phase 1 succeeded), don't retry Phase 2 failures —
-        // the device has the firmware and a retry would start a new download.
-        break;
+        if came_online && version_payload.is_some() {
+            break;
+        }
     }
 
     // Step 6: Verify firmware version
@@ -390,7 +425,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         if !download_complete {
             bail!("OTA flash failed: firmware download did not complete.");
         } else {
-            bail!("OTA flash failed: firmware was downloaded but device did not come back online within 60s. It may have failed to flash.");
+            bail!("OTA flash failed: firmware was downloaded but device did not come back online within {}s. It may have failed to flash.", REBOOT_TIMEOUT_SECS);
         }
     }
     match (&expected_version, &version_payload) {

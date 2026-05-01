@@ -516,7 +516,9 @@ fn test_toggle_all_items() {
         panic!("Expected StatusUpdate");
     }
 
-    let (mt, payload) = Command::ToggleItem(ToggleItem::HeatingMode).encode().unwrap();
+    let (mt, payload) = Command::ToggleItem(ToggleItem::HeatingMode)
+        .encode()
+        .unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     let frames = decoder.feed_slice(&encoded);
     sim.process_frame(&frames[0]);
@@ -530,7 +532,9 @@ fn test_toggle_all_items() {
         panic!("Expected StatusUpdate");
     }
 
-    let (mt, payload) = Command::ToggleItem(ToggleItem::TemperatureRange).encode().unwrap();
+    let (mt, payload) = Command::ToggleItem(ToggleItem::TemperatureRange)
+        .encode()
+        .unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     let frames = decoder.feed_slice(&encoded);
     sim.process_frame(&frames[0]);

@@ -259,7 +259,11 @@ where
         // and points to the correct partition.
         let running_entry = if running_slot == 0 { &entry0 } else { &entry1 };
         let running_valid = if running_slot == 0 { valid0 } else { valid1 };
-        let running_seq = if running_valid { crate::flash::seq_from_entry(running_entry) } else { 0 };
+        let running_seq = if running_valid {
+            crate::flash::seq_from_entry(running_entry)
+        } else {
+            0
+        };
         let running_correct = running_seq > 0 && (running_seq - 1) % 2 == running_slot as u32;
 
         let other_valid = if running_slot == 0 { valid1 } else { valid0 };
@@ -726,14 +730,20 @@ mod tests {
         );
         // Slot 1 was seeded because it was empty
         let slot1_seq_after_first = seq_from_entry(&read_otadata_entry(&ota.flash, 1));
-        assert_eq!(slot1_seq_after_first, 2, "slot 1 should be seeded with seq=2");
+        assert_eq!(
+            slot1_seq_after_first, 2,
+            "slot 1 should be seeded with seq=2"
+        );
 
         // Now write to slot 1 (Ota1) — slot 0 is already valid so only slot 1 is updated
         set_boot_partition(&mut ota.flash, Partition::Ota1).unwrap();
         let slot1_entry = read_otadata_entry(&ota.flash, 1);
         let slot1_seq = seq_from_entry(&slot1_entry);
         // max_seq was 2, next even seq > 2 for Ota1 is 4
-        assert_eq!(slot1_seq, 4, "slot 1 seq should be 4 (Ota1 needs even seq, >2)");
+        assert_eq!(
+            slot1_seq, 4,
+            "slot 1 seq should be 4 (Ota1 needs even seq, >2)"
+        );
 
         // Verify slot 0 is STILL intact (not destroyed by slot 1 erase)
         let slot0_entry_after_second = read_otadata_entry(&ota.flash, 0);
@@ -1178,7 +1188,11 @@ mod tests {
         // Simulate factory boot: create_ota detects both slots = 0 → defaults to Ota0
         let mut temp = EspOtaFlash::new(flash, Partition::Ota0);
         let running = temp.detect_running_partition().unwrap();
-        assert_eq!(running, Partition::Ota0, "should default to Ota0 on clean flash");
+        assert_eq!(
+            running,
+            Partition::Ota0,
+            "should default to Ota0 on clean flash"
+        );
         let storage = temp.into_flash();
 
         // OTA update (running thinks it's Ota0, so target is Ota1)

@@ -56,7 +56,9 @@ pub enum OtaError {
     HashMismatch { expected: u32, actual: u32 },
     #[error("invalid ESP32 image header magic")]
     InvalidImageHeader,
-    #[error("OTA read-back verification failed: expected CRC {expected:#010x}, got {actual:#010x}")]
+    #[error(
+        "OTA read-back verification failed: expected CRC {expected:#010x}, got {actual:#010x}"
+    )]
     VerificationFailed { expected: u32, actual: u32 },
 }
 

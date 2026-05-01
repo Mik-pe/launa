@@ -6,6 +6,8 @@
 //! - Registration race condition (commands queued before registration)
 //! - SpaApp registration end-to-end with SpaSim
 //! - Registration with interleaved frames
+//! - Client hash validation
+//! - Existing client reconnection
 
 mod common;
 
@@ -17,16 +19,18 @@ use common::{
 use launa_core::AppAction;
 use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
-use launa_protocol::frame::{Frame, FrameDecoder, FrameEncoder};
+use launa_protocol::frame::{Frame, FrameDecoder};
 use launa_protocol::registration::{
-    RegistrationAction, RegistrationState, RegistrationStateMachine,
+    RegistrationAction, RegistrationMessage, RegistrationState, RegistrationStateMachine,
 };
 use launa_sim::SpaSim;
+
+const TEST_HASH: [u8; 2] = [0xF1, 0x73];
 
 #[test]
 fn test_full_registration_flow() {
     let mut sim = SpaSim::new();
-    let mut client_sm = RegistrationStateMachine::new();
+    let mut client_sm = RegistrationStateMachine::new(TEST_HASH);
     let mut decoder = FrameDecoder::new();
 
     assert_eq!(client_sm.state(), &RegistrationState::WaitingForQuery);
@@ -36,13 +40,22 @@ fn test_full_registration_flow() {
     assert_eq!(query_frames.len(), 1);
 
     let query_msg = dispatch_frame(&query_frames[0]);
-    assert_eq!(query_msg, IncomingMessage::NewClientQuery);
+    assert_eq!(
+        query_msg,
+        IncomingMessage::Registration(RegistrationMessage::NewClientQuery)
+    );
 
-    let action = client_sm.process([0xFE, 0xBF], &[0x00]);
-    assert_eq!(action, RegistrationAction::SendIdRequest);
+    let action = client_sm.process(&RegistrationMessage::NewClientQuery);
+    assert_eq!(action, RegistrationAction::SendNewClientResponse);
     assert_eq!(client_sm.state(), &RegistrationState::WaitingForAssignment);
 
-    let client_request = FrameEncoder::encode([0xFE, 0xBF], &[0x01]).unwrap();
+    // Send client request with hash
+    let client_request = RegistrationMessage::NewClientResponse {
+        device_type: 0x02,
+        client_hash: TEST_HASH,
+    }
+    .encode()
+    .unwrap();
     let request_frames = decoder.feed_slice(&client_request);
     let request_frame = &request_frames[0];
 
@@ -54,27 +67,40 @@ fn test_full_registration_flow() {
 
     let assignment_msg = dispatch_frame(assignment_frame);
     match assignment_msg {
-        IncomingMessage::ClientIdAssignment { id } => {
-            assert_eq!(id, 0x02);
+        IncomingMessage::Registration(RegistrationMessage::ClientIdAssignment {
+            channel,
+            client_hash,
+        }) => {
+            assert_eq!(channel, 0x02);
+            // Hash should be echoed back
+            assert_eq!(client_hash, TEST_HASH);
 
-            let action = client_sm.process([0xFE, 0xBF], &[0x02, id]);
-            assert_eq!(action, RegistrationAction::SendIdAck { client_id: id });
+            let action = client_sm.process(&RegistrationMessage::ClientIdAssignment {
+                channel,
+                client_hash,
+            });
+            assert_eq!(
+                action,
+                RegistrationAction::SendClientIdAck { client_id: channel }
+            );
             assert!(client_sm.is_registered());
             assert_eq!(client_sm.client_id(), Some(0x02));
 
-            let ack = FrameEncoder::encode([id, 0xBF], &[0x03]).unwrap();
+            let ack = RegistrationMessage::ClientIdAck { channel }
+                .encode()
+                .unwrap();
             let ack_frames = decoder.feed_slice(&ack);
             sim.process_frame(&ack_frames[0]);
             assert_eq!(sim.client_id, Some(0x02));
         }
-        _ => panic!("Expected ClientIdAssignment"),
+        _ => panic!("Expected Registration(ClientIdAssignment)"),
     }
 }
 
 #[test]
 fn test_registration_state_machine_reset() {
-    let mut sm = RegistrationStateMachine::new();
-    sm.process([0xFE, 0xBF], &[0x00]);
+    let mut sm = RegistrationStateMachine::new(TEST_HASH);
+    sm.process(&RegistrationMessage::NewClientQuery);
     assert_eq!(sm.state(), &RegistrationState::WaitingForAssignment);
 
     sm.reset();
@@ -84,29 +110,28 @@ fn test_registration_state_machine_reset() {
 
 #[test]
 fn test_registration_flow_with_state_machine() {
-    use launa_protocol::registration::{
-        RegistrationAction, RegistrationState, RegistrationStateMachine,
-    };
-
-    let mut sm = RegistrationStateMachine::new();
+    let mut sm = RegistrationStateMachine::new(TEST_HASH);
     assert!(!sm.is_registered());
     assert!(matches!(sm.state(), RegistrationState::WaitingForQuery));
 
-    let action = sm.process([0xFE, 0xBF], &[0x00]);
+    let action = sm.process(&RegistrationMessage::NewClientQuery);
     assert_eq!(
         action,
-        RegistrationAction::SendIdRequest,
-        "should respond to query with ID request"
+        RegistrationAction::SendNewClientResponse,
+        "should respond to query with new client response"
     );
     assert!(matches!(
         sm.state(),
         RegistrationState::WaitingForAssignment
     ));
 
-    let action = sm.process([0xFE, 0xBF], &[0x02, 0x03]);
+    let action = sm.process(&RegistrationMessage::ClientIdAssignment {
+        channel: 0x03,
+        client_hash: TEST_HASH,
+    });
     assert_eq!(
         action,
-        RegistrationAction::SendIdAck { client_id: 0x03 },
+        RegistrationAction::SendClientIdAck { client_id: 0x03 },
         "should send ack after assignment"
     );
     assert!(sm.is_registered(), "should be registered after assignment");
@@ -114,6 +139,97 @@ fn test_registration_flow_with_state_machine() {
     let cmd = Command::NothingToSend { client_id: 0x03 };
     let (mt, _) = cmd.encode().unwrap();
     assert_eq!(mt, [0x03, 0xBF]);
+}
+
+#[test]
+fn test_hash_mismatch_rejected() {
+    let mut sm = RegistrationStateMachine::new(TEST_HASH);
+    sm.process(&RegistrationMessage::NewClientQuery);
+
+    // Assignment with wrong hash should be ignored
+    let action = sm.process(&RegistrationMessage::ClientIdAssignment {
+        channel: 0x05,
+        client_hash: [0xAA, 0xBB],
+    });
+    assert_eq!(action, RegistrationAction::None);
+    assert_eq!(sm.state(), &RegistrationState::WaitingForAssignment);
+    assert!(!sm.is_registered());
+
+    // Assignment with correct hash should succeed
+    let action = sm.process(&RegistrationMessage::ClientIdAssignment {
+        channel: 0x06,
+        client_hash: TEST_HASH,
+    });
+    assert_eq!(
+        action,
+        RegistrationAction::SendClientIdAck { client_id: 0x06 }
+    );
+    assert!(sm.is_registered());
+}
+
+#[test]
+fn test_legacy_assignment_without_hash_accepted() {
+    let mut sm = RegistrationStateMachine::new(TEST_HASH);
+    sm.process(&RegistrationMessage::NewClientQuery);
+
+    // Legacy assignment with zero hash (00 00) should be accepted
+    let action = sm.process(&RegistrationMessage::ClientIdAssignment {
+        channel: 0x05,
+        client_hash: [0x00, 0x00],
+    });
+    assert_eq!(
+        action,
+        RegistrationAction::SendClientIdAck { client_id: 0x05 }
+    );
+    assert!(sm.is_registered());
+}
+
+#[test]
+fn test_existing_client_reconnection() {
+    let mut sm = RegistrationStateMachine::with_previous_channel(TEST_HASH, 0x05);
+    assert_eq!(sm.previous_channel(), Some(0x05));
+
+    // On NewClientQuery, SM should try existing client path
+    let action = sm.process(&RegistrationMessage::NewClientQuery);
+    match action {
+        RegistrationAction::SendExistingClientRequest { message } => {
+            let msg = message.encode().unwrap();
+            assert!(!msg.is_empty());
+        }
+        _ => panic!("Expected SendExistingClientRequest, got {:?}", action),
+    }
+    assert_eq!(sm.state(), &RegistrationState::WaitingForExistingResponse);
+
+    // Spa confirms our existing client
+    let action = sm.process(&RegistrationMessage::ExistingClientResponse {
+        channel: 0x05,
+        client_hash: TEST_HASH,
+    });
+    assert_eq!(action, RegistrationAction::None);
+    assert!(sm.is_registered());
+    assert_eq!(sm.client_id(), Some(0x05));
+}
+
+#[test]
+fn test_existing_client_fallback_to_new() {
+    let mut sm = RegistrationStateMachine::with_previous_channel(TEST_HASH, 0x05);
+    sm.process(&RegistrationMessage::NewClientQuery);
+
+    // Spa sends another query (doesn't recognize existing client)
+    let action = sm.process(&RegistrationMessage::NewClientQuery);
+    assert_eq!(action, RegistrationAction::SendNewClientResponse);
+    assert_eq!(sm.state(), &RegistrationState::WaitingForAssignment);
+
+    // Normal assignment completes the flow
+    let action = sm.process(&RegistrationMessage::ClientIdAssignment {
+        channel: 0x06,
+        client_hash: TEST_HASH,
+    });
+    assert_eq!(
+        action,
+        RegistrationAction::SendClientIdAck { client_id: 0x06 }
+    );
+    assert!(sm.is_registered());
 }
 
 #[test]
@@ -162,7 +278,7 @@ fn test_registration_race_condition() {
                 AppAction::SendFrame(data) => Some(data.clone()),
                 _ => None,
             })
-            .expect(&format!("Ready {} should produce SendFrame", i + 1));
+            .unwrap_or_else(|| panic!("Ready {} should produce SendFrame", i + 1));
         sent_commands.push(frame_data);
     }
 
@@ -236,4 +352,33 @@ fn test_spaapp_registration_with_interleaved_frames() {
         app.process_frame(frame);
     }
     assert!(app.is_registered(), "should be registered after assignment");
+}
+
+#[test]
+fn test_spaapp_existing_client_reconnection_e2e() {
+    // First, register normally
+    let (_clock, app) = make_spaapp();
+    let mut app = app;
+    let mut sim = SpaSim::new();
+    full_registration(&mut sim, &mut app);
+
+    let _assigned_id = app.client_id().expect("should have client ID");
+    assert!(app.is_registered());
+
+    // Simulate spa reboot — spa forgets all clients
+    sim.simulate_spa_reboot();
+    assert!(sim.client_id.is_none());
+
+    // Spa starts sending registration queries again
+    let raw_bytes = sim.tick();
+    let mut decoder = FrameDecoder::new();
+    let frames = decoder.feed_slice(&raw_bytes);
+
+    // The app is still registered from its perspective, but the sim is not
+    // In real life, the app would detect stale and reset registration
+    // For this test, just verify the sim sends a registration query
+    let has_query = frames
+        .iter()
+        .any(|f| f.message_type == [0xFE, 0xBF] && !f.payload.is_empty() && f.payload[0] == 0x00);
+    assert!(has_query, "rebooted spa should send registration query");
 }

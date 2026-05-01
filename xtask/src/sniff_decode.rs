@@ -212,9 +212,38 @@ fn describe_message(msg: &IncomingMessage) -> String {
 
         IncomingMessage::Ready => "Ready (bus free)".to_string(),
 
-        IncomingMessage::NewClientQuery => "Registration query".to_string(),
+        IncomingMessage::Registration(
+            launa_protocol::registration::RegistrationMessage::NewClientQuery,
+        ) => "Registration query".to_string(),
 
-        IncomingMessage::ClientIdAssignment { id } => format!("Client ID assigned: {}", id),
+        IncomingMessage::Registration(
+            launa_protocol::registration::RegistrationMessage::ClientIdAssignment {
+                channel, ..
+            },
+        ) => format!("Client ID assigned: {}", channel),
+
+        IncomingMessage::Registration(
+            launa_protocol::registration::RegistrationMessage::NewClientResponse { .. },
+        ) => "Registration ID request".to_string(),
+
+        IncomingMessage::Registration(
+            launa_protocol::registration::RegistrationMessage::ClientIdAck { channel },
+        ) => format!("Client ID ack: {}", channel),
+
+        IncomingMessage::Registration(
+            launa_protocol::registration::RegistrationMessage::ExistingClientRequest { .. },
+        ) => "Existing client request".to_string(),
+
+        IncomingMessage::Registration(
+            launa_protocol::registration::RegistrationMessage::ExistingClientResponse {
+                channel,
+                ..
+            },
+        ) => format!("Existing client response: channel={}", channel),
+
+        IncomingMessage::Registration(
+            launa_protocol::registration::RegistrationMessage::ClearToSend { channel },
+        ) => format!("Clear to send: channel={}", channel),
 
         IncomingMessage::ConfigurationResponse(config)
         | IncomingMessage::ControlConfiguration(config) => {

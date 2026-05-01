@@ -169,7 +169,10 @@ fn parse_set_temperature(payload: &str) -> ParseResult {
     };
 
     if t.is_nan() || t < 0.0 || t > 255.0 {
-        return ParseResult::InvalidPayload(format!("temperature out of representable range: {:?}", payload));
+        return ParseResult::InvalidPayload(format!(
+            "temperature out of representable range: {:?}",
+            payload
+        ));
     }
 
     let temp: u8 = (t + 0.5) as u8;
@@ -478,14 +481,7 @@ mod tests {
     /// Extreme float values (very large, negative, NaN, infinity) must not overflow u8 cast.
     #[test]
     fn test_set_temperature_extreme_floats() {
-        let extreme_cases: &[&str] = &[
-            "1e10",
-            "-100.0",
-            "-0.1",
-            "999999.0",
-            "256.0",
-            "1000.0",
-        ];
+        let extreme_cases: &[&str] = &["1e10", "-100.0", "-0.1", "999999.0", "256.0", "1000.0"];
 
         for (i, payload) in extreme_cases.iter().enumerate() {
             let topic = format!("{}/set_temperature", CMD_BASE);

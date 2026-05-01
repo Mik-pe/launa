@@ -226,23 +226,14 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                         // Handle OTA commands
                         if mqtt.is_ota_topic(&topic) {
                             if let Some(url) = mqtt_client::MqttClient::parse_ota_url(&payload) {
-                                info!("OTA firmware URL: {}", url);
-                                // Graceful shutdown before OTA reboot
-                                info!("OTA: graceful shutdown — publishing offline...");
-                                let _ = mqtt.publish_availability(false).await;
-                                info!("OTA: sending MQTT DISCONNECT...");
-                                mqtt.disconnect().await;
-                                info!("OTA: draining UART TX channel...");
-                                while UART_TX_CHANNEL.try_receive().is_ok() {
-                                    // Drain pending UART writes
-                                }
-                                // Allow time for in-flight UART bytes to complete
-                                Timer::after(Duration::from_millis(50)).await;
-                                info!("OTA: shutdown complete, sending URL to main loop");
+                                info!("OTA firmware URL received, forwarding to main loop");
+                                // Send URL to main loop immediately — do NOT disconnect MQTT
+                                // or publish offline. The main loop handles the OTA download
+                                // over a new TCP connection (the MQTT socket is separate).
+                                // The device will reset after OTA completes.
                                 ota_tx.send(url).await;
-                                // Do NOT reconnect — the main loop needs the TCP socket for OTA download.
-                                // The device will reset after OTA completes (or the main loop handles failure).
-                                info!("OTA: MQTT task idle, waiting for device reset");
+                                // Idle until device resets. Do NOT reconnect or process
+                                // more messages — the OTA URL has been consumed.
                                 loop {
                                     Timer::after(Duration::from_secs(60)).await;
                                 }

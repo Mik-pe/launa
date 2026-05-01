@@ -149,9 +149,8 @@ fn read_otadata_entry<S: ReadNorFlash>(
 ) -> Result<[u8; OTA_ENTRY_SIZE], OtaError> {
     let offset = OTADATA_OFFSET + slot as u32 * SECTOR_SIZE;
     let mut buf = [0u8; OTA_ENTRY_SIZE];
-    ReadNorFlash::read(flash, offset, &mut buf).map_err(|_| OtaError::FlashError {
-        address: offset,
-    })?;
+    ReadNorFlash::read(flash, offset, &mut buf)
+        .map_err(|_| OtaError::FlashError { address: offset })?;
     Ok(buf)
 }
 
@@ -185,7 +184,12 @@ pub(crate) fn read_otadata_entries<S: NorFlash + ReadNorFlash>(
 ) -> Result<([u8; OTA_ENTRY_SIZE], bool, [u8; OTA_ENTRY_SIZE], bool), OtaError> {
     let entry0 = read_otadata_entry(flash, 0)?;
     let entry1 = read_otadata_entry(flash, 1)?;
-    Ok((entry0, otadata_entry_valid(&entry0), entry1, otadata_entry_valid(&entry1)))
+    Ok((
+        entry0,
+        otadata_entry_valid(&entry0),
+        entry1,
+        otadata_entry_valid(&entry1),
+    ))
 }
 
 /// Read the sequence numbers from the otadata partition.

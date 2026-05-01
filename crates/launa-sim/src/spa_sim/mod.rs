@@ -35,9 +35,10 @@ pub use state::{SpaEvent, SpaEventType, SpaState};
 
 use frame_gen::{
     apply_toggle_by_code, generate_client_id_assignment, generate_config_response,
-    generate_fault_log_response, generate_fault_log_response_for_entry,
-    generate_filter_cycles_response, generate_information_response, generate_ready_frame,
-    generate_registration_query, generate_status_frame,
+    generate_existing_client_response, generate_fault_log_response,
+    generate_fault_log_response_for_entry, generate_filter_cycles_response,
+    generate_information_response, generate_ready_frame, generate_registration_query,
+    generate_status_frame,
 };
 use physics::{next_physics_noise_rand, next_rand, simulate_physics, PhysicsContext};
 
@@ -69,6 +70,9 @@ pub struct SpaSim {
     next_client_id: u8,
     tick_count: u64,
     registered: bool,
+    /// Client hash from the most recent NewClientResponse, used to echo
+    /// back in the ClientIdAssignment so the client can validate it.
+    pending_client_hash: Option<[u8; 2]>,
 
     // Subsystems
     error_injection: ErrorInjection,
@@ -153,6 +157,7 @@ impl SpaSim {
             next_client_id: 0x02,
             tick_count: 0,
             registered: false,
+            pending_client_hash: None,
 
             error_injection: ErrorInjection::new(),
             fault_manager: FaultManager::new(),
@@ -235,6 +240,7 @@ impl SpaSim {
     pub fn simulate_spa_reboot(&mut self) {
         self.registered = false;
         self.client_id = None;
+        self.pending_client_hash = None;
         // Note: don't reset state (temps, pumps, etc.) — real spa retains physical state
     }
 
@@ -709,10 +715,39 @@ impl SpaSim {
                 }
             }
             [0xFE, 0xBF] => {
-                if !frame.payload.is_empty() && frame.payload[0] == 0x01 {
-                    let id = self.next_client_id;
-                    self.next_client_id += 1;
-                    Some(self.generate_client_id_assignment(id))
+                if !frame.payload.is_empty() {
+                    match frame.payload[0] {
+                        // NewClientResponse: client wants a channel assignment
+                        0x01 => {
+                            // Extract client hash from the response
+                            let hash = if frame.payload.len() >= 4 {
+                                [frame.payload[2], frame.payload[3]]
+                            } else {
+                                [0x00, 0x00]
+                            };
+                            self.pending_client_hash = Some(hash);
+                            let id = self.next_client_id;
+                            self.next_client_id += 1;
+                            Some(self.generate_client_id_assignment(id, hash))
+                        }
+                        // ExistingClientRequest: client wants to reclaim a channel
+                        0x04 => {
+                            let (channel, hash) = if frame.payload.len() >= 4 {
+                                (frame.payload[1], [frame.payload[2], frame.payload[3]])
+                            } else if frame.payload.len() >= 2 {
+                                (frame.payload[1], [0x00, 0x00])
+                            } else {
+                                // Empty payload form — can't determine channel, ignore
+                                return None;
+                            };
+                            // Accept the reconnection — assign the channel immediately
+                            self.client_id = Some(channel);
+                            self.registered = true;
+                            self.pending_client_hash = Some(hash);
+                            Some(generate_existing_client_response(channel, hash))
+                        }
+                        _ => None,
+                    }
                 } else {
                     None
                 }
@@ -807,9 +842,9 @@ impl SpaSim {
         generate_registration_query()
     }
 
-    /// Generate a client ID assignment (`FE BF 02 <ID>`).
-    fn generate_client_id_assignment(&self, id: u8) -> Vec<u8> {
-        generate_client_id_assignment(id)
+    /// Generate a client ID assignment (`FE BF 02 <ID> <hash_hi> <hash_lo>`).
+    fn generate_client_id_assignment(&self, id: u8, hash: [u8; 2]) -> Vec<u8> {
+        generate_client_id_assignment(id, hash)
     }
 
     /// Generate a configuration response.

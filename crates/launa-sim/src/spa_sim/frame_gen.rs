@@ -205,7 +205,10 @@ pub(crate) fn generate_status_frame(
     }
 
     // Offset 20: Set Temperature
-    payload[20] = state.set_temp.to_wire().expect("set_temp should always be encodable");
+    payload[20] = state
+        .set_temp
+        .to_wire()
+        .expect("set_temp should always be encodable");
 
     // Real Balboa hardware includes a 0x13 sub-type prefix byte before the
     // 24-byte status payload. Prepend it so simulation matches wire format.
@@ -242,10 +245,20 @@ pub(crate) fn generate_registration_query() -> Vec<u8> {
         .expect("registration query encoding should never fail: payload is 1 byte")
 }
 
-/// Generate a client ID assignment (`FE BF 02 <ID>`).
-pub(crate) fn generate_client_id_assignment(id: u8) -> Vec<u8> {
-    FrameEncoder::encode([0xFE, 0xBF], &[0x02, id])
-        .expect("client ID assignment encoding should never fail: payload is 2 bytes")
+/// Generate a client ID assignment (`FE BF 02 <ID> <hash_hi> <hash_lo>`).
+/// Includes the client hash so devices can validate the assignment is for them.
+pub(crate) fn generate_client_id_assignment(id: u8, client_hash: [u8; 2]) -> Vec<u8> {
+    FrameEncoder::encode([0xFE, 0xBF], &[0x02, id, client_hash[0], client_hash[1]])
+        .expect("client ID assignment encoding should never fail: payload is 4 bytes")
+}
+
+/// Generate an existing client confirmation (`<channel> BF 05 04 <channel> <hash_hi> <hash_lo>`).
+pub(crate) fn generate_existing_client_response(channel: u8, client_hash: [u8; 2]) -> Vec<u8> {
+    FrameEncoder::encode(
+        [channel, 0xBF],
+        &[0x05, 0x04, channel, client_hash[0], client_hash[1]],
+    )
+    .expect("existing client response encoding should never fail")
 }
 
 /// Generate a configuration response.

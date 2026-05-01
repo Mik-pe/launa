@@ -31,7 +31,10 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     for name in &erase_names {
         let part = crate::util::find_partition(&entries, name)?;
-        println!("Erasing {} partition (0x{:X}, {} bytes)...", name, part.offset, part.size);
+        println!(
+            "Erasing {} partition (0x{:X}, {} bytes)...",
+            name, part.offset, part.size
+        );
         let mut erase_cmd = Command::new("cargo");
         erase_cmd
             .arg("+esp")

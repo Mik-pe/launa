@@ -20,10 +20,8 @@ pub enum IncomingMessage {
     FilterCyclesResponse(FilterCycles),
     ControlConfiguration(SpaConfig),
     Ready,
-    NewClientQuery,
-    ClientIdAssignment {
-        id: u8,
-    },
+    /// A parsed registration protocol message (FE BF or <channel> BF).
+    Registration(crate::registration::RegistrationMessage),
     /// Preferences response (0x0A 0xBF sub-type 0x26).
     /// Payload contains panel preferences data.
     PreferencesResponse {
@@ -86,19 +84,9 @@ fn handle_status(msg_type: [u8; 2], payload: &[u8]) -> IncomingMessage {
 
 /// Handle registration frames (message type `FE BF`).
 fn handle_registration(msg_type: [u8; 2], payload: &[u8]) -> IncomingMessage {
-    if payload.is_empty() {
-        return unknown_msg(msg_type, payload);
-    }
-    match payload[0] {
-        0x00 => IncomingMessage::NewClientQuery,
-        0x02 => {
-            if payload.len() >= 2 {
-                IncomingMessage::ClientIdAssignment { id: payload[1] }
-            } else {
-                unknown_msg(msg_type, payload)
-            }
-        }
-        _ => unknown_msg(msg_type, payload),
+    match crate::registration::RegistrationMessage::parse(msg_type, payload) {
+        Ok(msg) => IncomingMessage::Registration(msg),
+        Err(_) => unknown_msg(msg_type, payload),
     }
 }
 
@@ -333,11 +321,16 @@ pub fn dispatch_frame(frame: &Frame) -> IncomingMessage {
         // 0A BF messages: disambiguate by first payload byte
         [0x0A, 0xBF] => handle_0abf(msg_type, payload),
 
-        // Ready indicator: any XX BF where XX is not a known message type.
-        // Protocol: "10 BF 06" for unregistered clients, "<ID> BF 06" for registered.
-        // The second byte 0xBF identifies these as client-addressed ready-to-send messages.
-        // Known prefixes (0x0A, 0xFE, 0xFF) are already matched above; any remaining
-        // XX BF combination is a ready-to-send indicator.
+        // XX BF messages: ready-to-send indicator for registered clients.
+        // Protocol: "10 BF 06" for unregistered, "<ID> BF 06" for registered.
+        // The second byte 0xBF identifies these as client-addressed messages.
+        // Known prefixes (0x0A, 0xFE, 0xFF) are already matched above.
+        //
+        // Note: ClearToSend (<ch> BF 06), ClientIdAck (<ch> BF 03), and
+        // ExistingClientResponse (<ch> BF 05) are also <ch> BF frames, but
+        // they are only relevant during the registration handshake and are
+        // handled directly by SpaApp via RegistrationMessage::parse() on the
+        // raw frame bytes — the dispatcher doesn't need to distinguish them.
         [_, 0xBF] => IncomingMessage::Ready,
 
         // Any other message type
@@ -534,12 +527,15 @@ mod tests {
             ),
         }
 
-        // 0xFE BF with 0x00 → NewClientQuery, not Ready
+        // 0xFE BF with 0x00 → Registration(NewClientQuery), not Ready
         let frame = Frame {
             message_type: [0xFE, 0xBF],
             payload: vec![0x00],
         };
-        assert_eq!(dispatch_frame(&frame), IncomingMessage::NewClientQuery);
+        assert_eq!(
+            dispatch_frame(&frame),
+            IncomingMessage::Registration(crate::registration::RegistrationMessage::NewClientQuery)
+        );
 
         // 0xFF AF → StatusUpdate (not BF, but verify it's not confused)
         let mut payload = vec![0u8; 24];
@@ -563,7 +559,10 @@ mod tests {
         };
 
         let msg = dispatch_frame(&frame);
-        assert_eq!(msg, IncomingMessage::NewClientQuery);
+        assert_eq!(
+            msg,
+            IncomingMessage::Registration(crate::registration::RegistrationMessage::NewClientQuery)
+        );
     }
 
     #[test]
@@ -574,7 +573,34 @@ mod tests {
         };
 
         let msg = dispatch_frame(&frame);
-        assert_eq!(msg, IncomingMessage::ClientIdAssignment { id: 0x05 });
+        assert_eq!(
+            msg,
+            IncomingMessage::Registration(
+                crate::registration::RegistrationMessage::ClientIdAssignment {
+                    channel: 0x05,
+                    client_hash: [0x00, 0x00], // legacy 2-byte form
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn test_dispatch_client_id_assignment_with_hash() {
+        let frame = Frame {
+            message_type: [0xFE, 0xBF],
+            payload: vec![0x02, 0x05, 0xF1, 0x73],
+        };
+
+        let msg = dispatch_frame(&frame);
+        assert_eq!(
+            msg,
+            IncomingMessage::Registration(
+                crate::registration::RegistrationMessage::ClientIdAssignment {
+                    channel: 0x05,
+                    client_hash: [0xF1, 0x73],
+                }
+            )
+        );
     }
 
     #[test]

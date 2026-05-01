@@ -9,7 +9,8 @@ fn test_process_toggle_via_bytes() {
 
     let (mt, payload) =
         launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
-            .encode().unwrap();
+            .encode()
+            .unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
     sim.process_incoming_bytes(&encoded);
@@ -22,7 +23,9 @@ fn test_set_temp_decoded_from_wire() {
     sim.state.temp_scale = TemperatureScale::Fahrenheit;
 
     // Simulate a SetTemperature(100) command coming in
-    let (mt, payload) = launa_protocol::command::Command::SetTemperature(100).encode().unwrap();
+    let (mt, payload) = launa_protocol::command::Command::SetTemperature(100)
+        .encode()
+        .unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
 
@@ -35,7 +38,9 @@ fn test_set_temp_decoded_celsius() {
     sim.state.temp_scale = TemperatureScale::Celsius;
 
     // SetTemperature sends raw value 80 (= 40°C on wire)
-    let (mt, payload) = launa_protocol::command::Command::SetTemperature(80).encode().unwrap();
+    let (mt, payload) = launa_protocol::command::Command::SetTemperature(80)
+        .encode()
+        .unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
 
@@ -49,7 +54,8 @@ fn test_command_success_rate_ignores_toggle() {
 
     let (mt, payload) =
         launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
-            .encode().unwrap();
+            .encode()
+            .unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
 
@@ -64,7 +70,8 @@ fn test_command_success_rate_accepts_toggle() {
 
     let (mt, payload) =
         launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
-            .encode().unwrap();
+            .encode()
+            .unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
 
@@ -78,7 +85,9 @@ fn test_command_success_rate_ignores_set_temp() {
     sim.state.temp_scale = TemperatureScale::Fahrenheit;
     sim.set_command_success_rate(0.0); // Never accept commands
 
-    let (mt, payload) = launa_protocol::command::Command::SetTemperature(90).encode().unwrap();
+    let (mt, payload) = launa_protocol::command::Command::SetTemperature(90)
+        .encode()
+        .unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
 
@@ -92,7 +101,9 @@ fn test_command_success_rate_accepts_set_temp() {
     sim.state.temp_scale = TemperatureScale::Fahrenheit;
     sim.set_command_success_rate(1.0); // Always accept commands
 
-    let (mt, payload) = launa_protocol::command::Command::SetTemperature(100).encode().unwrap();
+    let (mt, payload) = launa_protocol::command::Command::SetTemperature(100)
+        .encode()
+        .unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
 
@@ -106,7 +117,8 @@ fn test_command_latency_default_immediate() {
 
     let (mt, payload) =
         launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
-            .encode().unwrap();
+            .encode()
+            .unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
     sim.process_incoming_bytes(&encoded);
@@ -124,7 +136,8 @@ fn test_command_latency_deferred() {
 
     let (mt, payload) =
         launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
-            .encode().unwrap();
+            .encode()
+            .unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
     // Send command
@@ -162,12 +175,14 @@ fn test_command_latency_multiple_commands_order() {
     // Send two toggle commands for different pumps
     let (mt, payload) =
         launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
-            .encode().unwrap();
+            .encode()
+            .unwrap();
     let encoded1 = FrameEncoder::encode(mt, &payload).unwrap();
 
     let (mt, payload) =
         launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump2)
-            .encode().unwrap();
+            .encode()
+            .unwrap();
     let encoded2 = FrameEncoder::encode(mt, &payload).unwrap();
 
     sim.process_incoming_bytes(&encoded1);
@@ -195,7 +210,9 @@ fn test_command_latency_defers_set_temperature() {
     sim.set_command_latency_ticks(4);
 
     // Send SetTemperature(96)
-    let (mt, payload) = launa_protocol::command::Command::SetTemperature(96).encode().unwrap();
+    let (mt, payload) = launa_protocol::command::Command::SetTemperature(96)
+        .encode()
+        .unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
 
@@ -226,12 +243,15 @@ fn test_command_latency_set_temp_and_toggle_order() {
     sim.set_command_latency_ticks(2);
 
     // Send set_temp and toggle in sequence
-    let (mt, payload) = launa_protocol::command::Command::SetTemperature(96).encode().unwrap();
+    let (mt, payload) = launa_protocol::command::Command::SetTemperature(96)
+        .encode()
+        .unwrap();
     let encoded1 = FrameEncoder::encode(mt, &payload).unwrap();
 
     let (mt, payload) =
         launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
-            .encode().unwrap();
+            .encode()
+            .unwrap();
     let encoded2 = FrameEncoder::encode(mt, &payload).unwrap();
 
     sim.process_incoming_bytes(&encoded1);
@@ -272,7 +292,8 @@ fn test_command_success_rate_50_percent() {
         let (mt, payload) = launa_protocol::command::Command::ToggleItem(
             launa_protocol::command::ToggleItem::Pump1,
         )
-        .encode().unwrap();
+        .encode()
+        .unwrap();
         let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
         let before = sim.state.pumps[0];
@@ -307,7 +328,8 @@ fn test_command_success_rate_boundaries() {
         let (mt, payload) = launa_protocol::command::Command::ToggleItem(
             launa_protocol::command::ToggleItem::Pump1,
         )
-        .encode().unwrap();
+        .encode()
+        .unwrap();
         let encoded = FrameEncoder::encode(mt, &payload).unwrap();
         sim.process_incoming_bytes(&encoded);
     }
@@ -322,7 +344,8 @@ fn test_command_success_rate_boundaries() {
     sim.set_command_success_rate(1.0);
     let (mt, payload) =
         launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
-            .encode().unwrap();
+            .encode()
+            .unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
     assert_eq!(
