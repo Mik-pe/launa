@@ -1012,9 +1012,22 @@ async fn main(spawner: Spawner) {
 
     let clock = clock::EmbassyClock::new();
     // Derive a unique 2-byte client hash from the device ID for RS-485 registration.
-    // Uses a simple FNV-1a-like hash so each device gets a distinct channel assignment.
-    // TEMPORARY: hardcoded to F1 73 (cribskip reference) to test if hash matters.
-    let client_hash = [0xF1, 0x73];
+    // The spa may reject registration if a client with the same hash is already
+    // registered (e.g. from a previous firmware that used F173). Deriving from
+    // device_id ensures each device gets a unique identity on the bus.
+    let client_hash = {
+        let id_bytes = app_config.device_id.as_bytes();
+        let mut h: u16 = 0x811C; // FNV-1a offset basis for 16-bit
+        for &b in id_bytes {
+            h ^= b as u16;
+            h = h.wrapping_mul(0x0101); // FNV-1a 16-bit prime
+        }
+        // Ensure non-zero and not the legacy F173 value
+        if h == 0 { h = 1; }
+        if h == 0xF173 { h = 0xF174; }
+        [(h >> 8) as u8, (h & 0xFF) as u8]
+    };
+    info!("Client hash: {:02X}{:02X} (derived from device_id)", client_hash[0], client_hash[1]);
     // Store client hash in atomics so uart_task fast-path can read it
     // without async channel communication.
     CLIENT_HASH_H.store(client_hash[0], Ordering::Relaxed);
