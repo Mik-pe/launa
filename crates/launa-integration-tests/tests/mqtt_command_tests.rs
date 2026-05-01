@@ -86,7 +86,7 @@ fn test_mqtt_command_to_frame_to_simulator() {
     .expect("should parse command");
     assert_eq!(cmd, Command::ToggleItem(ToggleItem::Pump1));
 
-    let (mt, payload) = cmd.encode();
+    let (mt, payload) = cmd.encode().unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
     let mut decoder = FrameDecoder::new();
@@ -117,7 +117,7 @@ fn test_mqtt_set_temperature_pipeline() {
     .expect("should parse command");
     assert_eq!(cmd, Command::SetTemperature(102));
 
-    let (mt, payload) = cmd.encode();
+    let (mt, payload) = cmd.encode().unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
     let mut decoder = FrameDecoder::new();
@@ -158,7 +158,7 @@ fn test_command_round_trip_pump_toggle() {
     )
     .expect("should parse");
 
-    let (mt, payload) = cmd.encode();
+    let (mt, payload) = cmd.encode().unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
     let frames = decoder.feed_slice(&encoded);
@@ -194,7 +194,7 @@ fn test_command_round_trip_set_temperature() {
     .expect("should parse");
     assert_eq!(cmd, Command::SetTemperature(100));
 
-    let (mt, payload) = cmd.encode();
+    let (mt, payload) = cmd.encode().unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
     let mut decoder = FrameDecoder::new();

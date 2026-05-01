@@ -78,7 +78,7 @@ Includes an extracted MQTT v5 protocol codec.
 - `topics` — MQTT topic builder and LWT/birth configuration
 - `command_parser` — MQTT command parsing (toggle, set temp)
 - `state` — Spa state to JSON serialization
-- `v5_codec` — MQTT v5 protocol packet encoding/decoding
+- `mqtt_codec` — MQTT 3.1.1 protocol packet encoding/decoding
 - `packet` — Packet extraction from TCP stream
 - `remote_log` — Remote log entry serialization
 - `ota_url` — OTA URL parsing

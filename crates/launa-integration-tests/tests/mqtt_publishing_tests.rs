@@ -27,7 +27,8 @@ fn test_status_to_mqtt_json() {
 
             assert_eq!(parsed["current_temp"], 100.0);
             assert_eq!(parsed["set_temp"], 104.0);
-            assert_eq!(parsed["is_heating"], true);
+            // Default SpaState has is_heating=false (no circulation = no heating)
+            assert_eq!(parsed["is_heating"], false);
             assert_eq!(parsed["heating_mode"], "ready");
             assert_eq!(parsed["temp_range"], "high");
             assert_eq!(parsed["temp_scale"], "fahrenheit");

@@ -39,7 +39,7 @@ fn test_validated_temperature_pipeline_fahrenheit() {
         ParseResult::Valid(c) => c,
         _ => unreachable!(),
     };
-    let (mt, payload) = cmd.encode();
+    let (mt, payload) = cmd.encode().unwrap();
     let encoded = launa_protocol::frame::FrameEncoder::encode(mt, &payload).unwrap();
 
     let mut decoder = FrameDecoder::new();
@@ -82,7 +82,7 @@ fn test_validated_temperature_pipeline_celsius() {
     }
 
     let wire_value: u8 = 38u8.saturating_mul(2);
-    let (mt, payload) = Command::SetTemperature(wire_value).encode();
+    let (mt, payload) = Command::SetTemperature(wire_value).encode().unwrap();
     let encoded = launa_protocol::frame::FrameEncoder::encode(mt, &payload).unwrap();
 
     let mut decoder = FrameDecoder::new();

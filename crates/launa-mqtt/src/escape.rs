@@ -11,11 +11,11 @@ use alloc::string::String;
 /// Escape a string value for safe embedding in a JSON string literal.
 ///
 /// Handles the escapes required by RFC 8259:
-///   `\` → `\\`
-///   `"` → `\"`
-///   `\n` → `\\n`
-///   `\r` → `\\r`
-///   `\t` → `\\t`
+///   backslash        → `\\`
+///   double-quote     → `\"`
+///   newline          → `\n`
+///   carriage-return  → `\r`
+///   tab              → `\t`
 ///   Other control chars (U+0000..=U+001F) → `\uXXXX`
 pub fn escape_json_string(s: &str) -> String {
     let mut out = String::new();

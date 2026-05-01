@@ -23,9 +23,8 @@ use crate::heap_monitor::HeapMonitor;
 use crate::rate_log::RateLog;
 use crate::timers::{HoldModeTimer, PumpTimerManager};
 use crate::types::{
-    DIAGNOSTICS_INTERVAL_MS, MAX_COMMAND_QUEUE, REGISTRATION_HASH_ROTATE_THRESHOLD,
-    REGISTRATION_PROBE_INTERVAL_MS, REGISTRATION_TIMEOUT_MS, STALE_PROBE_INTERVAL_MS,
-    STALE_THRESHOLD_MS,
+    DIAGNOSTICS_INTERVAL_MS, MAX_COMMAND_QUEUE, REGISTRATION_PROBE_INTERVAL_MS,
+    REGISTRATION_TIMEOUT_MS, STALE_PROBE_INTERVAL_MS, STALE_THRESHOLD_MS,
 };
 
 /// The core application logic, extracted from the ESP32 main loop.
@@ -620,7 +619,13 @@ impl<'a> SpaApp<'a> {
 }
 
 fn encode_command(cmd: &Command) -> Vec<u8> {
-    let (msg_type, payload) = cmd.encode();
+    let (msg_type, payload) = match cmd.encode() {
+        Ok(v) => v,
+        Err(e) => {
+            log::error!("Command encode failed for {:?}: {:?}", cmd, e);
+            return Vec::new();
+        }
+    };
     match FrameEncoder::encode(msg_type, &payload) {
         Ok(encoded) => encoded,
         Err(e) => {
@@ -1383,7 +1388,7 @@ mod tests {
 
         // The probe should be a NothingToSend: msg_type=[client_id, 0xBF], payload=[0x07]
         let expected = {
-            let (mt, payload) = Command::NothingToSend { client_id: 0x03 }.encode();
+            let (mt, payload) = Command::NothingToSend { client_id: 0x03 }.encode().expect("encode should succeed");
             FrameEncoder::encode(mt, &payload).expect("encode should succeed")
         };
         assert!(

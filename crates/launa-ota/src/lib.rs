@@ -56,6 +56,8 @@ pub enum OtaError {
     HashMismatch { expected: u32, actual: u32 },
     #[error("invalid ESP32 image header magic")]
     InvalidImageHeader,
+    #[error("OTA read-back verification failed: expected CRC {expected:#010x}, got {actual:#010x}")]
+    VerificationFailed { expected: u32, actual: u32 },
 }
 
 #[cfg(test)]
@@ -83,6 +85,11 @@ mod tests {
             }
             .to_string(),
             OtaError::InvalidImageHeader.to_string(),
+            OtaError::VerificationFailed {
+                expected: 0xAAAA1111,
+                actual: 0xBBBB2222,
+            }
+            .to_string(),
         ];
         for s in &cases {
             assert!(!s.is_empty(), "OtaError variant Display output is empty");

@@ -10,7 +10,8 @@ use alloc::vec::Vec;
 /// Validate that the HTTP response status line indicates success (200).
 ///
 /// Checks that the response starts with `HTTP/1.` followed by a space and
-/// status code `200`.
+/// status code `200`. Uses space-based parsing rather than fixed byte offsets
+/// to handle varying HTTP version strings robustly.
 ///
 /// # Examples
 ///
@@ -20,15 +21,22 @@ use alloc::vec::Vec;
 /// assert!(!validate_http_status(b"HTTP/1.1 404 Not Found\r\n"));
 /// ```
 pub fn validate_http_status(headers: &[u8]) -> bool {
-    // Status line format: "HTTP/1.x 200 ..."
-    if headers.len() < 12 {
-        return false;
-    }
+    // Status line format: "HTTP/1.x <status-code> ..."
     if !headers.starts_with(b"HTTP/1.") {
         return false;
     }
-    // Status code is at bytes 9-11 (e.g., "HTTP/1.1 200")
-    headers[9] == b'2' && headers[10] == b'0' && headers[11] == b'0'
+    // Find the first space after the HTTP version string
+    let space_pos = match headers.iter().position(|&b| b == b' ') {
+        Some(p) => p,
+        None => return false,
+    };
+    // Need at least 3 more bytes for the status code after the space
+    let code_start = space_pos + 1;
+    if code_start + 3 > headers.len() {
+        return false;
+    }
+    // Check the 3-digit status code is "200"
+    headers[code_start] == b'2' && headers[code_start + 1] == b'0' && headers[code_start + 2] == b'0'
 }
 
 /// Extract the status line from HTTP headers for error logging.
@@ -123,24 +131,46 @@ pub fn parse_content_length(headers: &[u8]) -> Option<u32> {
 
 /// Find the start of a header value after the header name.
 ///
-/// Performs a case-sensitive search for `name` in `headers` and returns
-/// the position of the first non-space byte after the header name.
+/// Performs a case-sensitive search for `name` in `headers`, only matching
+/// at the start of a line (i.e., at position 0 or immediately after `\r\n`).
+/// Returns the position of the first non-space byte after the header name.
 /// Returns `None` if the header name is not found.
 pub fn find_header_value_start(headers: &[u8], name: &[u8]) -> Option<usize> {
     if name.is_empty() {
         return None;
     }
-    if let Some(pos) = headers.windows(name.len()).position(|w| w == name) {
-        let abs_pos = pos + name.len();
-        // Skip any leading whitespace
+    // Check at position 0 (first line)
+    let mut search_start = 0;
+    if headers.get(..name.len()) == Some(name) {
+        let abs_pos = name.len();
         let mut start = abs_pos;
         while start < headers.len() && headers[start] == b' ' {
             start += 1;
         }
-        Some(start)
-    } else {
-        None
+        return Some(start);
     }
+    // Check after each \r\n
+    let separator = b"\r\n";
+    while search_start + separator.len() < headers.len() {
+        if let Some(pos) = headers[search_start..]
+            .windows(separator.len())
+            .position(|w| w == separator)
+        {
+            let line_start = search_start + pos + separator.len();
+            if headers.get(line_start..line_start + name.len()) == Some(name) {
+                let abs_pos = line_start + name.len();
+                let mut start = abs_pos;
+                while start < headers.len() && headers[start] == b' ' {
+                    start += 1;
+                }
+                return Some(start);
+            }
+            search_start = line_start;
+        } else {
+            break;
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -248,10 +278,28 @@ mod tests {
         assert!(!validate_http_status(b"HTTP/1.1 204 No Content\r\n\r\n"));
 
         // Edge cases
-        assert!(!validate_http_status(b"HTTP/1.1")); // too short (8 bytes)
-        assert!(!validate_http_status(b"HTTP/1.1 20")); // 11 bytes
+        assert!(!validate_http_status(b"HTTP/1.1")); // too short, no space
+        assert!(!validate_http_status(b"HTTP/1.1 ")); // space but no status code
+        assert!(!validate_http_status(b"HTTP/1.1 20")); // incomplete status code
         assert!(!validate_http_status(b"FOOBAR/1.1 200 OK\r\n\r\n")); // wrong prefix
         assert!(!validate_http_status(b""));
+    }
+
+    #[test]
+    fn test_validate_http_status_robustness() {
+        // HTTP/1.0 with different version length
+        assert!(validate_http_status(b"HTTP/1.0 200 OK\r\n\r\n"));
+
+        // Minimal — just version + space + code
+        assert!(validate_http_status(b"HTTP/1.1 200"));
+
+        // With extra whitespace in version area shouldn't matter — we find the space
+        assert!(!validate_http_status(b"HTTP/1.1 403 Forbidden\r\n\r\n"));
+
+        // 2xx codes that are not 200
+        assert!(!validate_http_status(b"HTTP/1.1 201 Created\r\n\r\n"));
+        assert!(!validate_http_status(b"HTTP/1.1 202 Accepted\r\n\r\n"));
+        assert!(!validate_http_status(b"HTTP/1.1 299 Custom\r\n\r\n"));
     }
 
     #[test]
@@ -399,7 +447,7 @@ mod tests {
 
     #[test]
     fn test_find_header_value_start_cases() {
-        // Basic
+        // Basic at start of buffer
         let headers = b"Content-Length: 1234\r\n";
         assert_eq!(
             find_header_value_start(headers, b"Content-Length: "),
@@ -433,9 +481,62 @@ mod tests {
         );
         assert_eq!(&headers[18..22], b"5678");
 
-        // No trailing CRLF
-        assert_eq!(find_header_value_start(b"X-Value:42", b"X-Value:"), Some(8));
-        assert_eq!(&headers[18..22], b"5678");
+        // No trailing CRLF — header after \r\n
+        let headers = b"HTTP/1.1 200 OK\r\nX-Value:42";
+        assert_eq!(
+            find_header_value_start(headers, b"X-Value:"),
+            Some(25)
+        );
+    }
+
+    #[test]
+    fn test_find_header_value_start_line_boundary() {
+        // Header name must appear at start of a line, not inside a value
+        // "Content-Length" appears inside X-Comment value — should NOT match
+        let headers = b"X-Comment: see Content-Length for details\r\nContent-Length: 1234\r\n\r\n";
+        assert_eq!(
+            find_header_value_start(headers, b"Content-Length: "),
+            Some(59)
+        );
+        assert_eq!(&headers[59..63], b"1234");
+
+        // First line match still works
+        let headers = b"Content-Length: 99\r\nX-Other: Content-Length is 99\r\n\r\n";
+        assert_eq!(
+            find_header_value_start(headers, b"Content-Length: "),
+            Some(16)
+        );
+        assert_eq!(&headers[16..18], b"99");
+
+        // Neither at line start — should return None
+        let headers = b"X-Comment: Content-Length: embedded\r\n\r\n";
+        assert_eq!(
+            find_header_value_start(headers, b"Content-Length: "),
+            None
+        );
+    }
+
+    #[test]
+    fn test_find_header_value_start_multiple_headers() {
+        // Find header among multiple lines
+        let headers = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2048\r\nServer: nginx\r\n\r\n";
+        assert_eq!(
+            find_header_value_start(headers, b"Content-Length: "),
+            Some(58)
+        );
+        assert_eq!(&headers[58..62], b"2048");
+
+        // Find the first header (after status line)
+        assert_eq!(
+            find_header_value_start(headers, b"Content-Type: "),
+            Some(31)
+        );
+
+        // Find the last header
+        assert_eq!(
+            find_header_value_start(headers, b"Server: "),
+            Some(72)
+        );
     }
 
     #[test]

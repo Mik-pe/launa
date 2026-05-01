@@ -53,7 +53,7 @@ fn test_fault_appears_and_clears_lifecycle() {
     if !has_fault_publish {
         // Request fault log explicitly to populate last_fault
         // The sim will respond to a FaultLogRequest with the current fault
-        let (mt, payload) = Command::FaultLogRequest { entry: 0xFF }.encode();
+        let (mt, payload) = Command::FaultLogRequest { entry: 0xFF }.encode().unwrap();
         let encoded = launa_protocol::frame::FrameEncoder::encode(mt, &payload).unwrap();
         let response = h.sim.process_incoming_bytes(&encoded);
         if !response.is_empty() {
@@ -121,7 +121,7 @@ fn test_fault_appears_and_clears_lifecycle() {
 
     // Fault log entries should still be accessible (captured during the fault)
     // We can request the fault log to verify the entry was recorded
-    let (mt, payload) = Command::FaultLogRequest { entry: 0xFF }.encode();
+    let (mt, payload) = Command::FaultLogRequest { entry: 0xFF }.encode().unwrap();
     let encoded = launa_protocol::frame::FrameEncoder::encode(mt, &payload).unwrap();
     let response = h.sim.process_incoming_bytes(&encoded);
     assert!(
@@ -150,7 +150,7 @@ fn test_multiple_fault_types_distinct_entries() {
     h.sim.simulate_fault_state(FaultCode::HeaterDry);
 
     // Request fault log to capture HeaterDry
-    let (mt, payload) = Command::FaultLogRequest { entry: 0xFF }.encode();
+    let (mt, payload) = Command::FaultLogRequest { entry: 0xFF }.encode().unwrap();
     let encoded = launa_protocol::frame::FrameEncoder::encode(mt, &payload).unwrap();
     let response = h.sim.process_incoming_bytes(&encoded);
     let resp_frames = h.decoder.feed_slice(&response);
@@ -184,7 +184,7 @@ fn test_multiple_fault_types_distinct_entries() {
             sensor_b_temp: 98,
         });
 
-    let (mt, payload) = Command::FaultLogRequest { entry: 0xFF }.encode();
+    let (mt, payload) = Command::FaultLogRequest { entry: 0xFF }.encode().unwrap();
     let encoded = launa_protocol::frame::FrameEncoder::encode(mt, &payload).unwrap();
     let response = h.sim.process_incoming_bytes(&encoded);
     let resp_frames = h.decoder.feed_slice(&response);
@@ -221,7 +221,7 @@ fn test_multiple_fault_types_distinct_entries() {
             sensor_b_temp: 98,
         });
 
-    let (mt, payload) = Command::FaultLogRequest { entry: 1 }.encode();
+    let (mt, payload) = Command::FaultLogRequest { entry: 1 }.encode().unwrap();
     let encoded = launa_protocol::frame::FrameEncoder::encode(mt, &payload).unwrap();
     let response = h.sim.process_incoming_bytes(&encoded);
     let resp_frames = h.decoder.feed_slice(&response);
@@ -248,7 +248,7 @@ fn test_multiple_fault_types_distinct_entries() {
             sensor_b_temp: 98,
         });
 
-    let (mt, payload) = Command::FaultLogRequest { entry: 2 }.encode();
+    let (mt, payload) = Command::FaultLogRequest { entry: 2 }.encode().unwrap();
     let encoded = launa_protocol::frame::FrameEncoder::encode(mt, &payload).unwrap();
     let response = h.sim.process_incoming_bytes(&encoded);
     let resp_frames = h.decoder.feed_slice(&response);

@@ -1,10 +1,10 @@
-//! MQTT v5 client over embassy-net TCP.
+//! MQTT 3.1.1 client over embassy-net TCP.
 //!
-//! Hand-rolled MQTT v5 protocol implementation. Handles: connect with
+//! Hand-rolled MQTT 3.1.1 protocol implementation. Handles: connect with
 //! username/password, publish (QoS 0/1), subscribe, keepalive PINGREQ,
 //! incoming PUBACK, packet reassembly, and reconnect.
 //!
-//! Protocol encoding/decoding is delegated to `launa_mqtt::v5_codec`.
+//! Protocol encoding/decoding is delegated to `launa_mqtt::mqtt_codec`.
 
 extern crate alloc;
 
@@ -23,7 +23,7 @@ use launa_mqtt::discovery::DiscoveryBuilder;
 use launa_mqtt::packet::{decode_remaining_length, try_extract_packet};
 use launa_mqtt::state::status_to_json;
 use launa_mqtt::topics::TopicBuilder;
-use launa_mqtt::v5_codec::{
+use launa_mqtt::mqtt_codec::{
     encode_connect, encode_disconnect, encode_pingreq, encode_pingresp, encode_puback,
     encode_publish, encode_subscribe, parse_connack, parse_suback, ConnectConfig,
 };
@@ -441,6 +441,7 @@ impl MqttClient {
                     state.fault,
                     state.sniff_mode,
                     state.wifi_rssi,
+                    false,
                     state.registration_state,
                 )
                 .await
@@ -515,7 +516,8 @@ impl MqttClient {
         } else {
             None
         };
-        let packet = encode_publish(topic, payload, qos, retain, packet_id);
+        let packet = encode_publish(topic, payload, qos, retain, packet_id)
+            .map_err(|_| MqttError::PublishFailed)?;
         self.send_bytes(&packet).await
     }
 

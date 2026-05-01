@@ -322,3 +322,59 @@ Crate-by-crate review for clean code, deduplication, bad tests, and UX. Five par
 - [x] **Temperature=0 accepted as valid set-temperature wire value** (`launa-mqtt/command_parser.rs`): "0" means "no temp set" per protocol. Now rejected with `TemperatureOutOfRange` error.
 - [x] **Status message: missing sensor_a_temp, sensor_b_temp, hold_timer_minutes fields** (`launa-protocol/src/status.rs`): Offset 7 dual-interpretation: sensor_a_temp (normal mode) vs hold_timer_minutes (hold mode). Offset 8: sensor_b_temp in A/B temps mode (payload[0]==0x14). All three fields are Option types, mutually exclusive per mode. Temperature values respect scale divisor (÷2 for Celsius).
 - [x] **Pump timers for pumps 4-6 and simultaneous timer operation untested** (`launa-integration-tests`): Timer manager supports 6 pumps but only pump 1 is tested. Added 13 tests: individual pump 4/5/6 timers, expiry, cancel, restart, and 3-pump simultaneous operation.
+
+## Deep Audit 2026-04-30
+
+Six parallel worker audits covering protocol, app, HAL/sim, MQTT, OTA/integration-tests, and xtask/workspace config.
+
+### HIGH — Significant Bugs or Safety Issues
+
+- [x] **OTA `finalize()` sets boot partition without read-back verification** (`launa-esp-ota/src/ota.rs`): Added read-back CRC verification in `finalize()` — reads back written data in 256-byte chunks, computes CRC-32/MPEG-2, compares with `firmware_crc`. Returns `OtaError::VerificationFailed` on mismatch. 3 new tests added.
+- [ ] **`write_otadata_slot()` non-atomic erase-then-write vulnerable to power loss** (`launa-esp-ota/src/flash.rs`): Erases full 4 KiB sector, then writes back. If power fails between erase and write, otadata entry is destroyed. Already mitigated by dual-slot design, but single-slot corruption window exists during first OTA from factory.
+- [ ] **App reuses OTA/MQTT socket buffers via raw pointer casts** (`app/src/`): Sound only because of implicit single-task control flow invariants, not enforced at compile time. Add SAFETY documentation or refactor to use `MaybeUninit` pattern with compile-time guarantees.
+- [ ] **Multiple `Rng::new()` calls create overlapping references to same hardware peripheral** (`app/src/`): Each call creates a new handle to the same RNG peripheral. Should create once and pass reference, or use a shared static.
+- [ ] **`WIFI_RECONNECT_SIGNAL` fires on initial WiFi connect** (`app/src/`): Fires on first connect, not just reconnects. Currently safe only because `mqtt_task` isn't spawned yet, but fragile if task spawn order changes.
+- [x] **`temperature.rs` `to_wire()` silently saturates negative/oversized values** (`launa-protocol/src/temperature.rs`): Changed `to_wire()` to return `Result<u8, TemperatureError>`. Added `TemperatureError` enum with `Negative` and `Overflow` variants. Updated all callers across workspace (6 files). 6 new boundary tests added.
+- [ ] **`begin()` erases ENTIRE target partition upfront** (`launa-esp-ota/src/ota.rs`): Failed OTA leaves partition fully erased (all 0xFF). Old firmware in that slot is gone with no recovery other than retrying OTA.
+
+### MEDIUM — Logic Errors and Missing Validation
+
+- [x] **Clock sensor Jinja template uses Python syntax, not HA Jinja2** (`launa-mqtt/src/discovery.rs`): Fixed from `{{%02d:%02d|format(...)}}` to `{{ "%02d:%02d" | format(...) }}` (valid Jinja2).
+- [x] **`state_change.rs` skips comparing 6+ published fields** (`launa-mqtt/src/state_change.rs`): Added comparisons for `temperature_scale`, `time_format`, `notification_type`, `panel_locked`, `settings_lock`, `m8_cycle_time`. Updated 2 tests from `_not_detected` to `_detected`, added 4 new tests. 201 tests pass.
+- [x] **`SetTime` command no validation of hour/minute ranges** (`launa-protocol/src/command.rs`): Added `CommandError` enum. `encode()` now returns `Result`. SetTime validates `hour <= 23`, `minute <= 59`, no bit 7 set. SetTemperature validates against `ABSOLUTE_MAX_TEMP_F`. Updated all callers (10+ files). 567+ tests pass.
+- [x] **`SetTemperature` takes raw u8 without enforcement at construction** (`launa-protocol/src/command.rs`): Now validated in `encode()` — rejects values above `ABSOLUTE_MAX_TEMP_F` (108°F).
+- [x] **`parse_set_temperature()` can overflow u8 for extreme float inputs** (`launa-mqtt/src/command_parser.rs`): Added bounds check before `as u8` cast — rejects `NaN`, negative, and values >255.0. 2 new tests for extreme floats and NaN/infinity. 195 tests pass.
+- [ ] **MQTT `recv()` treats `Ok(0)` from TCP as FIN** (`app/src/mqtt_task.rs`): May cause spurious reconnects if the TCP stack returns 0 for transient conditions. Should match ESP-IDF behavior exactly.
+- [ ] **MQTT task health check threshold (120s) too tight given reconnect backoff** (`app/src/mqtt_task.rs`): Backoff can reach 60s per attempt. With multiple retry attempts, 120s threshold may trigger false stale detection.
+- [x] **Default `SpaState` has `is_heating=true` with all pumps off** (`launa-sim/src/spa_sim/state.rs`): Default was already `false`. Updated 2 integration tests that asserted `is_heating == true` for default sim state.
+- [ ] **Celsius temperature noise truncated by `to_wire()`** (`launa-sim/src/spa_sim/frame_gen.rs`): Noise added in Fahrenheit, converted to Celsius, then `to_wire()` multiplies by 2 and truncates. Small noise values may be lost entirely, giving coarser noise in Celsius mode.
+- [x] **`encode_publish()` silently omits packet_id for QoS 1 when `packet_id` is None** (`launa-mqtt/src/v5_codec.rs`): Added `PublishError` enum with `MissingPacketId` and `InvalidQoS`. Returns error instead of silently producing malformed packet. Updated caller in `app/`. 2 new tests. 201 tests pass.
+- [x] **`validate_http_status()` uses fixed byte offsets** (`launa-ota/src/http.rs`): Already fixed — uses space-based parsing to find status code after HTTP version string.
+- [x] **`find_header_value_start()` can match within header values** (`launa-ota/src/http.rs`): Already fixed — only matches at line boundaries (position 0 or after `\r\n`). Updated test offsets. 23 tests pass.
+- [x] **`optional_parsed` double-consumes flags already matched by `peek()`** (`xtask/src/*.rs`): Fixed in `listen.rs`, `spa_sim.rs`, `ota_serve.rs`, `sniff_decode.rs` — replaced `optional_parsed` with `parser.value("--flag")?.parse()?`. 30 xtask tests pass.
+- [x] **Default serial port `COM3` on macOS/Linux** (`xtask/src/monitor.rs`, `xtask/src/spa_sim.rs`): Already fixed — uses `resolve_port()` instead of `resolve_port_or(..., "COM3")`.
+- [ ] **`APP_PARTITION_OFFSET` hardcoded in `ota_flash.rs`** (`xtask/src/ota_flash.rs`): Could silently diverge from `partitions.csv`. No validation that constants match actual partition table.
+- [x] **`detect_running_partition()` defaults to Ota0 for factory partition** (`launa-esp-ota/src/flash.rs`): Added doc comment explaining the factory boot default and why it's safe (caller picks opposite partition). 44 tests pass.
+
+### LOW — Minor Issues and Design Improvements
+
+- [ ] **Entity count doc says 27 but actual is 32** (`launa-mqtt/src/lib.rs`, `discovery.rs`): Test only asserts `>= 27`. Update doc and test to match actual count.
+- [ ] **`v5_codec.rs` filename misleading** (`launa-mqtt/src/v5_codec.rs`): Implements MQTT 3.1.1 (protocol level 4), not MQTT v5. Rename to `codec.rs` or `mqtt3_codec.rs`.
+- [ ] **`DiscoveryBuilder::build()` discards `retain` flag** (`launa-mqtt/src/discovery.rs`): Returns `(topic, payload)` tuples, losing retain info. Callers using `build()` may not retain discovery messages. Use `build_with_retain()` or make `build()` preserve retain.
+- [ ] **`escape_json_string()` doc comment has wrong escape representations** (`launa-mqtt/src/escape.rs`): Doc says `\n` → `\\n` but actual output is `\n` (correct). Fix doc to match behavior.
+- [ ] **Reboot/sniff commands bypass `command_parser` allowlist** (`launa-mqtt`): Handled with raw topic string checks in `app/src/mqtt_task.rs`, bypassing `parse_command()`. Architecturally inconsistent.
+- [ ] **`SimTransport` has no write error injection** (`launa-sim/src/sim_transport.rs`): `MockTransport` supports both read and write error injection. `SimTransport` only supports read. Asymmetric testing capability.
+- [ ] **Integration test `TestHarness` leaks `VirtualClock` via `Box::leak`** (`launa-integration-tests/src/harness.rs`): Acceptable in test code but should not be copied to production.
+- [ ] **Integration tests directly mutate `sim.state.*`** (`launa-integration-tests/`): Couples tests to internal simulator state. Should use dedicated test API (e.g., `sim.set_pump(0, PumpState::Low)`).
+- [ ] **`sniff_decode.rs` never loads `launa.toml` config** (`xtask/src/sniff_decode.rs`): Hardcoded `localhost:1883` defaults. Other MQTT commands fall back to config. Inconsistent with project convention.
+- [ ] **OTA default port mismatch: `ota-serve` 8080 vs `ota-flash` config default 8081** (`xtask/src/ota_serve.rs`, `xtask/src/config.rs`): Silent mismatch if running `ota-serve` standalone without config.
+- [ ] **`embedded-io-async` version mismatch** (`Cargo.toml` vs `app/Cargo.toml`): Workspace uses 0.6, app uses 0.7. Works because app is excluded from workspace but could cause confusion.
+- [ ] **`SpaState` has two independent unknown-temp mechanisms** (`launa-sim/`): `report_unknown_temp` (manual) and `physics_unknown_temp_ticks` (auto-expiry) can be active simultaneously. Could confuse test authors.
+- [ ] **`registration.rs` state machine has no timeout mechanism** (`launa-protocol/src/registration.rs`): Stuck forever in `WaitingForAssignment` if spa never sends assignment frame. Caller handles timeouts externally but should be documented.
+- [ ] **`frame.rs` has unreachable dead-code branch in `feed()`** (`launa-protocol/src/frame.rs`): The `!buffer.is_empty()` branch when `expected_length == 0` is unreachable due to earlier validation. Should be simplified.
+- [ ] **Protocol parsers don't validate semantic ranges** (`launa-protocol/src/status.rs`, `filter.rs`): `hour`, `minute`, `filter_mode` could be semantically invalid (e.g. hour=255). Acceptable for hardware-sourced data but noted for completeness.
+- [ ] **Dispatcher handlers depend on caller for empty-payload guard** (`launa-protocol/src/dispatcher.rs`): `handle_*_direct` functions use `payload[1..]` which would panic if called directly with empty payload. Safety depends on `handle_0abf()` guard.
+- [ ] **`SimBroker` bypasses loss rate for discovery/availability** (`launa-sim/src/sim_broker.rs`): Internal publishes skip disconnect simulation, which could mask bugs in tests using these helpers.
+- [ ] **`MockOta` doesn't track `validate_first_chunk` state** (`launa-ota/src/lib.rs`): Real implementation rejects writes after invalid first chunk, but mock doesn't. Tests pass with mock but would fail on hardware.
+- [ ] **`SimHttpServer` duplicated across test files** (`launa-integration-tests/`): Defined identically in `ota_tests.rs` and `error_scenario_tests.rs`. Should be extracted to `common/` module.
+- [ ] **`deploy.sh` uses `linux/amd64` platform** (`deploy.sh`): Forces Rosetta emulation on Apple Silicon. Should use `linux/arm64` natively for cross-compilation to ARM targets.

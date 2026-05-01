@@ -189,6 +189,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                                 fault.as_str(),
                                 sniff_mode,
                                 wifi_rssi,
+                                false,
                                 registration_state,
                             )
                             .await

@@ -186,6 +186,7 @@ pub fn resolve_port(
 /// Resolve the serial port with auto-detection fallback.
 ///
 /// Like `resolve_port`, but returns `default` when nothing is found.
+#[allow(dead_code)]
 pub fn resolve_port_or(
     cli_port: Option<&str>,
     config: Option<&crate::config::Config>,
@@ -201,6 +202,49 @@ pub fn resolve_port_or(
         return p;
     }
     default.to_string()
+}
+
+/// A parsed entry from an ESP-IDF partition table CSV.
+pub struct PartitionEntry {
+    pub name: String,
+    pub offset: u32,
+    pub size: u32,
+}
+
+/// Parse an ESP-IDF `partitions.csv` file.
+///
+/// Skips comment lines (starting with `#`) and blank lines.
+/// Each data line is: `name, type, subtype, offset, size[, flags]`
+/// where offset and size are hex strings like `0x20000`.
+pub fn parse_partitions_csv(path: &Path) -> anyhow::Result<Vec<PartitionEntry>> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read partition table: {}", path.display()))?;
+    let mut entries = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<&str> = line.split(',').map(|f| f.trim()).collect();
+        if fields.len() < 5 {
+            continue;
+        }
+        let name = fields[0].to_string();
+        let offset = u32::from_str_radix(fields[3].trim_start_matches("0x"), 16)
+            .with_context(|| format!("Invalid offset '{}' for partition '{}'", fields[3], name))?;
+        let size = u32::from_str_radix(fields[4].trim_start_matches("0x"), 16)
+            .with_context(|| format!("Invalid size '{}' for partition '{}'", fields[4], name))?;
+        entries.push(PartitionEntry { name, offset, size });
+    }
+    Ok(entries)
+}
+
+/// Find a partition by name from a parsed partition table.
+pub fn find_partition<'a>(entries: &'a [PartitionEntry], name: &str) -> anyhow::Result<&'a PartitionEntry> {
+    entries
+        .iter()
+        .find(|e| e.name == name)
+        .with_context(|| format!("Partition '{}' not found in partition table", name))
 }
 
 /// Return a comma-separated list of available serial ports (for error messages).

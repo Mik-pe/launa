@@ -1,6 +1,6 @@
 //! Home Assistant MQTT auto-discovery message generation.
 //!
-//! Generates JSON discovery payloads for 27 HA entities using `alloc` only
+//! Generates JSON discovery payloads for 32 HA entities using `alloc` only
 //! (no serde_json dependency), so this works in `no_std` environments.
 
 extern crate alloc;
@@ -22,7 +22,7 @@ pub struct DiscoveryMessage {
 
 /// Generates Home Assistant MQTT auto-discovery config payloads for a spa device.
 ///
-/// Produces 27 discovery messages covering sensors, switches, lights, fans,
+/// Produces 32 discovery messages covering sensors, switches, lights, fans,
 /// selects, numbers, and binary sensors. Each message is a JSON config payload
 /// with its corresponding MQTT topic.
 pub struct DiscoveryBuilder {
@@ -399,7 +399,7 @@ impl DiscoveryBuilder {
         configs.push(DiscoveryMessage {
             topic: topics.discovery_topic("sensor", "clock"),
             payload: format!(
-                r#"{{"device":{},"origin":{},"name":"Clock","unique_id":"{}_clock","state_topic":"{}","value_template":"{{{{%02d:%02d|format(value_json.hour|default(0),value_json.minute|default(0))}}}}","availability_topic":"{}","icon":"mdi:clock-outline","entity_category":"diagnostic"}}"#,
+                r#"{{"device":{},"origin":{},"name":"Clock","unique_id":"{}_clock","state_topic":"{}","value_template":"{{{{ \"%02d:%02d\" | format(value_json.hour|default(0), value_json.minute|default(0)) }}}}","availability_topic":"{}","icon":"mdi:clock-outline","entity_category":"diagnostic"}}"#,
                 device_info, origin, self.device_id, state_topic, avail_topic
             ),
             retain: false,
@@ -613,9 +613,10 @@ mod tests {
         let builder = DiscoveryBuilder::new("test_spa_001");
         let configs = builder.build();
 
-        assert!(
-            configs.len() >= 27,
-            "expected at least 27 discovery configs, got {}",
+        assert_eq!(
+            configs.len(),
+            32,
+            "expected exactly 32 discovery configs, got {}",
             configs.len()
         );
 
@@ -630,9 +631,10 @@ mod tests {
         let builder = DiscoveryBuilder::new("test_spa_001");
         let messages = builder.build_with_retain();
 
-        assert!(
-            messages.len() >= 27,
-            "expected at least 27 discovery messages, got {}",
+        assert_eq!(
+            messages.len(),
+            32,
+            "expected exactly 32 discovery messages, got {}",
             messages.len()
         );
         for msg in &messages {
@@ -939,7 +941,7 @@ mod tests {
         let configs = builder.build();
         assert!(
             configs.len() >= 27,
-            "should have at least 27 entities after adding new toggle items, got {}",
+            "should have at least 27 entities (base count), got {}",
             configs.len()
         );
     }
@@ -964,7 +966,7 @@ mod tests {
         // and sw_version produce valid JSON in ALL discovery payloads.
         let builder = builder_with_special_chars();
         let configs = builder.build();
-        assert!(configs.len() >= 27, "expected at least 27 configs");
+        assert!(configs.len() >= 27, "expected at least 27 configs (base count)");
 
         for (topic, json_str) in &configs {
             let _: serde_json::Value = serde_json::from_str(json_str).unwrap_or_else(|e| {

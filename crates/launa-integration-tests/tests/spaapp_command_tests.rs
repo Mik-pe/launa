@@ -547,7 +547,7 @@ fn test_multi_command_fifo_drain() {
     let expected_frames: Vec<Vec<u8>> = commands
         .iter()
         .map(|cmd| {
-            let (mt, payload) = cmd.encode();
+            let (mt, payload) = cmd.encode().unwrap();
             FrameEncoder::encode(mt, &payload).unwrap()
         })
         .collect();
@@ -585,7 +585,7 @@ fn test_multi_command_fifo_drain() {
         })
         .expect("should send NothingToSend when queue empty");
     let expected_nts = {
-        let (mt, payload) = Command::NothingToSend { client_id: 0x03 }.encode();
+        let (mt, payload) = Command::NothingToSend { client_id: 0x03 }.encode().unwrap();
         FrameEncoder::encode(mt, &payload).unwrap()
     };
     assert_eq!(nts_frame, expected_nts, "should send NothingToSend");
@@ -676,7 +676,7 @@ fn test_spaapp_fault_log_with_sim() {
     app.process_frame(&make_status_frame());
 
     let mut sim = SpaSim::new();
-    let (mt, payload) = Command::FaultLogRequest { entry: 0xFF }.encode();
+    let (mt, payload) = Command::FaultLogRequest { entry: 0xFF }.encode().unwrap();
     let request_encoded = FrameEncoder::encode(mt, &payload).unwrap();
     let mut decoder = FrameDecoder::new();
     let request_frames = decoder.feed_slice(&request_encoded);

@@ -85,7 +85,7 @@ fn test_spaapp_stale_detection_lifecycle() {
         .collect();
     assert!(!probe_frames.is_empty(), "Phase 2: should send probe at 5s");
     let nts_expected = {
-        let (mt, payload) = Command::NothingToSend { client_id: 0x03 }.encode();
+        let (mt, payload) = Command::NothingToSend { client_id: 0x03 }.encode().unwrap();
         FrameEncoder::encode(mt, &payload).unwrap()
     };
     assert!(

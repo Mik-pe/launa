@@ -36,7 +36,8 @@ fn test_status_frame_round_trip() {
             assert_eq!(status.minute, 30);
             assert_eq!(status.heating_mode, HeatingMode::Ready);
             assert_eq!(status.temperature_scale, TemperatureScale::Fahrenheit);
-            assert!(status.is_heating);
+            // Default SpaState has is_heating=false (no circulation = no heating)
+            assert!(!status.is_heating);
             assert_eq!(status.temp_range, TempRange::High);
         }
         _ => panic!("Expected StatusUpdate, got {:?}", msg),
@@ -47,7 +48,7 @@ fn test_status_frame_round_trip() {
 fn test_config_request_response_round_trip() {
     let mut sim = SpaSim::new();
 
-    let (mt, payload) = Command::ConfigurationRequest.encode();
+    let (mt, payload) = Command::ConfigurationRequest.encode().unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
     let mut decoder = FrameDecoder::new();
@@ -78,7 +79,7 @@ fn test_config_request_response_round_trip() {
 fn test_information_request_response_round_trip() {
     let mut sim = SpaSim::new();
 
-    let (mt, payload) = Command::InformationRequest.encode();
+    let (mt, payload) = Command::InformationRequest.encode().unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
     let mut decoder = FrameDecoder::new();
@@ -105,7 +106,7 @@ fn test_information_request_response_round_trip() {
 fn test_fault_log_round_trip() {
     let mut sim = SpaSim::new();
 
-    let (mt, payload) = Command::FaultLogRequest { entry: 0xFF }.encode();
+    let (mt, payload) = Command::FaultLogRequest { entry: 0xFF }.encode().unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
     let mut decoder = FrameDecoder::new();
@@ -130,7 +131,7 @@ fn test_fault_log_round_trip() {
 fn test_filter_cycles_round_trip() {
     let mut sim = SpaSim::new();
 
-    let (mt, payload) = Command::FilterCyclesRequest.encode();
+    let (mt, payload) = Command::FilterCyclesRequest.encode().unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
 
     let mut decoder = FrameDecoder::new();
@@ -168,7 +169,7 @@ fn test_toggle_pump1_command() {
         panic!("Expected StatusUpdate");
     }
 
-    let (mt, payload) = Command::ToggleItem(ToggleItem::Pump1).encode();
+    let (mt, payload) = Command::ToggleItem(ToggleItem::Pump1).encode().unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     let frames = decoder.feed_slice(&encoded);
     let frame = &frames[0];
@@ -222,7 +223,7 @@ fn test_toggle_light_command() {
         panic!("Expected StatusUpdate");
     }
 
-    let (mt, payload) = Command::ToggleItem(ToggleItem::Light1).encode();
+    let (mt, payload) = Command::ToggleItem(ToggleItem::Light1).encode().unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     let frames = decoder.feed_slice(&encoded);
     let frame = &frames[0];
@@ -265,7 +266,7 @@ fn test_set_temperature_command() {
         panic!("Expected StatusUpdate");
     }
 
-    let (mt, payload) = Command::SetTemperature(100).encode();
+    let (mt, payload) = Command::SetTemperature(100).encode().unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     let frames = decoder.feed_slice(&encoded);
     let frame = &frames[0];
@@ -483,7 +484,7 @@ fn test_toggle_all_items() {
     let toggles = [ToggleItem::Pump1, ToggleItem::Pump2, ToggleItem::Pump3];
 
     for item in &toggles {
-        let (mt, payload) = Command::ToggleItem(*item).encode();
+        let (mt, payload) = Command::ToggleItem(*item).encode().unwrap();
         let encoded = FrameEncoder::encode(mt, &payload).unwrap();
         let frames = decoder.feed_slice(&encoded);
         sim.process_frame(&frames[0]);
@@ -501,7 +502,7 @@ fn test_toggle_all_items() {
         panic!("Expected StatusUpdate");
     }
 
-    let (mt, payload) = Command::ToggleItem(ToggleItem::Blower).encode();
+    let (mt, payload) = Command::ToggleItem(ToggleItem::Blower).encode().unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     let frames = decoder.feed_slice(&encoded);
     sim.process_frame(&frames[0]);
@@ -515,7 +516,7 @@ fn test_toggle_all_items() {
         panic!("Expected StatusUpdate");
     }
 
-    let (mt, payload) = Command::ToggleItem(ToggleItem::HeatingMode).encode();
+    let (mt, payload) = Command::ToggleItem(ToggleItem::HeatingMode).encode().unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     let frames = decoder.feed_slice(&encoded);
     sim.process_frame(&frames[0]);
@@ -529,7 +530,7 @@ fn test_toggle_all_items() {
         panic!("Expected StatusUpdate");
     }
 
-    let (mt, payload) = Command::ToggleItem(ToggleItem::TemperatureRange).encode();
+    let (mt, payload) = Command::ToggleItem(ToggleItem::TemperatureRange).encode().unwrap();
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     let frames = decoder.feed_slice(&encoded);
     sim.process_frame(&frames[0]);

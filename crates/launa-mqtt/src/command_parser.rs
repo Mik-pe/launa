@@ -163,10 +163,16 @@ pub fn parse_command_ok(command_topic_base: &str, topic: &str, payload: &[u8]) -
 /// prevent accidental `SetTemperature(255)` being sent to the spa.
 /// Zero is rejected as an invalid temperature (no spa supports 0°F / 0°C).
 fn parse_set_temperature(payload: &str) -> ParseResult {
-    let temp: u8 = match payload.parse::<f32>() {
-        Ok(t) => (t + 0.5) as u8,
+    let t = match payload.parse::<f32>() {
+        Ok(t) => t,
         Err(_) => return ParseResult::InvalidPayload(format!("not a number: {:?}", payload)),
     };
+
+    if t.is_nan() || t < 0.0 || t > 255.0 {
+        return ParseResult::InvalidPayload(format!("temperature out of representable range: {:?}", payload));
+    }
+
+    let temp: u8 = (t + 0.5) as u8;
 
     if temp == 0 {
         return ParseResult::TemperatureOutOfRange {
@@ -465,6 +471,46 @@ mod tests {
                 result,
                 ParseResult::Valid(Command::SetTemperature(*expected)),
                 "case {i}: set_temperature={payload}"
+            );
+        }
+    }
+
+    /// Extreme float values (very large, negative, NaN, infinity) must not overflow u8 cast.
+    #[test]
+    fn test_set_temperature_extreme_floats() {
+        let extreme_cases: &[&str] = &[
+            "1e10",
+            "-100.0",
+            "-0.1",
+            "999999.0",
+            "256.0",
+            "1000.0",
+        ];
+
+        for (i, payload) in extreme_cases.iter().enumerate() {
+            let topic = format!("{}/set_temperature", CMD_BASE);
+            let result = parse_command(CMD_BASE, &topic, payload.as_bytes());
+            // All extreme cases should be rejected (either InvalidPayload or TemperatureOutOfRange)
+            assert!(
+                !matches!(result, ParseResult::Valid(Command::SetTemperature(_))),
+                "case {i}: extreme payload '{payload}' should not produce a Valid result, got {:?}",
+                result
+            );
+        }
+    }
+
+    /// NaN and infinity payloads are rejected as invalid.
+    #[test]
+    fn test_set_temperature_nan_and_infinity() {
+        let cases: &[&str] = &["NaN", "inf", "-inf", "+inf"];
+
+        for (i, payload) in cases.iter().enumerate() {
+            let topic = format!("{}/set_temperature", CMD_BASE);
+            let result = parse_command(CMD_BASE, &topic, payload.as_bytes());
+            assert!(
+                matches!(result, ParseResult::InvalidPayload(_)),
+                "case {i}: payload '{payload}' should be InvalidPayload, got {:?}",
+                result
             );
         }
     }

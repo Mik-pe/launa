@@ -193,7 +193,9 @@ impl CommandTracker {
             ExpectedChange::TemperatureSet { temp } => {
                 // set_temp is a Temperature that knows its scale.
                 // to_wire() encodes back to raw byte (×2 for Celsius, direct for Fahrenheit).
-                status.set_temp.to_wire() == *temp
+                // If encoding fails (shouldn't happen with valid spa temps), the command
+                // cannot be confirmed via this comparison.
+                status.set_temp.to_wire().ok() == Some(*temp)
             }
             ExpectedChange::LightToggled { item, pre_state } => {
                 if let Some(idx) = item.light_index() {

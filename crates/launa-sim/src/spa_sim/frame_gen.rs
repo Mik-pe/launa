@@ -141,7 +141,8 @@ pub(crate) fn generate_status_frame(
         }
         payload[2] = Temperature::fahrenheit(reported_f)
             .convert(state.temp_scale)
-            .to_wire();
+            .to_wire()
+            .unwrap_or(0xFF); // 0xFF = unknown temperature on overflow/negative
     }
     // Offset 3: Hour, Offset 4: Minute
     payload[3] = state.hour;
@@ -204,7 +205,7 @@ pub(crate) fn generate_status_frame(
     }
 
     // Offset 20: Set Temperature
-    payload[20] = state.set_temp.to_wire();
+    payload[20] = state.set_temp.to_wire().expect("set_temp should always be encodable");
 
     // Real Balboa hardware includes a 0x13 sub-type prefix byte before the
     // 24-byte status payload. Prepend it so simulation matches wire format.

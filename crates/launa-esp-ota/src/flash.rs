@@ -323,6 +323,16 @@ pub(crate) fn set_boot_partition<S: NorFlash + ReadNorFlash>(
 /// Only considers slots with valid CRCs, matching the ESP-IDF bootloader behavior.
 /// Picks the slot with the higher valid sequence number, then maps it to a
 /// partition via `(ota_seq - 1) % 2`.
+///
+/// # Factory boot default
+///
+/// When both otadata slots are invalid (all-0xFF or bad CRC), this returns
+/// `Partition::Ota0` as a best-guess default. In reality the firmware is
+/// running from the factory partition at 0x20000, which is neither Ota0
+/// (0x160000) nor Ota1 (0x2A0000). This default is safe because the caller
+/// (`EspOtaFlash::new`) selects the *opposite* partition as the OTA target —
+/// so defaulting to `Ota0` yields `Ota1` as the update target, which is correct
+/// for the first OTA from factory.
 pub(crate) fn detect_running_partition<S: NorFlash + ReadNorFlash>(
     flash: &mut S,
 ) -> Result<Partition, OtaError> {

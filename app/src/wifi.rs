@@ -13,7 +13,6 @@ use core::sync::atomic::{AtomicI32, Ordering};
 
 use embassy_executor::Spawner;
 use embassy_net::{Config as NetConfig, DhcpConfig, Runner, Stack, StackResources};
-use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 use esp_hal::rng::Rng;
 use esp_radio::wifi::{

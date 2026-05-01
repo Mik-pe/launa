@@ -590,7 +590,7 @@ fn test_filter_cycle_stop_manual_toggle_off() {
     // Manually toggle pump off (simulating filter cycle end)
     let (mt, payload) =
         launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
-            .encode();
+            .encode().unwrap();
     let encoded = launa_protocol::frame::FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
 

@@ -130,22 +130,33 @@ pub fn parse_connack(buf: &[u8]) -> Result<(), ConnackError> {
     Ok(())
 }
 
+/// Error returned by [`encode_publish`] for invalid inputs.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PublishError {
+    /// QoS must be 0 or 1.
+    InvalidQoS(u8),
+    /// QoS > 0 requires a packet identifier, but `None` was provided.
+    MissingPacketId,
+}
+
 /// Encode an MQTT 3.1.1 PUBLISH packet.
 ///
-/// `qos` must be 0 or 1. For QoS > 0, `packet_id` must be provided.
+/// `qos` must be 0 or 1. For QoS > 0, `packet_id` must be `Some`.
 /// Returns the complete packet bytes ready to send.
-///
-/// # Panics
-///
-/// Panics if `qos > 1` (only QoS 0 and QoS 1 are supported).
 pub fn encode_publish(
     topic: &str,
     payload: &[u8],
     qos: u8,
     retain: bool,
     packet_id: Option<u16>,
-) -> Vec<u8> {
-    assert!(qos <= 1, "MQTT QoS must be 0 or 1, got {}", qos);
+) -> Result<Vec<u8>, PublishError> {
+    if qos > 1 {
+        return Err(PublishError::InvalidQoS(qos));
+    }
+    if qos > 0 && packet_id.is_none() {
+        return Err(PublishError::MissingPacketId);
+    }
+
     let retain_flag = if retain { 0x01 } else { 0x00 };
     let qos_flag = (qos & 0x03) << 1;
     let mut packet = Vec::new();
@@ -161,14 +172,14 @@ pub fn encode_publish(
     packet.extend_from_slice(topic_bytes);
 
     if qos > 0 {
-        if let Some(id) = packet_id {
-            packet.extend_from_slice(&id.to_be_bytes());
-        }
+        // SAFETY: checked above that packet_id is Some when qos > 0
+        let id = packet_id.unwrap();
+        packet.extend_from_slice(&id.to_be_bytes());
     }
 
     packet.extend_from_slice(payload);
 
-    packet
+    Ok(packet)
 }
 
 /// Encode an MQTT 3.1.1 SUBSCRIBE packet.
@@ -440,7 +451,7 @@ mod tests {
 
     #[test]
     fn test_encode_publish_qos0_no_retain() {
-        let packet = encode_publish("test/topic", b"hello", 0, false, None);
+        let packet = encode_publish("test/topic", b"hello", 0, false, None).unwrap();
         assert_eq!(packet[0], 0x30); // PUBLISH, QoS 0, no retain
 
         // Decode topic length and topic
@@ -457,7 +468,7 @@ mod tests {
 
     #[test]
     fn test_encode_publish_qos1_with_retain() {
-        let packet = encode_publish("a/b", b"data", 1, true, Some(42));
+        let packet = encode_publish("a/b", b"data", 1, true, Some(42)).unwrap();
         assert_eq!(packet[0], 0x33); // PUBLISH, QoS 1, retain
 
         let (_, hdr_size) = decode_remaining_length(&packet).unwrap();
@@ -471,11 +482,23 @@ mod tests {
 
     #[test]
     fn test_encode_publish_empty_payload() {
-        let packet = encode_publish("t", b"", 0, false, None);
+        let packet = encode_publish("t", b"", 0, false, None).unwrap();
         assert_eq!(packet[0], 0x30);
         // Verify the packet is well-formed by checking remaining length
         let (remaining, hdr_size) = decode_remaining_length(&packet).unwrap();
         assert_eq!(remaining + hdr_size, packet.len());
+    }
+
+    #[test]
+    fn test_encode_publish_qos1_missing_packet_id() {
+        let result = encode_publish("test/topic", b"hello", 1, false, None);
+        assert_eq!(result, Err(PublishError::MissingPacketId));
+    }
+
+    #[test]
+    fn test_encode_publish_invalid_qos() {
+        let result = encode_publish("test/topic", b"hello", 2, false, Some(1));
+        assert_eq!(result, Err(PublishError::InvalidQoS(2)));
     }
 
     // ── encode_subscribe tests ──

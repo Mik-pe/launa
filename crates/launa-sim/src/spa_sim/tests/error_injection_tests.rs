@@ -61,7 +61,7 @@ fn test_jitter_and_latency_together() {
 
     let (mt, payload) =
         launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
-            .encode();
+            .encode().unwrap();
     let encoded = launa_protocol::frame::FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
 
@@ -96,7 +96,7 @@ fn test_all_three_features_together() {
 
     let (mt, payload) =
         launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
-            .encode();
+            .encode().unwrap();
     let encoded = launa_protocol::frame::FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
 
@@ -212,7 +212,7 @@ fn test_combined_degraded_bus_commands_eventually_deliver() {
     // Send toggle pump1 command
     let (mt, payload) =
         launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
-            .encode();
+            .encode().unwrap();
     let encoded = launa_protocol::frame::FrameEncoder::encode(mt, &payload).unwrap();
 
     // Try sending the command multiple times

@@ -153,14 +153,14 @@ pub fn serve(
 /// CLI entry point for `cargo xtask ota-serve`.
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut firmware_path = None;
-    let mut port = 8080u16;
+    let mut port = 8081u16;
     let mut quiet = false;
     let mut parser = crate::util::Args::new(args);
     while parser.has_more() {
         match parser.peek().unwrap() {
             "--firmware" => firmware_path = Some(PathBuf::from(parser.value("--firmware")?)),
             "--port" => {
-                port = parser.optional_parsed::<u16>("--port")?.unwrap();
+                port = parser.value("--port")?.parse()?;
             }
             "--quiet" => {
                 quiet = true;

@@ -239,7 +239,7 @@ impl TestHarness {
         actions: &[AppAction],
         item: launa_protocol::command::ToggleItem,
     ) -> bool {
-        let (mt, payload) = Command::ToggleItem(item).encode();
+        let (mt, payload) = Command::ToggleItem(item).encode().expect("encode should succeed");
         let expected = launa_protocol::frame::FrameEncoder::encode(mt, &payload).unwrap();
         actions.iter().any(|a| {
             if let AppAction::SendFrame(bytes) = a {

@@ -8,6 +8,15 @@ use core::fmt;
 
 use crate::status::TemperatureScale;
 
+/// Error returned when a temperature value cannot be encoded to a wire byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemperatureError {
+    /// The value is negative after scale conversion.
+    Negative,
+    /// The value exceeds 255 after rounding and cannot fit in a `u8`.
+    Overflow,
+}
+
 /// A temperature value with its scale baked in.
 ///
 /// # Wire encoding
@@ -56,12 +65,21 @@ impl Temperature {
     ///
     /// Fahrenheit: direct cast.
     /// Celsius: multiply by 2 and round.
-    pub fn to_wire(self) -> u8 {
+    ///
+    /// Returns an error if the value is negative or exceeds 255 after rounding.
+    pub fn to_wire(self) -> Result<u8, TemperatureError> {
         let raw = match self.scale {
             TemperatureScale::Fahrenheit => self.value,
             TemperatureScale::Celsius => self.value * 2.0,
         };
-        (raw + 0.5) as u8
+        let rounded = raw + 0.5;
+        if rounded < 0.0 {
+            return Err(TemperatureError::Negative);
+        }
+        if rounded > 255.0 {
+            return Err(TemperatureError::Overflow);
+        }
+        Ok(rounded as u8)
     }
 
     /// The value in Celsius, converting if necessary.
@@ -135,7 +153,7 @@ mod tests {
     #[test]
     fn test_fahrenheit_round_trip() {
         let temp = Temperature::fahrenheit(100.0);
-        assert_eq!(temp.to_wire(), 100);
+        assert_eq!(temp.to_wire(), Ok(100));
         assert_eq!(
             Temperature::from_wire(100, TemperatureScale::Fahrenheit),
             temp
@@ -145,14 +163,14 @@ mod tests {
     #[test]
     fn test_celsius_round_trip() {
         let temp = Temperature::celsius(38.0);
-        assert_eq!(temp.to_wire(), 76);
+        assert_eq!(temp.to_wire(), Ok(76));
         assert_eq!(Temperature::from_wire(76, TemperatureScale::Celsius), temp);
     }
 
     #[test]
     fn test_celsius_half_degree() {
         let temp = Temperature::celsius(37.5);
-        assert_eq!(temp.to_wire(), 75); // 37.5 * 2 = 75
+        assert_eq!(temp.to_wire(), Ok(75)); // 37.5 * 2 = 75
         let decoded = Temperature::from_wire(75, TemperatureScale::Celsius);
         assert_eq!(decoded, Temperature::celsius(37.5));
     }
@@ -225,5 +243,40 @@ mod tests {
             Temperature::fahrenheit(0.0).scale(),
             TemperatureScale::Fahrenheit
         );
+    }
+
+    #[test]
+    fn test_to_wire_negative_fahrenheit() {
+        let temp = Temperature::fahrenheit(-1.0);
+        assert_eq!(temp.to_wire(), Err(TemperatureError::Negative));
+    }
+
+    #[test]
+    fn test_to_wire_negative_celsius() {
+        let temp = Temperature::celsius(-1.0);
+        assert_eq!(temp.to_wire(), Err(TemperatureError::Negative));
+    }
+
+    #[test]
+    fn test_to_wire_overflow_fahrenheit() {
+        let temp = Temperature::fahrenheit(256.0);
+        assert_eq!(temp.to_wire(), Err(TemperatureError::Overflow));
+    }
+
+    #[test]
+    fn test_to_wire_overflow_celsius() {
+        let temp = Temperature::celsius(128.0); // 128 * 2 = 256, rounds to 257
+        assert_eq!(temp.to_wire(), Err(TemperatureError::Overflow));
+    }
+
+    #[test]
+    fn test_to_wire_zero() {
+        assert_eq!(Temperature::fahrenheit(0.0).to_wire(), Ok(0));
+        assert_eq!(Temperature::celsius(0.0).to_wire(), Ok(0));
+    }
+
+    #[test]
+    fn test_to_wire_max_valid() {
+        assert_eq!(Temperature::fahrenheit(254.5).to_wire(), Ok(255));
     }
 }

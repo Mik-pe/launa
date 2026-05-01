@@ -12,7 +12,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         match parser.peek().unwrap() {
             "--port" => cli_port = Some(parser.value("--port")?.to_string()),
             "--duration" => {
-                duration_secs = parser.optional_parsed::<u64>("--duration")?.unwrap();
+                duration_secs = parser.value("--duration")?.parse()?;
             }
             "--respond" => {
                 parser.skip();
@@ -23,7 +23,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     }
 
     let config = crate::config::load().ok();
-    let port_name = crate::util::resolve_port_or(cli_port.as_deref(), config.as_ref(), "COM3");
+    let port_name = crate::util::resolve_port(cli_port.as_deref(), config.as_ref())?;
 
     let port = serialport::new(&port_name, 115200)
         .timeout(Duration::from_millis(100))

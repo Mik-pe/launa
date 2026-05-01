@@ -57,7 +57,7 @@ impl Default for SpaState {
             set_temp_low: Temperature::fahrenheit(80.0),
             heating_mode: HeatingMode::Ready,
             temp_scale: TemperatureScale::Fahrenheit,
-            is_heating: true,
+            is_heating: false,
             temp_range: TempRange::High,
             pumps: [PumpState::Off; 6],
             circ_pump: false,

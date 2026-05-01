@@ -112,7 +112,7 @@ fn test_registration_flow_with_state_machine() {
     assert!(sm.is_registered(), "should be registered after assignment");
 
     let cmd = Command::NothingToSend { client_id: 0x03 };
-    let (mt, _) = cmd.encode();
+    let (mt, _) = cmd.encode().unwrap();
     assert_eq!(mt, [0x03, 0xBF]);
 }
 

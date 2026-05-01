@@ -12,6 +12,17 @@ pub enum TempError {
     AboveAbsoluteLimit,
 }
 
+/// Command encoding error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandError {
+    /// SetTime hour exceeds 23 or has bit 7 set.
+    InvalidHour(u8),
+    /// SetTime minute exceeds 59.
+    InvalidMinute(u8),
+    /// SetTemperature value exceeds absolute safe limit.
+    InvalidTemperature(u8),
+}
+
 /// Validate a set-temperature value against the spa's safe operating range.
 ///
 /// Per Balboa protocol:
@@ -193,39 +204,53 @@ impl Command {
     ///
     /// All outgoing commands use message type `0A BF`. The first byte of the
     /// payload acts as a sub-type discriminator per the Balboa protocol.
-    pub fn encode(&self) -> ([u8; 2], Vec<u8>) {
+    ///
+    /// Returns an error if `SetTime` or `SetTemperature` values are out of
+    /// their valid ranges.
+    pub fn encode(&self) -> Result<([u8; 2], Vec<u8>), CommandError> {
         match self {
-            Command::ConfigurationRequest => ([0x0A, 0xBF], vec![0x04]),
-            Command::ToggleItem(item) => ([0x0A, 0xBF], vec![0x11, item.code(), 0x00]),
-            Command::SetTemperature(temp) => ([0x0A, 0xBF], vec![0x20, *temp]),
+            Command::ConfigurationRequest => Ok(([0x0A, 0xBF], vec![0x04])),
+            Command::ToggleItem(item) => Ok(([0x0A, 0xBF], vec![0x11, item.code(), 0x00])),
+            Command::SetTemperature(temp) => {
+                if *temp > ABSOLUTE_MAX_TEMP_F {
+                    return Err(CommandError::InvalidTemperature(*temp));
+                }
+                Ok(([0x0A, 0xBF], vec![0x20, *temp]))
+            }
             Command::SetTime {
                 hour,
                 minute,
                 is_24h,
             } => {
-                let h = if *is_24h { hour | 0x80 } else { *hour };
-                ([0x0A, 0xBF], vec![0x21, h, *minute])
+                if *hour > 23 || (*hour & 0x80) != 0 {
+                    return Err(CommandError::InvalidHour(*hour));
+                }
+                if *minute > 59 {
+                    return Err(CommandError::InvalidMinute(*minute));
+                }
+                let h = if *is_24h { *hour | 0x80 } else { *hour };
+                Ok(([0x0A, 0xBF], vec![0x21, h, *minute]))
             }
             Command::SetTemperatureScale(celsius) => {
                 let ts = if *celsius { 0x01 } else { 0x00 };
-                ([0x0A, 0xBF], vec![0x27, 0x01, ts])
+                Ok(([0x0A, 0xBF], vec![0x27, 0x01, ts]))
             }
             Command::SettingsRequest(SettingsType::Panel) => {
-                ([0x0A, 0xBF], vec![0x22, 0x00, 0x00, 0x01])
+                Ok(([0x0A, 0xBF], vec![0x22, 0x00, 0x00, 0x01]))
             }
             Command::SettingsRequest(SettingsType::FilterCycles) | Command::FilterCyclesRequest => {
-                ([0x0A, 0xBF], vec![0x22, 0x01, 0x00, 0x00])
+                Ok(([0x0A, 0xBF], vec![0x22, 0x01, 0x00, 0x00]))
             }
             Command::SettingsRequest(SettingsType::Information) | Command::InformationRequest => {
-                ([0x0A, 0xBF], vec![0x22, 0x02, 0x00, 0x00])
+                Ok(([0x0A, 0xBF], vec![0x22, 0x02, 0x00, 0x00]))
             }
             Command::SettingsRequest(SettingsType::Preferences) => {
-                ([0x0A, 0xBF], vec![0x22, 0x08, 0x00, 0x00])
+                Ok(([0x0A, 0xBF], vec![0x22, 0x08, 0x00, 0x00]))
             }
-            Command::FaultLogRequest { entry } => ([0x0A, 0xBF], vec![0x22, 0x20, *entry, 0x00]),
-            Command::NothingToSend { client_id } => ([*client_id, 0xBF], vec![0x07]),
-            Command::Sniff(_) => ([0x00, 0x00], Vec::new()), // not sent to spa
-            Command::Reboot => ([0x00, 0x00], Vec::new()),   // not sent to spa
+            Command::FaultLogRequest { entry } => Ok(([0x0A, 0xBF], vec![0x22, 0x20, *entry, 0x00])),
+            Command::NothingToSend { client_id } => Ok(([*client_id, 0xBF], vec![0x07])),
+            Command::Sniff(_) => Ok(([0x00, 0x00], Vec::new())), // not sent to spa
+            Command::Reboot => Ok(([0x00, 0x00], Vec::new())),   // not sent to spa
         }
     }
 }
@@ -446,7 +471,7 @@ mod tests {
         ];
 
         for (i, case) in cases.iter().enumerate() {
-            let (mt, payload) = case.cmd.encode();
+            let (mt, payload) = case.cmd.encode().expect("encode should succeed");
             assert_eq!(
                 mt, case.expected_mt,
                 "case {i} '{}': message_type mismatch",
@@ -663,5 +688,141 @@ mod tests {
         assert_eq!(ToggleItem::Pump1.light_index(), None);
         assert_eq!(ToggleItem::Mister.light_index(), None);
         assert_eq!(ToggleItem::from_light_index(4), None);
+    }
+
+    /// SetTime validation: reject out-of-range hours, minutes, and bit-7-set hours.
+    #[test]
+    fn set_time_validation() {
+        // Valid: boundary hour=23, minute=59
+        let cmd = Command::SetTime {
+            hour: 23,
+            minute: 59,
+            is_24h: false,
+        };
+        assert!(cmd.encode().is_ok());
+
+        // Valid: hour=0, minute=0
+        let cmd = Command::SetTime {
+            hour: 0,
+            minute: 0,
+            is_24h: true,
+        };
+        assert!(cmd.encode().is_ok());
+
+        // Invalid: hour=24
+        let cmd = Command::SetTime {
+            hour: 24,
+            minute: 0,
+            is_24h: false,
+        };
+        assert_eq!(
+            cmd.encode(),
+            Err(CommandError::InvalidHour(24)),
+            "hour 24 should be rejected"
+        );
+
+        // Invalid: minute=60
+        let cmd = Command::SetTime {
+            hour: 12,
+            minute: 60,
+            is_24h: false,
+        };
+        assert_eq!(
+            cmd.encode(),
+            Err(CommandError::InvalidMinute(60)),
+            "minute 60 should be rejected"
+        );
+
+        // Invalid: hour with bit 7 set (0x80)
+        let cmd = Command::SetTime {
+            hour: 0x80,
+            minute: 0,
+            is_24h: false,
+        };
+        assert_eq!(
+            cmd.encode(),
+            Err(CommandError::InvalidHour(0x80)),
+            "hour with bit 7 set should be rejected"
+        );
+
+        // Invalid: hour with bit 7 set (0xFF)
+        let cmd = Command::SetTime {
+            hour: 0xFF,
+            minute: 30,
+            is_24h: true,
+        };
+        assert_eq!(
+            cmd.encode(),
+            Err(CommandError::InvalidHour(0xFF)),
+            "hour 0xFF should be rejected"
+        );
+
+        // Invalid: extreme minute
+        let cmd = Command::SetTime {
+            hour: 10,
+            minute: 0xFF,
+            is_24h: false,
+        };
+        assert_eq!(
+            cmd.encode(),
+            Err(CommandError::InvalidMinute(0xFF)),
+            "minute 0xFF should be rejected"
+        );
+    }
+
+    /// SetTemperature validation: reject values above absolute max.
+    #[test]
+    fn set_temperature_validation() {
+        // Valid: exactly at absolute max
+        let cmd = Command::SetTemperature(ABSOLUTE_MAX_TEMP_F);
+        assert!(cmd.encode().is_ok());
+
+        // Valid: low value
+        let cmd = Command::SetTemperature(80);
+        assert!(cmd.encode().is_ok());
+
+        // Invalid: one above absolute max
+        let cmd = Command::SetTemperature(ABSOLUTE_MAX_TEMP_F + 1);
+        assert_eq!(
+            cmd.encode(),
+            Err(CommandError::InvalidTemperature(ABSOLUTE_MAX_TEMP_F + 1)),
+            "temp above absolute max should be rejected"
+        );
+
+        // Invalid: 0xFF
+        let cmd = Command::SetTemperature(0xFF);
+        assert_eq!(
+            cmd.encode(),
+            Err(CommandError::InvalidTemperature(0xFF)),
+            "temp 0xFF should be rejected"
+        );
+
+        // Invalid: well above absolute max
+        let cmd = Command::SetTemperature(200);
+        assert_eq!(
+            cmd.encode(),
+            Err(CommandError::InvalidTemperature(200)),
+            "temp 200 should be rejected"
+        );
+    }
+
+    /// Verify that valid SetTime encodes the 24h flag correctly (bit 7 set on hour).
+    #[test]
+    fn set_time_24h_encoding() {
+        let cmd = Command::SetTime {
+            hour: 14,
+            minute: 30,
+            is_24h: true,
+        };
+        let (_, payload) = cmd.encode().unwrap();
+        assert_eq!(payload, vec![0x21, 0x80 | 14, 30]);
+
+        let cmd = Command::SetTime {
+            hour: 14,
+            minute: 30,
+            is_24h: false,
+        };
+        let (_, payload) = cmd.encode().unwrap();
+        assert_eq!(payload, vec![0x21, 14, 30]);
     }
 }

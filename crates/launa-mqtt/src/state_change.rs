@@ -12,6 +12,8 @@ use launa_protocol::status::StatusUpdate;
 /// - `current_temp`, `set_temp`, `is_heating`
 /// - `pumps`, `lights`, `blower`, `circ_pump`, `mister`
 /// - `is_hold`, `heating_mode`, `temp_range`, `hold_timer_minutes`
+/// - `temperature_scale`, `time_format`
+/// - `notification_type`, `panel_locked`, `settings_lock`, `m8_cycle_time`
 ///
 /// If `prev` is `None` (first publish or after mode change reset), returns `true`.
 pub fn status_changed(prev: Option<&StatusUpdate>, current: &StatusUpdate) -> bool {
@@ -35,6 +37,12 @@ fn status_fields_differ(prev: &StatusUpdate, current: &StatusUpdate) -> bool {
         || prev.heating_mode != current.heating_mode
         || prev.temp_range != current.temp_range
         || prev.hold_timer_minutes != current.hold_timer_minutes
+        || prev.temperature_scale != current.temperature_scale
+        || prev.time_format != current.time_format
+        || prev.notification_type != current.notification_type
+        || prev.panel_locked != current.panel_locked
+        || prev.settings_lock != current.settings_lock
+        || prev.m8_cycle_time != current.m8_cycle_time
 }
 
 #[cfg(test)]
@@ -253,6 +261,40 @@ mod tests {
         assert!(status_changed(Some(&base), &changed));
     }
 
+    // --- Newly added published fields ---
+
+    #[test]
+    fn test_temperature_scale_change_detected() {
+        let base = sample_status();
+        let mut changed = base.clone();
+        changed.temperature_scale = TemperatureScale::Celsius;
+        assert!(status_changed(Some(&base), &changed));
+    }
+
+    #[test]
+    fn test_time_format_change_detected() {
+        let base = sample_status();
+        let mut changed = base.clone();
+        changed.time_format = TimeFormat::Hour12;
+        assert!(status_changed(Some(&base), &changed));
+    }
+
+    #[test]
+    fn test_settings_lock_change_detected() {
+        let base = sample_status();
+        let mut changed = base.clone();
+        changed.settings_lock = true;
+        assert!(status_changed(Some(&base), &changed));
+    }
+
+    #[test]
+    fn test_m8_cycle_time_change_detected() {
+        let base = sample_status();
+        let mut changed = base.clone();
+        changed.m8_cycle_time = 30;
+        assert!(status_changed(Some(&base), &changed));
+    }
+
     // --- Non-published fields should NOT trigger change ---
 
     #[test]
@@ -272,11 +314,11 @@ mod tests {
     }
 
     #[test]
-    fn test_notification_type_change_not_detected() {
+    fn test_notification_type_change_detected() {
         let base = sample_status();
         let mut changed = base.clone();
         changed.notification_type = 4;
-        assert!(!status_changed(Some(&base), &changed));
+        assert!(status_changed(Some(&base), &changed));
     }
 
     #[test]
@@ -288,11 +330,11 @@ mod tests {
     }
 
     #[test]
-    fn test_panel_locked_change_not_detected() {
+    fn test_panel_locked_change_detected() {
         let base = sample_status();
         let mut changed = base.clone();
         changed.panel_locked = true;
-        assert!(!status_changed(Some(&base), &changed));
+        assert!(status_changed(Some(&base), &changed));
     }
 
     #[test]

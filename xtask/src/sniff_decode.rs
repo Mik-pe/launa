@@ -11,7 +11,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         match parser.peek().unwrap() {
             "--host" => host = parser.value("--host")?.to_string(),
             "--port" => {
-                port = parser.optional_parsed::<u16>("--port")?.unwrap();
+                port = parser.value("--port")?.parse()?;
             }
             "--output" | "-o" => output_file = Some(parser.value("--output")?.to_string()),
             _ => return Err(parser.unknown_arg()),

@@ -40,4 +40,4 @@ pub use filter::FilterCycles;
 pub use frame::{Frame, FrameDecoder, FrameEncoder, FrameError};
 pub use information::InformationResponse;
 pub use status::StatusUpdate;
-pub use temperature::Temperature;
+pub use temperature::{Temperature, TemperatureError};

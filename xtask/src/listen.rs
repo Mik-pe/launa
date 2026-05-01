@@ -16,7 +16,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         match parser.peek().unwrap() {
             "--host" => host = parser.value("--host")?.to_string(),
             "--port" => {
-                port = parser.optional_parsed::<u16>("--port")?.unwrap();
+                port = parser.value("--port")?.parse()?;
             }
             "--topic" | "-t" => topic_filter = parser.value("--topic")?.to_string(),
             "--verbose" | "-v" => {
