@@ -302,9 +302,19 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                                     let has_end = i + 4 < n && buf[i + 4] == 0x7E;
                                     let has_end_crc1 = i + 3 < n && buf[i + 3] == 0x7E && i + 4 >= n;
 
+                                    // Log the surrounding bytes for debugging
+                                    let ctx_start = i.saturating_sub(2);
+                                    let ctx_end = (i + 5).min(n);
+                                    let ctx_hex = launa_protocol::hex::to_hex(&buf[ctx_start..ctx_end]);
+                                    info!("UART: FEBF00 pattern at offset {} in {} byte read, context: {}", i, n, ctx_hex);
+
                                     if has_start && (has_end || has_end_crc1) {
-                                        info!("UART: byte-level fast-path FEBF00 detected, sending ID request");
-                                        let _ = transport.write(&id_request_frame).await;
+                                        let hex = launa_protocol::hex::to_hex(&id_request_frame);
+                                        info!("UART: byte-level fast-path FEBF00 detected, sending ID request ({} bytes: {})", id_request_frame.len(), hex);
+                                        match transport.write(&id_request_frame).await {
+                                            Ok(()) => info!("UART: fast-path write OK"),
+                                            Err(e) => warn!("UART: fast-path write FAILED: {:?}", e),
+                                        }
                                         // Signal main loop to skip duplicate send
                                         FAST_PATH_ID_REQUEST_SENT.store(true, Ordering::Release);
                                         break; // Only respond once per read
