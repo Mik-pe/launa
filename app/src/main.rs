@@ -309,12 +309,23 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                                     info!("UART: FEBF00 pattern at offset {} in {} byte read, context: {}", i, n, ctx_hex);
 
                                     if has_start && (has_end || has_end_crc1) {
+                                        // Fast-path: preamble + flush + frame + flush, directly on UART.
+                                        // Matches the transport.write() approach for auto-direction modules.
                                         let hex = launa_protocol::hex::to_hex(&id_request_frame);
-                                        info!("UART: byte-level fast-path FEBF00 detected, sending ID request ({} bytes: {})", id_request_frame.len(), hex);
-                                        match transport.write(&id_request_frame).await {
-                                            Ok(()) => info!("UART: fast-path write OK"),
-                                            Err(e) => warn!("UART: fast-path write FAILED: {:?}", e),
+                                        info!("UART: FEBF00 detected at offset {}/{}, raw-write ID request ({} bytes: {})", i, n, id_request_frame.len(), hex);
+                                        // 1. Send preamble byte to trigger direction switch
+                                        let _ = transport.write_raw(&[0x00]);
+                                        let _ = transport.flush_raw();
+                                        // 2. Send the actual frame
+                                        let mut fp_written = 0;
+                                        while fp_written < id_request_frame.len() {
+                                            match transport.write_raw(&id_request_frame[fp_written..]) {
+                                                Ok(n) => fp_written += n,
+                                                Err(_) => break,
+                                            }
                                         }
+                                        let _ = transport.flush_raw();
+                                        info!("UART: fast-path write done ({} bytes)", fp_written);
                                         // Signal main loop to skip duplicate send
                                         FAST_PATH_ID_REQUEST_SENT.store(true, Ordering::Release);
                                         break; // Only respond once per read
@@ -929,13 +940,10 @@ async fn main(spawner: Spawner) {
         .with_rx(peripherals.GPIO16)
         .into_async();
 
-    // Use GPIO4 as explicit DE (Driver Enable) pin for RS-485 transceiver.
-    // Even with auto-direction transceivers, explicit DE control ensures
-    // the driver is asserted before data is sent. If GPIO4 is not connected
-    // to the transceiver, the pin will just toggle harmlessly.
-    let de_pin = Some(esp_hal::gpio::AnyPin::from(peripherals.GPIO4));
-    let uart_transport = transport::Rs485Transport::new(uart, de_pin);
-    info!("RS-485 UART initialized with DE pin on GPIO4");
+    // Auto-direction RS-485 transceiver (no DE pin). Preamble bytes are
+    // sent before each frame to give the direction-switching circuit time.
+    let uart_transport = transport::Rs485Transport::new(uart, None);
+    info!("RS-485 UART initialized (auto-direction, no DE pin)");
 
     let wifi_stack = init_wifi(
         spawner,
@@ -1124,7 +1132,7 @@ async fn main(spawner: Spawner) {
             let last_alert = UART_LAST_NO_BYTE_ALERT_SECS.load(Ordering::Relaxed) as u64;
             if uptime - last_alert >= 300 || last_alert == 0 {
                 UART_LAST_NO_BYTE_ALERT_SECS.store(uptime as u32, Ordering::Relaxed);
-                error!("UART: no bytes received after {}s — check RS-485 wiring (RX=GPIO16, TX=GPIO17, DE=GPIO4)", uptime);
+                error!("UART: no bytes received after {}s — check RS-485 wiring (RX=GPIO16, TX=GPIO17)", uptime);
                 send_alert("error", "no_uart_bytes");
             }
         }

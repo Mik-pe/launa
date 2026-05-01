@@ -458,7 +458,14 @@ impl RegistrationStateMachine {
             },
 
             RegistrationState::WaitingForExistingResponse => match msg {
-                RegistrationMessage::ExistingClientResponse { channel, .. } => {
+                RegistrationMessage::ExistingClientResponse {
+                    channel,
+                    client_hash,
+                } => {
+                    // Validate hash — reject responses meant for other devices
+                    if *client_hash != self.client_hash {
+                        return RegistrationAction::None;
+                    }
                     // Spa confirmed our existing client — we're registered
                     self.state = RegistrationState::Registered {
                         client_id: *channel,
@@ -798,6 +805,35 @@ mod tests {
         );
         assert!(sm.is_registered());
         assert_eq!(sm.client_id(), Some(0x06));
+    }
+
+    #[test]
+    fn test_existing_client_hash_mismatch_rejected() {
+        let mut sm = new_sm_with_previous(0x05);
+
+        sm.process(&RegistrationMessage::NewClientQuery);
+        assert_eq!(sm.state(), &RegistrationState::WaitingForExistingResponse);
+
+        // Response with wrong hash — must be ignored
+        let action = sm.process(&RegistrationMessage::ExistingClientResponse {
+            channel: 0x05,
+            client_hash: [0xAA, 0xBB],
+        });
+        assert_eq!(action, RegistrationAction::None);
+        assert_eq!(
+            sm.state(),
+            &RegistrationState::WaitingForExistingResponse
+        );
+        assert!(!sm.is_registered());
+
+        // Correct hash should still work
+        let action = sm.process(&RegistrationMessage::ExistingClientResponse {
+            channel: 0x05,
+            client_hash: TEST_HASH,
+        });
+        assert_eq!(action, RegistrationAction::None);
+        assert!(sm.is_registered());
+        assert_eq!(sm.client_id(), Some(0x05));
     }
 
     #[test]
