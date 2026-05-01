@@ -3,6 +3,12 @@
 //! Implements the `launa_hal::Transport` trait, providing a unified async
 //! transport abstraction shared between production (ESP32 UART) and test
 //! (mock/sim) code.
+//!
+//! Writes use the **sync** UART API (`write` + `flush`) to avoid yield points
+//! between filling the TX FIFO and waiting for the shift register to drain.
+//! On a half-duplex RS-485 bus, yielding to the executor between write and
+//! flush can allow other tasks to run, causing timing jitter that corrupts
+//! the bus frame boundary — especially with auto-direction transceivers.
 
 use embassy_time::{Duration, Timer};
 use esp_hal::gpio::{AnyPin, Level, Output, OutputConfig};
@@ -63,7 +69,7 @@ impl Drop for DeGuard<'_> {
 impl Rs485Transport {
     /// Create a new RS-485 transport.
     ///
-    /// - `uart`: An async UART peripheral configured for 19200 baud.
+    /// - `uart`: An async UART peripheral configured for 115200 baud.
     /// - `de_pin`: Optional GPIO pin connected to the RS-485 transceiver's
     ///   DE (Driver Enable) input. When `None`, DE pin control is skipped
     ///   (useful for auto-direction transceivers or direct UART connections).
@@ -108,47 +114,22 @@ impl Transport for Rs485Transport {
             }
         }
 
-        // For auto-direction RS-485 transceivers (no DE pin), the driver
-        // enables on the start bit's falling edge — but the turn-on delay
-        // can corrupt that first byte. Send a 0x00 preamble byte so the
-        // real data starts with the driver already enabled.
-        //
-        // The preamble and data are merged into a single buffer and written
-        // in one loop to eliminate the timing gap between two separate write
-        // calls. A preemption between writes could let the transceiver
-        // disable and re-enable, corrupting the first real byte.
-        if guard.de.is_none() && !data.is_empty() {
-            // Stack-allocated buffer: 1 preamble byte + data.
-            // heapless is already a dependency; use a Vec to avoid fixed size.
-            let mut buf = heapless::Vec::<u8, 256>::new();
-            buf.push(0x00).ok(); // preamble — discard if buf is full (impossible at 1 byte)
-            buf.extend_from_slice(data).ok(); // truncate if data > 255 bytes
-            let merged = &buf[..];
-            let mut written = 0;
-            while written < merged.len() {
-                let n = self
-                    .uart
-                    .write_async(&merged[written..])
-                    .await
-                    .map_err(|_e| TransportError::Io)?;
-                written += n;
-            }
-        } else {
-            // Write all bytes using the async API
-            let mut written = 0;
-            while written < data.len() {
-                let n = self
-                    .uart
-                    .write_async(&data[written..])
-                    .await
-                    .map_err(|_e| TransportError::Io)?;
-                written += n;
-            }
+        // Use sync write + sync flush to avoid yielding to the executor
+        // between filling the TX FIFO and draining the shift register.
+        // Async write/flush introduces yield points that can cause timing
+        // jitter on the half-duplex RS-485 bus.
+        let mut written = 0;
+        while written < data.len() {
+            let n = self
+                .uart
+                .write(&data[written..])
+                .map_err(|_e| TransportError::Io)?;
+            written += n;
         }
 
-        // Async flush: yields to the executor while waiting for the TX FIFO
-        // and shift register to drain, instead of blocking the CPU.
-        let flush_result = self.uart.flush_async().await;
+        // Sync flush: busy-waits until the TX FIFO and shift register
+        // are fully drained, guaranteeing all bytes are on the wire.
+        let flush_result = self.uart.flush();
 
         // Always release DE pin via the guard.
         if guard.de.is_some() {
@@ -168,9 +149,6 @@ impl Transport for Rs485Transport {
     }
 
     async fn flush(&mut self) -> Result<(), TransportError> {
-        self.uart
-            .flush_async()
-            .await
-            .map_err(|_| TransportError::Io)
+        self.uart.flush().map_err(|_| TransportError::Io)
     }
 }
