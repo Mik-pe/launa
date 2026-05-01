@@ -39,5 +39,6 @@ pub use fault::{FaultCode, FaultLogEntry};
 pub use filter::FilterCycles;
 pub use frame::{Frame, FrameDecoder, FrameEncoder, FrameError};
 pub use information::InformationResponse;
+pub use registration::Channel;
 pub use status::StatusUpdate;
 pub use temperature::{Temperature, TemperatureError};

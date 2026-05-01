@@ -29,6 +29,7 @@
 extern crate alloc;
 
 mod actions;
+mod channel_broker;
 mod command_tracker;
 mod fault_buf;
 mod heap_monitor;
@@ -42,6 +43,7 @@ mod types;
 
 // Re-export all public items to preserve the public API
 pub use actions::AppAction;
+pub use channel_broker::{AllocatorToken, ChannelAllocatorBroker};
 pub use command_tracker::{CommandTracker, VerifyResult};
 pub use fault_buf::FaultBuf;
 pub use heap_monitor::HeapMonitor;

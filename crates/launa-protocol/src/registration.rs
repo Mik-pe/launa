@@ -22,6 +22,112 @@ extern crate alloc;
 use crate::frame::{FrameEncoder, FrameError};
 
 // ---------------------------------------------------------------------------
+// Channel type
+// ---------------------------------------------------------------------------
+
+/// Valid client channel range (CTS-based, most common).
+pub const CLIENT_CTS_RANGE: core::ops::RangeInclusive<u8> = 0x10..=0x2F;
+/// Client channel range without ClearToSend.
+pub const CLIENT_NO_CTS_RANGE: core::ops::RangeInclusive<u8> = 0x30..=0x3F;
+
+/// A typed Balboa RS-485 channel identifier.
+///
+/// The Balboa protocol uses the first byte of the message type (`XX BF`) to
+/// identify which channel a frame is addressed to. Well-known channel values:
+///
+/// | Value    | Meaning                          |
+/// |----------|----------------------------------|
+/// | `0x0A`   | WiFi module                      |
+/// | `0x10-0x2F` | Client with ClearToSend       |
+/// | `0x30-0x3F` | Client without ClearToSend    |
+/// | `0xFE`   | Multicast channel assignment     |
+/// | `0xFF`   | Multicast broadcast (status)     |
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Channel {
+    /// WiFi module channel (0x0A).
+    WifiModule,
+    /// Client with ClearToSend support (0x10-0x2F).
+    /// The spa sends `<channel> BF 06` (ClearToSend) before this client can send.
+    Client(u8),
+    /// Client without ClearToSend (0x30-0x3F).
+    ClientNoCTS(u8),
+    /// Multicast channel assignment (0xFE) — used during registration.
+    MulticastChannelAssignment,
+    /// Multicast broadcast (0xFF) — status frames.
+    MulticastBroadcast,
+    /// Unknown/reserved channel value.
+    Unknown(u8),
+}
+
+impl Channel {
+    /// Whether this channel uses ClearToSend flow control.
+    pub fn has_cts(&self) -> bool {
+        matches!(self, Channel::Client(_))
+    }
+
+    /// Whether this is a client channel (with or without CTS).
+    pub fn is_client(&self) -> bool {
+        matches!(self, Channel::Client(_) | Channel::ClientNoCTS(_))
+    }
+
+    /// Create a CTS client channel from a 0-based index.
+    /// Returns `None` if the index would place the channel outside `0x10-0x2F`.
+    pub fn new_client_channel(index: usize) -> Option<Self> {
+        let raw = 0x10u8.checked_add(index as u8)?;
+        if CLIENT_CTS_RANGE.contains(&raw) {
+            Some(Channel::Client(raw))
+        } else {
+            None
+        }
+    }
+}
+
+impl From<u8> for Channel {
+    fn from(value: u8) -> Self {
+        match value {
+            0x0A => Channel::WifiModule,
+            0xFE => Channel::MulticastChannelAssignment,
+            0xFF => Channel::MulticastBroadcast,
+            v if CLIENT_CTS_RANGE.contains(&v) => Channel::Client(v),
+            v if CLIENT_NO_CTS_RANGE.contains(&v) => Channel::ClientNoCTS(v),
+            v => Channel::Unknown(v),
+        }
+    }
+}
+
+impl From<Channel> for u8 {
+    fn from(channel: Channel) -> u8 {
+        match channel {
+            Channel::WifiModule => 0x0A,
+            Channel::Client(v) => v,
+            Channel::ClientNoCTS(v) => v,
+            Channel::MulticastChannelAssignment => 0xFE,
+            Channel::MulticastBroadcast => 0xFF,
+            Channel::Unknown(v) => v,
+        }
+    }
+}
+
+impl From<&Channel> for u8 {
+    fn from(channel: &Channel) -> u8 {
+        u8::from(*channel)
+    }
+}
+
+impl core::fmt::Display for Channel {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Channel::WifiModule => write!(f, "WiFi(0x0A)"),
+            Channel::Client(v) => write!(f, "Client(0x{:02X})", v),
+            Channel::ClientNoCTS(v) => write!(f, "ClientNoCTS(0x{:02X})", v),
+            Channel::MulticastChannelAssignment => write!(f, "Reg(0xFE)"),
+            Channel::MulticastBroadcast => write!(f, "Broadcast(0xFF)"),
+            Channel::Unknown(v) => write!(f, "Unknown(0x{:02X})", v),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Typed registration messages
 // ---------------------------------------------------------------------------
 
@@ -799,5 +905,70 @@ mod tests {
             Some(RegistrationAction::SendClientIdAck { client_id: 0x05 })
         );
         assert!(sm.is_registered());
+    }
+
+    // --- Channel tests ---
+
+    #[test]
+    fn test_channel_from_u8() {
+        assert_eq!(Channel::from(0x0A), Channel::WifiModule);
+        assert_eq!(Channel::from(0x10), Channel::Client(0x10));
+        assert_eq!(Channel::from(0x2F), Channel::Client(0x2F));
+        assert_eq!(Channel::from(0x30), Channel::ClientNoCTS(0x30));
+        assert_eq!(Channel::from(0x3F), Channel::ClientNoCTS(0x3F));
+        assert_eq!(Channel::from(0xFE), Channel::MulticastChannelAssignment);
+        assert_eq!(Channel::from(0xFF), Channel::MulticastBroadcast);
+        assert_eq!(Channel::from(0x05), Channel::Unknown(0x05));
+    }
+
+    #[test]
+    fn test_channel_into_u8() {
+        assert_eq!(u8::from(Channel::WifiModule), 0x0A);
+        assert_eq!(u8::from(Channel::Client(0x15)), 0x15);
+        assert_eq!(u8::from(Channel::ClientNoCTS(0x33)), 0x33);
+        assert_eq!(u8::from(Channel::MulticastChannelAssignment), 0xFE);
+        assert_eq!(u8::from(Channel::MulticastBroadcast), 0xFF);
+        assert_eq!(u8::from(Channel::Unknown(0x05)), 0x05);
+    }
+
+    #[test]
+    fn test_channel_has_cts() {
+        assert!(Channel::Client(0x10).has_cts());
+        assert!(Channel::Client(0x2F).has_cts());
+        assert!(!Channel::ClientNoCTS(0x30).has_cts());
+        assert!(!Channel::WifiModule.has_cts());
+        assert!(!Channel::MulticastChannelAssignment.has_cts());
+    }
+
+    #[test]
+    fn test_channel_is_client() {
+        assert!(Channel::Client(0x10).is_client());
+        assert!(Channel::ClientNoCTS(0x30).is_client());
+        assert!(!Channel::WifiModule.is_client());
+        assert!(!Channel::MulticastBroadcast.is_client());
+    }
+
+    #[test]
+    fn test_new_client_channel() {
+        assert_eq!(Channel::new_client_channel(0), Some(Channel::Client(0x10)));
+        assert_eq!(Channel::new_client_channel(31), Some(Channel::Client(0x2F)));
+        assert_eq!(Channel::new_client_channel(32), None); // 0x30 is outside CTS range
+    }
+
+    #[test]
+    fn test_channel_display() {
+        assert_eq!(format!("{}", Channel::WifiModule), "WiFi(0x0A)");
+        assert_eq!(format!("{}", Channel::Client(0x15)), "Client(0x15)");
+        assert_eq!(
+            format!("{}", Channel::ClientNoCTS(0x33)),
+            "ClientNoCTS(0x33)"
+        );
+    }
+
+    #[test]
+    fn test_channel_roundtrip() {
+        for raw in [0x0A, 0x10, 0x15, 0x2F, 0x30, 0x3F, 0xFE, 0xFF, 0x05] {
+            assert_eq!(u8::from(Channel::from(raw)), raw);
+        }
     }
 }
