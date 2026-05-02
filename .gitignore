@@ -1,5 +1,7 @@
 /target
 app/target/
+app-rs485-debugger/target/
+app-sniffer/target/
 app/vendor/
 .vscode/
 .idea/

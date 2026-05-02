@@ -1,0 +1,38 @@
+[package]
+name = "launa-rs485-debugger"
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true
+opt-level = "s"
+
+# esp-radio requires opt-level >= 2 for WiFi to work reliably
+[profile.dev.package.esp-radio]
+opt-level = 3
+
+[dependencies]
+esp-hal = { version = "=1.1.0-rc.0", features = ["esp32", "unstable"] }
+esp-rtos = { version = "0.3.0", features = ["esp32", "embassy", "esp-radio", "esp-alloc", "log-04"] }
+esp-radio = { version = "0.18.0", features = ["esp32", "unstable", "wifi", "log-04"] }
+esp-alloc = "0.10"
+esp-backtrace = { version = "0.19", features = ["esp32", "println"] }
+esp-println = { version = "0.17", default-features = false, features = ["esp32", "log-04", "uart"] }
+esp-bootloader-esp-idf = { version = "0.5", default-features = false, features = ["esp32"] }
+
+embassy-executor = "0.10"
+embassy-time = "0.5"
+embassy-futures = "0.1"
+embassy-net = { version = "0.9", features = ["tcp", "dhcpv4", "dhcpv4-hostname", "medium-ethernet", "dns"] }
+
+embedded-io-async = "0.7"
+
+heapless = "0.9"
+static_cell = "2"
+log = "0.4"
+
+launa-protocol = { path = "../crates/launa-protocol" }
+launa-mqtt = { path = "../crates/launa-mqtt", default-features = false }
