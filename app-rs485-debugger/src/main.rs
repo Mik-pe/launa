@@ -71,7 +71,7 @@ impl Device {
         let bytes = mac.as_bytes();
         match (bytes[4], bytes[5]) {
             (0x83, 0xC8) => Device { id: "A", index: 0 },
-            (0x2D, 0xBC) => Device { id: "B", index: 1 },
+            (0x12, 0xBC) => Device { id: "B", index: 1 },
             _ => Device { id: "?", index: 0 },
         }
     }
