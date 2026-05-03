@@ -13,13 +13,32 @@ use crate::types::{COMMAND_ACK_TIMEOUT_MS, MAX_COMMAND_RETRIES, MAX_PENDING_COMM
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExpectedChange {
-    PumpOn { item: ToggleItem },
-    PumpOff { item: ToggleItem },
-    TemperatureSet { temp: u8 },
-    LightToggled { item: ToggleItem, pre_state: bool },
-    HoldModeToggled { pre_state: bool },
-    HeatingModeToggled { pre_mode: HeatingMode },
-    TempRangeToggled { pre_range: TempRange },
+    /// Pump state changed from pre_state (Balboa pumps cycle Off→Low→High→Off,
+    /// so a toggle from Low goes to High, not Off — we confirm on ANY state change).
+    PumpToggled {
+        item: ToggleItem,
+        pre_state: PumpState,
+    },
+    /// Blower toggled (simple on/off, not a multi-state cycle).
+    BlowerToggled {
+        pre_state: bool,
+    },
+    TemperatureSet {
+        temp: u8,
+    },
+    LightToggled {
+        item: ToggleItem,
+        pre_state: bool,
+    },
+    HoldModeToggled {
+        pre_state: bool,
+    },
+    HeatingModeToggled {
+        pre_mode: HeatingMode,
+    },
+    TempRangeToggled {
+        pre_range: TempRange,
+    },
 }
 
 impl ExpectedChange {
@@ -27,11 +46,13 @@ impl ExpectedChange {
         match cmd {
             Command::ToggleItem(item) => {
                 if let Some(idx) = item.pump_index() {
-                    let is_on = matches!(pre_status.pumps[idx], PumpState::Low | PumpState::High);
-                    Some(if is_on {
-                        ExpectedChange::PumpOff { item: *item }
-                    } else {
-                        ExpectedChange::PumpOn { item: *item }
+                    // Balboa pumps cycle Off→Low→High→Off, so we track the
+                    // pre_state and confirm on ANY state change, not a specific
+                    // direction. This avoids infinite retries when toggling from
+                    // Low (expecting Off) but the pump goes to High instead.
+                    Some(ExpectedChange::PumpToggled {
+                        item: *item,
+                        pre_state: pre_status.pumps[idx],
                     })
                 } else if let Some(idx) = item.light_index() {
                     Some(ExpectedChange::LightToggled {
@@ -40,10 +61,8 @@ impl ExpectedChange {
                     })
                 } else {
                     match item {
-                        ToggleItem::Blower => Some(if pre_status.blower {
-                            ExpectedChange::PumpOff { item: *item }
-                        } else {
-                            ExpectedChange::PumpOn { item: *item }
+                        ToggleItem::Blower => Some(ExpectedChange::BlowerToggled {
+                            pre_state: pre_status.blower,
                         }),
                         ToggleItem::HoldMode => Some(ExpectedChange::HoldModeToggled {
                             pre_state: pre_status.is_hold,
@@ -170,26 +189,14 @@ impl CommandTracker {
 
     pub(crate) fn is_confirmed(expected: &ExpectedChange, status: &StatusUpdate) -> bool {
         match expected {
-            ExpectedChange::PumpOn { item } => {
+            ExpectedChange::PumpToggled { item, pre_state } => {
                 if let Some(idx) = item.pump_index() {
-                    matches!(status.pumps[idx], PumpState::Low | PumpState::High)
+                    status.pumps[idx] != *pre_state
                 } else {
-                    match item {
-                        ToggleItem::Blower => status.blower,
-                        _ => false,
-                    }
+                    false
                 }
             }
-            ExpectedChange::PumpOff { item } => {
-                if let Some(idx) = item.pump_index() {
-                    status.pumps[idx] == PumpState::Off
-                } else {
-                    match item {
-                        ToggleItem::Blower => !status.blower,
-                        _ => false,
-                    }
-                }
-            }
+            ExpectedChange::BlowerToggled { pre_state } => status.blower != *pre_state,
             ExpectedChange::TemperatureSet { temp } => {
                 // set_temp is a Temperature that knows its scale.
                 // to_wire() encodes back to raw byte (×2 for Celsius, direct for Fahrenheit).
