@@ -4,11 +4,13 @@ use std::time::{Duration, Instant};
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut port_name = None;
+    let mut port_index = None;
     let mut duration_secs = None;
     let mut parser = crate::util::Args::new(args);
     while parser.has_more() {
         match parser.peek().unwrap() {
             "--port" => port_name = Some(parser.value("--port")?.to_string()),
+            "--port-index" => port_index = parser.optional_parsed("--port-index")?,
             "--duration" => {
                 duration_secs = parser.optional_parsed::<u64>("--duration")?;
             }
@@ -17,7 +19,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     }
 
     let config = crate::config::load().ok();
-    let port_name = crate::util::resolve_port(port_name.as_deref(), config.as_ref())?;
+    let port_name = crate::util::resolve_port(port_name.as_deref(), port_index, config.as_ref())?;
 
     let port = serialport::new(&port_name, 115200)
         .timeout(Duration::from_millis(100))

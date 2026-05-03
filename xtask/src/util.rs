@@ -90,43 +90,88 @@ impl<'a> Args<'a> {
     }
 }
 
-/// Auto-detect an ESP32 USB serial port.
+/// A detected USB serial port with optional metadata from the USB device.
+pub struct DetectedPort {
+    pub port_name: String,
+    pub manufacturer: Option<String>,
+    pub product: Option<String>,
+    pub serial_number: Option<String>,
+    pub vid: Option<u16>,
+    pub pid: Option<u16>,
+}
+
+impl DetectedPort {
+    /// Human-readable description for the port picker menu.
+    fn description(&self) -> String {
+        match (&self.manufacturer, &self.product, &self.serial_number) {
+            (Some(mfr), Some(prod), Some(sn)) => format!("{} {} (s/n: {})", mfr, prod, sn),
+            (Some(mfr), Some(prod), None) => format!("{} {}", mfr, prod),
+            (Some(mfr), None, Some(sn)) => format!("{} (s/n: {})", mfr, sn),
+            (Some(mfr), None, None) => mfr.clone(),
+            (None, Some(prod), Some(sn)) => format!("{} (s/n: {})", prod, sn),
+            (None, Some(prod), None) => prod.clone(),
+            (None, None, Some(sn)) => format!("USB device (s/n: {})", sn),
+            _ => {
+                // Fall back to VID:PID if available
+                match (self.vid, self.pid) {
+                    (Some(v), Some(p)) => format!("USB device ({:04x}:{:04x})", v, p),
+                    _ => "USB device".to_string(),
+                }
+            }
+        }
+    }
+}
+
+/// Detect all USB serial ports that look like ESP32 adapters.
 ///
-/// On macOS, scans `/dev/cu.usb*` for common USB-serial adapters.
-/// On Linux, scans `/dev/ttyUSB*` and `/dev/ttyACM*`.
-/// Returns the first matching device path, or `None` if nothing is found.
-pub fn auto_detect_serial_port() -> Option<String> {
-    let candidates: Vec<&str> = if cfg!(target_os = "macos") {
-        vec![
-            "/dev/cu.usbserial*",
-            "/dev/cu.usbmodem*",
-            "/dev/cu.wchusbserial*",
-        ]
-    } else if cfg!(target_os = "linux") {
-        vec!["/dev/ttyUSB*", "/dev/ttyACM*"]
-    } else {
-        vec!["COM*"]
+/// Uses `serialport::available_ports()` which provides USB metadata
+/// (manufacturer, product name, serial number) on macOS and Linux.
+pub fn detect_esp_ports() -> Vec<DetectedPort> {
+    let ports = match serialport::available_ports() {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
     };
 
-    for pattern in candidates {
-        if let Ok(entries) = glob::glob(pattern) {
-            for entry in entries.flatten() {
-                let path = entry.to_string_lossy().to_string();
-                // Prefer /dev/cu.* over /dev/tty.* on macOS (call-out device, no carrier detect blocking)
-                return Some(path);
-            }
-        }
-    }
+    let mut detected: Vec<DetectedPort> = ports
+        .into_iter()
+        .filter(|p| is_likely_esp_port(&p.port_name))
+        .filter_map(|p| {
+            let (manufacturer, product, serial_number, vid, pid) = match &p.port_type {
+                serialport::SerialPortType::UsbPort(usb) => (
+                    usb.manufacturer.clone(),
+                    usb.product.clone(),
+                    usb.serial_number.clone(),
+                    Some(usb.vid),
+                    Some(usb.pid),
+                ),
+                _ => (None, None, None, None, None),
+            };
+            Some(DetectedPort {
+                port_name: p.port_name,
+                manufacturer,
+                product,
+                serial_number,
+                vid,
+                pid,
+            })
+        })
+        .collect();
 
-    // Fallback: try serialport enumeration
-    if let Ok(ports) = serialport::available_ports() {
-        for port in ports {
-            if is_likely_esp_port(&port.port_name) {
-                return Some(port.port_name);
-            }
-        }
-    }
+    // Sort by port name for deterministic ordering
+    detected.sort_by(|a, b| a.port_name.cmp(&b.port_name));
+    detected
+}
 
+/// Auto-detect a single ESP32 USB serial port.
+///
+/// Returns `None` if zero or multiple ports are found (use `resolve_port`
+/// for the full interactive flow that handles multiple devices).
+#[allow(dead_code)]
+pub fn auto_detect_serial_port() -> Option<String> {
+    let ports = detect_esp_ports();
+    if ports.len() == 1 {
+        return Some(ports[0].port_name.clone());
+    }
     None
 }
 
@@ -159,23 +204,93 @@ fn is_likely_esp_port(name: &str) -> bool {
     false
 }
 
+/// Build an error message listing all detected ports with 1-based indices.
+fn format_port_list(ports: &[DetectedPort]) -> String {
+    let mut lines = Vec::new();
+    lines.push("Multiple serial ports detected:".to_string());
+    lines.push(String::new());
+    for (i, p) in ports.iter().enumerate() {
+        lines.push(format!(
+            "  [{}] {}  {}",
+            i + 1,
+            p.port_name,
+            p.description()
+        ));
+    }
+    lines.push(String::new());
+    lines.push(format!(
+        "Use --port-index <N> or --port <device> to select one."
+    ));
+    lines.join("\n")
+}
+
 /// Resolve the serial port using the "CLI arg → config → auto-detect → error" pattern.
 ///
-/// Priority: `--port` flag > config file > auto-detect USB device.
+/// Priority:
+/// 1. `--port <device>` — explicit device path
+/// 2. `--port-index <N>` — 1-based index into auto-detected ports
+/// 3. Config file `device.serial_port`
+/// 4. Single auto-detected port (no ambiguity)
+/// 5. Error with numbered port list (for `--port-index` on retry)
+///
+/// When multiple USB serial devices are found and no `--port-index` is given,
+/// prints a numbered list and returns an error — this is machine-readable so
+/// an LLM or script can parse it and retry with `--port-index N`.
 pub fn resolve_port(
     cli_port: Option<&str>,
+    port_index: Option<usize>,
     config: Option<&crate::config::Config>,
 ) -> anyhow::Result<String> {
+    // 1. Explicit port path wins
     if let Some(p) = cli_port {
         return Ok(p.to_string());
     }
+
+    let ports = detect_esp_ports();
+
+    // 2. Port index selects from auto-detected list
+    if let Some(idx) = port_index {
+        if idx < 1 || idx > ports.len() {
+            if ports.is_empty() {
+                bail!("No serial ports detected — cannot use --port-index {}", idx);
+            }
+            bail!(
+                "--port-index {} out of range (1-{}).\n{}",
+                idx,
+                ports.len(),
+                format_port_list(&ports)
+            );
+        }
+        let selected = &ports[idx - 1];
+        println!(
+            "Selected port [{}]: {} ({})",
+            idx,
+            selected.port_name,
+            selected.description()
+        );
+        return Ok(selected.port_name.clone());
+    }
+
+    // 3. Config file
     if let Some(cfg) = config {
         return Ok(cfg.device.serial_port.clone());
     }
-    if let Some(p) = auto_detect_serial_port() {
-        println!("Auto-detected serial port: {}", p);
-        return Ok(p);
+
+    // 4. Single auto-detected port
+    if ports.len() == 1 {
+        let p = &ports[0];
+        println!("Auto-detected serial port: {}", p.port_name);
+        if p.description() != "USB device" {
+            println!("  {}", p.description());
+        }
+        return Ok(p.port_name.clone());
     }
+
+    // 5. Multiple ports — error with numbered list
+    if !ports.is_empty() {
+        bail!("{}", format_port_list(&ports));
+    }
+
     bail!(
         "No serial port found. Use --port <device> or set device.serial_port in launa.toml\n\
          Detected serial ports: {}",
@@ -186,6 +301,7 @@ pub fn resolve_port(
 /// Resolve the serial port with auto-detection fallback.
 ///
 /// Like `resolve_port`, but returns `default` when nothing is found.
+/// Does not print a port list or error — used for non-critical port selection.
 #[allow(dead_code)]
 pub fn resolve_port_or(
     cli_port: Option<&str>,
@@ -198,8 +314,9 @@ pub fn resolve_port_or(
     if let Some(cfg) = config {
         return cfg.device.serial_port.clone();
     }
-    if let Some(p) = auto_detect_serial_port() {
-        return p;
+    let ports = detect_esp_ports();
+    if ports.len() == 1 {
+        return ports[0].port_name.clone();
     }
     default.to_string()
 }

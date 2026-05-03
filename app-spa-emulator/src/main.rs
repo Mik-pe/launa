@@ -7,6 +7,12 @@
 //! Publishes diagnostics over MQTT every tick so we can observe the RS-485
 //! communication from the spa side.
 //!
+//! Subscribes to `launa/spa_emulator/config` for live parameter tuning:
+//! - `{"post_tx_delay_ms":10}` — post-TX turnaround delay (ms)
+//! - `{"suppress_tx":true}` — suppress all TX output (silent mode)
+//! - `{"suppress_registration":true}` — suppress NewClientQuery frames
+//! - `{"rx_read_timeout_ms":100}` — UART read timeout per iteration (ms)
+//!
 //! GPIO17 = TX, GPIO16 = RX (UART1, 115200 baud, RS-485 half-duplex)
 
 #![no_std]
@@ -16,6 +22,7 @@ extern crate alloc;
 
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 
 use embassy_executor::Spawner;
@@ -32,7 +39,12 @@ use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::rng::Rng;
 use esp_hal::uart::Uart;
-use launa_mqtt::mqtt_codec::{encode_connect, encode_publish, parse_connack, ConnectConfig};
+use launa_mqtt::mqtt_codec::{
+    encode_connect, encode_publish, encode_puback, encode_subscribe, parse_connack,
+    parse_incoming_publish, parse_suback, ConnectConfig,
+};
+use launa_mqtt::packet::try_extract_packet;
+use launa_protocol::frame::FrameDecoder;
 use launa_sim::{SpaSim, SpaState};
 use log::{info, warn};
 
@@ -56,6 +68,30 @@ macro_rules! mk_static {
         let x = STATIC_CELL.uninit().write(($val));
         x
     }};
+}
+
+// ── Runtime config (tunable via MQTT) ────────────────────────────────
+
+struct RuntimeConfig {
+    /// Post-TX turnaround delay in ms (after each UART write).
+    post_tx_delay_ms: u64,
+    /// If true, suppress all UART TX output (silent mode).
+    suppress_tx: bool,
+    /// If true, suppress NewClientQuery frames (don't solicit registration).
+    suppress_registration: bool,
+    /// UART read timeout per iteration in ms within the RX loop.
+    rx_read_timeout_ms: u64,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        RuntimeConfig {
+            post_tx_delay_ms: 10,
+            suppress_tx: false,
+            suppress_registration: false,
+            rx_read_timeout_ms: 900,
+        }
+    }
 }
 
 // ── WiFi ─────────────────────────────────────────────────────────────
@@ -126,7 +162,7 @@ fn wifi_init(
     stack_ref
 }
 
-// ── Minimal MQTT ─────────────────────────────────────────────────────
+// ── MQTT Client ──────────────────────────────────────────────────────
 
 struct MqttBuffers {
     rx: &'static UnsafeCell<[u8; MQTT_SOCKET_BUF_SIZE]>,
@@ -178,8 +214,13 @@ struct MqttState {
     stack: &'static Stack<'static>,
     buffers: MqttBuffers,
     transport: Option<TcpTransport>,
-    topic: String,
+    status_topic: String,
+    config_topic: String,
     last_outgoing: Instant,
+    /// Incoming MQTT packet reassembly buffer.
+    rx_buffer: Vec<u8>,
+    /// Monotonic packet ID counter for SUBSCRIBE/PUBACK.
+    next_packet_id: u16,
 }
 
 impl MqttState {
@@ -196,8 +237,11 @@ impl MqttState {
             stack,
             buffers: MqttBuffers { rx, tx },
             transport: None,
-            topic: "launa/spa_emulator/status".to_string(),
+            status_topic: "launa/spa_emulator/status".to_string(),
+            config_topic: "launa/spa_emulator/config".to_string(),
             last_outgoing: Instant::now(),
+            rx_buffer: Vec::new(),
+            next_packet_id: 1,
         }
     }
 
@@ -205,8 +249,18 @@ impl MqttState {
         self.transport.is_some()
     }
 
+    fn alloc_packet_id(&mut self) -> u16 {
+        let id = self.next_packet_id;
+        self.next_packet_id = self.next_packet_id.wrapping_add(1);
+        if self.next_packet_id == 0 {
+            self.next_packet_id = 1;
+        }
+        id
+    }
+
     async fn connect(&mut self) -> bool {
         self.transport.take();
+        self.rx_buffer.clear();
 
         let rx: &'static mut [u8] = unsafe { &mut *self.buffers.rx.get() };
         let tx: &'static mut [u8] = unsafe { &mut *self.buffers.tx.get() };
@@ -235,7 +289,7 @@ impl MqttState {
         let client_id = "launa_spa_emulator";
         let config = ConnectConfig {
             client_id,
-            lwt_topic: &self.topic,
+            lwt_topic: &self.status_topic,
             username: None,
             password: None,
             keep_alive: MQTT_KEEP_ALIVE_SECS,
@@ -264,13 +318,39 @@ impl MqttState {
             }
         }
 
+        // Subscribe to config topic
+        let pkt_id = self.alloc_packet_id();
+        let sub_packet = encode_subscribe(&self.config_topic, pkt_id);
+        if self.send_bytes(&sub_packet).await.is_err() {
+            warn!("MQTT: SUBSCRIBE send failed");
+            self.transport.take();
+            return false;
+        }
+
+        // Wait for SUBACK
+        let mut suback_buf = [0u8; 32];
+        match self.read_exact(&mut suback_buf, 5).await {
+            Ok(n) if n >= 3 => {
+                if parse_suback(&suback_buf[..n], pkt_id).is_err() {
+                    warn!("MQTT: SUBACK rejected");
+                    self.transport.take();
+                    return false;
+                }
+            }
+            _ => {
+                warn!("MQTT: SUBACK read failed");
+                self.transport.take();
+                return false;
+            }
+        }
+
         self.last_outgoing = Instant::now();
-        info!("MQTT connected");
+        info!("MQTT connected + subscribed to {}", self.config_topic);
         true
     }
 
     async fn publish(&mut self, payload: &[u8]) -> bool {
-        if let Ok(packet) = encode_publish(&self.topic, payload, 0, false, None) {
+        if let Ok(packet) = encode_publish(&self.status_topic, payload, 0, false, None) {
             self.send_bytes(&packet).await.is_ok()
         } else {
             false
@@ -286,6 +366,65 @@ impl MqttState {
             }
         }
         true
+    }
+
+    /// Non-blocking read from MQTT socket with timeout. Returns parsed
+    /// (topic, payload) for any incoming PUBLISH packets.
+    async fn try_recv(&mut self) -> Option<(String, Vec<u8>)> {
+        let transport = self.transport.as_mut()?;
+        let mut tmp = [0u8; 256];
+        // Short timeout so we don't block the main loop
+        match select(transport.read(&mut tmp), Timer::after(Duration::from_millis(10))).await {
+            Either::First(Ok(0)) => None,
+            Either::First(Ok(n)) => {
+                self.rx_buffer.extend_from_slice(&tmp[..n]);
+                self.process_rx_buffer().await
+            }
+            Either::First(Err(_)) => None,
+            Either::Second(_) => None, // timeout, no data
+        }
+    }
+
+    /// Process buffered RX data, extracting complete MQTT packets.
+    /// Returns the first PUBLISH packet's (topic, payload), discarding
+    /// other packet types (PUBACK, SUBACK, PINGREQ, etc.).
+    async fn process_rx_buffer(&mut self) -> Option<(String, Vec<u8>)> {
+        while let Some(packet) = try_extract_packet(&mut self.rx_buffer) {
+            if packet.is_empty() {
+                continue;
+            }
+            let pkt_type = packet[0] >> 4;
+            match pkt_type {
+                3 => {
+                    // PUBLISH
+                    match parse_incoming_publish(&packet) {
+                        Ok(pub_msg) => {
+                            // Send PUBACK for QoS 1
+                            if let Some(pid) = pub_msg.packet_id {
+                                let puback = encode_puback(pid);
+                                let _ = self.send_bytes(&puback).await;
+                            }
+                            let topic = String::from(pub_msg.topic);
+                            let payload = Vec::from(pub_msg.payload);
+                            return Some((topic, payload));
+                        }
+                        Err(e) => {
+                            warn!("MQTT: failed to parse PUBLISH: {:?}", e);
+                        }
+                    }
+                }
+                4 => { /* PUBACK — ignore */ }
+                9 => { /* SUBACK — ignore (already handled in connect) */ }
+                13 => { /* PINGREQ — send PINGRESP */
+                    let resp = launa_mqtt::mqtt_codec::encode_pingresp();
+                    let _ = self.send_bytes(&resp).await;
+                }
+                _ => {
+                    info!("MQTT: unexpected packet type {}", pkt_type);
+                }
+            }
+        }
+        None
     }
 
     async fn send_bytes(&mut self, data: &[u8]) -> Result<(), ()> {
@@ -315,7 +454,7 @@ impl MqttState {
 }
 
 async fn resolve_host(stack: &Stack<'static>, host: &str) -> Option<[u8; 4]> {
-    let parts: alloc::vec::Vec<&str> = host.split('.').collect();
+    let parts: Vec<&str> = host.split('.').collect();
     if parts.len() == 4 {
         let mut octets = [0u8; 4];
         let mut valid = true;
@@ -340,6 +479,60 @@ async fn resolve_host(stack: &Stack<'static>, host: &str) -> Option<[u8; 4]> {
             }
         }
         Err(_) => None,
+    }
+}
+
+// ── Config parsing ───────────────────────────────────────────────────
+
+/// Apply a JSON config payload to the runtime config.
+/// Format: `{"key":value,...}` — unknown keys are silently ignored.
+fn apply_config(config: &mut RuntimeConfig, json: &[u8]) {
+    // Minimal JSON parser for flat key-value pairs.
+    // Handles: bool, u64, string values.
+    let s = match core::str::from_utf8(json) {
+        Ok(s) => s.trim(),
+        Err(_) => return,
+    };
+    // Strip outer braces
+    let inner = s.trim_start_matches('{').trim_end_matches('}');
+
+    // Split on commas (naive but sufficient for flat JSON)
+    for pair in inner.split(',') {
+        let pair = pair.trim();
+        if let Some(colon_pos) = pair.find(':') {
+            let key = pair[..colon_pos].trim().trim_matches('"');
+            let value = pair[colon_pos + 1..].trim();
+
+            match key {
+                "post_tx_delay_ms" => {
+                    if let Ok(v) = value.parse::<u64>() {
+                        config.post_tx_delay_ms = v;
+                        info!("Config: post_tx_delay_ms = {}", v);
+                    }
+                }
+                "suppress_tx" => {
+                    if let Ok(v) = value.parse::<bool>() {
+                        config.suppress_tx = v;
+                        info!("Config: suppress_tx = {}", v);
+                    }
+                }
+                "suppress_registration" => {
+                    if let Ok(v) = value.parse::<bool>() {
+                        config.suppress_registration = v;
+                        info!("Config: suppress_registration = {}", v);
+                    }
+                }
+                "rx_read_timeout_ms" => {
+                    if let Ok(v) = value.parse::<u64>() {
+                        config.rx_read_timeout_ms = v;
+                        info!("Config: rx_read_timeout_ms = {}", v);
+                    }
+                }
+                _ => {
+                    info!("Config: unknown key '{}'", key);
+                }
+            }
+        }
     }
 }
 
@@ -373,7 +566,9 @@ fn print_state(tick: u64, state: &SpaState) {
 }
 
 /// Write data to UART, flushing before and after.
-async fn write_frames(uart: &mut Uart<'static, esp_hal::Async>, data: &[u8]) {
+/// Includes a configurable post-TX turnaround delay for the auto-direction
+/// RS-485 transceiver to switch from TX to RX mode.
+async fn write_frames(uart: &mut Uart<'static, esp_hal::Async>, data: &[u8], post_tx_delay_ms: u64) {
     let mut written = 0;
     while written < data.len() {
         match uart.write(&data[written..]) {
@@ -382,6 +577,7 @@ async fn write_frames(uart: &mut Uart<'static, esp_hal::Async>, data: &[u8]) {
         }
     }
     let _ = uart.flush();
+    Timer::after(Duration::from_millis(post_tx_delay_ms)).await;
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -435,27 +631,81 @@ async fn main(spawner: Spawner) {
 
     let mut mqtt_reconnect_at = Instant::now() + Duration::from_secs(30);
 
+    // Runtime config (tunable via MQTT)
+    let mut rt_config = RuntimeConfig::default();
+
     // Spa simulator
     let mut sim = SpaSim::new();
+    let mut frame_decoder = FrameDecoder::new();
     let mut read_buf = [0u8; 128];
     let mut rx_count: u64 = 0;
     let mut rx_bytes: u64 = 0;
     let mut tx_count: u64 = 0;
+    let mut decoded_frames: u64 = 0;
+    let mut frame_errors: u64 = 0;
     let start_time = Instant::now();
 
     info!("Spa simulator started, sending frames at 1Hz...");
 
     loop {
+        // Check for MQTT config messages (non-blocking)
+        if mqtt.is_connected() {
+            // Drain all pending MQTT messages
+            loop {
+                match mqtt.try_recv().await {
+                    Some((topic, payload)) => {
+                        if topic == mqtt.config_topic {
+                            apply_config(&mut rt_config, &payload);
+                        } else {
+                            info!("MQTT: unexpected topic: {}", topic);
+                        }
+                    }
+                    None => break,
+                }
+            }
+        }
+
         // Generate and send spa frames for this tick
+        let _prev_errors = frame_decoder.frame_error_count() as u64;
         let output = sim.tick();
-        if !output.is_empty() {
-            write_frames(&mut uart, &output).await;
-            tx_count += 1;
+
+        if !rt_config.suppress_tx && !output.is_empty() {
+            // If suppress_registration is set, strip FEBF00 frames from output
+            let tx_data: Vec<u8> = if rt_config.suppress_registration {
+                // Filter out NewClientQuery frames (7E 05 FE BF 00 <CRC> 7E)
+                // Simple approach: skip bytes that form a FEBF00 query
+                let mut filtered = Vec::new();
+                let mut i = 0;
+                while i < output.len() {
+                    // Check if this looks like a registration query frame
+                    if i + 6 < output.len()
+                        && output[i] == 0x7E
+                        && output[i + 1] == 0x05
+                        && output[i + 2] == 0xFE
+                        && output[i + 3] == 0xBF
+                        && output[i + 4] == 0x00
+                    {
+                        // Skip 7 bytes (full FEBF00 frame)
+                        i += 7;
+                    } else {
+                        filtered.push(output[i]);
+                        i += 1;
+                    }
+                }
+                filtered
+            } else {
+                output
+            };
+
+            if !tx_data.is_empty() {
+                write_frames(&mut uart, &tx_data, rt_config.post_tx_delay_ms).await;
+                tx_count += 1;
+            }
         }
 
         print_state(sim.tick_count(), &sim.state);
 
-        // Process any incoming commands during the remainder of the tick
+        // Process any incoming commands during the remainder of the tick.
         let deadline = embassy_time::Instant::now() + TICK_INTERVAL - Duration::from_millis(50);
         while embassy_time::Instant::now() < deadline {
             let remaining = deadline - embassy_time::Instant::now();
@@ -463,19 +713,42 @@ async fn main(spawner: Spawner) {
                 Either::First(Ok(n)) if n > 0 => {
                     rx_count += 1;
                     rx_bytes += n as u64;
-                    let hex = launa_protocol::hex::to_hex(&read_buf[..n.min(32)]);
+                    let hex = launa_protocol::hex::to_hex(&read_buf[..n.min(48)]);
                     info!("RX ({} bytes): {}", n, hex);
 
-                    let responses = sim.process_incoming_bytes(&read_buf[..n]);
-                    if !responses.is_empty() {
-                        let resp_hex = launa_protocol::hex::to_hex(&responses[..responses.len().min(32)]);
-                        info!("TX response ({} bytes): {}", responses.len(), resp_hex);
-                        write_frames(&mut uart, &responses).await;
+                    let prev_err = frame_decoder.frame_error_count();
+                    let frames = frame_decoder.feed_slice(&read_buf[..n]);
+                    let new_err = frame_decoder.frame_error_count();
+                    if new_err > prev_err {
+                        frame_errors += (new_err - prev_err) as u64;
+                    }
+
+                    for frame in &frames {
+                        decoded_frames += 1;
+                        let mt = alloc::format!(
+                            "{:02X}{:02X}",
+                            frame.message_type[0], frame.message_type[1]
+                        );
+                        let payload_hex =
+                            launa_protocol::hex::to_hex(&frame.payload[..frame.payload.len().min(16)]);
+                        info!(
+                            "DECODED frame type={} payload_len={} payload={}",
+                            mt,
+                            frame.payload.len(),
+                            payload_hex
+                        );
+
+                        if let Some(response) = sim.process_frame(frame) {
+                            let resp_hex =
+                                launa_protocol::hex::to_hex(&response[..response.len().min(32)]);
+                            info!("TX response ({} bytes): {}", response.len(), resp_hex);
+                            write_frames(&mut uart, &response, rt_config.post_tx_delay_ms).await;
+                        }
                     }
                 }
                 Either::First(Err(_)) => {
-                    let mut drain = [0u8; 32];
-                    let _ = uart.read_buffered(&mut drain);
+                    let mut drain_buf = [0u8; 32];
+                    let _ = uart.read_buffered(&mut drain_buf);
                 }
                 _ => {}
             }
@@ -501,11 +774,14 @@ async fn main(spawner: Spawner) {
 
         if mqtt.is_connected() {
             let json = format!(
-                r#"{{"tick":{},"tx_count":{},"rx_count":{},"rx_bytes":{},"temp":{:.1},"set_temp":{:.1},"p1":"{}","p2":"{}","circ":{},"heat":{},"uptime_secs":{}}}"#,
+                r#"{{"tick":{},"tx_count":{},"rx_count":{},"rx_bytes":{},"decoded_frames":{},"frame_errors":{},"registered":{},"temp":{:.1},"set_temp":{:.1},"p1":"{}","p2":"{}","circ":{},"heat":{},"uptime_secs":{},"post_tx_delay_ms":{},"suppress_tx":{},"suppress_reg":{}}}"#,
                 sim.tick_count(),
                 tx_count,
                 rx_count,
                 rx_bytes,
+                decoded_frames,
+                frame_errors,
+                sim.is_registered(),
                 sim.state.current_temp.to_fahrenheit(),
                 sim.state.set_temp.to_fahrenheit(),
                 pump_str(sim.state.pumps[0]),
@@ -513,6 +789,9 @@ async fn main(spawner: Spawner) {
                 sim.state.circ_pump,
                 sim.state.is_heating,
                 uptime_secs,
+                rt_config.post_tx_delay_ms,
+                rt_config.suppress_tx,
+                rt_config.suppress_registration,
             );
             if !mqtt.publish(json.as_bytes()).await {
                 warn!("MQTT publish failed");

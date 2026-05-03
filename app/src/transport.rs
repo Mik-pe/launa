@@ -3,11 +3,6 @@
 //! Implements the `launa_hal::Transport` trait, providing a unified async
 //! transport abstraction shared between production (ESP32 UART) and test
 //! (mock/sim) code.
-//!
-//! When no DE pin is configured (auto-direction transceiver), a preamble
-//! byte (0xFF) is prepended to each write to give the transceiver time to
-//! switch direction. Without this, the first byte of the frame (0x7E SOF)
-//! can be corrupted on cheap auto-direction modules.
 
 use embassy_time::{Duration, Timer};
 use esp_hal::gpio::{AnyPin, Level, Output, OutputConfig};
@@ -24,23 +19,12 @@ const DE_SAFETY_DELAY_US: u64 = 1000;
 /// Only used when an explicit DE pin is configured.
 const DE_ASSERT_DELAY_US: u64 = 50;
 
-/// Preamble byte sent before each frame when using an auto-direction
-/// transceiver (no DE pin). Must NOT be 0xFF — that's indistinguishable
-/// from UART idle (mark state) and won't trigger the direction switch.
-/// 0x00 produces a start bit (falling edge) + 8 zero bits, which forces
-/// the transceiver into transmit mode. The Balboa parser discards bytes
-/// before the 0x7E SOF marker, so this is harmless.
-const PREAMBLE_BYTE: u8 = 0x00;
-
 /// RS-485 half-duplex UART transport for Balboa spa communication.
 ///
 /// Wraps an async UART and optional DE (Driver Enable) pin for RS-485
 /// transceiver control. When a DE pin is configured, it is automatically
 /// asserted HIGH during writes and released LOW after the UART TX FIFO
 /// and shift register have fully drained.
-///
-/// When no DE pin is configured (auto-direction transceiver), preamble
-/// bytes are prepended to each write to avoid first-byte corruption.
 pub struct Rs485Transport {
     uart: Uart<'static, Async>,
     de_pin: Option<Output<'static>>,
@@ -82,8 +66,7 @@ impl Rs485Transport {
     ///
     /// - `uart`: An async UART peripheral configured for 115200 baud.
     /// - `de_pin`: Optional GPIO pin connected to the RS-485 transceiver's
-    ///   DE (Driver Enable) input. When `None`, DE pin control is skipped
-    ///   and preamble bytes are sent for auto-direction transceivers.
+    ///   DE (Driver Enable) input. When `None`, DE pin control is skipped.
     pub fn new(uart: Uart<'static, Async>, de_pin: Option<AnyPin<'static>>) -> Self {
         let de = de_pin.map(|pin| Output::new(pin, Level::Low, OutputConfig::default()));
         Rs485Transport {
@@ -98,24 +81,26 @@ impl Rs485Transport {
         self.de_assert_delay_us = delay_us;
     }
 
-    /// Sync write bytes directly to the UART TX FIFO. No preamble, no DE control.
-    /// Used by the registration fast-path for minimum-latency response.
-    pub fn write_raw(&mut self, data: &[u8]) -> Result<usize, TransportError> {
-        self.uart.write(data).map_err(|_e| TransportError::Io)
-    }
-
-    /// Sync flush the UART TX FIFO and shift register.
-    pub fn flush_raw(&mut self) -> Result<(), TransportError> {
-        self.uart.flush().map_err(|_e| TransportError::Io)
-    }
 }
 
 impl Transport for Rs485Transport {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, TransportError> {
-        self.uart
-            .read_async(buf)
-            .await
-            .map_err(|_e| TransportError::Io)
+        loop {
+            match self.uart.read_async(buf).await {
+                Ok(n) => return Ok(n),
+                Err(_e) => {
+                    // Auto-direction RS-485 transceivers cause frequent framing
+                    // errors when the bus transitions between TX and RX. The
+                    // esp-hal UartRxFuture clears the error event, but corrupt
+                    // bytes may remain in the RX FIFO and trigger new errors on
+                    // the next read. Drain them and retry.
+                    let mut drain = [0u8; 32];
+                    let _ = self.uart.read_buffered(&mut drain);
+                    // Brief yield to avoid busy-looping on persistent errors
+                    Timer::after(Duration::from_micros(500)).await;
+                }
+            }
+        }
     }
 
     async fn write(&mut self, data: &[u8]) -> Result<(), TransportError> {
@@ -148,29 +133,17 @@ impl Transport for Rs485Transport {
             }
             guard.release();
 
+            // Post-TX turnaround delay: wait for the RS-485 transceiver to
+            // switch from TX to RX mode. Auto-direction transceivers like
+            // the MAX13487E need a brief settling period after the last TX
+            // byte before they reliably release the bus and start receiving.
+            Timer::after(Duration::from_micros(1000)).await;
+
             if let Err(_e) = flush_result {
                 return Err(TransportError::Io);
             }
         } else {
-            // Auto-direction transceiver: send a preamble byte and flush it
-            // to the wire before sending the actual data. The preamble (0x00)
-            // triggers the direction-switching circuit to enable the driver.
-            // Flushing ensures the transceiver has fully switched before the
-            // actual frame data follows. This matches the approach that was
-            // verified working with the BP6013G1 controller.
-            let preamble = [PREAMBLE_BYTE];
-            let mut pw = 0;
-            while pw < preamble.len() {
-                let n = self
-                    .uart
-                    .write(&preamble[pw..])
-                    .map_err(|_e| TransportError::Io)?;
-                pw += n;
-            }
-            // Flush preamble to wire — ensures transceiver has switched direction
-            self.uart.flush().map_err(|_e| TransportError::Io)?;
-
-            // Now send the actual frame data
+            // Auto-direction transceiver: send data directly.
             let mut written = 0;
             while written < data.len() {
                 let n = self
@@ -180,6 +153,12 @@ impl Transport for Rs485Transport {
                 written += n;
             }
             self.uart.flush().map_err(|_e| TransportError::Io)?;
+
+            // Post-TX turnaround delay: wait for the auto-direction
+            // transceiver (MAX13487E) to switch from TX to RX mode.
+            // Without this, RX reads immediately after TX can capture
+            // bus garbage or miss the start of the response.
+            Timer::after(Duration::from_micros(1000)).await;
         }
 
         trace!("UART wrote all {} bytes", data.len());

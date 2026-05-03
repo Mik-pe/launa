@@ -820,10 +820,7 @@ mod tests {
             client_hash: [0xAA, 0xBB],
         });
         assert_eq!(action, RegistrationAction::None);
-        assert_eq!(
-            sm.state(),
-            &RegistrationState::WaitingForExistingResponse
-        );
+        assert_eq!(sm.state(), &RegistrationState::WaitingForExistingResponse);
         assert!(!sm.is_registered());
 
         // Correct hash should still work

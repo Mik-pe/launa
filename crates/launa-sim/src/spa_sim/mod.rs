@@ -231,6 +231,11 @@ impl SpaSim {
         self.error_injection.inject_duplicate_frame();
     }
 
+    /// Whether a client has completed registration.
+    pub fn is_registered(&self) -> bool {
+        self.registered
+    }
+
     /// Simulate a spa reboot.
     ///
     /// Resets registration state (unregistered, client_id cleared),

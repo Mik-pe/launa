@@ -6,7 +6,10 @@ mod monitor;
 mod ota_flash;
 mod ota_serve;
 mod provision;
+mod rs485_debugger_flash;
 mod sniff_decode;
+mod sniffer_flash;
+mod spa_emulator_flash;
 mod spa_sim;
 mod util;
 
@@ -17,19 +20,28 @@ fn usage() {
     eprintln!("Usage: cargo xtask <command> [args...]");
     eprintln!();
     eprintln!("Commands:");
-    eprintln!("  flash [--feature <name>] [--port <COMx>] [--monitor]  Flash firmware via USB");
-    eprintln!("  monitor [--port <COMx>] [--duration <secs>]            Read serial output (runs until Ctrl+C)");
+    eprintln!("  flash [--port <device> | --port-index <N>] [--feature <name>] [--monitor]");
+    eprintln!("                                                    Flash firmware via USB");
+    eprintln!("  monitor [--port <device> | --port-index <N>] [--duration <secs>]");
+    eprintln!("                                                    Read serial output");
     eprintln!(
         "  sniff-decode [--host <host>] [--port <1883>]      Decode sniffer frames from MQTT"
     );
-    eprintln!("  spa-sim [--port <COMx>] [--duration <secs>]       Simulate spa over RS-485");
+    eprintln!("  spa-sim [--port <device> | --port-index <N>] [--duration <secs>]");
+    eprintln!("                                                    Simulate spa over RS-485");
+    eprintln!("  rs485-debugger-flash [--port <device> | --port-index <N>] [--monitor]");
+    eprintln!("                                                    Flash RS-485 debugger firmware");
+    eprintln!("  sniffer-flash [--port <device> | --port-index <N>] [--monitor]");
+    eprintln!("                                                    Flash sniffer firmware");
+    eprintln!("  spa-emulator-flash [--port <device> | --port-index <N>] [--monitor]");
+    eprintln!("                                                    Flash spa emulator firmware");
     eprintln!("  ota-serve --firmware <path> [--port <8080>]       Serve firmware over HTTP");
     eprintln!(
         "  ota-flash [--feature <name>] [--device-id <id>]   Build and flash remotely over WiFi"
     );
-    eprintln!("  config-flash [--port <COMx>]                      Write config to ESP32 NVS");
+    eprintln!("  config-flash [--port <device> | --port-index <N>] Write config to ESP32 NVS");
     eprintln!(
-        "  provision [--port <COMx>] [--no-confirm]          Burn AES key to ESP32 eFuse BLOCK3"
+        "  provision [--port <device> | --port-index <N>] [--no-confirm]  Burn AES key to ESP32 eFuse BLOCK3"
     );
     eprintln!("  listen [--host <host>] [--port <1883>] [-t <topic>]  Subscribe to MQTT topics");
 }
@@ -51,6 +63,11 @@ fn main() -> anyhow::Result<()> {
         "monitor" => monitor::run(sub_args),
         "sniff-decode" | "sniff_decode" => sniff_decode::run(sub_args),
         "spa-sim" | "spa_sim" => spa_sim::run(sub_args),
+        "rs485-debugger-flash" | "rs485_debugger_flash" | "spa-emu-flash" | "spa_emu_flash" => {
+            rs485_debugger_flash::run(sub_args)
+        }
+        "sniffer-flash" | "sniffer_flash" => sniffer_flash::run(sub_args),
+        "spa-emulator-flash" | "spa_emulator_flash" => spa_emulator_flash::run(sub_args),
         "ota-serve" | "ota_serve" => ota_serve::run(sub_args),
         "ota-flash" | "ota_flash" => ota_flash::run(sub_args),
         "config-flash" | "config_flash" => config_flash::run(sub_args),

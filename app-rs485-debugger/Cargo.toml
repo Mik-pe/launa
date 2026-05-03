@@ -36,3 +36,6 @@ log = "0.4"
 
 launa-protocol = { path = "../crates/launa-protocol" }
 launa-mqtt = { path = "../crates/launa-mqtt", default-features = false }
+
+[build-dependencies]
+toml = "0.8"

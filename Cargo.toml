@@ -16,6 +16,12 @@ exclude = [
     # The ESP32 app targets xtensa-esp32-none-elf and uses esp-hal + embassy.
     # Build separately with: cd app && cargo build
     "app",
+    # RS-485 debugger binary for transceiver testing.
+    # Build with: cd app-rs485-debugger && cargo build
+    "app-rs485-debugger",
+    # Spa emulator binary — simulates Balboa BP6013G1 on ESP32 over RS-485.
+    # Build with: cd app-spa-emulator && cargo build
+    "app-spa-emulator",
 ]
 
 [workspace.package]

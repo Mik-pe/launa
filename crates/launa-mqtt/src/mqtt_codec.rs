@@ -222,6 +222,79 @@ pub fn encode_disconnect() -> [u8; 2] {
     [0xE0, 0x00]
 }
 
+/// Parse an incoming MQTT PUBLISH packet, extracting topic and payload.
+///
+/// Handles QoS 0 and QoS 1 packets. Returns `None` if the buffer doesn't
+/// contain a PUBLISH packet (wrong type) or is too short to parse.
+/// For QoS 1, returns the packet ID so the caller can send PUBACK.
+pub struct IncomingPublish<'a> {
+    pub topic: &'a str,
+    pub payload: &'a [u8],
+    pub packet_id: Option<u16>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum PublishParseError {
+    /// Buffer too short.
+    TooShort,
+    /// Not a PUBLISH packet.
+    NotPublish(u8),
+    /// Invalid remaining-length encoding.
+    InvalidRemainingLength,
+    /// Topic is not valid UTF-8.
+    InvalidTopic,
+}
+
+pub fn parse_incoming_publish(buf: &[u8]) -> Result<IncomingPublish<'_>, PublishParseError> {
+    if buf.is_empty() {
+        return Err(PublishParseError::TooShort);
+    }
+    let pkt_type = buf[0] >> 4;
+    if pkt_type != 3 {
+        return Err(PublishParseError::NotPublish(buf[0]));
+    }
+
+    let (remaining_len, header_size) = decode_remaining_length(buf)
+        .ok_or(PublishParseError::InvalidRemainingLength)?;
+
+    if buf.len() < header_size + remaining_len {
+        return Err(PublishParseError::TooShort);
+    }
+
+    let body = &buf[header_size..header_size + remaining_len];
+    if body.len() < 2 {
+        return Err(PublishParseError::TooShort);
+    }
+
+    let topic_len = u16::from_be_bytes([body[0], body[1]]) as usize;
+    if body.len() < 2 + topic_len {
+        return Err(PublishParseError::TooShort);
+    }
+
+    let topic = core::str::from_utf8(&body[2..2 + topic_len])
+        .map_err(|_| PublishParseError::InvalidTopic)?;
+
+    let qos = (buf[0] >> 1) & 0x03;
+    let mut idx = 2 + topic_len;
+    let packet_id = if qos > 0 {
+        if body.len() < idx + 2 {
+            return Err(PublishParseError::TooShort);
+        }
+        let id = u16::from_be_bytes([body[idx], body[idx + 1]]);
+        idx += 2;
+        Some(id)
+    } else {
+        None
+    };
+
+    let payload = &body[idx..];
+    Ok(IncomingPublish {
+        topic,
+        payload,
+        packet_id,
+    })
+}
+
 /// Parse a SUBACK packet from raw bytes.
 ///
 /// Validates that the packet type, packet identifier, and return code

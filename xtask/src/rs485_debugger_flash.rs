@@ -53,10 +53,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     cmd.env("LAUNA_WIFI_SSID", &config.wifi.ssid);
     cmd.env("LAUNA_WIFI_PASSWORD", &config.wifi.password);
     cmd.env("LAUNA_MQTT_HOST", &config.mqtt.host);
-    cmd.env(
-        "LAUNA_MQTT_PORT",
-        config.mqtt.port.to_string(),
-    );
+    cmd.env("LAUNA_MQTT_PORT", config.mqtt.port.to_string());
 
     cmd.current_dir(&emu_dir);
 
@@ -79,6 +76,9 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         println!("RS-485 debugger flash successful.");
         Ok(())
     } else {
-        bail!("RS-485 debugger flash failed with exit code {:?}", status.code());
+        bail!(
+            "RS-485 debugger flash failed with exit code {:?}",
+            status.code()
+        );
     }
 }

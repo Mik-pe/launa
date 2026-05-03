@@ -72,7 +72,14 @@ impl Device {
         match (bytes[4], bytes[5]) {
             (0x83, 0xC8) => Device { id: "A", index: 0 },
             (0x12, 0xBC) => Device { id: "B", index: 1 },
-            _ => Device { id: "?", index: 0 },
+            _ => {
+                let b4 = bytes[4];
+                let b5 = bytes[5];
+                panic!(
+                    "Unknown MAC {:02X}:{:02X} — device identity cannot be determined",
+                    b4, b5
+                );
+            }
         }
     }
 }
@@ -188,6 +195,67 @@ fn sync_slot(sender_index: u8, _dev: &Device) -> (u8, embassy_time::Instant) {
     let new_counter = sender_index.wrapping_add(1);
     let new_deadline = embassy_time::Instant::now() + SLOT_DURATION;
     (new_counter, new_deadline)
+}
+
+/// RX statistics tracked across the main loop.
+struct RxStats {
+    rx_count: u64,
+    total_rx_bytes: u64,
+    last_rx_sender: &'static str,
+    last_rx_hex: String,
+}
+
+/// Context for the RS-485 main loop's mutable state, extracted to avoid
+/// passing 10+ &mut references to `handle_rx_bytes`.
+struct SlotState {
+    slot_counter: u8,
+    slot_deadline: embassy_time::Instant,
+    synced: bool,
+    cycles_since_last_rx: u32,
+}
+
+/// Process received bytes: decode frames, log, update stats, and re-sync slots.
+/// `check_crc` enables CRC error logging (used in RX-slot, not TX-slot).
+fn handle_rx_bytes(
+    dev: &Device,
+    decoder: &mut FrameDecoder,
+    data: &[u8],
+    stats: &mut RxStats,
+    slot: &mut SlotState,
+    label: &str,
+    check_crc: bool,
+) {
+    if data.iter().all(|&b| b == 0x00 || b == 0xFF) {
+        return;
+    }
+    stats.total_rx_bytes += data.len() as u64;
+    stats.rx_count += 1;
+    let hex = launa_protocol::hex::to_hex(&data[..data.len().min(32)]);
+    let prev_errors = if check_crc { decoder.frame_error_count() } else { 0 };
+    let (sender, sender_idx) = decode_sender(decoder, data);
+    let new_errors = if check_crc { decoder.frame_error_count() } else { 0 };
+    stats.last_rx_sender = sender;
+    stats.last_rx_hex = hex.clone();
+
+    if check_crc && new_errors > prev_errors {
+        dlog!(dev, "RX ({}) from [{}]: {} bytes: {} (crc err)", label, sender, data.len(), hex);
+    } else {
+        dlog!(dev, "RX ({}) from [{}]: {} bytes: {}", label, sender, data.len(), hex);
+    }
+
+    if let Some(idx) = sender_idx {
+        if idx != dev.index {
+            let (new_ctr, new_dl) = sync_slot(idx, dev);
+            slot.slot_counter = new_ctr;
+            slot.slot_deadline = new_dl;
+            if !slot.synced {
+                slot.synced = true;
+                dlog!(dev, "SYNC: locked to peer [{}]", sender);
+            }
+            slot.cycles_since_last_rx = 0;
+            dlog!(dev, "SYNC: sender=[{}] idx={}, new_slot={}", sender, idx, slot.slot_counter);
+        }
+    }
 }
 
 // ── WiFi ─────────────────────────────────────────────────────────────
@@ -555,23 +623,28 @@ async fn main(spawner: Spawner) {
     let mut decoder = FrameDecoder::new();
     let mut read_buf = [0u8; 128];
     let mut seq: u32 = 0;
-    let mut rx_count: u64 = 0;
     let mut tx_count: u64 = 0;
-    let mut total_rx_bytes: u64 = 0;
-    let mut last_rx_sender: &'static str = "-";
-    let mut last_rx_hex: String = String::new();
     let start_time = Instant::now();
 
+    let mut rx_stats = RxStats {
+        rx_count: 0,
+        total_rx_bytes: 0,
+        last_rx_sender: "-",
+        last_rx_hex: String::new(),
+    };
+
     // Start on our own slot so we transmit immediately if no one else is heard
-    let mut slot_counter: u8 = dev.index;
-    let mut slot_deadline = embassy_time::Instant::now() + SLOT_DURATION;
-    let mut synced = false;
-    let mut cycles_since_last_rx: u32 = 0;
+    let mut slot = SlotState {
+        slot_counter: dev.index,
+        slot_deadline: embassy_time::Instant::now() + SLOT_DURATION,
+        synced: false,
+        cycles_since_last_rx: 0,
+    };
     let mut mqtt_reconnect_at = Instant::now() + Duration::from_secs(30);
 
     loop {
-        let slot_start = slot_deadline - SLOT_DURATION;
-        let is_my_slot = slot_counter % NUM_DEVICES == dev.index;
+        let slot_start = slot.slot_deadline - SLOT_DURATION;
+        let is_my_slot = slot.slot_counter % NUM_DEVICES == dev.index;
 
         if is_my_slot {
             // ── TX slot ──────────────────────────────────────────────
@@ -603,33 +676,12 @@ async fn main(spawner: Spawner) {
             }
 
             // Listen for remainder of slot
-            let listen_deadline = slot_deadline - Duration::from_millis(5);
+            let listen_deadline = slot.slot_deadline - Duration::from_millis(5);
             while embassy_time::Instant::now() < listen_deadline {
                 let remaining = listen_deadline - embassy_time::Instant::now();
                 match select(transport.read(&mut read_buf), Timer::after(remaining)).await {
                     Either::First(Ok(n)) if n > 0 => {
-                        if !read_buf[..n].iter().all(|&b| b == 0x00 || b == 0xFF) {
-                            total_rx_bytes += n as u64;
-                            rx_count += 1;
-                            let hex = launa_protocol::hex::to_hex(&read_buf[..n.min(32)]);
-                            let (sender, sender_idx) = decode_sender(&mut decoder, &read_buf[..n]);
-                            last_rx_sender = sender;
-                            last_rx_hex = hex.clone();
-                            dlog!(dev, "RX (post-TX) from [{}]: {} bytes: {}", sender, n, hex);
-                            if let Some(idx) = sender_idx {
-                                if idx != dev.index {
-                                    let (new_ctr, new_dl) = sync_slot(idx, &dev);
-                                    slot_counter = new_ctr;
-                                    slot_deadline = new_dl;
-                                    if !synced {
-                                        synced = true;
-                                        dlog!(dev, "SYNC: locked to peer [{}]", sender);
-                                    }
-                                    cycles_since_last_rx = 0;
-                                    dlog!(dev, "SYNC: sender=[{}] idx={}, new_slot={}", sender, idx, slot_counter);
-                                }
-                            }
-                        }
+                        handle_rx_bytes(&dev, &mut decoder, &read_buf[..n], &mut rx_stats, &mut slot, "post-TX", false);
                     }
                     Either::First(Err(_)) => {
                         let mut drain = [0u8; 32];
@@ -643,41 +695,12 @@ async fn main(spawner: Spawner) {
             let mut drain = [0u8; 64];
             let _ = transport.uart.read_buffered(&mut drain);
 
-            let listen_deadline = slot_deadline - Duration::from_millis(5);
+            let listen_deadline = slot.slot_deadline - Duration::from_millis(5);
             while embassy_time::Instant::now() < listen_deadline {
                 let remaining = listen_deadline - embassy_time::Instant::now();
                 match select(transport.read(&mut read_buf), Timer::after(remaining)).await {
                     Either::First(Ok(n)) if n > 0 => {
-                        if !read_buf[..n].iter().all(|&b| b == 0x00 || b == 0xFF) {
-                            total_rx_bytes += n as u64;
-                            rx_count += 1;
-                            let hex = launa_protocol::hex::to_hex(&read_buf[..n.min(32)]);
-                            let prev_errors = decoder.frame_error_count();
-                            let (sender, sender_idx) = decode_sender(&mut decoder, &read_buf[..n]);
-                            let new_errors = decoder.frame_error_count();
-                            last_rx_sender = sender;
-                            last_rx_hex = hex.clone();
-
-                            if new_errors > prev_errors {
-                                dlog!(dev, "RX from [{}]: {} bytes: {} (crc err)", sender, n, hex);
-                            } else {
-                                dlog!(dev, "RX from [{}]: {} bytes: {}", sender, n, hex);
-                            }
-
-                            if let Some(idx) = sender_idx {
-                                if idx != dev.index {
-                                    let (new_ctr, new_dl) = sync_slot(idx, &dev);
-                                    slot_counter = new_ctr;
-                                    slot_deadline = new_dl;
-                                    if !synced {
-                                        synced = true;
-                                        dlog!(dev, "SYNC: locked to peer [{}]", sender);
-                                    }
-                                    cycles_since_last_rx = 0;
-                                    dlog!(dev, "SYNC: sender=[{}] idx={}, new_slot={}", sender, idx, slot_counter);
-                                }
-                            }
-                        }
+                        handle_rx_bytes(&dev, &mut decoder, &read_buf[..n], &mut rx_stats, &mut slot, "listen", true);
                     }
                     Either::First(Err(_)) => {
                         let mut drain = [0u8; 32];
@@ -689,8 +712,8 @@ async fn main(spawner: Spawner) {
             }
         }
 
-        // ── MQTT publish every 3 slots (1 full cycle) ────────────────
-        if slot_counter > 0 && slot_counter % 3 == 0 {
+        // ── MQTT publish every 3 slots ────────────────────────────────
+        if slot.slot_counter > 0 && slot.slot_counter % 3 == 0 {
             let uptime_secs = start_time.elapsed().as_secs();
 
             // MQTT keepalive ping
@@ -715,16 +738,16 @@ async fn main(spawner: Spawner) {
             // Publish status JSON
             if mqtt.is_connected() {
                 // Truncate last_rx_hex to 64 chars to keep payload small
-                let hex_display = if last_rx_hex.len() > 64 {
-                    &last_rx_hex[..64]
+                let hex_display = if rx_stats.last_rx_hex.len() > 64 {
+                    &rx_stats.last_rx_hex[..64]
                 } else {
-                    &last_rx_hex
+                    &rx_stats.last_rx_hex
                 };
                 let json = format!(
                     r#"{{"device_id":"{}","tx_count":{},"rx_count":{},"rx_bytes":{},"last_rx_sender":"{}","last_rx_hex":"{}","seq":{},"slot_counter":{},"synced":{},"uptime_secs":{}}}"#,
-                    dev.id, tx_count, rx_count, total_rx_bytes,
-                    last_rx_sender, hex_display,
-                    seq, slot_counter, synced, uptime_secs
+                    dev.id, tx_count, rx_stats.rx_count, rx_stats.total_rx_bytes,
+                    rx_stats.last_rx_sender, hex_display,
+                    seq, slot.slot_counter, slot.synced, uptime_secs
                 );
                 if !mqtt.publish_status(json.as_bytes()).await {
                     dwarn!(dev, "MQTT publish failed");
@@ -735,29 +758,29 @@ async fn main(spawner: Spawner) {
 
             // Serial stats (keep existing log pattern)
             dlog!(dev, "stats: slot={} tx={} rx={} rx_bytes={} synced={} uptime={}s",
-                  slot_counter, tx_count, rx_count, total_rx_bytes, synced, uptime_secs);
-            if total_rx_bytes == 0 {
+                  slot.slot_counter, tx_count, rx_stats.rx_count, rx_stats.total_rx_bytes, slot.synced, uptime_secs);
+            if rx_stats.total_rx_bytes == 0 {
                 dwarn!(dev, "NO RX BYTES — transceiver RX may be broken");
             }
 
             // Track sync timeout
-            cycles_since_last_rx += 1;
-            if synced && cycles_since_last_rx >= SYNC_TIMEOUT_CYCLES {
-                dwarn!(dev, "SYNC LOST: no RX sync for {} cycles, free-running", cycles_since_last_rx);
-                synced = false;
+            slot.cycles_since_last_rx += 1;
+            if slot.synced && slot.cycles_since_last_rx >= SYNC_TIMEOUT_CYCLES {
+                dwarn!(dev, "SYNC LOST: no RX sync for {} cycles, free-running", slot.cycles_since_last_rx);
+                slot.synced = false;
             }
-            if !synced && cycles_since_last_rx >= SYNC_TIMEOUT_CYCLES {
-                dlog!(dev, "FREE-RUN: unsynced for {} cycles, starting own slot", cycles_since_last_rx);
-                slot_counter = dev.index;
-                slot_deadline = embassy_time::Instant::now() + SLOT_DURATION;
-                cycles_since_last_rx = 0;
+            if !slot.synced && slot.cycles_since_last_rx >= SYNC_TIMEOUT_CYCLES {
+                dlog!(dev, "FREE-RUN: unsynced for {} cycles, starting own slot", slot.cycles_since_last_rx);
+                slot.slot_counter = dev.index;
+                slot.slot_deadline = embassy_time::Instant::now() + SLOT_DURATION;
+                slot.cycles_since_last_rx = 0;
             }
         }
 
         // ── Advance to next slot ─────────────────────────────────────
-        Timer::at(slot_deadline).await;
-        slot_deadline = slot_deadline + SLOT_DURATION;
-        slot_counter = slot_counter.wrapping_add(1);
+        Timer::at(slot.slot_deadline).await;
+        slot.slot_deadline = slot.slot_deadline + SLOT_DURATION;
+        slot.slot_counter = slot.slot_counter.wrapping_add(1);
     }
 }
 

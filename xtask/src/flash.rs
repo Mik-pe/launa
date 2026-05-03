@@ -4,12 +4,14 @@ use std::process::Command;
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut feature = None;
     let mut port = None;
+    let mut port_index = None;
     let mut monitor = false;
     let mut parser = crate::util::Args::new(args);
     while parser.has_more() {
         match parser.peek().unwrap() {
             "--feature" => feature = Some(parser.value("--feature")?.to_string()),
             "--port" => port = Some(parser.value("--port")?.to_string()),
+            "--port-index" => port_index = parser.optional_parsed("--port-index")?,
             "--monitor" => {
                 monitor = true;
                 parser.skip();
@@ -17,6 +19,10 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             _ => return Err(parser.unknown_arg()),
         }
     }
+
+    let config = crate::config::load().ok();
+    let port = crate::util::resolve_port(port.as_deref(), port_index, config.as_ref())?;
+    let port = Some(port);
 
     let app_dir = crate::util::project_root().join("app");
     let partitions_csv = app_dir.join("partitions.csv");
