@@ -20,6 +20,11 @@ ESP32 firmware (Rust, no_std) that interfaces with Balboa BP6013G1 spa controlle
 
 Protocol reference: `docs/protocol.md`. Architecture details: `docs/architecture.md`.
 
+## Hardware
+
+- **RS-485 transceiver:** MAX13487EESA + 131 (auto-direction half-duplex transceiver — no DE/RE pin control needed)
+- **Never speculate about faulty RS-485 hardware.** The transceivers have been verified working with the RS-485 debugger firmware — communication issues are always firmware/software, not hardware.
+
 ## Build and Test
 
 ```bash
@@ -67,6 +72,8 @@ Requires `launa.toml` at project root (gitignored; copy from `launa.example.toml
 - Error handling: `thiserror` for library errors, `anyhow` for application errors
 - Run `cargo test` before committing
 - Rust 2021 edition, workspace uses `resolver = "2"`
+- **NEVER add preamble bytes before RS-485 frames.** This has been tried and verified to have no effect — the auto-direction transceiver handles line turnaround without any preamble flushing.
+- **When stuck on a problem, search the web for answers.** Use WebSearch to look up documentation, known issues, and solutions. Spawn worker subagents to research in parallel if needed. Do not guess — look it up.
 
 ## Git Commit Conventions
 
