@@ -461,8 +461,9 @@ fn test_spaapp_stress_rapid_commands() {
     app.process_frame(&make_status_frame());
 
     let queue_cap: usize = 32;
+    // Use ConfigurationRequest to avoid toggle deduplication
     for _ in 0..100 {
-        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        app.on_mqtt_command(Command::ConfigurationRequest);
     }
     assert_eq!(
         app.queued_command_count(),
@@ -599,8 +600,9 @@ fn test_bounded_command_queue_cap() {
 
     app.process_frame(&make_status_frame());
 
+    // Use ConfigurationRequest to avoid toggle deduplication
     for _ in 0..9 {
-        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        app.on_mqtt_command(Command::ConfigurationRequest);
     }
     assert_eq!(app.queued_command_count(), 9);
 

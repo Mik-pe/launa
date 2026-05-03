@@ -475,6 +475,28 @@ impl<'a> SpaApp<'a> {
             }
         }
 
+        // For ToggleItem, cancel out duplicate toggles: if the same item is
+        // already queued, remove it (two toggles = no-op) instead of queuing
+        // another one. This prevents rapid button presses from cycling the
+        // pump through Off→Low→High→Off with no visible effect.
+        if let Command::ToggleItem(new_item) = cmd {
+            let mut removed = false;
+            let mut i = 0;
+            while i < self.command_queue.len() {
+                if let Command::ToggleItem(existing) = &self.command_queue[i] {
+                    if existing == &new_item {
+                        self.command_queue.remove(i);
+                        removed = true;
+                        break;
+                    }
+                }
+                i += 1;
+            }
+            if removed {
+                return Vec::new();
+            }
+        }
+
         if self.command_queue.len() >= MAX_COMMAND_QUEUE {
             // Queue full — drop the command and increment the dropped counter
             self.cmd_tracker.record_dropped();
@@ -1221,20 +1243,22 @@ mod tests {
         let mut app = app;
         app.force_registered(0x03);
 
-        // Fill the queue up to MAX_COMMAND_QUEUE
+        // Fill the queue with non-deduplicating commands.
+        // ToggleItem deduplicates (cancels duplicates), SetTemperature replaces.
+        // ConfigurationRequest and other commands are just appended.
         for _ in 0..MAX_COMMAND_QUEUE {
-            app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+            app.on_mqtt_command(Command::ConfigurationRequest);
         }
         assert_eq!(app.queued_command_count(), MAX_COMMAND_QUEUE);
         assert_eq!(app.total_dropped(), 0);
 
         // Next command should be dropped
-        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump2));
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
         assert_eq!(app.queued_command_count(), MAX_COMMAND_QUEUE);
         assert_eq!(app.total_dropped(), 1);
 
         // Queue another — also dropped
-        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump3));
+        app.on_mqtt_command(Command::ConfigurationRequest);
         assert_eq!(app.queued_command_count(), MAX_COMMAND_QUEUE);
         assert_eq!(app.total_dropped(), 2);
 
@@ -1737,5 +1761,79 @@ mod tests {
             "Ready should dequeue command even without prior status"
         );
         assert_eq!(app.queued_command_count(), 0);
+    }
+
+    /// Rapid duplicate toggles cancel out (press, press again → no-op).
+    #[test]
+    fn test_toggle_duplicate_cancels_out() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+        app.process_frame(&status_frame());
+
+        // First toggle: queued
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Second toggle for same item: cancels the first
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        assert_eq!(app.queued_command_count(), 0);
+    }
+
+    /// Different toggle items are queued independently.
+    #[test]
+    fn test_toggle_different_items_not_deduplicated() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+        app.process_frame(&status_frame());
+
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump2));
+        assert_eq!(app.queued_command_count(), 2);
+    }
+
+    /// Toggle deduplication only cancels matching items, not cross-contaminating.
+    #[test]
+    fn test_toggle_dedup_does_not_affect_other_commands() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+        app.process_frame(&status_frame());
+
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        app.on_mqtt_command(Command::SetTemperature(100));
+        assert_eq!(app.queued_command_count(), 2);
+
+        // Duplicate toggle cancels only the toggle, not the set-temp
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Remaining command is the set-temp
+        match app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump2)) {
+            _ => {}
+        }
+        assert_eq!(app.queued_command_count(), 2);
+    }
+
+    /// Triple rapid press: press-press-press results in one toggle queued.
+    #[test]
+    fn test_triple_rapid_press_results_in_one_toggle() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x03);
+        app.process_frame(&status_frame());
+
+        // Press 1: queue
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Press 2: cancel
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        assert_eq!(app.queued_command_count(), 0);
+
+        // Press 3: queue again
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        assert_eq!(app.queued_command_count(), 1);
     }
 }

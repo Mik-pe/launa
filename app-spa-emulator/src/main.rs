@@ -636,6 +636,7 @@ async fn main(spawner: Spawner) {
 
     // Spa simulator
     let mut sim = SpaSim::new();
+    sim.set_require_registration(true);
     let mut frame_decoder = FrameDecoder::new();
     let mut read_buf = [0u8; 128];
     let mut rx_count: u64 = 0;
@@ -774,7 +775,7 @@ async fn main(spawner: Spawner) {
 
         if mqtt.is_connected() {
             let json = format!(
-                r#"{{"tick":{},"tx_count":{},"rx_count":{},"rx_bytes":{},"decoded_frames":{},"frame_errors":{},"registered":{},"temp":{:.1},"set_temp":{:.1},"p1":"{}","p2":"{}","circ":{},"heat":{},"uptime_secs":{},"post_tx_delay_ms":{},"suppress_tx":{},"suppress_reg":{}}}"#,
+                r#"{{"tick":{},"tx_count":{},"rx_count":{},"rx_bytes":{},"decoded_frames":{},"frame_errors":{},"registered":{},"rejected_unregistered":{},"temp":{:.1},"set_temp":{:.1},"p1":"{}","p2":"{}","circ":{},"heat":{},"uptime_secs":{},"post_tx_delay_ms":{},"suppress_tx":{},"suppress_reg":{}}}"#,
                 sim.tick_count(),
                 tx_count,
                 rx_count,
@@ -782,6 +783,7 @@ async fn main(spawner: Spawner) {
                 decoded_frames,
                 frame_errors,
                 sim.is_registered(),
+                sim.rejected_unregistered_frames(),
                 sim.state.current_temp.to_fahrenheit(),
                 sim.state.set_temp.to_fahrenheit(),
                 pump_str(sim.state.pumps[0]),

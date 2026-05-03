@@ -405,15 +405,10 @@ fn test_rapid_command_flood_exceeds_queue_cap() {
     let total_commands = 35usize;
     let queue_drops = total_commands - queue_cap; // 3
 
-    // Flood with commands
-    for i in 0..total_commands {
-        // Alternate between different toggle items for variety
-        let item = match i % 3 {
-            0 => ToggleItem::Pump1,
-            1 => ToggleItem::Pump2,
-            _ => ToggleItem::Pump3,
-        };
-        app.on_mqtt_command(Command::ToggleItem(item));
+    // Flood with non-deduplicating commands (ConfigurationRequest).
+    // ToggleItem deduplicates (cancels duplicates), so we can't use it here.
+    for _ in 0..total_commands {
+        app.on_mqtt_command(Command::ConfigurationRequest);
     }
 
     // Verify queue cap: exactly 32 accepted
@@ -498,9 +493,9 @@ fn test_command_flood_multiple_cycles() {
         payload: vec![0x06],
     };
 
-    // Cycle 1: flood + drain
+    // Cycle 1: flood with ConfigurationRequest (no dedup) + drain
     for _ in 0..35 {
-        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        app.on_mqtt_command(Command::ConfigurationRequest);
     }
     assert_eq!(app.queued_command_count(), 32);
     // 3 queue drops from the 35-command flood
@@ -509,20 +504,18 @@ fn test_command_flood_multiple_cycles() {
     for _ in 0..32 {
         app.process_frame(&ready_frame);
     }
-    // Tracker deduplicates: all Pump1 toggles share one ExpectedChange,
-    // so only 1 pending entry — no tracker overflow.
     let drops_after_cycle1 = 3u32;
     assert_eq!(app.queued_command_count(), 0);
     assert_eq!(
         app.total_dropped(),
         drops_after_cycle1,
-        "drops should be queue drops only (tracker deduplicates)"
+        "drops should be queue drops only"
     );
 
-    // Cycle 2: flood + drain again (different toggle item)
+    // Cycle 2: flood + drain again
     let drops_before_cycle2 = app.total_dropped();
     for _ in 0..35 {
-        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump2));
+        app.on_mqtt_command(Command::FilterCyclesRequest);
     }
     assert_eq!(app.queued_command_count(), 32);
     // 3 more queue drops from cycle 2 flood
@@ -536,13 +529,11 @@ fn test_command_flood_multiple_cycles() {
         app.process_frame(&ready_frame);
     }
     assert_eq!(app.queued_command_count(), 0);
-    // Tracker has 2 entries (Pump1 + Pump2), still well under
-    // MAX_PENDING_COMMANDS=8, so no tracker overflow.
     let drops_after_cycle2 = drops_before_cycle2 + 3;
 
     // Cycle 3: partial flood (no overflow)
     for _ in 0..10 {
-        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump3));
+        app.on_mqtt_command(Command::InformationRequest);
     }
     assert_eq!(app.queued_command_count(), 10);
     let drops_before_drain3 = app.total_dropped();
@@ -555,13 +546,12 @@ fn test_command_flood_multiple_cycles() {
         app.process_frame(&ready_frame);
     }
     assert_eq!(app.queued_command_count(), 0);
-    // Tracker now has 3 entries (Pump1 + Pump2 + Pump3), still no overflow.
     let final_drops = drops_after_cycle2;
 
     // Final drop count: all accumulated queue drops across cycles
     assert_eq!(
         app.total_dropped(),
         final_drops,
-        "final drop count should include all queue drops (no tracker overflow with dedup)"
+        "final drop count should include all queue drops"
     );
 }

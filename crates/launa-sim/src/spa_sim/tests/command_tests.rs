@@ -354,3 +354,145 @@ fn test_command_success_rate_boundaries() {
         "rate 1.0 should accept all commands"
     );
 }
+
+// ── Registration validation tests ──────────────────────────────────
+
+#[test]
+fn test_require_registration_rejects_toggle_when_unregistered() {
+    let mut sim = SpaSim::new();
+    sim.set_require_registration(true);
+
+    let (mt, payload) =
+        launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
+            .encode()
+            .unwrap();
+    let encoded = FrameEncoder::encode(mt, &payload).unwrap();
+    sim.process_incoming_bytes(&encoded);
+
+    assert_eq!(sim.state.pumps[0], PumpState::Off, "toggle should be rejected");
+    assert_eq!(sim.rejected_unregistered_frames(), 1);
+}
+
+#[test]
+fn test_require_registration_rejects_set_temp_when_unregistered() {
+    let mut sim = SpaSim::new();
+    sim.state.temp_scale = TemperatureScale::Fahrenheit;
+    sim.set_require_registration(true);
+
+    let (mt, payload) = launa_protocol::command::Command::SetTemperature(100)
+        .encode()
+        .unwrap();
+    let encoded = FrameEncoder::encode(mt, &payload).unwrap();
+    sim.process_incoming_bytes(&encoded);
+
+    assert_eq!(
+        sim.state.set_temp,
+        Temperature::fahrenheit(104.0),
+        "set_temp should be rejected"
+    );
+    assert_eq!(sim.rejected_unregistered_frames(), 1);
+}
+
+#[test]
+fn test_require_registration_rejects_config_request_when_unregistered() {
+    let mut sim = SpaSim::new();
+    sim.set_require_registration(true);
+
+    let (mt, payload) = launa_protocol::command::Command::ConfigurationRequest
+        .encode()
+        .unwrap();
+    let encoded = FrameEncoder::encode(mt, &payload).unwrap();
+    let responses = sim.process_incoming_bytes(&encoded);
+
+    assert!(responses.is_empty(), "config response should be suppressed");
+    assert_eq!(sim.rejected_unregistered_frames(), 1);
+}
+
+#[test]
+fn test_require_registration_accepts_toggle_after_registration() {
+    let mut sim = SpaSim::new();
+    sim.set_require_registration(true);
+
+    // Register via new-client flow: FE BF 01 → FE BF 02 <id> <hash> → <id> BF 03
+    let reg_response = FrameEncoder::encode([0xFE, 0xBF], &[0x00]).unwrap();
+    sim.process_incoming_bytes(&reg_response); // NewClientQuery — sim sends it, but we feed it back
+    // Sim doesn't register from its own query. Feed a NewClientResponse instead:
+    let new_client_resp = FrameEncoder::encode([0xFE, 0xBF], &[0x01, 0x02, 0xAB, 0xCD]).unwrap();
+    let responses = sim.process_incoming_bytes(&new_client_resp);
+    // Sim sends ClientIdAssignment — extract and feed the ack
+    let mut decoder = launa_protocol::frame::FrameDecoder::new();
+    let frames = decoder.feed_slice(&responses);
+    let mut assigned_id = 0u8;
+    for frame in &frames {
+        if frame.message_type == [0xFE, 0xBF] && !frame.payload.is_empty() && frame.payload[0] == 0x02 {
+            assigned_id = frame.payload[1];
+            let ack = FrameEncoder::encode([assigned_id, 0xBF], &[0x03]).unwrap();
+            sim.process_incoming_bytes(&ack);
+        }
+    }
+    assert!(sim.is_registered());
+
+    // Now toggle should work
+    let (mt, payload) =
+        launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
+            .encode()
+            .unwrap();
+    let encoded = FrameEncoder::encode(mt, &payload).unwrap();
+    sim.process_incoming_bytes(&encoded);
+
+    assert_eq!(sim.state.pumps[0], PumpState::Low, "toggle should work after registration");
+    assert_eq!(sim.rejected_unregistered_frames(), 0);
+}
+
+#[test]
+fn test_require_registration_allows_registration_frames() {
+    let mut sim = SpaSim::new();
+    sim.set_require_registration(true);
+
+    // FE BF 01 (NewClientResponse) should always be accepted
+    let new_client_resp = FrameEncoder::encode([0xFE, 0xBF], &[0x01, 0x02, 0xAB, 0xCD]).unwrap();
+    let responses = sim.process_incoming_bytes(&new_client_resp);
+    assert!(!responses.is_empty(), "registration response should produce output");
+    assert_eq!(sim.rejected_unregistered_frames(), 0);
+
+    // <ID> BF 03 (ClientIdAck) should also be accepted
+    let ack = FrameEncoder::encode([0x02, 0xBF], &[0x03]).unwrap();
+    sim.process_incoming_bytes(&ack);
+    assert!(sim.is_registered());
+    assert_eq!(sim.rejected_unregistered_frames(), 0);
+}
+
+#[test]
+fn test_require_registration_counts_multiple_rejections() {
+    let mut sim = SpaSim::new();
+    sim.set_require_registration(true);
+
+    // Send 3 toggles while unregistered
+    for _ in 0..3 {
+        let (mt, payload) =
+            launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
+                .encode()
+                .unwrap();
+        let encoded = FrameEncoder::encode(mt, &payload).unwrap();
+        sim.process_incoming_bytes(&encoded);
+    }
+
+    assert_eq!(sim.rejected_unregistered_frames(), 3);
+    assert_eq!(sim.state.pumps[0], PumpState::Off);
+}
+
+#[test]
+fn test_require_registration_default_off() {
+    let mut sim = SpaSim::new();
+
+    // Without enabling require_registration, commands should work
+    let (mt, payload) =
+        launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
+            .encode()
+            .unwrap();
+    let encoded = FrameEncoder::encode(mt, &payload).unwrap();
+    sim.process_incoming_bytes(&encoded);
+
+    assert_eq!(sim.state.pumps[0], PumpState::Low, "default should allow commands");
+    assert_eq!(sim.rejected_unregistered_frames(), 0);
+}

@@ -141,6 +141,14 @@ pub struct SpaSim {
     information_config: InformationConfig,
     /// Custom configuration response data. Defaults to the hardcoded config data.
     spa_config_config: SpaConfigConfig,
+
+    // Validation
+    /// When true, `process_frame` rejects command and query frames (`0x0A BF`)
+    /// unless a client is registered. Registration frames (`FE BF`, `<ID> BF 03`)
+    /// are always allowed. Default: false (backward compatible).
+    require_registration: bool,
+    /// Number of command/query frames rejected due to require_registration.
+    rejected_unregistered_frames: u64,
 }
 
 impl Default for SpaSim {
@@ -189,6 +197,9 @@ impl SpaSim {
             filter_cycles_config: FilterCyclesConfig::default(),
             information_config: InformationConfig::default(),
             spa_config_config: SpaConfigConfig::default(),
+
+            require_registration: false,
+            rejected_unregistered_frames: 0,
         }
     }
 
@@ -453,6 +464,25 @@ impl SpaSim {
         self.spa_config_config = config;
     }
 
+    /// Enable registration validation.
+    ///
+    /// When enabled, `process_frame` rejects command and query frames (`0x0A BF`
+    /// with sub-types 0x04, 0x11, 0x20, 0x22) unless a client has completed
+    /// registration. Registration frames (`FE BF` and `<ID> BF 03`) are always
+    /// allowed regardless of this setting.
+    ///
+    /// Rejected frames are counted in `rejected_unregistered_frames()`.
+    /// Default: false (backward compatible — all frames are accepted).
+    pub fn set_require_registration(&mut self, require: bool) {
+        self.require_registration = require;
+    }
+
+    /// Number of command/query frames rejected because no client was registered
+    /// (only counted when `require_registration` is enabled).
+    pub fn rejected_unregistered_frames(&self) -> u64 {
+        self.rejected_unregistered_frames
+    }
+
     /// Deterministic pseudo-random check for command acceptance.
     ///
     /// Returns `true` if the command should be accepted based on the success rate.
@@ -662,6 +692,11 @@ impl SpaSim {
         match frame.message_type {
             [0x0A, 0xBF] => {
                 if frame.payload.is_empty() {
+                    return None;
+                }
+                // Validate: reject commands/queries from unregistered clients
+                if self.require_registration && !self.registered {
+                    self.rejected_unregistered_frames += 1;
                     return None;
                 }
                 match frame.payload[0] {

@@ -679,14 +679,17 @@ fn test_pump_timer_cancels_on_mqtt_toggle_off() {
     }
 }
 
-// Test 7: Rapid toggle race (4 toggles, parity) (VAL-TEST-013)
-// Queue 4 rapid toggle pump1 commands. The CommandTracker tracks based on
-// the pre_status at the time of sending, so rapid toggles may cause retries.
+// Test 7: Rapid toggle race (deduplication) (VAL-TEST-013)
+// Queue 4 rapid toggle pump1 commands. With deduplication:
+// - Toggle #1 queues the command
+// - Toggle #2 cancels it (no-op)
+// - Toggle #3 queues again
+// - Toggle #4 cancels it (no-op)
+// Net result: queue is empty, pump stays Off.
 // The key assertions are:
 // - No panics
-// - Command queue fully drains (no stuck commands)
-// - Final state is deterministic (same result if repeated)
-// - Pump state changed from initial Off to some on state
+// - Even count of identical toggles = no change (dedup cancel-out)
+// - Odd count = one effective toggle
 
 #[test]
 fn test_rapid_toggle_race_parity() {
@@ -704,75 +707,89 @@ fn test_rapid_toggle_race_parity() {
         panic!("Expected StatusUpdate");
     }
 
-    // Queue 4 rapid toggle commands
+    // Queue 4 rapid toggle commands — deduplication cancels them out
+    // (1: queued, 2: cancelled, 3: queued, 4: cancelled)
     h.send_command(Command::ToggleItem(ToggleItem::Pump1));
     h.send_command(Command::ToggleItem(ToggleItem::Pump1));
     h.send_command(Command::ToggleItem(ToggleItem::Pump1));
     h.send_command(Command::ToggleItem(ToggleItem::Pump1));
 
-    assert_eq!(
-        h.app.queued_command_count(),
-        4,
-        "should have 4 queued commands"
-    );
-
-    // Tick through enough Ready windows to drain all commands + any retries
-    for _ in 0..20 {
-        let actions = h.collect_actions();
-        h.process_outgoing(&actions);
-    }
-
-    // Verify queue is drained (no stuck commands)
     assert_eq!(
         h.app.queued_command_count(),
         0,
-        "command queue should be empty after draining"
+        "4 identical toggles should cancel out (deduplication)"
     );
 
-    // Verify pump state through decoded status frame
+    // Tick through to settle
+    for _ in 0..5 {
+        h.collect_actions();
+    }
+
+    // Verify pump is still Off (no toggle was sent)
     let check_bytes = h.sim.generate_status_frame();
     let check_frames = h.decoder.feed_slice(&check_bytes);
     let check_msg = launa_protocol::dispatcher::dispatch_frame(&check_frames[0]);
     if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = check_msg {
-        assert_ne!(
+        assert_eq!(
             s.pumps[0],
             PumpState::Off,
-            "after 4+ toggles from Off, pump should NOT be Off (some toggle was effective)"
+            "pump should stay Off after 4 cancelled toggles"
         );
     } else {
         panic!("Expected StatusUpdate");
     }
 
-    // Verify no command drops (all toggles were eventually sent)
-    let drops = h.app.total_dropped();
+    // Verify no command drops
+    assert_eq!(h.app.total_dropped(), 0, "no commands dropped");
+
+    // Now test ODD count: 3 toggles = 1 effective toggle
+    h.send_command(Command::ToggleItem(ToggleItem::Pump1));
+    h.send_command(Command::ToggleItem(ToggleItem::Pump1));
+    h.send_command(Command::ToggleItem(ToggleItem::Pump1));
+
     assert_eq!(
-        drops, 0,
-        "no commands should be dropped — all toggles should eventually send"
+        h.app.queued_command_count(),
+        1,
+        "3 identical toggles should result in 1 queued command"
     );
 
-    // Run the same scenario again to verify determinism
-    // Reset pump to Off — Rationale: sim.state setup to reset for determinism test.
-    // Verification is through decoded status frames.
-    h.sim.state.pumps[0] = PumpState::Off;
-    h.collect_actions(); // let app see pump off
-    h.collect_actions(); // another tick for tracker to settle
-
-    h.send_command(Command::ToggleItem(ToggleItem::Pump1));
-    h.send_command(Command::ToggleItem(ToggleItem::Pump1));
-    h.send_command(Command::ToggleItem(ToggleItem::Pump1));
-    h.send_command(Command::ToggleItem(ToggleItem::Pump1));
-
-    for _ in 0..20 {
+    // Drain through Ready windows
+    for _ in 0..10 {
         let actions = h.collect_actions();
         h.process_outgoing(&actions);
     }
 
-    // Same final state as first run (deterministic)
-    assert_eq!(
-        h.app.queued_command_count(),
-        0,
-        "second run: queue should drain"
-    );
+    assert_eq!(h.app.queued_command_count(), 0, "queue should drain");
+
+    // Verify pump changed state
+    let final_bytes = h.sim.generate_status_frame();
+    let final_frames = h.decoder.feed_slice(&final_bytes);
+    let final_msg = launa_protocol::dispatcher::dispatch_frame(&final_frames[0]);
+    if let launa_protocol::dispatcher::IncomingMessage::StatusUpdate(s) = final_msg {
+        assert_ne!(
+            s.pumps[0],
+            PumpState::Off,
+            "after 1 effective toggle, pump should NOT be Off"
+        );
+    } else {
+        panic!("Expected StatusUpdate");
+    }
+
+    // Verify determinism: reset and repeat with 3 toggles
+    h.sim.state.pumps[0] = PumpState::Off;
+    h.collect_actions();
+    h.collect_actions();
+
+    h.send_command(Command::ToggleItem(ToggleItem::Pump1));
+    h.send_command(Command::ToggleItem(ToggleItem::Pump1));
+    h.send_command(Command::ToggleItem(ToggleItem::Pump1));
+
+    for _ in 0..10 {
+        let actions = h.collect_actions();
+        h.process_outgoing(&actions);
+    }
+
+    assert_eq!(h.app.queued_command_count(), 0, "second run: queue should drain");
 }
 
 // Test 8: Rapid temperature race (100→104→102, last wins) (VAL-TEST-020)

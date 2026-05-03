@@ -37,9 +37,13 @@ impl Default for TestHarness {
 
 impl TestHarness {
     /// Create a new harness with clean state: unregistered, no status, no publications.
+    ///
+    /// The simulator is configured with `require_registration` enabled so that
+    /// command/query frames are rejected until a client completes registration.
     pub fn new() -> Self {
         let clock: &'static VirtualClock = Box::leak(Box::new(VirtualClock::new()));
-        let sim = SpaSim::new();
+        let mut sim = SpaSim::new();
+        sim.set_require_registration(true);
         let app = SpaApp::new(clock);
         let broker = SimBroker::new("test_spa");
 
