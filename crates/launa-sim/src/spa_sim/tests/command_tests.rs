@@ -369,7 +369,11 @@ fn test_require_registration_rejects_toggle_when_unregistered() {
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
 
-    assert_eq!(sim.state.pumps[0], PumpState::Off, "toggle should be rejected");
+    assert_eq!(
+        sim.state.pumps[0],
+        PumpState::Off,
+        "toggle should be rejected"
+    );
     assert_eq!(sim.rejected_unregistered_frames(), 1);
 }
 
@@ -416,7 +420,7 @@ fn test_require_registration_accepts_toggle_after_registration() {
     // Register via new-client flow: FE BF 01 → FE BF 02 <id> <hash> → <id> BF 03
     let reg_response = FrameEncoder::encode([0xFE, 0xBF], &[0x00]).unwrap();
     sim.process_incoming_bytes(&reg_response); // NewClientQuery — sim sends it, but we feed it back
-    // Sim doesn't register from its own query. Feed a NewClientResponse instead:
+                                               // Sim doesn't register from its own query. Feed a NewClientResponse instead:
     let new_client_resp = FrameEncoder::encode([0xFE, 0xBF], &[0x01, 0x02, 0xAB, 0xCD]).unwrap();
     let responses = sim.process_incoming_bytes(&new_client_resp);
     // Sim sends ClientIdAssignment — extract and feed the ack
@@ -424,7 +428,10 @@ fn test_require_registration_accepts_toggle_after_registration() {
     let frames = decoder.feed_slice(&responses);
     let mut assigned_id = 0u8;
     for frame in &frames {
-        if frame.message_type == [0xFE, 0xBF] && !frame.payload.is_empty() && frame.payload[0] == 0x02 {
+        if frame.message_type == [0xFE, 0xBF]
+            && !frame.payload.is_empty()
+            && frame.payload[0] == 0x02
+        {
             assigned_id = frame.payload[1];
             let ack = FrameEncoder::encode([assigned_id, 0xBF], &[0x03]).unwrap();
             sim.process_incoming_bytes(&ack);
@@ -440,7 +447,11 @@ fn test_require_registration_accepts_toggle_after_registration() {
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
 
-    assert_eq!(sim.state.pumps[0], PumpState::Low, "toggle should work after registration");
+    assert_eq!(
+        sim.state.pumps[0],
+        PumpState::Low,
+        "toggle should work after registration"
+    );
     assert_eq!(sim.rejected_unregistered_frames(), 0);
 }
 
@@ -452,7 +463,10 @@ fn test_require_registration_allows_registration_frames() {
     // FE BF 01 (NewClientResponse) should always be accepted
     let new_client_resp = FrameEncoder::encode([0xFE, 0xBF], &[0x01, 0x02, 0xAB, 0xCD]).unwrap();
     let responses = sim.process_incoming_bytes(&new_client_resp);
-    assert!(!responses.is_empty(), "registration response should produce output");
+    assert!(
+        !responses.is_empty(),
+        "registration response should produce output"
+    );
     assert_eq!(sim.rejected_unregistered_frames(), 0);
 
     // <ID> BF 03 (ClientIdAck) should also be accepted
@@ -469,10 +483,11 @@ fn test_require_registration_counts_multiple_rejections() {
 
     // Send 3 toggles while unregistered
     for _ in 0..3 {
-        let (mt, payload) =
-            launa_protocol::command::Command::ToggleItem(launa_protocol::command::ToggleItem::Pump1)
-                .encode()
-                .unwrap();
+        let (mt, payload) = launa_protocol::command::Command::ToggleItem(
+            launa_protocol::command::ToggleItem::Pump1,
+        )
+        .encode()
+        .unwrap();
         let encoded = FrameEncoder::encode(mt, &payload).unwrap();
         sim.process_incoming_bytes(&encoded);
     }
@@ -493,6 +508,10 @@ fn test_require_registration_default_off() {
     let encoded = FrameEncoder::encode(mt, &payload).unwrap();
     sim.process_incoming_bytes(&encoded);
 
-    assert_eq!(sim.state.pumps[0], PumpState::Low, "default should allow commands");
+    assert_eq!(
+        sim.state.pumps[0],
+        PumpState::Low,
+        "default should allow commands"
+    );
     assert_eq!(sim.rejected_unregistered_frames(), 0);
 }

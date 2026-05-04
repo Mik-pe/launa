@@ -789,7 +789,11 @@ fn test_rapid_toggle_race_parity() {
         h.process_outgoing(&actions);
     }
 
-    assert_eq!(h.app.queued_command_count(), 0, "second run: queue should drain");
+    assert_eq!(
+        h.app.queued_command_count(),
+        0,
+        "second run: queue should drain"
+    );
 }
 
 // Test 8: Rapid temperature race (100→104→102, last wins) (VAL-TEST-020)

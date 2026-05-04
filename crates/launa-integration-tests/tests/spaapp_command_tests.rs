@@ -204,11 +204,10 @@ fn test_spaapp_registration_timeout() {
     let (clock, app) = make_spaapp();
     let mut app = app;
 
-    let actions = app.process_frame(&make_new_client_query_frame());
-    assert!(
-        actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))),
-        "should send ID request on NewClientQuery"
-    );
+    let _actions = app.process_frame(&make_new_client_query_frame());
+    // SendNewClientResponse is SUPPRESSED (fast-path handles it).
+    // registration_started_at is still set, so the timeout timer runs.
+    let _actions = app.process_frame(&make_ready_frame());
     assert!(!app.is_registered());
 
     clock.advance_ms(6_000);

@@ -7,7 +7,7 @@
 
 use launa_core::{AppAction, SpaApp};
 use launa_protocol::command::Command;
-use launa_protocol::frame::FrameDecoder;
+use launa_protocol::frame::{Frame, FrameDecoder};
 use launa_sim::{SimBroker, SpaSim, VirtualClock};
 use std::boxed::Box;
 
@@ -87,33 +87,97 @@ impl TestHarness {
     /// Drive registration to completion by ticking the spa until registered.
     /// Returns the number of ticks needed.
     /// Panics if registration doesn't complete within `max_ticks`.
+    ///
+    /// The SpaApp's SendNewClientResponse handler is a no-op (the sync fast-path
+    /// in uart_task handles it on real hardware). In tests, we detect the
+    /// NewClientQuery frame and generate the response ourselves.
     pub fn complete_registration(&mut self, max_ticks: usize) -> usize {
-        for i in 0..max_ticks {
-            let actions = self.tick_spa();
-            self.process_outgoing(&actions);
+        use launa_protocol::registration::RegistrationMessage;
 
-            if self.app.is_registered() {
-                return i + 1;
+        for i in 0..max_ticks {
+            let spa_bytes = self.sim.tick();
+            let frames = self.decoder.feed_slice(&spa_bytes);
+
+            let mut all_actions = Vec::new();
+
+            for frame in &frames {
+                let is_new_client_query = frame.message_type == [0xFE, 0xBF]
+                    && frame.payload.len() == 1
+                    && frame.payload[0] == 0x00;
+
+                if is_new_client_query {
+                    // Process through SpaApp (triggers SM transition)
+                    let actions = self.app.process_frame(frame);
+                    all_actions.extend(actions);
+
+                    // Simulate sync fast-path: generate and send NewClientResponse
+                    let client_hash = self.app.client_hash();
+                    let response_msg = RegistrationMessage::NewClientResponse {
+                        device_type: 0x02,
+                        client_hash,
+                    };
+                    if let Ok(encoded) = response_msg.encode() {
+                        let resp_bytes = self.sim.process_incoming_bytes(&encoded);
+                        if !resp_bytes.is_empty() {
+                            let resp_frames = self.decoder.feed_slice(&resp_bytes);
+                            for rf in &resp_frames {
+                                let resp_actions = self.app.process_frame(rf);
+                                all_actions.extend(resp_actions);
+                            }
+                        }
+                    }
+                } else if !self.app.is_registered() {
+                    // Only process non-registration frames before registration
+                    // completes, to avoid counting status frames in frames_received
+                    let actions = self.app.process_frame(frame);
+                    all_actions.extend(actions);
+                }
+                // Skip frames after registration to prevent double-counting
             }
 
-            for action in &actions {
-                if let AppAction::SendFrame(bytes) = action {
-                    let responses = self.sim.process_incoming_bytes(bytes);
-                    if !responses.is_empty() {
-                        let resp_frames = self.decoder.feed_slice(&responses);
-                        for frame in &resp_frames {
-                            let resp_actions = self.app.process_frame(frame);
-                            for ra in &resp_actions {
-                                if let AppAction::SendFrame(rbytes) = ra {
-                                    self.sim.process_incoming_bytes(rbytes);
+            // Process all SendFrame actions through the simulator.
+            // This handles ClientIdAck and command frames.
+            for action in &all_actions {
+                match action {
+                    AppAction::SendFrame(bytes) => {
+                        let responses = self.sim.process_incoming_bytes(bytes);
+                        if !responses.is_empty() {
+                            let resp_frames = self.decoder.feed_slice(&responses);
+                            for frame in &resp_frames {
+                                let resp_actions = self.app.process_frame(frame);
+                                for ra in &resp_actions {
+                                    match ra {
+                                        AppAction::SendFrame(rbytes) => {
+                                            self.sim.process_incoming_bytes(rbytes);
+                                        }
+                                        _ => {}
+                                    }
                                 }
                             }
                         }
                     }
+                    _ => {}
                 }
             }
 
             if self.app.is_registered() {
+                // Flush any pending registration ACK by injecting a Ready frame.
+                // The ACK is queued until the next CTS window.
+                if self.app.has_pending_registration_response() {
+                    let ready_frame = Frame {
+                        message_type: [0x10, 0xBF],
+                        payload: vec![0x06],
+                    };
+                    let ack_actions = self.app.process_frame(&ready_frame);
+                    for ra in &ack_actions {
+                        match ra {
+                            AppAction::SendFrame(rbytes) => {
+                                self.sim.process_incoming_bytes(rbytes);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 return i + 1;
             }
         }
@@ -125,8 +189,11 @@ impl TestHarness {
     /// commands) so the simulator can update its state.
     pub fn process_outgoing(&mut self, actions: &[AppAction]) {
         for action in actions {
-            if let AppAction::SendFrame(bytes) = action {
-                let _responses = self.sim.process_incoming_bytes(bytes);
+            match action {
+                AppAction::SendFrame(bytes) => {
+                    let _responses = self.sim.process_incoming_bytes(bytes);
+                }
+                _ => {}
             }
         }
     }
@@ -247,12 +314,9 @@ impl TestHarness {
             .encode()
             .expect("encode should succeed");
         let expected = launa_protocol::frame::FrameEncoder::encode(mt, &payload).unwrap();
-        actions.iter().any(|a| {
-            if let AppAction::SendFrame(bytes) = a {
-                bytes == &expected
-            } else {
-                false
-            }
+        actions.iter().any(|a| match a {
+            AppAction::SendFrame(bytes) => bytes == &expected,
+            _ => false,
         })
     }
 }

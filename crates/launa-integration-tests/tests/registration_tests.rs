@@ -12,8 +12,8 @@
 mod common;
 
 use common::{
-    full_registration, make_client_id_assignment_frame, make_new_client_query_frame, make_spaapp,
-    make_status_frame,
+    full_registration, make_client_id_assignment_frame, make_new_client_query_frame,
+    make_ready_frame, make_spaapp, make_status_frame,
 };
 
 use launa_core::AppAction;
@@ -244,16 +244,31 @@ fn test_registration_race_condition() {
     assert!(!app.is_registered());
 
     let actions = app.process_frame(&make_new_client_query_frame());
+    // NewClientResponse is handled by the sync fast-path (no-op in SpaApp)
     assert!(
-        actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))),
-        "should send ID request"
+        !actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))),
+        "NewClientResponse is handled by sync fast-path, no action from SpaApp"
+    );
+    assert!(
+        !app.has_pending_registration_response(),
+        "no response queued"
+    );
+
+    // Ready frame — nothing queued, no action
+    let actions = app.process_frame(&make_ready_frame());
+    assert!(
+        !actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))),
+        "nothing queued, no action on Ready"
     );
     assert!(!app.is_registered());
 
-    let actions = app.process_frame(&make_client_id_assignment_frame(0x03));
+    // Process assignment (as if the sync fast-path response was received by spa)
+    let _actions = app.process_frame(&make_client_id_assignment_frame(0x03));
+    // ACK is queued — send Ready frame to trigger it
+    let actions = app.process_frame(&make_ready_frame());
     assert!(
         actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))),
-        "should send ID ack"
+        "should send ID ack on Ready frame"
     );
     assert!(app.is_registered());
     assert_eq!(app.client_id(), Some(0x03));
@@ -318,6 +333,8 @@ fn test_spaapp_registration_e2e() {
 
 #[test]
 fn test_spaapp_registration_with_interleaved_frames() {
+    use launa_protocol::registration::RegistrationMessage;
+
     let (_clock, app) = make_spaapp();
     let mut app = app;
     let mut sim = SpaSim::new();
@@ -326,30 +343,36 @@ fn test_spaapp_registration_with_interleaved_frames() {
     let mut decoder = FrameDecoder::new();
     let frames = decoder.feed_slice(&raw_bytes);
 
-    // Process all frames — the NewClientQuery triggers ID request
-    let mut id_request_bytes = None;
+    // Process all frames — NewClientQuery is a no-op in SpaApp (sync fast-path
+    // handles it). Simulate the fast-path by detecting the query and generating
+    // the response ourselves.
+    let mut all_actions: Vec<AppAction> = Vec::new();
     for frame in &frames {
         let actions = app.process_frame(frame);
-        // Capture the ID request from the registration handler
-        for a in &actions {
-            if let AppAction::SendFrame(data) = a {
-                id_request_bytes = Some(data.clone());
+        all_actions.extend(actions);
+
+        // Simulate sync fast-path: detect NewClientQuery and send response
+        if frame.message_type == [0xFE, 0xBF]
+            && frame.payload.len() == 1
+            && frame.payload[0] == 0x00
+        {
+            let client_hash = app.client_hash();
+            let response_msg = RegistrationMessage::NewClientResponse {
+                device_type: 0x02,
+                client_hash,
+            };
+            let response_bytes = response_msg.encode().expect("encode should succeed");
+            let assignment_bytes = sim.process_incoming_bytes(&response_bytes);
+            assert!(
+                !assignment_bytes.is_empty(),
+                "should return assignment bytes"
+            );
+
+            let assignment_frames = decoder.feed_slice(&assignment_bytes);
+            for frame in &assignment_frames {
+                app.process_frame(frame);
             }
         }
-    }
-    assert!(!app.is_registered(), "should not be registered yet");
-    let id_request_bytes =
-        id_request_bytes.expect("should have ID request SendFrame from NewClientQuery");
-
-    let assignment_bytes = sim.process_incoming_bytes(&id_request_bytes);
-    assert!(
-        !assignment_bytes.is_empty(),
-        "should return assignment bytes"
-    );
-
-    let assignment_frames = decoder.feed_slice(&assignment_bytes);
-    for frame in &assignment_frames {
-        app.process_frame(frame);
     }
     assert!(app.is_registered(), "should be registered after assignment");
 }

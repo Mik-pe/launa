@@ -44,6 +44,11 @@ pub struct SpaApp<'a> {
     /// Queue of commands waiting for the next Ready window.
     command_queue: VecDeque<Command>,
 
+    /// Encoded registration response frame, deferred until the next Ready/CTS
+    /// frame. The Balboa spa expects registration responses during the CTS
+    /// window (~100ms after NewClientQuery), not immediately after the query.
+    pending_registration_response: Option<Vec<u8>>,
+
     // Timers
     pump_timers: PumpTimerManager,
     hold_timer: HoldModeTimer,
@@ -99,6 +104,13 @@ impl<'a> SpaApp<'a> {
         Self::with_client_hash(clock, [0x00, 0x01])
     }
 
+    /// Create a SpaApp with client hash derived from a device ID string.
+    ///
+    /// Uses FNV-1a 16-bit hashing. Avoids 0x0000 and 0xF173 (Balboa reserved).
+    pub fn new_from_device_id(clock: &'a dyn Clock, device_id: &str) -> Self {
+        Self::with_client_hash(clock, derive_client_hash(device_id))
+    }
+
     /// Create a new SpaApp with a specific client hash for RS-485 registration.
     ///
     /// The `client_hash` should be derived from unique device identity (e.g.
@@ -112,6 +124,7 @@ impl<'a> SpaApp<'a> {
             registration_started_at: None,
             cmd_tracker: CommandTracker::new(),
             command_queue: VecDeque::new(),
+            pending_registration_response: None,
             pump_timers: PumpTimerManager::new(),
             hold_timer: HoldModeTimer::new(),
             heap_monitor: HeapMonitor::new(),
@@ -134,6 +147,16 @@ impl<'a> SpaApp<'a> {
         }
     }
 
+    /// Set a previously-assigned channel for existing client reconnection.
+    ///
+    /// When set, the next `NewClientQuery` will trigger an
+    /// `ExistingClientRequest` (FE BF 04 <channel> <hash>) instead of a
+    /// `NewClientResponse`, asking the spa to reassign the same channel.
+    pub fn set_previous_channel(&mut self, channel: u8) {
+        self.registration =
+            RegistrationStateMachine::with_previous_channel(self.client_hash, channel);
+    }
+
     /// Whether the controller has completed registration.
     pub fn is_registered(&self) -> bool {
         self.registration.is_registered()
@@ -147,6 +170,11 @@ impl<'a> SpaApp<'a> {
     /// The current client hash used for RS-485 registration.
     pub fn client_hash(&self) -> [u8; 2] {
         self.client_hash
+    }
+
+    /// Whether a registration response is queued, waiting for the next CTS.
+    pub fn has_pending_registration_response(&self) -> bool {
+        self.pending_registration_response.is_some()
     }
 
     /// The last received status, if any.
@@ -225,6 +253,7 @@ impl<'a> SpaApp<'a> {
         self.registration_started_at = None;
         self.last_unregistered_frame_time = None;
         self.last_registration_probe_time = None;
+        self.pending_registration_response = None;
     }
 
     /// Rotate the client hash to try a different identity on the bus.
@@ -271,7 +300,8 @@ impl<'a> SpaApp<'a> {
         if !self.registration.is_registered() {
             self.unregistered_frames_received += 1;
             self.last_unregistered_frame_time = Some(now);
-            let action = match RegistrationMessage::parse(frame.message_type, &frame.payload) {
+
+            match RegistrationMessage::parse(frame.message_type, &frame.payload) {
                 Ok(msg) => {
                     let now_secs = now.as_secs() as u32;
                     match self.reg_log.check(now_secs, 5) {
@@ -293,69 +323,69 @@ impl<'a> SpaApp<'a> {
                         }
                         Err(_) => { /* suppressed */ }
                     }
-                    self.registration.process(&msg)
+
+                    // Intercept ClearToSend: the spa sends CTS (~100ms after
+                    // NewClientQuery). This is the window to send our queued
+                    // registration response.
+                    if let RegistrationMessage::ClearToSend { channel } = &msg {
+                        if let Some(encoded) = self.pending_registration_response.take() {
+                            log::info!(
+                                "REG: sending queued response on CTS (ch=0x{:02X})",
+                                channel,
+                            );
+                            actions.push(AppAction::SendFrame(encoded));
+                        }
+                        // Feed to SM (returns None, no state change)
+                        self.registration.process(&msg);
+                        return actions;
+                    }
+
+                    let action = self.registration.process(&msg);
+                    match action {
+                        RegistrationAction::SendNewClientResponse => {
+                            // The sync fast-path in uart_task sends the NewClientResponse
+                            // directly when it sees FE BF 00 — no action needed here.
+                            self.registration_started_at = Some(now);
+                        }
+                        RegistrationAction::SendClientIdAck { client_id: id } => {
+                            let msg = RegistrationMessage::ClientIdAck { channel: id };
+                            match msg.encode() {
+                                Ok(encoded) => {
+                                    log::info!("REG: queuing ClientIdAck for channel 0x{:02X}", id);
+                                    self.pending_registration_response = Some(encoded);
+                                    self.client_id = Some(id);
+                                }
+                                Err(e) => {
+                                    log::error!("REG: failed to encode ID ack: {:?}", e);
+                                }
+                            }
+                        }
+                        RegistrationAction::SendExistingClientRequest { message } => {
+                            match message.encode() {
+                                Ok(encoded) => {
+                                    log::info!(
+                                        "REG: queuing existing client request (ch={:?}, hash={:02X}{:02X}) for next CTS",
+                                        self.registration.previous_channel(),
+                                        self.client_hash[0],
+                                        self.client_hash[1],
+                                    );
+                                    self.pending_registration_response = Some(encoded);
+                                    self.registration_started_at = Some(now);
+                                }
+                                Err(e) => {
+                                    log::error!(
+                                        "REG: failed to encode existing client request: {:?}",
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                        RegistrationAction::None => {}
+                    }
                 }
                 Err(_) => {
                     // Not a registration message — ignore
-                    RegistrationAction::None
                 }
-            };
-            match action {
-                RegistrationAction::SendNewClientResponse => {
-                    log::info!(
-                        "REG: sending ID request with hash {:02X}{:02X}",
-                        self.client_hash[0],
-                        self.client_hash[1],
-                    );
-                    let msg = RegistrationMessage::NewClientResponse {
-                        device_type: 0x02,
-                        client_hash: self.client_hash,
-                    };
-                    match msg.encode() {
-                        Ok(encoded) => {
-                            actions.push(AppAction::SendFrame(encoded));
-                            self.registration_started_at = Some(now);
-                        }
-                        Err(e) => {
-                            log::error!("REG: failed to encode registration request: {:?}", e);
-                        }
-                    }
-                }
-                RegistrationAction::SendClientIdAck { client_id: id } => {
-                    log::info!("REG: acknowledging client ID 0x{:02X}", id);
-                    let msg = RegistrationMessage::ClientIdAck { channel: id };
-                    match msg.encode() {
-                        Ok(encoded) => {
-                            actions.push(AppAction::SendFrame(encoded));
-                            self.client_id = Some(id);
-                            self.registration_started_at = None;
-                            self.failed_registration_attempts = 0;
-                            self.last_unregistered_frame_time = None;
-                            self.last_registration_probe_time = None;
-                        }
-                        Err(e) => {
-                            log::error!("REG: failed to encode ID ack: {:?}", e);
-                        }
-                    }
-                }
-                RegistrationAction::SendExistingClientRequest { message } => {
-                    log::info!(
-                        "REG: sending existing client request (ch={:?}, hash={:02X}{:02X})",
-                        self.registration.previous_channel(),
-                        self.client_hash[0],
-                        self.client_hash[1],
-                    );
-                    match message.encode() {
-                        Ok(encoded) => {
-                            actions.push(AppAction::SendFrame(encoded));
-                            self.registration_started_at = Some(now);
-                        }
-                        Err(e) => {
-                            log::error!("REG: failed to encode existing client request: {:?}", e);
-                        }
-                    }
-                }
-                RegistrationAction::None => {}
             }
             return actions;
         }
@@ -408,7 +438,15 @@ impl<'a> SpaApp<'a> {
             IncomingMessage::Ready => {
                 // Only handle Ready when registered — commands require a client ID
                 if self.registration.is_registered() {
-                    if let Some(cmd) = self.command_queue.pop_front() {
+                    // Priority: pending registration ACK > queued commands > NothingToSend
+                    if let Some(encoded) = self.pending_registration_response.take() {
+                        log::info!("REG: sent queued ClientIdAck on Ready frame");
+                        actions.push(AppAction::SendFrame(encoded));
+                        self.registration_started_at = None;
+                        self.failed_registration_attempts = 0;
+                        self.last_unregistered_frame_time = None;
+                        self.last_registration_probe_time = None;
+                    } else if let Some(cmd) = self.command_queue.pop_front() {
                         let encoded = encode_command(&cmd);
                         actions.push(AppAction::SendFrame(encoded));
                         if let Some(ref pre_status) = self.last_status {
@@ -526,6 +564,7 @@ impl<'a> SpaApp<'a> {
                     });
                     self.registration.reset();
                     self.registration_started_at = None;
+                    self.pending_registration_response = None;
                 }
             }
             // Alert if no registration query seen for 30s after boot
@@ -579,6 +618,7 @@ impl<'a> SpaApp<'a> {
                 self.registration_started_at = None;
                 self.last_unregistered_frame_time = None;
                 self.last_registration_probe_time = None;
+                self.pending_registration_response = None;
                 self.command_queue.clear();
                 self.cmd_tracker.reset();
                 self.pump_timers.cancel_all();
@@ -640,6 +680,20 @@ impl<'a> SpaApp<'a> {
         }
         actions
     }
+}
+
+/// Derive a 2-byte client hash from a device ID string using FNV-1a 16-bit.
+///
+/// Avoids 0x0000 (null) and 0xF173 (Balboa reserved).
+pub fn derive_client_hash(device_id: &str) -> [u8; 2] {
+    let mut h: u16 = 0x811C; // FNV-1a 16-bit offset basis
+    for &b in device_id.as_bytes() {
+        h ^= b as u16;
+        h = h.wrapping_mul(0x0101); // FNV-1a 16-bit prime
+    }
+    if h == 0 { h = 1; }
+    if h == 0xF173 { h = 0xF174; }
+    [(h >> 8) as u8, (h & 0xFF) as u8]
 }
 
 fn encode_command(cmd: &Command) -> Vec<u8> {
@@ -728,24 +782,36 @@ mod tests {
         let (_clock, app) = make_app_with_clock();
         let mut app = app;
 
-        // Send NewClientQuery → should request ID
+        // Send NewClientQuery → NewClientResponse is handled by the sync fast-path
+        // in uart_task (no pending response queued in SpaApp)
         let actions = app.process_frame(&new_client_query_frame());
-        assert_eq!(actions.len(), 1);
-        match &actions[0] {
-            AppAction::SendFrame(_bytes) => {
-                // Frame is HDLC-encoded, just check it's a non-empty frame
-            }
-            _ => panic!("Expected SendFrame"),
-        }
+        assert_eq!(
+            actions.len(),
+            0,
+            "NewClientResponse is handled by sync fast-path"
+        );
+        assert!(!app.has_pending_registration_response());
         assert!(!app.is_registered());
 
-        // Send ClientIdAssignment
+        // Ready/CTS frame → nothing queued, no action
+        let actions = app.process_frame(&ready_frame());
+        assert_eq!(actions.len(), 0, "nothing queued, no action on CTS");
+        assert!(!app.is_registered());
+
+        // Send ClientIdAssignment → ACK is queued (not sent immediately)
         let actions = app.process_frame(&client_id_assignment_frame(0x05));
-        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions.len(),
+            0,
+            "ACK should be queued, not sent immediately"
+        );
+        assert!(app.is_registered());
+
+        // Send Ready frame → triggers the queued ClientIdAck
+        let actions = app.process_frame(&ready_frame());
+        assert_eq!(actions.len(), 1, "queued ACK should be sent on Ready");
         match &actions[0] {
-            AppAction::SendFrame(_bytes) => {
-                // ACK frame
-            }
+            AppAction::SendFrame(_bytes) => {}
             _ => panic!("Expected SendFrame"),
         }
         assert!(app.is_registered());
@@ -956,9 +1022,11 @@ mod tests {
         }
         assert_eq!(app.failed_registration_attempts, 5);
 
-        // Now succeed
-        app.process_frame(&new_client_query_frame());
-        app.process_frame(&client_id_assignment_frame(0x04));
+        // Now succeed — complete registration (NewClientResponse suppressed,
+        // fast-path handles it; ClientIdAck still queued for Ready)
+        app.process_frame(&new_client_query_frame()); // suppressed, fast-path handles
+        app.process_frame(&client_id_assignment_frame(0x04)); // queues ACK
+        app.process_frame(&ready_frame()); // sends queued ACK
 
         assert!(app.is_registered());
         assert_eq!(app.failed_registration_attempts, 0);
