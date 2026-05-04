@@ -22,6 +22,9 @@ exclude = [
     # Spa emulator binary — simulates Balboa BP6013G1 on ESP32 over RS-485.
     # Build with: cd app-spa-emulator && cargo build
     "app-spa-emulator",
+    # Passive RS-485 bus sniffer — decodes and publishes frames to MQTT.
+    # Build with: cd app-sniffer && cargo build
+    "app-sniffer",
 ]
 
 [workspace.package]
