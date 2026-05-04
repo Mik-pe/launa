@@ -192,10 +192,13 @@ pub fn capture_log(level: log::Level, message: &str) {
     };
 
     let ts = embassy_time::Instant::now().as_millis() as u64;
+    let ts_secs = ts / 1000;
+    let ts_frac = ts % 1000;
+    let prefixed = alloc::format!("{:5}.{:03}s {}", ts_secs, ts_frac, message);
 
     unsafe {
         if let Some(ref mut buf) = REMOTE_LOG_BUFFER {
-            buf.push(level_str, message, ts);
+            buf.push(level_str, &prefixed, ts);
         }
     }
 }

@@ -119,10 +119,13 @@ impl log::Log for Logger {
             };
 
             let (color, reset) = color_for_level(record.level());
+            let ts_ms = embassy_time::Instant::now().as_millis();
             let msg = alloc::format!(
-                "{}[C{}] {} - {}{}\n",
+                "{}[C{}] {:5}.{:03}s {} - {}{}\n",
                 color,
                 core_id,
+                ts_ms / 1000,
+                ts_ms % 1000,
                 record.level(),
                 record.args(),
                 reset,
