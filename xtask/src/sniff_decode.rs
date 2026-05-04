@@ -1,5 +1,5 @@
 use anyhow::Context;
-use launa_protocol::{dispatch_frame, FrameDecoder, IncomingMessage};
+use launa_protocol::{dispatch_frame, Frame, FrameDecoder, IncomingMessage};
 use std::time::Duration;
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
@@ -63,17 +63,19 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             let device_id = topic.split('/').nth(1).unwrap_or("?");
 
             // Try to parse as JSON
-            let entry = if let Ok(json) = serde_json::from_slice::<serde_json::Value>(payload) {
+            let entries = if let Ok(json) = serde_json::from_slice::<serde_json::Value>(payload) {
                 handle_json_sniff(&mut decoder, device_id, &json)
             } else {
                 // Treat as raw hex string
                 let text = String::from_utf8_lossy(payload);
-                handle_raw_sniff(&mut decoder, device_id, &text)
+                vec![handle_raw_sniff(&mut decoder, device_id, &text)]
             };
 
             if let Some(ref _file) = output_file {
-                if let Ok(obj) = serde_json::to_value(&entry) {
-                    session_log.push(obj);
+                for entry in &entries {
+                    if let Ok(obj) = serde_json::to_value(entry) {
+                        session_log.push(obj);
+                    }
                 }
             }
         }
@@ -102,7 +104,100 @@ fn handle_json_sniff(
     decoder: &mut FrameDecoder,
     device_id: &str,
     json: &serde_json::Value,
-) -> SniffEntry {
+) -> Vec<SniffEntry> {
+    // Check for burst capture format: {"capture_us":..., "frame_count":..., "frames":[[ts_us, type_hex, payload_hex], ...]}
+    if let Some(frames_arr) = json.get("frames").and_then(|v| v.as_array()) {
+        let capture_us = json.get("capture_us").and_then(|v| v.as_u64()).unwrap_or(0);
+        let frame_count = json
+            .get("frame_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        println!(
+            "=== Burst capture: {} frames in {}us ({:.1}ms) ===",
+            frame_count,
+            capture_us,
+            capture_us as f64 / 1000.0,
+        );
+        println!();
+
+        let mut entries = Vec::new();
+        for frame_val in frames_arr {
+            let arr = match frame_val.as_array() {
+                Some(a) if a.len() >= 3 => a,
+                _ => continue,
+            };
+            let ts_us = arr[0].as_u64().unwrap_or(0);
+            let type_hex = arr[1].as_str().unwrap_or("");
+            let payload_hex = arr[2].as_str().unwrap_or("");
+
+            // Parse message type from hex (e.g. "10BF" -> [0x10, 0xBF])
+            let type_bytes = hex_to_bytes(type_hex);
+            let payload_bytes = hex_to_bytes(payload_hex);
+
+            let msg_type = if type_bytes.len() == 2 {
+                format!("{:02X} {:02X}", type_bytes[0], type_bytes[1])
+            } else {
+                type_hex.to_string()
+            };
+
+            // Construct a synthetic frame for dispatch
+            let frame = Frame {
+                message_type: if type_bytes.len() == 2 {
+                    [type_bytes[0], type_bytes[1]]
+                } else {
+                    [0x00, 0x00]
+                },
+                payload: payload_bytes.clone(),
+            };
+            let msg = dispatch_frame(&frame);
+            let parsed = describe_message(&msg);
+
+            let timestamp = format!("+{}us", ts_us);
+
+            // Reconstruct the raw frame bytes (including 0x7E markers) for display
+            let raw_frame = frame.encode().unwrap_or_else(|_| payload_bytes.clone());
+            let raw_hex_str = raw_frame
+                .iter()
+                .map(|b| format!("{:02X}", b))
+                .collect::<Vec<_>>()
+                .join("");
+
+            let entry = SniffEntry {
+                device_id: device_id.to_string(),
+                timestamp: Some(timestamp),
+                message_type: msg_type,
+                crc_ok: true,
+                raw_hex: raw_hex_str,
+                parsed: Some(parsed),
+            };
+            print_entry(&entry);
+            entries.push(entry);
+        }
+
+        // Print timing summary
+        if entries.len() >= 2 {
+            println!("--- Timing summary ---");
+            for i in 1..entries.len() {
+                let prev_ts = parse_ts_us(&entries[i - 1].timestamp);
+                let cur_ts = parse_ts_us(&entries[i].timestamp);
+                if let (Some(prev), Some(cur)) = (prev_ts, cur_ts) {
+                    let delta = cur - prev;
+                    println!(
+                        "  {} -> {} : {}us ({:.1}ms)",
+                        entries[i - 1].message_type,
+                        entries[i].message_type,
+                        delta,
+                        delta as f64 / 1000.0,
+                    );
+                }
+            }
+            println!();
+        }
+
+        return entries;
+    }
+
+    // Legacy per-frame format: {"raw":"...", "type":"...", ...}
     let timestamp = json
         .get("ts")
         .and_then(|v| v.as_str())
@@ -133,7 +228,7 @@ fn handle_json_sniff(
             parsed: Some(parsed),
         };
         print_entry(&entry);
-        entry
+        vec![entry]
     } else {
         let entry = SniffEntry {
             device_id: device_id.to_string(),
@@ -144,8 +239,17 @@ fn handle_json_sniff(
             parsed: None,
         };
         print_entry(&entry);
-        entry
+        vec![entry]
     }
+}
+
+/// Parse timestamp from format "+Nus" used in burst capture entries.
+fn parse_ts_us(ts: &Option<String>) -> Option<u64> {
+    ts.as_ref().and_then(|s| {
+        s.strip_prefix('+')
+            .and_then(|s| s.strip_suffix("us"))
+            .and_then(|s| s.parse().ok())
+    })
 }
 
 fn handle_raw_sniff(decoder: &mut FrameDecoder, device_id: &str, text: &str) -> SniffEntry {
