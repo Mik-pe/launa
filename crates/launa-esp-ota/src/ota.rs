@@ -285,6 +285,37 @@ where
         Ok(())
     }
 
+    fn needs_validation(&mut self) -> bool {
+        let (entry0, valid0, entry1, valid1) =
+            match crate::flash::read_otadata_entries(&mut self.flash) {
+                Ok(result) => result,
+                Err(_) => return true, // Can't read otadata → assume needs validation
+            };
+        let running_index = self.running.index();
+
+        let entry = if running_index == 0 { &entry0 } else { &entry1 };
+        let valid = if running_index == 0 { valid0 } else { valid1 };
+
+        // If CRC is invalid, needs validation
+        if !valid {
+            return true;
+        }
+
+        let seq = crate::flash::seq_from_entry(entry);
+        // If seq is 0, needs validation
+        if seq == 0 {
+            return true;
+        }
+
+        // Check if seq points to the running partition
+        let points_to_running = (seq - 1) % 2 == running_index as u32;
+        if !points_to_running {
+            return true;
+        }
+
+        false
+    }
+
     fn rollback_and_reboot(&mut self) -> Result<(), OtaError> {
         info!("OTA: rolling back to {:?}", self.running);
         set_boot_partition(&mut self.flash, self.running)?;

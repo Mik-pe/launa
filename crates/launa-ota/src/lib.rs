@@ -18,6 +18,13 @@ pub trait OtaUpdate {
     fn finalize(&mut self) -> Result<(), OtaError>;
     /// Mark the current firmware as valid (prevents rollback on next boot).
     fn mark_valid(&mut self) -> Result<(), OtaError>;
+    /// Check whether the currently running partition has NOT been marked valid yet.
+    /// Returns `true` if the bootloader would roll back on the next reboot
+    /// (i.e. this is a freshly OTA'd partition that hasn't been validated).
+    /// Default: `false` (already valid).
+    fn needs_validation(&mut self) -> bool {
+        false
+    }
     /// Rollback to the previous firmware and reboot.
     fn rollback_and_reboot(&mut self) -> Result<(), OtaError>;
     /// Verify the CRC32 of all written firmware data matches the expected value.
