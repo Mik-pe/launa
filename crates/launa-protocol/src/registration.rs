@@ -262,13 +262,13 @@ impl RegistrationMessage {
         }
     }
 
-    /// Encode this message into a raw HDLC frame suitable for transmission.
+    /// Encode this message into a raw frame suitable for transmission.
     pub fn encode(&self) -> Result<alloc::vec::Vec<u8>, FrameError> {
         let (msg_type, payload) = self.encode_parts()?;
         FrameEncoder::encode(msg_type, &payload)
     }
 
-    /// Returns the (msg_type, payload) pair without HDLC encoding.
+    /// Returns the (msg_type, payload) pair without frame encoding.
     /// Useful when the caller wraps in a FrameEncoder separately.
     pub fn encode_parts(&self) -> Result<([u8; 2], alloc::vec::Vec<u8>), FrameError> {
         match self {

@@ -149,7 +149,7 @@ All software development is complete. The firmware compiles for xtensa-esp32-non
 
 ### Key Milestones
 
-- **Protocol**: CRC-8, HDLC framing, status parser, command builder, registration state machine, fault/filter/info parsers, temperature safety clamping
+- **Protocol**: CRC-8, 0x7E-delimited length-field framing, status parser, command builder, registration state machine, fault/filter/info parsers, temperature safety clamping
 - **MQTT**: Hand-rolled MQTT v5 client with QoS 1, keepalive, reconnect with backoff, packet reassembly, 20-entity HA auto-discovery, command parsing, diagnostics/alert topics
 - **OTA**: Custom launa-esp-ota crate, HTTP download over embassy-net TCP, dual partition slots, boot validation + auto-rollback, graceful shutdown sequence
 - **Robustness**: CommandTracker (ACK/retry/drop), stale-status detection (5s probe, 30s stale), heap monitoring, HoldModeTimer (60min safety), bounded command queue, exponential backoff on reconnect, alert throttling

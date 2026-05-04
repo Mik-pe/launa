@@ -80,7 +80,6 @@ impl Rs485Transport {
     pub fn set_de_assert_delay(&mut self, delay_us: u64) {
         self.de_assert_delay_us = delay_us;
     }
-
 }
 
 impl Transport for Rs485Transport {

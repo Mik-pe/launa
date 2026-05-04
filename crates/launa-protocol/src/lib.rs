@@ -1,12 +1,12 @@
 //! Balboa BP6013G1 spa controller RS-485 protocol parser.
 //!
-//! Handles frame encoding/decoding (CRC-8 + HDLC byte stuffing), message
+//! Handles frame encoding/decoding (0x7E-delimited with CRC-8, length-field framing), message
 //! dispatch, status/config/fault/filter/information parsing, command
 //! encoding, and the client registration state machine.
 //!
 //! # Modules
 //!
-//! - [`frame`] — Frame encode/decode with CRC-8 and HDLC byte stuffing
+//! - [`frame`] — Frame encode/decode with CRC-8 and length-field framing (0x7E delimited)
 //! - [`status`] — Real-time spa status (temperatures, pumps, heating mode)
 //! - [`command`] — Command encoding (toggle items, set temperature, settings)
 //! - [`config`] — Control configuration parsing (temperature range, scale)

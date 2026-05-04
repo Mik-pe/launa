@@ -254,8 +254,8 @@ pub fn parse_incoming_publish(buf: &[u8]) -> Result<IncomingPublish<'_>, Publish
         return Err(PublishParseError::NotPublish(buf[0]));
     }
 
-    let (remaining_len, header_size) = decode_remaining_length(buf)
-        .ok_or(PublishParseError::InvalidRemainingLength)?;
+    let (remaining_len, header_size) =
+        decode_remaining_length(buf).ok_or(PublishParseError::InvalidRemainingLength)?;
 
     if buf.len() < header_size + remaining_len {
         return Err(PublishParseError::TooShort);
