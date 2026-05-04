@@ -15,9 +15,10 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use embassy_futures::select::{select, Either};
 use embassy_time::{Duration, Timer};
 use launa_protocol::status::StatusUpdate;
-use log::{info, warn};
+use log::{error, info, warn};
 
 use crate::types::FaultBuf;
+use crate::sniff::SNIFF_CHANNEL;
 use crate::*;
 
 static MQTT_PUB_WARN: launa_core::RateLog = launa_core::RateLog::new();
@@ -54,6 +55,41 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
 
     info!("MQTT task started");
 
+    // Initial connection with backoff
+    {
+        let mut attempt = 0u32;
+        loop {
+            attempt += 1;
+            match mqtt.connect().await {
+                Ok(()) => {
+                    info!("MQTT connected on attempt {}", attempt);
+                    break;
+                }
+                Err(e) => {
+                    let backoff = launa_core::network::backoff_secs(attempt);
+                    warn!(
+                        "MQTT connect attempt {} failed: {:?}, retrying in {}s",
+                        attempt, e, backoff
+                    );
+                    if attempt >= 10 {
+                        error!("MQTT connect failed after {} attempts, resetting", attempt);
+                        esp_hal::system::software_reset();
+                    }
+                    Timer::after(Duration::from_secs(backoff)).await;
+                }
+            }
+        }
+    }
+
+    // Post-connect publish: discovery, availability, subscribe
+    if let Err(e) = mqtt.post_connect_publish(false).await {
+        warn!("Post-connect publish failed: {:?}", e);
+    }
+
+    // Signal to main task that MQTT is connected
+    crate::MQTT_CONNECTED_SIGNAL.signal(());
+
+    // Main loop (existing code, unchanged)
     #[allow(unused_assignments)]
     loop {
         // Check for WiFi reconnect signal — force MQTT reconnect
@@ -81,6 +117,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 "WiFi reconnect exceeded 30 attempts, resetting device",
             )
             .await;
+            crate::MQTT_CONNECTED_SIGNAL.signal(());
         }
 
         // Skip all publish work when MQTT is disconnected. This avoids:
@@ -342,6 +379,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                             "MQTT reconnect exceeded 30 attempts, resetting device",
                         )
                         .await;
+                        crate::MQTT_CONNECTED_SIGNAL.signal(());
                     }
                 }
             }

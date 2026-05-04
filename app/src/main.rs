@@ -18,10 +18,10 @@ use esp_backtrace as _;
 esp_bootloader_esp_idf::esp_app_desc!();
 
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 
 use embassy_executor::Spawner;
-use embassy_futures::select::{select, Either};
+use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
@@ -30,6 +30,7 @@ use esp_hal::clock::CpuClock;
 use esp_hal::ram;
 use launa_core::{AppAction, SpaApp};
 use launa_hal::Transport as _;
+use launa_ota::OtaUpdate;
 use launa_protocol::command::Command;
 use launa_protocol::frame::{Frame, FrameDecoder};
 use log::{debug, error, info, warn};
@@ -49,108 +50,15 @@ mod net_util;
 mod ota;
 #[cfg(feature = "remote-log")]
 mod remote_log;
+mod serial_config;
+mod sniff;
 mod transport;
 mod types;
 mod uart_raw;
 mod wifi;
 
+mod panic;
 mod rate_log;
-
-/// Custom panic handler: logs panic location, stores crash info to NVS,
-/// waits for UART flush, then triggers a software reset.
-/// Replaces esp-backtrace's default infinite loop to allow automatic recovery
-/// from panics. Crash info is published via MQTT on next boot.
-#[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
-    // Write directly to UART0 registers — don't use the logger since
-    // the panic might have occurred while holding the logger lock.
-
-    // Print heap free first — uses only stack, no allocation.
-    let heap_free = esp_alloc::HEAP.free();
-    {
-        let heap_msg = core::format_args!("\nHEAP free: {} bytes\n", heap_free);
-        let mut heap_buf = [0u8; 48];
-        let mut w = SliceWrite::new(&mut heap_buf);
-        let _ = core::fmt::Write::write_fmt(&mut w, heap_msg);
-        let heap_len = w.len();
-        uart_raw::write_bytes(&heap_buf[..heap_len]);
-        uart_raw::flush();
-    }
-
-    // Print location — short format (filename only) to avoid truncation.
-    if let Some(loc) = info.location() {
-        let file = loc.file();
-        let filename = file.rsplit('/').next().unwrap_or(file);
-        let loc_msg = core::format_args!(
-            "PANIC {}:{}\n",
-            filename,
-            loc.line(),
-        );
-        let mut loc_buf = [0u8; 80];
-        let mut w = SliceWrite::new(&mut loc_buf);
-        let _ = core::fmt::Write::write_fmt(&mut w, loc_msg);
-        let loc_len = w.len();
-        uart_raw::write_bytes(&loc_buf[..loc_len]);
-        uart_raw::flush();
-    }
-
-    // Print full panic message (may be long for OOM).
-    // Use heap check: if heap is zero/critically low, skip the full
-    // message since format! would re-trigger OOM → infinite recursion.
-    if heap_free > 256 {
-        let msg = core::format_args!("MSG: {}\n", info);
-        let mut buf = [0u8; 1024];
-        let mut writer = SliceWrite::new(&mut buf);
-        let _ = core::fmt::Write::write_fmt(&mut writer, msg);
-        let written = writer.len();
-        uart_raw::write_bytes(&buf[..written]);
-        // Flush twice to ensure all bytes are sent before the delay
-        uart_raw::flush();
-        uart_raw::flush();
-
-        // Write crash info to NVS (pre-check prevents repeated writes in crash loops)
-        let panic_msg = core::str::from_utf8(&buf[..written]).unwrap_or("PANIC");
-        let reason = crash_info::CrashReason::classify(panic_msg);
-        crash_info::write_crash_info(reason, panic_msg);
-    }
-
-    // Busy-wait ~1s to allow UART TX to fully transmit.
-    const PANIC_DELAY_ITERATIONS: u32 = 10_000_000;
-    let mut counter: u32 = 0;
-    while counter < PANIC_DELAY_ITERATIONS {
-        counter += 1;
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-    }
-
-    esp_hal::system::software_reset()
-}
-
-/// Minimal writer that writes to a byte slice and tracks position.
-struct SliceWrite<'a> {
-    buf: &'a mut [u8],
-    pos: usize,
-}
-
-impl<'a> SliceWrite<'a> {
-    fn new(buf: &'a mut [u8]) -> Self {
-        SliceWrite { buf, pos: 0 }
-    }
-
-    fn len(&self) -> usize {
-        self.pos
-    }
-}
-
-impl<'a> core::fmt::Write for SliceWrite<'a> {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        let bytes = s.as_bytes();
-        let remaining = &mut self.buf[self.pos..];
-        let len = bytes.len().min(remaining.len());
-        remaining[..len].copy_from_slice(&bytes[..len]);
-        self.pos += len;
-        Ok(())
-    }
-}
 
 /// Firmware version embedded at compile time from Cargo.toml [package].version
 /// plus the Git short SHA from build.rs. Produces e.g. `"0.1.0 (abc1234)"`.
@@ -202,9 +110,9 @@ fn uptime_secs() -> u64 {
     now.saturating_sub(start) as u64
 }
 
-/// Fast-path registration was removed — the sync write_raw() approach didn't
-/// drive the RS-485 bus correctly with the auto-direction transceiver.
-/// The normal async channel path handles registration reliably.
+/// Pre-computed client hash for registration fast-path (stored as big-endian u16).
+/// Set once at startup from device_id via FNV-1a.
+static REG_CLIENT_HASH: AtomicU16 = AtomicU16::new(0);
 
 static FRAME_CHANNEL: Channel<CriticalSectionRawMutex, Frame, 4> = Channel::new();
 static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
@@ -218,11 +126,25 @@ static OTA_CHANNEL: Channel<CriticalSectionRawMutex, alloc::string::String, 1> =
 /// to force a clean MQTT reconnect (old TCP socket may be stale).
 pub static WIFI_RECONNECT_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
+/// Signal set by mqtt_task after the first successful connect+sync.
+/// Main loop waits on this before proceeding to normal operation.
+pub static MQTT_CONNECTED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
 /// Channel for sending alert payloads from the main loop to the MQTT task.
 static ALERT_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
 
-/// Channel for sending raw sniff frame JSON from main loop to MQTT task.
-static SNIFF_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
+/// Extract ClientIdAssignment ACK bytes from a FEBF frame, if applicable.
+fn extract_reg_ack(frame: &Frame) -> Option<Vec<u8>> {
+    if frame.message_type != [0xFE, 0xBF] || frame.payload.len() < 2 {
+        return None;
+    }
+    if frame.payload[0] == 0x02 {
+        let ch = frame.payload[1];
+        launa_protocol::frame::FrameEncoder::encode([ch, 0xBF], &[0x03]).ok()
+    } else {
+        None
+    }
+}
 
 #[embassy_executor::task]
 async fn uart_task(mut transport: transport::Rs485Transport) {
@@ -234,92 +156,97 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
     let uart_rx = UART_TX_CHANNEL.receiver();
     let mut buf = [0u8; 128];
     let mut first_bytes_logged = false;
+    let mut pending_reg_ack: Option<Vec<u8>> = None;
+    let mut sniff = sniff::SniffState::new();
 
-    info!("UART task started");
+    info!("UART task started (async half-duplex)");
 
     loop {
-        // Use select so TX can proceed even when no RX data is available.
-        match select(transport.read(&mut buf), uart_rx.receive()).await {
-            Either::First(result) => {
-                match result {
-                    Ok(n) if n > 0 => {
-                        UART_BYTES_RECEIVED.fetch_add(n as u32, Ordering::Relaxed);
+        sniff.check_start();
 
-                        if !first_bytes_logged {
-                            first_bytes_logged = true;
-                            UART_FIRST_BYTE_SEEN.store(1, Ordering::Relaxed);
-                            let hex_dump: Vec<u8> = buf[..n.min(16)].to_vec();
-                            let hex_str = launa_protocol::hex::to_hex(&hex_dump);
-                            info!("UART: first {} bytes from spa bus: {}", n, hex_str);
+        // ── RECEIVE ────────────────────────────────────────────────────────
+        // Half-duplex RS-485: read with short timeout. If bytes arrive, decode.
+        // On timeout, bus is idle — fall through to TX.
+        let read_result = select(
+            transport.read(&mut buf),
+            Timer::after(Duration::from_micros(200)),
+        )
+        .await;
+
+        match read_result {
+            Either::First(Ok(n)) if n > 0 => {
+                UART_BYTES_RECEIVED.fetch_add(n as u32, Ordering::Relaxed);
+
+                if !first_bytes_logged {
+                    first_bytes_logged = true;
+                    UART_FIRST_BYTE_SEEN.store(1, Ordering::Relaxed);
+                    let hex_dump: Vec<u8> = buf[..n.min(16)].to_vec();
+                    let hex_str = launa_protocol::hex::to_hex(&hex_dump);
+                    info!("UART: first {} bytes from spa bus: {}", n, hex_str);
+                }
+
+                let prev_errors = decoder.frame_error_count();
+                for &byte in &buf[..n] {
+                    if let Some(frame) = decoder.feed(byte) {
+                        // Check for ClientIdAssignment ACK
+                        if let Some(ack) = extract_reg_ack(&frame) {
+                            pending_reg_ack = Some(ack);
                         }
 
-                        // Byte-level fast path removed: the sync write_raw() approach
-                        // didn't drive the RS-485 bus correctly with the auto-direction
-                        // transceiver. The normal async channel path works reliably.
-
-                        // Periodic raw byte logging (every ~1000 bytes)
-                        let total = UART_BYTES_RECEIVED.load(Ordering::Relaxed);
-                        if total % 1000 < n as u32 {
-                            let hex_dump: Vec<u8> = buf[..n.min(8)].to_vec();
-                            let hex_str = launa_protocol::hex::to_hex(&hex_dump);
-                            debug!("UART: {} total bytes, last {} bytes: {}", total, n, hex_str);
+                        if frame.message_type != [0x10, 0xBF] {
+                            info!(
+                                "UART: decoded frame type={:02X}{:02X} len={}",
+                                frame.message_type[0],
+                                frame.message_type[1],
+                                frame.payload.len()
+                            );
                         }
-                        let prev_errors = decoder.frame_error_count();
-                        for &byte in &buf[..n] {
-                            if let Some(frame) = decoder.feed(byte) {
-                                // Only log non-10BF frames (10BF Ready floods the log)
-                                if frame.message_type != [0x10, 0xBF] {
-                                    info!(
-                                        "UART: decoded frame type={:02X}{:02X} len={}",
-                                        frame.message_type[0],
-                                        frame.message_type[1],
-                                        frame.payload.len()
-                                    );
-                                }
 
-                                // NOTE: Frame-level fast-path removed in favor of byte-level
-                                // fast-path above (responds before decoder processes bytes).
-                                // The frame-level check is now redundant since byte-level
-                                // already handles it.
+                        if sniff.record_frame(&frame) {
+                            sniff.finish();
+                        }
 
-                                frame_sender.send(frame).await;
-                            }
-                        }
-                        let new_errors = decoder.frame_error_count();
-                        if new_errors > prev_errors {
-                            FRAME_ERROR_COUNT
-                                .fetch_add(new_errors - prev_errors, Ordering::Relaxed);
-                        }
-                    }
-                    Ok(_) => {
-                        Timer::after(Duration::from_millis(1)).await;
-                    }
-                    Err(_) => {
-                        rate_error!(UART_READ_ERR, "UART read error: Io");
-                        Timer::after(Duration::from_millis(10)).await;
+                        frame_sender.send(frame).await;
                     }
                 }
-                // Drain any pending TX after processing RX
-                while let Ok(data) = uart_rx.try_receive() {
-                    if let Err(_) = transport.write(&data).await {
-                        rate_error!(UART_WRITE_ERR, "UART write error: Io (drain)");
-                    }
+                let new_errors = decoder.frame_error_count();
+                if new_errors > prev_errors {
+                    FRAME_ERROR_COUNT
+                        .fetch_add(new_errors - prev_errors, Ordering::Relaxed);
                 }
+
+                continue;
             }
-            Either::Second(data) => {
-                let hex = launa_protocol::hex::to_hex(&data);
-                info!("UART TX: {} bytes: {}", data.len(), hex);
-                if let Err(_) = transport.write(&data).await {
-                    rate_error!(UART_WRITE_ERR, "UART write error: Io");
-                }
-                // Drain any additional pending TX
-                while let Ok(data) = uart_rx.try_receive() {
-                    if let Err(_) = transport.write(&data).await {
-                        rate_error!(UART_WRITE_ERR, "UART write error: Io (drain)");
-                    }
-                }
+            Either::First(Ok(_)) => {} // 0 bytes — proceed to TX check
+            Either::First(Err(_)) => {
+                rate_error!(UART_READ_ERR, "UART read error: Io");
+                Timer::after(Duration::from_millis(1)).await;
+                continue;
+            }
+            Either::Second(_) => {} // Timeout — bus is idle, proceed to TX
+        }
+
+        // ── TRANSMIT (bus idle) ────────────────────────────────────────────
+        // Priority 1: Pending registration ACK
+        if let Some(resp) = pending_reg_ack.take() {
+            let result = transport.write(&resp).await;
+            info!("REG TX: sent {} bytes during idle gap", resp.len());
+            if let Err(_) = result {
+                rate_error!(UART_WRITE_ERR, "UART write error: Io");
+            }
+            continue;
+        }
+
+        // Priority 2: TX from main loop (commands)
+        if let Ok(data) = uart_rx.try_receive() {
+            let result = transport.write(&data).await;
+            info!("UART TX: {} bytes", data.len());
+            if let Err(_) = result {
+                rate_error!(UART_WRITE_ERR, "UART write error: Io");
             }
         }
+
+        Timer::after(Duration::from_micros(100)).await;
     }
 }
 
@@ -347,8 +274,11 @@ async fn execute_actions(
 ) {
     for action in actions {
         match action {
-            AppAction::SendFrame(bytes) => {
-                UART_TX_CHANNEL.send(bytes.clone()).await;
+            AppAction::SendFrame(_bytes) => {
+                // TX DISABLED: MAX13487E auto-direction transceiver produces
+                // garbled output on the RS-485 bus. All TX is suppressed until
+                // the hardware issue is resolved (explicit DE pin or different
+                // transceiver).
             }
             AppAction::PublishState {
                 status,
@@ -419,29 +349,6 @@ async fn execute_actions(
     }
 }
 
-/// Publish a raw frame to the sniff channel for MQTT delivery.
-///
-/// Formats the frame as JSON matching the sniffer protocol:
-/// `{"raw":"<hex>","type":"<MT>","len":<N>,"crc_ok":<bool>}`
-fn publish_sniff_frame(frame: &Frame) {
-    let hex_str = launa_protocol::hex::to_hex(&frame.payload);
-
-    let mt = alloc::format!("{:02X}{:02X}", frame.message_type[0], frame.message_type[1]);
-    let crc_ok = Frame::parse(&frame.payload).is_ok();
-
-    let json = alloc::format!(
-        r#"{{"raw":"{}","type":"{}","len":{},"crc_ok":{}}}"#,
-        hex_str,
-        mt,
-        frame.payload.len(),
-        crc_ok
-    );
-
-    if SNIFF_CHANNEL.try_send(Vec::from(json.as_bytes())).is_err() {
-        warn!("SNIFF_CHANNEL full, dropping frame");
-    }
-}
-
 /// Handle an incoming MQTT command, routing through SpaApp.
 async fn handle_mqtt_command(
     cmd: Command,
@@ -451,10 +358,11 @@ async fn handle_mqtt_command(
 ) {
     match cmd {
         Command::Sniff(enable) => {
-            if enable && !*sniff_mode {
-                info!("Sniff mode enabled — publishing raw RS-485 frames");
+            if enable {
+                info!("Sniff burst capture requested via MQTT");
+                sniff::SNIFF_CAPTURE.store(true, Ordering::Relaxed);
+                // Set sniff_mode in state so UI shows it's active
                 *sniff_mode = true;
-                // Immediately publish state so UI receives sniff_mode: true
                 let actions = app.force_publish();
                 execute_actions(
                     &actions,
@@ -463,10 +371,10 @@ async fn handle_mqtt_command(
                     read_wifi_rssi(),
                 )
                 .await;
-            } else if !enable && *sniff_mode {
-                info!("Sniff mode disabled — resuming normal operation");
+            } else {
+                // Manual disable if capture hasn't started yet
+                sniff::SNIFF_CAPTURE.store(false, Ordering::Relaxed);
                 *sniff_mode = false;
-                // Immediately publish state so UI receives sniff_mode: false
                 let actions = app.force_publish();
                 execute_actions(
                     &actions,
@@ -557,121 +465,9 @@ async fn handle_ota_request<TG: esp_hal::timer::timg::TimerGroupInstance>(
     }
 }
 
-/// Receive configuration over USB serial (UART0) using raw register access.
-///
-/// Waits for `CONFIG_START` followed by key=value lines and `CONFIG_END`.
-/// Parses the config and returns it. Does NOT save to NVS — the caller
-/// is responsible for persisting.
-/// Returns `None` if no config was received within the timeout.
-///
-/// This uses raw UART0 register reads (see `uart_raw`) so it works alongside
-/// the logger which writes to UART0 TX. The host sends config data over
-/// USB serial which is physically UART0.
-fn receive_serial_config(timeout_secs: u64) -> Option<config::AppConfig> {
-    info!("Waiting for serial config ({}s timeout)...", timeout_secs);
-
-    const MAX_LINE_LEN: usize = 256;
-
-    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
-    let mut line_buf: Vec<u8> = Vec::new();
-    let mut config_started = false;
-    let mut kv_pairs: Vec<(alloc::string::String, alloc::string::String)> = Vec::new();
-    let mut config_done = false;
-
-    while Instant::now() < deadline && !config_done {
-        // Drain UART0 RX FIFO (USB serial)
-        let mut rx_byte = uart_raw::read_byte();
-        while let Some(byte) = rx_byte {
-            if byte == b'\n' {
-                let line = {
-                    let raw = core::str::from_utf8(&line_buf).unwrap_or("");
-                    let trimmed = raw.trim_start_matches('\r').trim_end_matches('\r');
-                    alloc::string::String::from(trimmed)
-                };
-                line_buf.clear();
-
-                if !config_started {
-                    if line == "CONFIG_START" {
-                        config_started = true;
-                        info!("Config reception started");
-                    }
-                } else if line == "CONFIG_END" {
-                    config_done = true;
-                } else if !line.is_empty() {
-                    if let Some(eq_pos) = line.find('=') {
-                        let key = &line[..eq_pos];
-                        let value = &line[eq_pos + 1..];
-                        kv_pairs.push((
-                            alloc::string::String::from(key),
-                            alloc::string::String::from(value),
-                        ));
-                    }
-                }
-            } else if byte != b'\r' {
-                if line_buf.len() < MAX_LINE_LEN {
-                    line_buf.push(byte);
-                }
-            }
-
-            rx_byte = uart_raw::read_byte();
-        }
-
-        // Brief delay to avoid busy-looping when FIFO is empty
-        esp_hal::rom::ets_delay_us(1000);
-    }
-
-    if !config_done {
-        info!("No serial config received, continuing with NVS config");
-        return None;
-    }
-
-    // Map dotted keys to AppConfig fields
-    let mut app_config = config::AppConfig::default();
-
-    for (key, value) in &kv_pairs {
-        match key.as_str() {
-            "wifi.ssid" => app_config.wifi_ssid = value.clone(),
-            "wifi.password" => app_config.wifi_password = value.clone(),
-            "mqtt.host" => app_config.mqtt_host = value.clone(),
-            "mqtt.port" => match value.parse::<u16>() {
-                Ok(p) => {
-                    app_config.mqtt_port = p;
-                }
-                Err(_) => {
-                    warn!("Invalid port: {}", value);
-                    uart_raw::write_bytes(
-                        alloc::format!("CONFIG_ERROR:invalid_port={}\n", value).as_bytes(),
-                    );
-                    uart_raw::flush();
-                    return None;
-                }
-            },
-            "mqtt.user" => app_config.mqtt_user = value.clone(),
-            "mqtt.password" => app_config.mqtt_password = value.clone(),
-            "device.id" => app_config.device_id = value.clone(),
-            other => {
-                warn!("Unknown config key: {}", other);
-            }
-        }
-    }
-
-    info!(
-        "Parsed config: ssid=<{} chars> mqtt={}:{} device={}",
-        app_config.wifi_ssid.len(),
-        app_config.mqtt_host,
-        app_config.mqtt_port,
-        app_config.device_id
-    );
-
-    uart_raw::write_bytes(b"CONFIG_OK\n");
-    uart_raw::flush();
-    Some(app_config)
-}
-
 /// Process UART frames received during the event loop.
 ///
 /// Process incoming UART frames through SpaApp for state updates and commands.
-/// In sniff mode, also publishes raw frames to the sniff channel as a side effect.
 async fn process_uart_frames(
     frame: Frame,
     app: &mut SpaApp<'_>,
@@ -679,11 +475,6 @@ async fn process_uart_frames(
     sniff_mode: bool,
     frame_rx: &embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, Frame, 4>,
 ) {
-    // In sniff mode, publish raw frames as a side effect alongside normal processing.
-    if sniff_mode {
-        publish_sniff_frame(&frame);
-    }
-
     let mut actions = app.process_frame(&frame);
 
     execute_actions(
@@ -695,9 +486,6 @@ async fn process_uart_frames(
     .await;
 
     while let Ok(frame) = frame_rx.try_receive() {
-        if sniff_mode {
-            publish_sniff_frame(&frame);
-        }
         let mut actions = app.process_frame(&frame);
         execute_actions(
             &actions,
@@ -741,14 +529,199 @@ async fn init_wifi(
     }
 }
 
-/// Mark firmware as valid (boot validation passed: WiFi + MQTT connected).
-fn validate_firmware(ota: &mut Option<ota::EspOta>) {
-    use launa_ota::OtaUpdate;
-    if let Some(ref mut o) = ota {
-        if let Err(e) = o.mark_valid() {
-            warn!("Failed to mark firmware valid: {:?}", e);
-        } else {
-            info!("Firmware marked valid (boot validation passed)");
+/// Reusable main event loop state. Used by both OTA validation and normal operation
+/// so the same loop logic runs in both paths without duplication.
+struct MainLoop<'a> {
+    app: SpaApp<'static>,
+    device_id: &'a str,
+    sniff_mode: bool,
+    serial_cfg: serial_config::SerialConfigReceiver,
+    mqtt_last_tick: u32,
+    mqtt_last_tick_time: Instant,
+}
+
+/// Static EmbassyClock instance. Safe because EmbassyClock is a zero-sized type
+/// with no interior mutability — it simply wraps `embassy_time::Instant::now()`.
+static CLOCK: clock::EmbassyClock = clock::EmbassyClock::new();
+
+impl<'a> MainLoop<'a> {
+    fn new(device_id: &'a str) -> Self {
+        let app = SpaApp::new_from_device_id(&CLOCK, device_id);
+        Self {
+            app,
+            device_id,
+            sniff_mode: false,
+            serial_cfg: serial_config::SerialConfigReceiver::new(),
+            mqtt_last_tick: mqtt_task::MQTT_TASK_TICK.load(Ordering::Relaxed),
+            mqtt_last_tick_time: Instant::now(),
+        }
+    }
+
+    /// Run one iteration of the main event loop.
+    /// Returns after processing one event or the 1-second tick timeout.
+    async fn tick<TG: esp_hal::timer::timg::TimerGroupInstance>(
+        &mut self,
+        wdt: &mut esp_hal::timer::timg::Wdt<TG>,
+        wifi_stack: &crate::wifi::WifiStack,
+        ota: &mut Option<ota::EspOta>,
+        ota_buffers: &mut Option<ota::OtaBuffers>,
+        ota_rx: &embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, alloc::string::String, 1>,
+    ) {
+        let frame_rx = FRAME_CHANNEL.receiver();
+        let cmd_rx = COMMAND_CHANNEL.receiver();
+        let pump_timer_rx = PUMP_TIMER_CHANNEL.receiver();
+
+        // Feed the hardware watchdog each iteration
+        wdt.feed();
+
+        // Check MQTT task health: if the tick counter hasn't changed in 120s,
+        // the MQTT task is frozen (cooperative executor starvation). Threshold
+        // accounts for reconnect backoff (up to 60s per attempt).
+        let mqtt_tick = mqtt_task::MQTT_TASK_TICK.load(Ordering::Relaxed);
+        if mqtt_tick != self.mqtt_last_tick {
+            self.mqtt_last_tick = mqtt_tick;
+            self.mqtt_last_tick_time = Instant::now();
+        } else if self.mqtt_last_tick_time.elapsed().as_secs() >= 120 {
+            warn!(
+                "MQTT task appears frozen (tick unchanged for {}s)",
+                self.mqtt_last_tick_time.elapsed().as_secs()
+            );
+            send_alert("error", "mqtt_task_frozen");
+            // Reset the timer so we don't spam alerts every tick
+            self.mqtt_last_tick_time = Instant::now();
+        }
+
+        let tick_interval = Duration::from_secs(1);
+
+        // Multiplex: wait for a UART frame, an MQTT command, or the 1-second
+        // tick timer — whichever fires first.
+        match select3(
+            frame_rx.receive(),
+            cmd_rx.receive(),
+            Timer::after(tick_interval),
+        )
+        .await
+        {
+            // UART frame received
+            Either3::First(frame) => {
+                process_uart_frames(
+                    frame,
+                    &mut self.app,
+                    self.device_id,
+                    self.sniff_mode,
+                    &frame_rx,
+                )
+                .await;
+            }
+            // MQTT command received
+            Either3::Second(cmd) => {
+                handle_mqtt_command(
+                    cmd,
+                    &mut self.app,
+                    &mut self.sniff_mode,
+                    self.device_id,
+                )
+                .await;
+            }
+            // Tick timer expired
+            Either3::Third(_) => {}
+        }
+
+        // Drain MQTT commands (non-blocking)
+        while let Ok(cmd) = cmd_rx.try_receive() {
+            handle_mqtt_command(
+                cmd,
+                &mut self.app,
+                &mut self.sniff_mode,
+                self.device_id,
+            )
+            .await;
+        }
+
+        // Auto-disable sniff_mode after burst capture completes.
+        // The uart_task clears SNIFF_CAPTURE when the capture is done.
+        if self.sniff_mode && !sniff::SNIFF_CAPTURE.load(Ordering::Relaxed) {
+            self.sniff_mode = false;
+            let actions = self.app.force_publish();
+            execute_actions(
+                &actions,
+                self.device_id,
+                false,
+                read_wifi_rssi(),
+            )
+            .await;
+            info!("Sniff mode auto-disabled after burst capture");
+        }
+
+        // Periodic tick: stale detection, registration timeout, diagnostics
+        let tick_actions = self.app.tick();
+        execute_actions(
+            &tick_actions,
+            self.device_id,
+            self.sniff_mode,
+            read_wifi_rssi(),
+        )
+        .await;
+
+        // Heap check (uses actual ESP32 free heap)
+        let heap_actions = self.app.check_heap(esp_alloc::HEAP.free());
+        execute_actions(
+            &heap_actions,
+            self.device_id,
+            self.sniff_mode,
+            read_wifi_rssi(),
+        )
+        .await;
+
+        // UART health check: alert if no bytes received after 30s of uptime
+        // Re-alert every 5 minutes until bytes are seen
+        let uptime = uptime_secs();
+        if UART_FIRST_BYTE_SEEN.load(Ordering::Relaxed) == 0 && uptime >= 30 {
+            let last_alert = UART_LAST_NO_BYTE_ALERT_SECS.load(Ordering::Relaxed) as u64;
+            if uptime - last_alert >= 300 || last_alert == 0 {
+                UART_LAST_NO_BYTE_ALERT_SECS.store(uptime as u32, Ordering::Relaxed);
+                error!("UART: no bytes received after {}s — check RS-485 wiring (RX=GPIO16, TX=GPIO17)", uptime);
+                send_alert("error", "no_uart_bytes");
+            }
+        }
+
+        // Non-blocking serial config check: poll UART0 RX FIFO for config-flash data.
+        // If a complete config is received, save to NVS and reboot. This replaces
+        // the old blocking 5-second startup wait — config-flash now works at any time.
+        if let Some(new_config) = self.serial_cfg.poll() {
+            if let Some(ota_handler) = ota.take() {
+                // Recover FlashStorage from OTA, create temp NVS, save config, reboot.
+                let flash = ota_handler.into_flash();
+                match esp_nvs::Nvs::new(0x9000, 0x6000, flash) {
+                    Ok(mut nvs) => {
+                        let mut aes = esp_hal::aes::Aes::new(unsafe { esp_hal::peripherals::AES::steal() });
+                        let mut rng = esp_hal::rng::Rng::new();
+                        new_config.save(&mut nvs, &mut aes, &mut rng);
+                        info!("Serial config saved to NVS, rebooting...");
+                    }
+                    Err(e) => {
+                        error!("Failed to open NVS for serial config save: {:?}", e);
+                    }
+                }
+                esp_hal::system::software_reset();
+            } else {
+                warn!("Serial config received but OTA/NVS unavailable, ignoring");
+            }
+        }
+
+        handle_ota_request(wifi_stack, ota, ota_buffers, ota_rx, wdt).await;
+
+        // Drain pump timer commands
+        while let Ok((pump_index, minutes)) = pump_timer_rx.try_receive() {
+            let actions = self.app.start_pump_timer(pump_index, minutes);
+            execute_actions(
+                &actions,
+                self.device_id,
+                self.sniff_mode,
+                read_wifi_rssi(),
+            )
+            .await;
+            info!("Started pump {} timer for {} min", pump_index, minutes);
         }
     }
 }
@@ -791,7 +764,7 @@ async fn main(spawner: Spawner) {
 
     info!("Launa ESP32 firmware v{} starting...", FIRMWARE_VERSION);
 
-    let mut app_config;
+    let app_config;
     let mut ota = None;
     let mut ota_buffers = None;
     let mut nvs_handle: Option<esp_nvs::Nvs<esp_storage::FlashStorage<'static>>> = None;
@@ -817,19 +790,6 @@ async fn main(spawner: Spawner) {
         None => {
             warn!("NVS unavailable — using default config, OTA disabled");
             app_config = config::AppConfig::default();
-        }
-    }
-
-    // Brief serial config window: listen on UART0 (USB serial) for config-flash.
-    // If CONFIG_START is received within 5 seconds, accept new config and save to NVS.
-    // Otherwise proceed normally with the NVS/default config.
-    if let Some(new_config) = receive_serial_config(5) {
-        app_config = new_config;
-        if let Some(ref mut nvs) = nvs_handle {
-            let mut aes = esp_hal::aes::Aes::new(unsafe { esp_hal::peripherals::AES::steal() });
-            let mut rng = esp_hal::rng::Rng::new();
-            app_config.save(nvs, &mut aes, &mut rng);
-            info!("Serial config saved to NVS");
         }
     }
 
@@ -868,40 +828,27 @@ async fn main(spawner: Spawner) {
     // Create MqttClient on the stack. Socket buffers inside are pre-allocated
     // via mk_static! in new() — only the struct itself is stack-local, and it
     // moves into the embassy task on spawn.
-    let mut mqtt = mqtt_client::MqttClient::new(wifi_stack.stack, &app_config, boot_id());
+    let mqtt = mqtt_client::MqttClient::new(wifi_stack.stack, &app_config, boot_id());
 
-    // Connect to MQTT broker on the ThreadModeExecutor. The heavy formatting
-    // in connect/discovery code runs here to avoid overflowing the shared
-    // interrupt/task stack on ESP32/Xtensa.
-    info!("Connecting to MQTT broker...");
-    {
-        let mut attempt = 0u32;
-        loop {
-            attempt += 1;
-            match mqtt.connect().await {
-                Ok(()) => break,
-                Err(e) => {
-                    let backoff = launa_core::network::backoff_secs(attempt);
-                    error!(
-                        "MQTT connect attempt {} failed: {:?}, retrying in {}s",
-                        attempt, e, backoff
-                    );
-                    if attempt >= 10 {
-                        error!("MQTT connect failed after {} attempts, resetting", attempt);
-                        esp_hal::system::software_reset();
-                    }
-                    Timer::after(Duration::from_secs(backoff)).await;
-                }
-            }
-        }
-    }
-    if let Err(e) = mqtt.post_connect_publish(false).await {
-        warn!("Post-connect publish failed: {:?}", e);
-    }
+    // Derive client hash from device ID for RS-485 registration.
+    // Must be set BEFORE spawning uart_task, which reads REG_CLIENT_HASH at
+    // startup to pre-encode the registration response.
+    let client_hash = launa_core::derive_client_hash(&app_config.device_id);
+    info!("Client hash: {:02X}{:02X} (derived from device_id)", client_hash[0], client_hash[1]);
+    REG_CLIENT_HASH.store(
+        ((client_hash[0] as u16) << 8) | (client_hash[1] as u16),
+        Ordering::Relaxed,
+    );
+
+    // Spawn background tasks on the ThreadModeExecutor.
+    spawner.spawn(mqtt_task::mqtt_task(mqtt).unwrap());
+    spawner.spawn(uart_task(uart_transport).unwrap());
+
+    // Wait for mqtt_task to complete initial connection
+    info!("Waiting for MQTT task to connect...");
+    MQTT_CONNECTED_SIGNAL.wait().await;
 
     // Publish crash alarm from previous boot if present.
-    // MQTT is now connected, so we send via ALERT_CHANNEL for the mqtt_task
-    // to publish.
     if let Some(ref crash) = pending_crash_alarm {
         let alarm_json = crash_info::crash_alarm_json(crash, FIRMWARE_VERSION);
         let _ = ALERT_CHANNEL.try_send(Vec::from(alarm_json.as_bytes()));
@@ -909,193 +856,31 @@ async fn main(spawner: Spawner) {
         drop(pending_crash_alarm.take());
     }
 
-    validate_firmware(&mut ota);
-
-    // Spawn background tasks on the ThreadModeExecutor.
-    spawner.spawn(mqtt_task::mqtt_task(mqtt).unwrap());
-    spawner.spawn(uart_task(uart_transport).unwrap());
-
-    info!("Entering main event loop");
-
-    let frame_rx = FRAME_CHANNEL.receiver();
-    let cmd_rx = COMMAND_CHANNEL.receiver();
-    let pump_timer_rx = PUMP_TIMER_CHANNEL.receiver();
+    let device_id_str: &str = &app_config.device_id;
     let ota_rx = OTA_CHANNEL.receiver();
 
-    let clock = clock::EmbassyClock::new();
-    // Derive a unique 2-byte client hash from the device ID for RS-485 registration.
-    // The spa may reject registration if a client with the same hash is already
-    // registered (e.g. from a previous firmware that used F173). Deriving from
-    // device_id ensures each device gets a unique identity on the bus.
-    let client_hash = {
-        let id_bytes = app_config.device_id.as_bytes();
-        let mut h: u16 = 0x811C; // FNV-1a offset basis for 16-bit
-        for &b in id_bytes {
-            h ^= b as u16;
-            h = h.wrapping_mul(0x0101); // FNV-1a 16-bit prime
+    // --- OTA Validation (runs only when partition is freshly flashed) ---
+    if ota.as_mut().map_or(false, |o| o.needs_validation()) {
+        info!("OTA partition unvalidated, running boot validation...");
+        let mut validation_loop = MainLoop::new(device_id_str);
+        // Run a few ticks to prove core logic doesn't crash
+        for _ in 0..3 {
+            validation_loop.tick(&mut wdt, &wifi_stack, &mut ota, &mut ota_buffers, &ota_rx).await;
         }
-        // Ensure non-zero and not the legacy F173 value
-        if h == 0 { h = 1; }
-        if h == 0xF173 { h = 0xF174; }
-        [(h >> 8) as u8, (h & 0xFF) as u8]
-    };
-    info!("Client hash: {:02X}{:02X} (derived from device_id)", client_hash[0], client_hash[1]);
-    let mut app = SpaApp::with_client_hash(&clock, client_hash);
-    let device_id_str: &str = &app_config.device_id;
-    let mut sniff_mode: bool = false;
+        if let Some(ref mut o) = ota {
+            if let Err(e) = o.mark_valid() {
+                warn!("Failed to mark firmware valid: {:?}", e);
+            } else {
+                info!("Firmware marked valid (boot validation passed)");
+            }
+        }
+    }
 
-    let tick_interval = Duration::from_secs(1);
+    // --- Normal operation ---
+    info!("Entering main event loop");
 
-    // Periodic UART TX test: send a registration probe every 15s when no bytes
-    // have been received, to verify the UART TX path works. This also acts as
-    // a keep-alive ping on the RS-485 bus.
-    let mut uart_tx_test_interval: Option<Instant> = None;
-
-    // MQTT task health: track the last tick value and when we last saw it change.
-    let mut mqtt_last_tick: u32 = mqtt_task::MQTT_TASK_TICK.load(Ordering::Relaxed);
-    let mut mqtt_last_tick_time: Instant = Instant::now();
-
+    let mut main_loop = MainLoop::new(device_id_str);
     loop {
-        // Feed the hardware watchdog each iteration
-        wdt.feed();
-
-        // Check MQTT task health: if the tick counter hasn't changed in 120s,
-        // the MQTT task is frozen (cooperative executor starvation). Threshold
-        // accounts for reconnect backoff (up to 60s per attempt).
-        let mqtt_tick = mqtt_task::MQTT_TASK_TICK.load(Ordering::Relaxed);
-        if mqtt_tick != mqtt_last_tick {
-            mqtt_last_tick = mqtt_tick;
-            mqtt_last_tick_time = Instant::now();
-        } else if mqtt_last_tick_time.elapsed().as_secs() >= 120 {
-            warn!(
-                "MQTT task appears frozen (tick unchanged for {}s)",
-                mqtt_last_tick_time.elapsed().as_secs()
-            );
-            send_alert("error", "mqtt_task_frozen");
-            // Reset the timer so we don't spam alerts every tick
-            mqtt_last_tick_time = Instant::now();
-        }
-
-        // Multiplex: wait for either a UART frame, an MQTT command, or a
-        // 1-second tick timer. This replaces the old blocking receive() that
-        // hung indefinitely when the spa was off (no OTA, no commands, no ticks).
-        match select(
-            frame_rx.receive(),
-            select(cmd_rx.receive(), Timer::after(tick_interval)),
-        )
-        .await
-        {
-            // UART frame received
-            Either::First(frame) => {
-                process_uart_frames(
-                    frame,
-                    &mut app,
-                    device_id_str,
-                    sniff_mode,
-                    &frame_rx,
-                )
-                .await;
-            }
-            // MQTT command received
-            Either::Second(Either::First(cmd)) => {
-                handle_mqtt_command(
-                    cmd,
-                    &mut app,
-                    &mut sniff_mode,
-                    device_id_str,
-                )
-                .await;
-            }
-            // Tick timer expired
-            Either::Second(Either::Second(_)) => {}
-        }
-
-        // Drain MQTT commands (non-blocking)
-        while let Ok(cmd) = cmd_rx.try_receive() {
-            handle_mqtt_command(
-                cmd,
-                &mut app,
-                &mut sniff_mode,
-                device_id_str,
-            )
-            .await;
-        }
-
-        // Periodic tick: stale detection, registration timeout, diagnostics
-        let tick_actions = app.tick();
-        execute_actions(
-            &tick_actions,
-            device_id_str,
-            sniff_mode,
-            read_wifi_rssi(),
-        )
-        .await;
-
-        // Sync fast-path registration state atomics with SpaApp state.
-        // Must run after both process_uart_frames() and tick() since both
-        // can change registration status (tick resets it on stale/timeout).
-        let _is_registered = app.is_registered();
-        // Heap check (uses actual ESP32 free heap)
-        let heap_actions = app.check_heap(esp_alloc::HEAP.free());
-        execute_actions(
-            &heap_actions,
-            device_id_str,
-            sniff_mode,
-            read_wifi_rssi(),
-        )
-        .await;
-
-        // UART health check: alert if no bytes received after 30s of uptime
-        // Re-alert every 5 minutes until bytes are seen
-        let uptime = uptime_secs();
-        if UART_FIRST_BYTE_SEEN.load(Ordering::Relaxed) == 0 && uptime >= 30 {
-            let last_alert = UART_LAST_NO_BYTE_ALERT_SECS.load(Ordering::Relaxed) as u64;
-            if uptime - last_alert >= 300 || last_alert == 0 {
-                UART_LAST_NO_BYTE_ALERT_SECS.store(uptime as u32, Ordering::Relaxed);
-                error!("UART: no bytes received after {}s — check RS-485 wiring (RX=GPIO16, TX=GPIO17)", uptime);
-                send_alert("error", "no_uart_bytes");
-            }
-        }
-
-        // UART TX test: every 15s when no bytes received, send a test frame
-        // to verify the UART TX path and check if the spa responds.
-        if UART_FIRST_BYTE_SEEN.load(Ordering::Relaxed) == 0 {
-            let should_test = uart_tx_test_interval.is_none_or(|t| t.elapsed().as_secs() >= 15);
-            if should_test {
-                uart_tx_test_interval = Some(Instant::now());
-                // Send a registration request: FE BF 01 02 <hash>
-                let msg = launa_protocol::registration::RegistrationMessage::NewClientResponse {
-                    device_type: 0x02,
-                    client_hash,
-                };
-                match msg.encode() {
-                    Ok(encoded) => {
-                        info!(
-                            "UART TX test: sending registration probe ({} bytes)",
-                            encoded.len()
-                        );
-                        UART_TX_CHANNEL.send(encoded).await;
-                    }
-                    Err(e) => {
-                        warn!("UART TX test: encode failed: {:?}", e);
-                    }
-                }
-            }
-        }
-
-        handle_ota_request(&wifi_stack, &mut ota, &mut ota_buffers, &ota_rx, &mut wdt).await;
-
-        // Drain pump timer commands
-        while let Ok((pump_index, minutes)) = pump_timer_rx.try_receive() {
-            let actions = app.start_pump_timer(pump_index, minutes);
-            execute_actions(
-                &actions,
-                device_id_str,
-                sniff_mode,
-                read_wifi_rssi(),
-            )
-            .await;
-            info!("Started pump {} timer for {} min", pump_index, minutes);
-        }
+        main_loop.tick(&mut wdt, &wifi_stack, &mut ota, &mut ota_buffers, &ota_rx).await;
     }
 }
