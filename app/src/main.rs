@@ -133,19 +133,6 @@ pub static MQTT_CONNECTED_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::
 /// Channel for sending alert payloads from the main loop to the MQTT task.
 static ALERT_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
 
-/// Extract ClientIdAssignment ACK bytes from a FEBF frame, if applicable.
-fn extract_reg_ack(frame: &Frame) -> Option<Vec<u8>> {
-    if frame.message_type != [0xFE, 0xBF] || frame.payload.len() < 2 {
-        return None;
-    }
-    if frame.payload[0] == 0x02 {
-        let ch = frame.payload[1];
-        launa_protocol::frame::FrameEncoder::encode([ch, 0xBF], &[0x03]).ok()
-    } else {
-        None
-    }
-}
-
 #[embassy_executor::task]
 async fn uart_task(mut transport: transport::Rs485Transport) {
     static UART_READ_ERR: launa_core::RateLog = launa_core::RateLog::new();
@@ -156,7 +143,6 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
     let uart_rx = UART_TX_CHANNEL.receiver();
     let mut buf = [0u8; 128];
     let mut first_bytes_logged = false;
-    let mut pending_reg_ack: Option<Vec<u8>> = None;
     let mut sniff = sniff::SniffState::new();
 
     info!("UART task started (async half-duplex)");
@@ -188,9 +174,27 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                 let prev_errors = decoder.frame_error_count();
                 for &byte in &buf[..n] {
                     if let Some(frame) = decoder.feed(byte) {
-                        // Check for ClientIdAssignment ACK
-                        if let Some(ack) = extract_reg_ack(&frame) {
-                            pending_reg_ack = Some(ack);
+                        // Fast-path: when we see a NewClientQuery (FE BF 00),
+                        // send the NewClientResponse IMMEDIATELY. This bypasses
+                        // the idle-gap queue and avoids the ~20ms latency from
+                        // the 200us read timeout cycle. Critical for RS-485
+                        // half-duplex where the emulator only listens briefly.
+                        if frame.message_type == [0xFE, 0xBF]
+                            && frame.payload.first() == Some(&0x00)
+                        {
+                            let hash_be = REG_CLIENT_HASH.load(Ordering::Relaxed);
+                            let hash_hi = (hash_be >> 8) as u8;
+                            let hash_lo = (hash_be & 0xFF) as u8;
+                            let response = launa_protocol::registration::RegistrationMessage::NewClientResponse {
+                                device_type: 0x02,
+                                client_hash: [hash_hi, hash_lo],
+                            };
+                            if let Ok(encoded) = response.encode() {
+                                info!("REG fast-path: sending NewClientResponse immediately");
+                                if let Err(_) = transport.write(&encoded).await {
+                                    rate_error!(UART_WRITE_ERR, "UART write error: Io");
+                                }
+                            }
                         }
 
                         if frame.message_type != [0x10, 0xBF] {
@@ -227,17 +231,7 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
         }
 
         // ── TRANSMIT (bus idle) ────────────────────────────────────────────
-        // Priority 1: Pending registration ACK
-        if let Some(resp) = pending_reg_ack.take() {
-            let result = transport.write(&resp).await;
-            info!("REG TX: sent {} bytes during idle gap", resp.len());
-            if let Err(_) = result {
-                rate_error!(UART_WRITE_ERR, "UART write error: Io");
-            }
-            continue;
-        }
-
-        // Priority 2: TX from main loop (commands)
+        // TX from main loop (commands, registration responses via SpaApp)
         if let Ok(data) = uart_rx.try_receive() {
             let result = transport.write(&data).await;
             info!("UART TX: {} bytes", data.len());
@@ -274,11 +268,8 @@ async fn execute_actions(
 ) {
     for action in actions {
         match action {
-            AppAction::SendFrame(_bytes) => {
-                // TX DISABLED: MAX13487E auto-direction transceiver produces
-                // garbled output on the RS-485 bus. All TX is suppressed until
-                // the hardware issue is resolved (explicit DE pin or different
-                // transceiver).
+            AppAction::SendFrame(bytes) => {
+                let _ = UART_TX_CHANNEL.try_send(bytes.clone());
             }
             AppAction::PublishState {
                 status,
