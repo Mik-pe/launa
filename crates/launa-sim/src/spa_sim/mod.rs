@@ -149,6 +149,19 @@ pub struct SpaSim {
     require_registration: bool,
     /// Number of command/query frames rejected due to require_registration.
     rejected_unregistered_frames: u64,
+
+    // Registration timing window
+    /// The tick count when the most recent FEBF 00 (NewClientQuery) was sent.
+    /// Set in `tick()` when the registration query is emitted.
+    registration_query_tick: Option<u64>,
+    /// Maximum number of ticks after the registration query within which a
+    /// NewClientResponse (FEBF 01) must arrive to be accepted.
+    /// Matches the real BP6013G1 behavior: the spa sends FEBF 00 and expects
+    /// a response within the ~20ms CTS cycle window (1 tick = 1 second in sim).
+    /// Default: None (no timing enforcement, backward compatible).
+    registration_window_ticks: Option<u64>,
+    /// Number of registration responses rejected due to timing window expiry.
+    rejected_registration_responses: u64,
 }
 
 impl Default for SpaSim {
@@ -200,6 +213,10 @@ impl SpaSim {
 
             require_registration: false,
             rejected_unregistered_frames: 0,
+
+            registration_query_tick: None,
+            registration_window_ticks: None,
+            rejected_registration_responses: 0,
         }
     }
 
@@ -257,6 +274,7 @@ impl SpaSim {
         self.registered = false;
         self.client_id = None;
         self.pending_client_hash = None;
+        self.registration_query_tick = None;
         // Note: don't reset state (temps, pumps, etc.) — real spa retains physical state
     }
 
@@ -483,6 +501,26 @@ impl SpaSim {
         self.rejected_unregistered_frames
     }
 
+    /// Set the registration response timing window in ticks.
+    ///
+    /// When set, the simulator only accepts a NewClientResponse (FEBF 01) if it
+    /// arrives within `window_ticks` of the most recent NewClientQuery (FEBF 00).
+    /// This matches the real BP6013G1 behavior where the spa expects a response
+    /// within the ~20ms CTS cycle after sending the query.
+    ///
+    /// In sim time, 1 tick = 1 second. The real spa sends a registration query
+    /// once per second, so a window of 1 tick means "respond before the next
+    /// tick/query". Set to `None` to disable timing enforcement (default).
+    pub fn set_registration_window(&mut self, window_ticks: Option<u64>) {
+        self.registration_window_ticks = window_ticks;
+    }
+
+    /// Number of registration responses rejected because they arrived outside
+    /// the timing window (only counted when `registration_window_ticks` is set).
+    pub fn rejected_registration_responses(&self) -> u64 {
+        self.rejected_registration_responses
+    }
+
     /// Deterministic pseudo-random check for command acceptance.
     ///
     /// Returns `true` if the command should be accepted based on the success rate.
@@ -600,6 +638,8 @@ impl SpaSim {
         // Send registration query if no client is registered
         if !self.registered {
             output.extend_from_slice(&self.generate_registration_query());
+            // Record when the query was sent for timing window enforcement
+            self.registration_query_tick = Some(self.tick_count);
         }
 
         // Process scheduled spontaneous events
@@ -759,6 +799,21 @@ impl SpaSim {
                     match frame.payload[0] {
                         // NewClientResponse: client wants a channel assignment
                         0x01 => {
+                            // Enforce registration timing window.
+                            // The real BP6013G1 expects the response within ~20ms
+                            // (one CTS cycle) after sending the NewClientQuery.
+                            // In sim time, 1 tick = 1 second, so we use a configurable
+                            // tick window. If the response arrives outside the window,
+                            // reject it — matching real spa behavior.
+                            if let Some(window_ticks) = self.registration_window_ticks {
+                                if let Some(query_tick) = self.registration_query_tick {
+                                    let elapsed = self.tick_count.saturating_sub(query_tick);
+                                    if elapsed > window_ticks {
+                                        self.rejected_registration_responses += 1;
+                                        return None;
+                                    }
+                                }
+                            }
                             // Extract client hash from the response
                             let hash = if frame.payload.len() >= 4 {
                                 [frame.payload[2], frame.payload[3]]
@@ -766,6 +821,8 @@ impl SpaSim {
                                 [0x00, 0x00]
                             };
                             self.pending_client_hash = Some(hash);
+                            // Clear the query tick since we've accepted a response
+                            self.registration_query_tick = None;
                             let id = self.next_client_id;
                             self.next_client_id += 1;
                             Some(self.generate_client_id_assignment(id, hash))
