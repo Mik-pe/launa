@@ -1,10 +1,10 @@
-use anyhow::Context;
+use anyhow::{bail, Context};
 use launa_protocol::{dispatch_frame, Frame, FrameDecoder, IncomingMessage};
 use std::time::Duration;
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
-    let mut host = "localhost".to_string();
-    let mut port = 1883u16;
+    let mut host = String::new();
+    let mut port = 0u16;
     let mut output_file = None;
     let mut parser = crate::util::Args::new(args);
     while parser.has_more() {
@@ -15,6 +15,28 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             }
             "--output" | "-o" => output_file = Some(parser.value("--output")?.to_string()),
             _ => return Err(parser.unknown_arg()),
+        }
+    }
+
+    // Fall back to launa.toml config if --host not given
+    if host.is_empty() || port == 0 {
+        match crate::config::load_without_serial_port_check() {
+            Ok(config) => {
+                if host.is_empty() {
+                    host = config.mqtt.host;
+                }
+                if port == 0 {
+                    port = config.mqtt.port;
+                }
+            }
+            Err(e) => {
+                if host.is_empty() || port == 0 {
+                    bail!(
+                        "Cannot load launa.toml: {}\nUse --host and --port to specify the MQTT broker.",
+                        e
+                    );
+                }
+            }
         }
     }
 
@@ -105,7 +127,121 @@ fn handle_json_sniff(
     device_id: &str,
     json: &serde_json::Value,
 ) -> Vec<SniffEntry> {
-    // Check for burst capture format: {"capture_us":..., "frame_count":..., "frames":[[ts_us, type_hex, payload_hex], ...]}
+    // New burst capture format: {"capture_us":..., "frame_count":..., "entries":[[ts_us, type_or_"garbage", hex], ...]}
+    if let Some(entries_arr) = json.get("entries").and_then(|v| v.as_array()) {
+        let capture_us = json.get("capture_us").and_then(|v| v.as_u64()).unwrap_or(0);
+        let frame_count = json
+            .get("frame_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let garbage_count = entries_arr
+            .iter()
+            .filter(|e| {
+                e.as_array()
+                    .and_then(|a| a.get(1))
+                    .and_then(|v| v.as_str())
+                    .map_or(false, |s| s == "garbage")
+            })
+            .count();
+
+        println!(
+            "=== Burst capture: {} frames + {} garbage in {}us ({:.1}ms) ===",
+            frame_count,
+            garbage_count,
+            capture_us,
+            capture_us as f64 / 1000.0,
+        );
+        println!();
+
+        let mut result = Vec::new();
+        for entry_val in entries_arr {
+            let arr = match entry_val.as_array() {
+                Some(a) if a.len() >= 3 => a,
+                _ => continue,
+            };
+            let ts_us = arr[0].as_u64().unwrap_or(0);
+            let type_str = arr[1].as_str().unwrap_or("");
+            let payload_hex = arr[2].as_str().unwrap_or("");
+
+            if type_str == "garbage" {
+                let payload_bytes = hex_to_bytes(payload_hex);
+                let entry = SniffEntry {
+                    device_id: device_id.to_string(),
+                    timestamp: Some(format!("+{}us", ts_us)),
+                    message_type: "GARBAGE".to_string(),
+                    crc_ok: false,
+                    raw_hex: payload_hex.to_string(),
+                    parsed: Some(format!("{} bytes of inter-frame garbage", payload_bytes.len())),
+                };
+                print_entry(&entry);
+                result.push(entry);
+                continue;
+            }
+
+            // Regular frame entry
+            let type_bytes = hex_to_bytes(type_str);
+            let payload_bytes = hex_to_bytes(payload_hex);
+
+            let msg_type = if type_bytes.len() == 2 {
+                format!("{:02X} {:02X}", type_bytes[0], type_bytes[1])
+            } else {
+                type_str.to_string()
+            };
+
+            let frame = Frame {
+                message_type: if type_bytes.len() == 2 {
+                    [type_bytes[0], type_bytes[1]]
+                } else {
+                    [0x00, 0x00]
+                },
+                payload: payload_bytes.clone(),
+            };
+            let msg = dispatch_frame(&frame);
+            let parsed = describe_message(&msg);
+
+            let raw_frame = frame.encode().unwrap_or_else(|_| payload_bytes.clone());
+            let raw_hex_str = raw_frame
+                .iter()
+                .map(|b| format!("{:02X}", b))
+                .collect::<Vec<_>>()
+                .join("");
+
+            let entry = SniffEntry {
+                device_id: device_id.to_string(),
+                timestamp: Some(format!("+{}us", ts_us)),
+                message_type: msg_type,
+                crc_ok: true,
+                raw_hex: raw_hex_str,
+                parsed: Some(parsed),
+            };
+            print_entry(&entry);
+            result.push(entry);
+        }
+
+        // Print timing summary
+        if result.len() >= 2 {
+            println!("--- Timing summary ---");
+            for i in 1..result.len() {
+                let prev_ts = parse_ts_us(&result[i - 1].timestamp);
+                let cur_ts = parse_ts_us(&result[i].timestamp);
+                if let (Some(prev), Some(cur)) = (prev_ts, cur_ts) {
+                    let delta = cur.saturating_sub(prev);
+                    println!(
+                        "  {} -> {} : {}us ({:.1}ms)",
+                        result[i - 1].message_type,
+                        result[i].message_type,
+                        delta,
+                        delta as f64 / 1000.0,
+                    );
+                }
+            }
+            println!();
+        }
+
+        return result;
+    }
+
+    // Old burst capture format: {"capture_us":..., "frame_count":..., "frames":[[ts_us, type_hex, payload_hex], ...]}
     if let Some(frames_arr) = json.get("frames").and_then(|v| v.as_array()) {
         let capture_us = json.get("capture_us").and_then(|v| v.as_u64()).unwrap_or(0);
         let frame_count = json
@@ -130,7 +266,6 @@ fn handle_json_sniff(
             let type_hex = arr[1].as_str().unwrap_or("");
             let payload_hex = arr[2].as_str().unwrap_or("");
 
-            // Parse message type from hex (e.g. "10BF" -> [0x10, 0xBF])
             let type_bytes = hex_to_bytes(type_hex);
             let payload_bytes = hex_to_bytes(payload_hex);
 
@@ -140,7 +275,6 @@ fn handle_json_sniff(
                 type_hex.to_string()
             };
 
-            // Construct a synthetic frame for dispatch
             let frame = Frame {
                 message_type: if type_bytes.len() == 2 {
                     [type_bytes[0], type_bytes[1]]
@@ -152,9 +286,6 @@ fn handle_json_sniff(
             let msg = dispatch_frame(&frame);
             let parsed = describe_message(&msg);
 
-            let timestamp = format!("+{}us", ts_us);
-
-            // Reconstruct the raw frame bytes (including 0x7E markers) for display
             let raw_frame = frame.encode().unwrap_or_else(|_| payload_bytes.clone());
             let raw_hex_str = raw_frame
                 .iter()
@@ -164,7 +295,7 @@ fn handle_json_sniff(
 
             let entry = SniffEntry {
                 device_id: device_id.to_string(),
-                timestamp: Some(timestamp),
+                timestamp: Some(format!("+{}us", ts_us)),
                 message_type: msg_type,
                 crc_ok: true,
                 raw_hex: raw_hex_str,
@@ -174,14 +305,13 @@ fn handle_json_sniff(
             entries.push(entry);
         }
 
-        // Print timing summary
         if entries.len() >= 2 {
             println!("--- Timing summary ---");
             for i in 1..entries.len() {
                 let prev_ts = parse_ts_us(&entries[i - 1].timestamp);
                 let cur_ts = parse_ts_us(&entries[i].timestamp);
                 if let (Some(prev), Some(cur)) = (prev_ts, cur_ts) {
-                    let delta = cur - prev;
+                    let delta = cur.saturating_sub(prev);
                     println!(
                         "  {} -> {} : {}us ({:.1}ms)",
                         entries[i - 1].message_type,
