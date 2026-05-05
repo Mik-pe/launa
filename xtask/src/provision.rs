@@ -6,11 +6,13 @@ use std::process::Command;
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     // Parse arguments
     let mut port_name = None;
+    let mut serial = None;
     let mut port_index = None;
     let mut parser = crate::util::Args::new(args);
     while parser.has_more() {
         match parser.peek().unwrap() {
             "--port" => port_name = Some(parser.value("--port")?.to_string()),
+            "--serial" => serial = Some(parser.value("--serial")?.to_string()),
             "--port-index" => port_index = parser.optional_parsed("--port-index")?,
             "--no-confirm" => {
                 // Accepted for backward compat but ignored — espefuse is always
@@ -23,7 +25,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     // Resolve serial port from config if not provided via CLI
     let config = crate::config::load().ok();
-    let port_name = crate::util::resolve_port(port_name.as_deref(), port_index, config.as_ref())?;
+    let port_name = crate::util::resolve_port(port_name.as_deref(), serial.as_deref(), port_index, config.as_ref())?;
 
     // Determine keychain username from config device ID
     let keychain_user = config

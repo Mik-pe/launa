@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut cli_port = None;
+    let mut serial = None;
     let mut port_index = None;
     let mut duration_secs = 60u64;
     let mut respond = false;
@@ -12,6 +13,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     while parser.has_more() {
         match parser.peek().unwrap() {
             "--port" => cli_port = Some(parser.value("--port")?.to_string()),
+            "--serial" => serial = Some(parser.value("--serial")?.to_string()),
             "--port-index" => port_index = parser.optional_parsed("--port-index")?,
             "--duration" => {
                 duration_secs = parser.value("--duration")?.parse()?;
@@ -25,7 +27,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     }
 
     let config = crate::config::load().ok();
-    let port_name = crate::util::resolve_port(cli_port.as_deref(), port_index, config.as_ref())?;
+    let port_name = crate::util::resolve_port(cli_port.as_deref(), serial.as_deref(), port_index, config.as_ref())?;
 
     let port = serialport::new(&port_name, 115200)
         .timeout(Duration::from_millis(100))

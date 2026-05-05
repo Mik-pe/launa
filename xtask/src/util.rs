@@ -210,34 +210,117 @@ fn format_port_list(ports: &[DetectedPort]) -> String {
     lines.push("Multiple serial ports detected:".to_string());
     lines.push(String::new());
     for (i, p) in ports.iter().enumerate() {
+        let sn_info = p
+            .serial_number
+            .as_ref()
+            .map(|sn| format!(" (s/n: {})", sn))
+            .unwrap_or_default();
         lines.push(format!(
-            "  [{}] {}  {}",
+            "  [{}] {}  {}{}",
             i + 1,
             p.port_name,
-            p.description()
+            p.description(),
+            sn_info
         ));
     }
     lines.push(String::new());
-    lines.push(format!(
-        "Use --port-index <N> or --port <device> to select one."
-    ));
+    lines.push(
+        "Use --port-index <N>, --port <device>, or --serial <usb-serial> to select one.".to_string(),
+    );
     lines.join("\n")
 }
 
-/// Resolve the serial port using the "CLI arg → config → auto-detect → error" pattern.
+/// Resolve a serial port by USB serial number.
+///
+/// Scans all detected ESP ports and returns the one whose USB serial number
+/// matches (case-insensitive, partial match from the end of the serial number).
+/// This is stable across replugs — the USB serial number doesn't change even
+/// when macOS assigns a different `/dev/cu.usbserial-*` path.
+pub fn resolve_port_by_serial(serial: &str) -> anyhow::Result<String> {
+    let ports = detect_esp_ports();
+    let serial_lower = serial.to_lowercase();
+
+    let matches: Vec<&DetectedPort> = ports
+        .iter()
+        .filter(|p| {
+            p.serial_number
+                .as_ref()
+                .map_or(false, |sn| sn.to_lowercase().ends_with(&serial_lower))
+        })
+        .collect();
+
+    match matches.len() {
+        0 => {
+            let available: Vec<String> = ports
+                .iter()
+                .filter_map(|p| {
+                    p.serial_number
+                        .as_ref()
+                        .map(|sn| format!("  {} (s/n: {})", p.port_name, sn))
+                })
+                .collect();
+            if available.is_empty() {
+                bail!(
+                    "No ESP serial port found with USB serial number matching '{}'.\n\
+                     No ports with serial numbers detected at all.",
+                    serial
+                );
+            } else {
+                bail!(
+                    "No ESP serial port found with USB serial number matching '{}'.\n\
+                     Available:\n{}",
+                    serial,
+                    available.join("\n")
+                );
+            }
+        }
+        1 => {
+            let p = matches[0];
+            println!(
+                "Matched USB serial '{}': {} (s/n: {})",
+                serial,
+                p.port_name,
+                p.serial_number.as_deref().unwrap_or("?")
+            );
+            Ok(p.port_name.clone())
+        }
+        _ => {
+            let list: Vec<String> = matches
+                .iter()
+                .map(|p| {
+                    format!(
+                        "  {} (s/n: {})",
+                        p.port_name,
+                        p.serial_number.as_deref().unwrap_or("?")
+                    )
+                })
+                .collect();
+            bail!(
+                "Multiple ports match USB serial '{}':\n{}\n\
+                 Use a more specific serial number or --port to disambiguate.",
+                serial,
+                list.join("\n")
+            );
+        }
+    }
+}
+
+/// Resolve the serial port using the "CLI arg → serial → config → auto-detect → error" pattern.
 ///
 /// Priority:
 /// 1. `--port <device>` — explicit device path
-/// 2. `--port-index <N>` — 1-based index into auto-detected ports
-/// 3. Config file `device.serial_port`
-/// 4. Single auto-detected port (no ambiguity)
-/// 5. Error with numbered port list (for `--port-index` on retry)
+/// 2. `--serial <usb-serial>` — match by USB serial number (stable across replugs)
+/// 3. `--port-index <N>` — 1-based index into auto-detected ports
+/// 4. Config file `device.serial_port`
+/// 5. Single auto-detected port (no ambiguity)
+/// 6. Error with numbered port list (for `--port-index` on retry)
 ///
 /// When multiple USB serial devices are found and no `--port-index` is given,
 /// prints a numbered list and returns an error — this is machine-readable so
 /// an LLM or script can parse it and retry with `--port-index N`.
 pub fn resolve_port(
     cli_port: Option<&str>,
+    usb_serial: Option<&str>,
     port_index: Option<usize>,
     config: Option<&crate::config::Config>,
 ) -> anyhow::Result<String> {
@@ -246,9 +329,14 @@ pub fn resolve_port(
         return Ok(p.to_string());
     }
 
+    // 2. USB serial number lookup
+    if let Some(serial) = usb_serial {
+        return resolve_port_by_serial(serial);
+    }
+
     let ports = detect_esp_ports();
 
-    // 2. Port index selects from auto-detected list
+    // 3. Port index selects from auto-detected list
     if let Some(idx) = port_index {
         if idx < 1 || idx > ports.len() {
             if ports.is_empty() {
@@ -271,12 +359,12 @@ pub fn resolve_port(
         return Ok(selected.port_name.clone());
     }
 
-    // 3. Config file
+    // 4. Config file
     if let Some(cfg) = config {
         return Ok(cfg.device.serial_port.clone());
     }
 
-    // 4. Single auto-detected port
+    // 5. Single auto-detected port
     if ports.len() == 1 {
         let p = &ports[0];
         println!("Auto-detected serial port: {}", p.port_name);
@@ -286,16 +374,48 @@ pub fn resolve_port(
         return Ok(p.port_name.clone());
     }
 
-    // 5. Multiple ports — error with numbered list
+    // 6. Multiple ports — error with numbered list
     if !ports.is_empty() {
         bail!("{}", format_port_list(&ports));
     }
 
     bail!(
-        "No serial port found. Use --port <device> or set device.serial_port in launa.toml\n\
+        "No serial port found. Use --port <device>, --serial <usb-serial>, or set device.serial_port in launa.toml\n\
          Detected serial ports: {}",
         list_available_ports()
     )
+}
+
+/// List all detected ESP serial ports with their USB serial numbers.
+/// Used by `cargo xtask list-ports` for discovering stable identifiers.
+pub fn list_ports() -> anyhow::Result<()> {
+    let ports = detect_esp_ports();
+    if ports.is_empty() {
+        println!("No ESP serial ports detected.");
+        return Ok(());
+    }
+
+    println!("Detected ESP serial ports:\n");
+    for (i, p) in ports.iter().enumerate() {
+        println!("  [{}] {}", i + 1, p.port_name);
+        if let Some(ref sn) = p.serial_number {
+            println!("       USB serial: {}", sn);
+        }
+        if let Some(ref mfr) = p.manufacturer {
+            println!("       Manufacturer: {}", mfr);
+        }
+        if let Some(ref prod) = p.product {
+            println!("       Product: {}", prod);
+        }
+        if let (Some(v), Some(pid)) = (p.vid, p.pid) {
+            println!("       VID:PID: {:04x}:{:04x}", v, pid);
+        }
+        println!();
+    }
+
+    println!("Tip: Use --serial <usb-serial> to target a specific device across replugs.");
+    println!("     The USB serial number is stable even when the /dev/ path changes.");
+    Ok(())
 }
 
 /// Resolve the serial port with auto-detection fallback.
@@ -305,11 +425,17 @@ pub fn resolve_port(
 #[allow(dead_code)]
 pub fn resolve_port_or(
     cli_port: Option<&str>,
+    usb_serial: Option<&str>,
     config: Option<&crate::config::Config>,
     default: &str,
 ) -> String {
     if let Some(p) = cli_port {
         return p.to_string();
+    }
+    if let Some(serial) = usb_serial {
+        if let Ok(port) = resolve_port_by_serial(serial) {
+            return port;
+        }
     }
     if let Some(cfg) = config {
         return cfg.device.serial_port.clone();

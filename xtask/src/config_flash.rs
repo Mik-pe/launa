@@ -28,18 +28,20 @@ fn strip_ansi(s: &str) -> String {
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut cli_port = None;
+    let mut serial = None;
     let mut port_index = None;
     let mut parser = crate::util::Args::new(args);
     while parser.has_more() {
         match parser.peek().unwrap() {
             "--port" => cli_port = Some(parser.value("--port")?.to_string()),
+            "--serial" => serial = Some(parser.value("--serial")?.to_string()),
             "--port-index" => port_index = parser.optional_parsed("--port-index")?,
             _ => return Err(parser.unknown_arg()),
         }
     }
 
     let config = crate::config::load()?;
-    let port_name = crate::util::resolve_port(cli_port.as_deref(), port_index, Some(&config))?;
+    let port_name = crate::util::resolve_port(cli_port.as_deref(), serial.as_deref(), port_index, Some(&config))?;
 
     // Build config payload
     let mut payload = String::from("CONFIG_START\r\n");

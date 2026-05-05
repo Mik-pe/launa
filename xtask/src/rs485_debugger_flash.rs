@@ -10,12 +10,14 @@ use std::process::Command;
 
 pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut port = None;
+    let mut serial = None;
     let mut port_index = None;
     let mut monitor = false;
     let mut parser = crate::util::Args::new(args);
     while parser.has_more() {
         match parser.peek().unwrap() {
             "--port" => port = Some(parser.value("--port")?.to_string()),
+            "--serial" => serial = Some(parser.value("--serial")?.to_string()),
             "--port-index" => port_index = parser.optional_parsed("--port-index")?,
             "--monitor" => {
                 monitor = true;
@@ -29,7 +31,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         "RS-485 debugger requires launa.toml for WiFi/MQTT config.\n\
          Copy launa.example.toml to launa.toml and fill in your values.",
     )?;
-    let port = crate::util::resolve_port(port.as_deref(), port_index, Some(&config))?;
+    let port = crate::util::resolve_port(port.as_deref(), serial.as_deref(), port_index, Some(&config))?;
     let port = Some(port);
 
     let emu_dir = crate::util::project_root().join("app-rs485-debugger");

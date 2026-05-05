@@ -20,29 +20,32 @@ fn usage() {
     eprintln!("Usage: cargo xtask <command> [args...]");
     eprintln!();
     eprintln!("Commands:");
-    eprintln!("  flash [--port <device> | --port-index <N>] [--feature <name>] [--monitor]");
+    eprintln!("  list-ports                                         List detected ESP serial ports with USB serial numbers");
+    eprintln!("  flash [--port <device> | --serial <usb-serial> | --port-index <N>] [--feature <name>] [--monitor]");
     eprintln!("                                                    Flash firmware via USB");
-    eprintln!("  monitor [--port <device> | --port-index <N>] [--duration <secs>]");
+    eprintln!("  monitor [--port <device> | --serial <usb-serial> | --port-index <N>] [--duration <secs>]");
     eprintln!("                                                    Read serial output");
     eprintln!(
         "  sniff-decode [--host <host>] [--port <1883>]      Decode sniffer frames from MQTT"
     );
-    eprintln!("  spa-sim [--port <device> | --port-index <N>] [--duration <secs>]");
+    eprintln!("  spa-sim [--port <device> | --serial <usb-serial> | --port-index <N>] [--duration <secs>]");
     eprintln!("                                                    Simulate spa over RS-485");
-    eprintln!("  rs485-debugger-flash [--port <device> | --port-index <N>] [--monitor]");
+    eprintln!("  rs485-debugger-flash [--port <device> | --serial <usb-serial> | --port-index <N>] [--monitor]");
     eprintln!("                                                    Flash RS-485 debugger firmware");
-    eprintln!("  sniffer-flash [--port <device> | --port-index <N>] [--monitor]");
+    eprintln!("  sniffer-flash [--port <device> | --serial <usb-serial> | --port-index <N>] [--monitor]");
     eprintln!("                                                    Flash sniffer firmware");
-    eprintln!("  spa-emulator-flash [--port <device> | --port-index <N>] [--monitor]");
+    eprintln!("  spa-emulator-flash [--port <device> | --serial <usb-serial> | --port-index <N>] [--monitor]");
     eprintln!("                                                    Flash spa emulator firmware");
     eprintln!("  ota-serve --firmware <path> [--port <8080>]       Serve firmware over HTTP");
     eprintln!(
         "  ota-flash [--feature <name>] [--device-id <id>]   Build and flash remotely over WiFi"
     );
-    eprintln!("  config-flash [--port <device> | --port-index <N>] Write config to ESP32 NVS");
+    eprintln!("  config-flash [--port <device> | --serial <usb-serial> | --port-index <N>]");
+    eprintln!("                                                    Write config to ESP32 NVS");
     eprintln!(
-        "  provision [--port <device> | --port-index <N>] [--no-confirm]  Burn AES key to ESP32 eFuse BLOCK3"
+        "  provision [--port <device> | --serial <usb-serial> | --port-index <N>] [--no-confirm]"
     );
+    eprintln!("                                                    Burn AES key to ESP32 eFuse BLOCK3");
     eprintln!("  listen [--host <host>] [--port <1883>] [-t <topic>]  Subscribe to MQTT topics");
 }
 
@@ -59,6 +62,9 @@ fn main() -> anyhow::Result<()> {
     let sub_args = &args[1..];
 
     match command.as_str() {
+        "list-ports" | "list_ports" => {
+            crate::util::list_ports()
+        }
         "flash" => flash::run(sub_args),
         "monitor" => monitor::run(sub_args),
         "sniff-decode" | "sniff_decode" => sniff_decode::run(sub_args),
