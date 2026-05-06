@@ -831,11 +831,30 @@ impl SpaSim {
                             } else {
                                 [0x00, 0x00]
                             };
+                            // If this client was previously registered (same hash),
+                            // reuse its old channel instead of burning a new one.
+                            // This handles app reboots where NVS has a saved channel
+                            // but the app falls back to new-client registration.
+                            let previous_hash = self.pending_client_hash;
+                            let id = if self.registered
+                                && self.client_id.is_some()
+                                && previous_hash.map_or(false, |h| h == hash)
+                            {
+                                self.client_id.unwrap()
+                            } else {
+                                let id = self.next_client_id;
+                                // Wrap around within the valid CTS client range (0x11..=0x2F).
+                                // Channel 0x10 is reserved for the simulated display panel.
+                                self.next_client_id = if self.next_client_id >= 0x2F {
+                                    0x11
+                                } else {
+                                    self.next_client_id + 1
+                                };
+                                id
+                            };
                             self.pending_client_hash = Some(hash);
                             // Clear the query tick since we've accepted a response
                             self.registration_query_tick = None;
-                            let id = self.next_client_id;
-                            self.next_client_id += 1;
                             Some(self.generate_client_id_assignment(id, hash))
                         }
                         // ExistingClientRequest: client wants to reclaim a channel
