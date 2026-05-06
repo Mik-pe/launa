@@ -25,6 +25,8 @@ exclude = [
     # Passive RS-485 bus sniffer — decodes and publishes frames to MQTT.
     # Build with: cd app-sniffer && cargo build
     "app-sniffer",
+    # Shared code for ESP32 app crates (WiFi, MQTT transport, utilities).
+    "app-common",
 ]
 
 [workspace.package]
@@ -39,6 +41,4 @@ thiserror = { version = "2", default-features = false }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-heapless = "0.8"
-embedded-io = "0.6"
-embedded-io-async = "0.6"
+
