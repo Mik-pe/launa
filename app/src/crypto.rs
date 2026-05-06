@@ -106,8 +106,6 @@ pub fn encrypt(plaintext: &str, aes: &mut Aes, rng: &mut Rng) -> String {
     let nonce_12 = random_nonce(rng);
     let mut counter = [0u8; 16];
     counter[..12].copy_from_slice(&nonce_12);
-    // counter[12..16] remains 0 (counter starts at 0)
-
     // Pad plaintext to next 16-byte boundary with PKCS7 padding
     let plain_bytes = plaintext.as_bytes();
     let pad_len = 16 - (plain_bytes.len() % 16);

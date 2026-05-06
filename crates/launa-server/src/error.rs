@@ -16,9 +16,6 @@ pub enum Error {
 
     #[error("Config error: {0}")]
     Config(#[from] config::ConfigError),
-
-    #[error("Signal handler error: {0}")]
-    Signal(#[from] ctrlc::Error),
 }
 
 impl IntoResponse for Error {

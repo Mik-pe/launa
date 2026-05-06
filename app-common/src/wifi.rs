@@ -17,10 +17,7 @@ async fn connection_task(mut controller: esp_radio::wifi::WifiController<'static
         match controller.connect_async().await {
             Ok(_info) => {
                 info!("WiFi connected");
-                loop {
-                    if !controller.is_connected() {
-                        break;
-                    }
+                while controller.is_connected() {
                     Timer::after(Duration::from_secs(1)).await;
                 }
                 warn!("WiFi disconnected");

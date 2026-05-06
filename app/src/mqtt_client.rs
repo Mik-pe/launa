@@ -314,7 +314,6 @@ impl MqttClient {
         self.transport = Some(TcpTransport::new(socket));
         self.rx_buffer.clear();
         self.next_packet_id = 1;
-        self.last_outgoing = Instant::now();
 
         let client_id = format!("launa_{}", self.device_id);
         let topics = TopicBuilder::new(&self.device_id);

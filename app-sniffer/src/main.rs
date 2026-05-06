@@ -28,7 +28,6 @@ use alloc::vec::Vec;
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, Either};
 use embassy_time::{Duration, Instant, Timer};
-use embedded_io_async::Read;
 use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;

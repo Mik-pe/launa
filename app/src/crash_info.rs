@@ -34,9 +34,6 @@ fn contains_ci(haystack: &str, needle: &str) -> bool {
     }
     let needle_bytes = needle.as_bytes();
     let haystack_bytes = haystack.as_bytes();
-    if needle_bytes.len() > haystack_bytes.len() {
-        return false;
-    }
     haystack_bytes.windows(needle_bytes.len()).any(|window| {
         window
             .iter()
@@ -189,15 +186,12 @@ pub(crate) fn write_crash_info(reason: CrashReason, message: &str) -> bool {
 
     let mut success = true;
 
-    if let Err(e) = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_MAGIC), CRASH_MAGIC) {
+    if let Err(_) = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_MAGIC), CRASH_MAGIC) {
         success = false;
-        // Can't log here (might be in panic), just continue
-        let _ = e;
     }
 
-    if let Err(e) = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_REASON), reason as u8) {
+    if let Err(_) = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_REASON), reason as u8) {
         success = false;
-        let _ = e;
     }
 
     // Truncate message to MAX_MESSAGE_LEN
@@ -207,9 +201,8 @@ pub(crate) fn write_crash_info(reason: CrashReason, message: &str) -> bool {
         message
     };
 
-    if let Err(e) = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_MESSAGE), truncated) {
+    if let Err(_) = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_MESSAGE), truncated) {
         success = false;
-        let _ = e;
     }
 
     success
