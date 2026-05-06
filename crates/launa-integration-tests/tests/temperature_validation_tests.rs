@@ -125,7 +125,7 @@ fn test_validated_temperature_pipeline_through_spaapp_fahrenheit() {
     app.on_mqtt_command(cmd);
     assert_eq!(app.queued_command_count(), 1);
 
-    let actions = app.process_frame(&make_ready_frame());
+    let actions = app.process_frame(&make_ready_frame(0x03));
     let send_frame = actions
         .iter()
         .find_map(|a| match a {
@@ -188,7 +188,7 @@ fn test_validated_temperature_pipeline_through_spaapp_celsius() {
     assert_eq!(cmd, Command::SetTemperature(80));
 
     app.on_mqtt_command(cmd);
-    let actions = app.process_frame(&make_ready_frame());
+    let actions = app.process_frame(&make_ready_frame(0x03));
     let send_frame = actions
         .iter()
         .find_map(|a| match a {

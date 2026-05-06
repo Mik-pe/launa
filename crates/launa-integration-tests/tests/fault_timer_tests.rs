@@ -446,7 +446,7 @@ fn test_hold_mode_and_pump_timer_fire_independently() {
     while h.app.queued_command_count() > 0 {
         let ready_bytes = {
             use launa_protocol::frame::FrameEncoder;
-            FrameEncoder::encode([0x10, 0xBF], &[0x06]).unwrap()
+            FrameEncoder::encode([h.client_channel().unwrap(), 0xBF], &[0x06]).unwrap()
         };
         let ready_frames = h.decoder.feed_slice(&ready_bytes);
         for frame in &ready_frames {
@@ -473,7 +473,7 @@ fn test_hold_mode_and_pump_timer_fire_independently() {
     while h.app.queued_command_count() > 0 {
         let ready_bytes = {
             use launa_protocol::frame::FrameEncoder;
-            FrameEncoder::encode([0x10, 0xBF], &[0x06]).unwrap()
+            FrameEncoder::encode([h.client_channel().unwrap(), 0xBF], &[0x06]).unwrap()
         };
         let ready_frames = h.decoder.feed_slice(&ready_bytes);
         for frame in &ready_frames {

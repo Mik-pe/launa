@@ -30,7 +30,7 @@ fn test_spaapp_command_ack_and_confirmation() {
     app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
     assert_eq!(app.queued_command_count(), 1);
 
-    let actions = app.process_frame(&make_ready_frame());
+    let actions = app.process_frame(&make_ready_frame(0x03));
     let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
     assert!(has_send, "should send command on Ready");
     assert_eq!(app.queued_command_count(), 0);
@@ -63,7 +63,7 @@ fn test_spaapp_command_retry_on_ignore() {
     app.process_frame(&make_status_frame());
 
     app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
-    app.process_frame(&make_ready_frame());
+    app.process_frame(&make_ready_frame(0x03));
 
     clock.advance_ms(6_000);
     let _actions = app.process_frame(&make_status_frame());
@@ -73,7 +73,7 @@ fn test_spaapp_command_retry_on_ignore() {
     assert!(has_retry_queued, "should retry on first timeout (queued)");
     assert!(app.total_retries() > 0);
     // Dequeue the retry via Ready
-    app.process_frame(&make_ready_frame());
+    app.process_frame(&make_ready_frame(0x03));
 
     clock.advance_ms(6_000);
     let _actions = app.process_frame(&make_status_frame());
@@ -115,7 +115,7 @@ fn test_spaapp_hold_mode_safety_timeout() {
         "hold timer should NOT produce immediate SendFrame"
     );
     // Dequeue via Ready
-    let ready_actions = app.process_frame(&make_ready_frame());
+    let ready_actions = app.process_frame(&make_ready_frame(0x03));
     assert!(
         ready_actions
             .iter()
@@ -154,7 +154,7 @@ fn test_spaapp_pump_timer_expiry() {
         "pump auto-off should NOT produce immediate SendFrame"
     );
     // Dequeue via Ready
-    let ready_actions = app.process_frame(&make_ready_frame());
+    let ready_actions = app.process_frame(&make_ready_frame(0x03));
     assert!(
         ready_actions
             .iter()
@@ -207,7 +207,7 @@ fn test_spaapp_registration_timeout() {
     let _actions = app.process_frame(&make_new_client_query_frame());
     // SendNewClientResponse is SUPPRESSED (fast-path handles it).
     // registration_started_at is still set, so the timeout timer runs.
-    let _actions = app.process_frame(&make_ready_frame());
+    let _actions = app.process_frame(&make_ready_frame(0x03));
     assert!(!app.is_registered());
 
     clock.advance_ms(6_000);
@@ -262,7 +262,7 @@ fn test_spaapp_temperature_not_validated_in_app() {
     app.on_mqtt_command(Command::SetTemperature(106));
     assert_eq!(app.queued_command_count(), 1);
 
-    let actions = app.process_frame(&make_ready_frame());
+    let actions = app.process_frame(&make_ready_frame(0x03));
     let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
     assert!(
         has_send,
@@ -283,19 +283,19 @@ fn test_spaapp_concurrent_operations() {
     app.on_mqtt_command(Command::ToggleItem(ToggleItem::HeatingMode));
     assert_eq!(app.queued_command_count(), 3);
 
-    let actions1 = app.process_frame(&make_ready_frame());
+    let actions1 = app.process_frame(&make_ready_frame(0x03));
     assert!(actions1
         .iter()
         .any(|a| matches!(a, AppAction::SendFrame(_))));
     assert_eq!(app.queued_command_count(), 2);
 
-    let actions2 = app.process_frame(&make_ready_frame());
+    let actions2 = app.process_frame(&make_ready_frame(0x03));
     assert!(actions2
         .iter()
         .any(|a| matches!(a, AppAction::SendFrame(_))));
     assert_eq!(app.queued_command_count(), 1);
 
-    let actions3 = app.process_frame(&make_ready_frame());
+    let actions3 = app.process_frame(&make_ready_frame(0x03));
     assert!(actions3
         .iter()
         .any(|a| matches!(a, AppAction::SendFrame(_))));
@@ -358,16 +358,16 @@ fn test_spaapp_ready_window_command_queuing() {
     app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump3));
     assert_eq!(app.queued_command_count(), 3);
 
-    app.process_frame(&make_ready_frame());
+    app.process_frame(&make_ready_frame(0x03));
     assert_eq!(app.queued_command_count(), 2);
 
-    app.process_frame(&make_ready_frame());
+    app.process_frame(&make_ready_frame(0x03));
     assert_eq!(app.queued_command_count(), 1);
 
-    app.process_frame(&make_ready_frame());
+    app.process_frame(&make_ready_frame(0x03));
     assert_eq!(app.queued_command_count(), 0);
 
-    let actions = app.process_frame(&make_ready_frame());
+    let actions = app.process_frame(&make_ready_frame(0x03));
     let has_nts = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
     assert!(has_nts, "should send NothingToSend when queue is empty");
     assert_eq!(app.queued_command_count(), 0);
@@ -385,6 +385,8 @@ fn test_spaapp_24_hour_smoke() {
     // Rationale: sim.state.pumps is test setup — pump on creates a realistic
     // thermal model in the 24h smoke test; verified through SpaApp status.
     sim.state.pumps[0] = PumpState::Low;
+    // Configure sim to send CTS on the same channel the app is registered on
+    sim.force_set_client(0x03);
 
     for _ in 0..1000 {
         clock.advance_ms(1_000);
@@ -397,7 +399,7 @@ fn test_spaapp_24_hour_smoke() {
         for frame in &frames {
             if frame.message_type == [0xFF, 0xAF] {
                 app.process_frame(frame);
-            } else if frame.message_type == [0x10, 0xBF] {
+            } else if frame.message_type == [0x03, 0xBF] {
                 app.process_frame(frame);
             }
         }
@@ -418,7 +420,7 @@ fn test_spaapp_24_hour_smoke() {
         let status_frame = decode_first_frame(&status_bytes);
         app.process_frame(&status_frame);
 
-        app.process_frame(&make_ready_frame());
+        app.process_frame(&make_ready_frame(0x03));
 
         let actions = app.tick();
         diag_count += actions
@@ -485,7 +487,7 @@ fn test_spaapp_stress_rapid_commands() {
 
         clock.advance_ms(1_000);
 
-        let actions = app.process_frame(&make_ready_frame());
+        let actions = app.process_frame(&make_ready_frame(0x03));
         if actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))) {
             send_frame_count += 1;
         }
@@ -554,7 +556,7 @@ fn test_multi_command_fifo_drain() {
 
     let mut actual_frames: Vec<Vec<u8>> = Vec::new();
     for i in 0..5 {
-        let actions = app.process_frame(&make_ready_frame());
+        let actions = app.process_frame(&make_ready_frame(0x03));
         let frame_data = actions
             .iter()
             .find_map(|a| match a {
@@ -576,7 +578,7 @@ fn test_multi_command_fifo_drain() {
 
     assert_eq!(app.queued_command_count(), 0);
 
-    let actions = app.process_frame(&make_ready_frame());
+    let actions = app.process_frame(&make_ready_frame(0x03));
     let nts_frame = actions
         .iter()
         .find_map(|a| match a {
@@ -607,7 +609,7 @@ fn test_bounded_command_queue_cap() {
 
     let mut send_count: usize = 0;
     for _ in 0..9 {
-        let actions = app.process_frame(&make_ready_frame());
+        let actions = app.process_frame(&make_ready_frame(0x03));
         if actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))) {
             send_count += 1;
         }

@@ -447,7 +447,9 @@ fn describe_message(msg: &IncomingMessage) -> String {
             )
         }
 
-        IncomingMessage::Ready => "Ready (bus free)".to_string(),
+        IncomingMessage::Ready { channel } => {
+            format!("Ready (bus free, ch=0x{:02X})", channel)
+        }
 
         IncomingMessage::Registration(
             launa_protocol::registration::RegistrationMessage::NewClientQuery,

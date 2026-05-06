@@ -175,7 +175,7 @@ impl SpaSim {
         SpaSim {
             state: SpaState::default(),
             client_id: None,
-            next_client_id: 0x02,
+            next_client_id: 0x11,
             tick_count: 0,
             registered: false,
             pending_client_hash: None,
@@ -276,6 +276,17 @@ impl SpaSim {
         self.pending_client_hash = None;
         self.registration_query_tick = None;
         // Note: don't reset state (temps, pumps, etc.) — real spa retains physical state
+    }
+
+    /// Force-set the registered client channel (for tests).
+    ///
+    /// Sets the internal `client_id` and `registered` flag so the sim generates
+    /// CTS frames on the given channel. Does NOT go through the registration
+    /// handshake — use only in tests where you need the sim to act as if
+    /// a specific client is already registered.
+    pub fn force_set_client(&mut self, channel: u8) {
+        self.client_id = Some(channel);
+        self.registered = true;
     }
 
     /// Simulate a fault state.
@@ -929,9 +940,12 @@ impl SpaSim {
         )
     }
 
-    /// Generate a `Ready` frame (`10 BF 06`).
+    /// Generate a `Ready` frame (`<channel> BF 06`).
+    ///
+    /// Uses the registered client's channel if available, otherwise 0x10 (simulated display panel).
     pub fn generate_ready_frame(&self) -> Vec<u8> {
-        generate_ready_frame()
+        let channel = self.client_id.unwrap_or(0x10);
+        generate_ready_frame(channel)
     }
 
     /// Generate a registration query (`FE BF 00`).

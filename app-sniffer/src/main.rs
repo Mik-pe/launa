@@ -35,6 +35,7 @@ use esp_hal::rng::Rng;
 use esp_hal::uart::Uart;
 use launa_app_common::wifi::wifi_init;
 use launa_app_common::MqttStateCore;
+use embedded_io_async::Read;
 use launa_mqtt::mqtt_codec::ConnectConfig;
 use launa_protocol::dispatcher::dispatch_frame;
 use launa_protocol::frame::FrameDecoder;
@@ -226,7 +227,7 @@ fn describe_message(msg: &launa_protocol::dispatcher::IncomingMessage) -> &'stat
     use launa_protocol::dispatcher::IncomingMessage;
     match msg {
         IncomingMessage::StatusUpdate(_) => "Status",
-        IncomingMessage::Ready => "Ready",
+        IncomingMessage::Ready { .. } => "Ready",
         IncomingMessage::ConfigurationResponse(_) => "Config",
         IncomingMessage::ControlConfiguration(_) => "CtrlConfig",
         IncomingMessage::InformationResponse(_) => "Info",

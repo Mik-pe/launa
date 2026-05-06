@@ -19,7 +19,12 @@ pub enum IncomingMessage {
     FaultLogResponse(FaultLogEntry),
     FilterCyclesResponse(FilterCycles),
     ControlConfiguration(SpaConfig),
-    Ready,
+    /// Spa tells a specific client it can send — `<channel> BF 06`.
+    /// The dispatcher passes this as `Ready { channel }` so consumers can
+    /// filter by their own client ID.
+    Ready {
+        channel: u8,
+    },
     /// A parsed registration protocol message (FE BF or <channel> BF).
     Registration(crate::registration::RegistrationMessage),
     /// Preferences response (0x0A 0xBF sub-type 0x26).
@@ -322,7 +327,8 @@ pub fn dispatch_frame(frame: &Frame) -> IncomingMessage {
         [0x0A, 0xBF] => handle_0abf(msg_type, payload),
 
         // XX BF messages: ready-to-send indicator for registered clients.
-        // Protocol: "10 BF 06" for unregistered, "<ID> BF 06" for registered.
+        // Protocol: "10 BF 06" for unregistered (display panel CTS),
+        // "<ID> BF 06" for registered clients (unicast CTS).
         // The second byte 0xBF identifies these as client-addressed messages.
         // Known prefixes (0x0A, 0xFE, 0xFF) are already matched above.
         //
@@ -331,7 +337,7 @@ pub fn dispatch_frame(frame: &Frame) -> IncomingMessage {
         // they are only relevant during the registration handshake and are
         // handled directly by SpaApp via RegistrationMessage::parse() on the
         // raw frame bytes — the dispatcher doesn't need to distinguish them.
-        [_, 0xBF] => IncomingMessage::Ready,
+        [channel, 0xBF] => IncomingMessage::Ready { channel },
 
         // Any other message type
         _ => unknown_msg(msg_type, payload),
@@ -445,7 +451,7 @@ mod tests {
         };
 
         let msg = dispatch_frame(&frame);
-        assert_eq!(msg, IncomingMessage::Ready);
+        assert_eq!(msg, IncomingMessage::Ready { channel: 0x10 });
     }
 
     /// VAL-PROTO-006: Registered client Ready frame (<ID> BF 06) dispatches as Ready.
@@ -459,7 +465,7 @@ mod tests {
         };
 
         let msg = dispatch_frame(&frame);
-        assert_eq!(msg, IncomingMessage::Ready);
+        assert_eq!(msg, IncomingMessage::Ready { channel: 0x02 });
     }
 
     /// VAL-PROTO-006: Various registered client IDs all dispatch as Ready.
@@ -476,7 +482,7 @@ mod tests {
             let msg = dispatch_frame(&frame);
             assert_eq!(
                 msg,
-                IncomingMessage::Ready,
+                IncomingMessage::Ready { channel: id },
                 "client ID 0x{:02X} should dispatch as Ready",
                 id
             );
@@ -493,7 +499,7 @@ mod tests {
         };
 
         let msg = dispatch_frame(&frame);
-        assert_eq!(msg, IncomingMessage::Ready);
+        assert_eq!(msg, IncomingMessage::Ready { channel: 0x02 });
     }
 
     /// VAL-PROTO-006: <ID> BF with non-0x06 payload still dispatches as Ready.
@@ -506,7 +512,7 @@ mod tests {
         };
 
         let msg = dispatch_frame(&frame);
-        assert_eq!(msg, IncomingMessage::Ready);
+        assert_eq!(msg, IncomingMessage::Ready { channel: 0x02 });
     }
 
     /// VAL-PROTO-006: Reserved message types 0x0A, 0xFE, 0xFF with 0xBF second byte

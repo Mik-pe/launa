@@ -61,10 +61,7 @@ fn test_fault_log_walk_entries_1_to_n() {
         assert_eq!(harness.app.queued_command_count(), 1);
 
         // Ready frame triggers the command to be sent to SpaSim
-        let ready_frame = launa_protocol::frame::Frame {
-            message_type: [0x10, 0xBF],
-            payload: vec![0x06],
-        };
+        let ready_frame = harness.ready_frame();
         let actions = harness.app.process_frame(&ready_frame);
 
         // Extract the SendFrame (fault log request) and feed to SpaSim
@@ -161,10 +158,7 @@ fn test_configuration_request_response_pairing() {
     assert_eq!(harness.app.queued_command_count(), 1);
 
     // Trigger the command via Ready frame
-    let ready_frame = launa_protocol::frame::Frame {
-        message_type: [0x10, 0xBF],
-        payload: vec![0x06],
-    };
+    let ready_frame = harness.ready_frame();
     let actions = harness.app.process_frame(&ready_frame);
 
     // Extract SendFrame and feed to SpaSim
@@ -230,10 +224,7 @@ fn test_filter_cycles_request_response() {
     assert_eq!(harness.app.queued_command_count(), 1);
 
     // Trigger the command via Ready frame
-    let ready_frame = launa_protocol::frame::Frame {
-        message_type: [0x10, 0xBF],
-        payload: vec![0x06],
-    };
+    let ready_frame = harness.ready_frame();
     let actions = harness.app.process_frame(&ready_frame);
 
     // Extract SendFrame and feed to SpaSim
@@ -430,7 +421,7 @@ fn test_rapid_command_flood_exceeds_queue_cap() {
 
     // Drain all queued commands via Ready frames
     let ready_frame = launa_protocol::frame::Frame {
-        message_type: [0x10, 0xBF],
+        message_type: [0x03, 0xBF],
         payload: vec![0x06],
     };
 
@@ -489,7 +480,7 @@ fn test_command_flood_multiple_cycles() {
     app.process_frame(&status_frame);
 
     let ready_frame = launa_protocol::frame::Frame {
-        message_type: [0x10, 0xBF],
+        message_type: [0x03, 0xBF],
         payload: vec![0x06],
     };
 

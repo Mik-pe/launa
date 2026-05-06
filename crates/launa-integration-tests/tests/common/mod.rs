@@ -37,10 +37,10 @@ pub fn make_status_frame() -> Frame {
     }
 }
 
-/// Create a standard ready frame (client ready acknowledgement).
-pub fn make_ready_frame() -> Frame {
+/// Create a standard ready frame (CTS) on the given client channel.
+pub fn make_ready_frame(channel: u8) -> Frame {
     Frame {
-        message_type: [0x10, 0xBF],
+        message_type: [channel, 0xBF],
         payload: vec![0x06],
     }
 }
@@ -93,6 +93,11 @@ pub fn sim_tick_to_app(sim: &mut SpaSim, app: &mut SpaApp) -> Vec<AppAction> {
 /// handler is a no-op (the sync fast-path in uart_task handles it on real
 /// hardware), we detect the NewClientQuery frame and generate the response
 /// ourselves, then feed it to the sim to get the ClientIdAssignment.
+///
+/// The ClientIdAck is sent immediately by SpaApp upon receiving the
+/// ClientIdAssignment (matching real Balboa display panel behavior).
+/// The ack is fed back to the sim to complete registration.
+///
 /// Panics if any step fails.
 pub fn full_registration(sim: &mut SpaSim, app: &mut SpaApp) {
     use launa_protocol::registration::RegistrationMessage;
@@ -134,9 +139,20 @@ pub fn full_registration(sim: &mut SpaSim, app: &mut SpaApp) {
                 "should produce one assignment frame"
             );
 
-            // Process assignment through SpaApp (queues ACK)
-            let _actions2 = app.process_frame(&assignment_frames[0]);
+            // Process assignment through SpaApp — ClientIdAck is sent IMMEDIATELY
+            let actions = app.process_frame(&assignment_frames[0]);
             assert!(app.is_registered(), "should be registered after assignment");
+
+            // Extract the immediately-sent ClientIdAck and feed it to the sim
+            let ack_bytes = actions.iter().find_map(|a| match a {
+                AppAction::SendFrame(data) => Some(data.clone()),
+                _ => None,
+            });
+            assert!(
+                ack_bytes.is_some(),
+                "ClientIdAck should be sent immediately on assignment"
+            );
+            sim.process_incoming_bytes(&ack_bytes.unwrap());
         } else if !app.is_registered() {
             // Only process non-registration frames before we're registered
             // to avoid counting status frames in frames_received
@@ -145,28 +161,4 @@ pub fn full_registration(sim: &mut SpaSim, app: &mut SpaApp) {
         // Skip frames that arrive after registration (they'll be processed
         // by the caller if needed, preventing double-counting)
     }
-
-    // Send a Ready frame to trigger the queued ClientIdAck
-    let ready_frame = Frame {
-        message_type: [0x10, 0xBF],
-        payload: vec![0x06],
-    };
-    let actions3 = app.process_frame(&ready_frame);
-    let has_ack = actions3
-        .iter()
-        .any(|a| matches!(a, AppAction::SendFrame(_)));
-    assert!(
-        has_ack,
-        "should send ID ack on Ready frame after assignment"
-    );
-
-    let ack_bytes = actions3
-        .iter()
-        .find_map(|a| match a {
-            AppAction::SendFrame(data) => Some(data.clone()),
-            _ => None,
-        })
-        .expect("should have SendFrame for ACK");
-
-    sim.process_incoming_bytes(&ack_bytes);
 }

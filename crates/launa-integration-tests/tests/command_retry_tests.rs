@@ -26,7 +26,7 @@ fn test_spaapp_command_retry_and_drop_lifecycle() {
     app.process_frame(&make_status_frame());
 
     app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
-    app.process_frame(&make_ready_frame());
+    app.process_frame(&make_ready_frame(0x03));
     assert_eq!(app.queued_command_count(), 0, "command should be dequeued");
 
     assert_eq!(app.total_retries(), 0);
@@ -41,7 +41,7 @@ fn test_spaapp_command_retry_and_drop_lifecycle() {
     );
     assert_eq!(app.queued_command_count(), 1, "Retry 1: should be queued");
     assert_eq!(app.total_retries(), 1, "should have 1 retry");
-    app.process_frame(&make_ready_frame());
+    app.process_frame(&make_ready_frame(0x03));
     assert_eq!(app.queued_command_count(), 0);
 
     // Retry 2: timeout again
@@ -50,7 +50,7 @@ fn test_spaapp_command_retry_and_drop_lifecycle() {
     assert!(app.queued_command_count() >= 1, "Retry 2: should be queued");
     // Drain all queued commands
     while app.queued_command_count() > 0 {
-        app.process_frame(&make_ready_frame());
+        app.process_frame(&make_ready_frame(0x03));
     }
 
     // After MAX_COMMAND_RETRIES (2), the next timeout should drop the command
@@ -77,8 +77,10 @@ fn test_spaapp_command_retry_with_sim_pipeline() {
 
     app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
 
+    let client_channel = app.client_id().expect("should have client ID");
+
     let ready_frame = Frame {
-        message_type: [0x10, 0xBF],
+        message_type: [client_channel, 0xBF],
         payload: vec![0x06],
     };
     let actions = app.process_frame(&ready_frame);
@@ -126,9 +128,9 @@ fn test_spaapp_multiple_command_retry_and_drop() {
     app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump2));
     app.on_mqtt_command(Command::SetTemperature(100));
 
-    app.process_frame(&make_ready_frame());
-    app.process_frame(&make_ready_frame());
-    app.process_frame(&make_ready_frame());
+    app.process_frame(&make_ready_frame(0x03));
+    app.process_frame(&make_ready_frame(0x03));
+    app.process_frame(&make_ready_frame(0x03));
     assert_eq!(app.queued_command_count(), 0);
 
     clock.advance_ms(6_000);
@@ -182,8 +184,9 @@ fn test_spaapp_full_pipeline_register_status_command() {
     app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
     assert_eq!(app.queued_command_count(), 1);
 
+    let client_channel = app.client_id().expect("should have client ID");
     let ready_frame = Frame {
-        message_type: [0x10, 0xBF],
+        message_type: [client_channel, 0xBF],
         payload: vec![0x06],
     };
     let actions = app.process_frame(&ready_frame);

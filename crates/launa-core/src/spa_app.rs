@@ -44,10 +44,9 @@ pub struct SpaApp<'a> {
     /// Queue of commands waiting for the next Ready window.
     command_queue: VecDeque<Command>,
 
-    /// Encoded registration response frame, deferred until the next Ready/CTS
-    /// frame. The Balboa spa expects registration responses during the CTS
-    /// window (~100ms after NewClientQuery), not immediately after the query.
-    pending_registration_response: Option<Vec<u8>>,
+    // Registration responses (ClientIdAck, ExistingClientRequest) are now sent
+    // immediately via AppAction::SendFrame rather than queued for the next CTS.
+    // This matches real Balboa display panel behavior (acks within ~0.3ms).
 
     // Timers
     pump_timers: PumpTimerManager,
@@ -124,7 +123,6 @@ impl<'a> SpaApp<'a> {
             registration_started_at: None,
             cmd_tracker: CommandTracker::new(),
             command_queue: VecDeque::new(),
-            pending_registration_response: None,
             pump_timers: PumpTimerManager::new(),
             hold_timer: HoldModeTimer::new(),
             heap_monitor: HeapMonitor::new(),
@@ -170,11 +168,6 @@ impl<'a> SpaApp<'a> {
     /// The current client hash used for RS-485 registration.
     pub fn client_hash(&self) -> [u8; 2] {
         self.client_hash
-    }
-
-    /// Whether a registration response is queued, waiting for the next CTS.
-    pub fn has_pending_registration_response(&self) -> bool {
-        self.pending_registration_response.is_some()
     }
 
     /// The last received status, if any.
@@ -253,7 +246,6 @@ impl<'a> SpaApp<'a> {
         self.registration_started_at = None;
         self.last_unregistered_frame_time = None;
         self.last_registration_probe_time = None;
-        self.pending_registration_response = None;
     }
 
     /// Rotate the client hash to try a different identity on the bus.
@@ -324,22 +316,6 @@ impl<'a> SpaApp<'a> {
                         Err(_) => { /* suppressed */ }
                     }
 
-                    // Intercept ClearToSend: the spa sends CTS (~100ms after
-                    // NewClientQuery). This is the window to send our queued
-                    // registration response.
-                    if let RegistrationMessage::ClearToSend { channel } = &msg {
-                        if let Some(encoded) = self.pending_registration_response.take() {
-                            log::info!(
-                                "REG: sending queued response on CTS (ch=0x{:02X})",
-                                channel,
-                            );
-                            actions.push(AppAction::SendFrame(encoded));
-                        }
-                        // Feed to SM (returns None, no state change)
-                        self.registration.process(&msg);
-                        return actions;
-                    }
-
                     let action = self.registration.process(&msg);
                     match action {
                         RegistrationAction::SendNewClientResponse => {
@@ -351,9 +327,16 @@ impl<'a> SpaApp<'a> {
                             let msg = RegistrationMessage::ClientIdAck { channel: id };
                             match msg.encode() {
                                 Ok(encoded) => {
-                                    log::info!("REG: queuing ClientIdAck for channel 0x{:02X}", id);
-                                    self.pending_registration_response = Some(encoded);
+                                    log::info!(
+                                        "REG: sending ClientIdAck immediately for channel 0x{:02X}",
+                                        id
+                                    );
+                                    actions.push(AppAction::SendFrame(encoded));
                                     self.client_id = Some(id);
+                                    self.registration_started_at = None;
+                                    self.failed_registration_attempts = 0;
+                                    self.last_unregistered_frame_time = None;
+                                    self.last_registration_probe_time = None;
                                 }
                                 Err(e) => {
                                     log::error!("REG: failed to encode ID ack: {:?}", e);
@@ -364,12 +347,12 @@ impl<'a> SpaApp<'a> {
                             match message.encode() {
                                 Ok(encoded) => {
                                     log::info!(
-                                        "REG: queuing existing client request (ch={:?}, hash={:02X}{:02X}) for next CTS",
+                                        "REG: sending existing client request immediately (ch={:?}, hash={:02X}{:02X})",
                                         self.registration.previous_channel(),
                                         self.client_hash[0],
                                         self.client_hash[1],
                                     );
-                                    self.pending_registration_response = Some(encoded);
+                                    actions.push(AppAction::SendFrame(encoded));
                                     self.registration_started_at = Some(now);
                                 }
                                 Err(e) => {
@@ -435,18 +418,16 @@ impl<'a> SpaApp<'a> {
                     registration_state: reg_state,
                 });
             }
-            IncomingMessage::Ready => {
-                // Only handle Ready when registered — commands require a client ID
+            IncomingMessage::Ready { channel } => {
+                // Only handle Ready when registered — commands require a client ID.
                 if self.registration.is_registered() {
-                    // Priority: pending registration ACK > queued commands > NothingToSend
-                    if let Some(encoded) = self.pending_registration_response.take() {
-                        log::info!("REG: sent queued ClientIdAck on Ready frame");
-                        actions.push(AppAction::SendFrame(encoded));
-                        self.registration_started_at = None;
-                        self.failed_registration_attempts = 0;
-                        self.last_unregistered_frame_time = None;
-                        self.last_registration_probe_time = None;
-                    } else if let Some(cmd) = self.command_queue.pop_front() {
+                    // Only respond to CTS on our own channel
+                    if let Some(my_id) = self.client_id {
+                        if channel != my_id {
+                            return actions;
+                        }
+                    }
+                    if let Some(cmd) = self.command_queue.pop_front() {
                         let encoded = encode_command(&cmd);
                         actions.push(AppAction::SendFrame(encoded));
                         if let Some(ref pre_status) = self.last_status {
@@ -564,7 +545,6 @@ impl<'a> SpaApp<'a> {
                     });
                     self.registration.reset();
                     self.registration_started_at = None;
-                    self.pending_registration_response = None;
                 }
             }
             // Alert if no registration query seen for 30s after boot
@@ -618,7 +598,6 @@ impl<'a> SpaApp<'a> {
                 self.registration_started_at = None;
                 self.last_unregistered_frame_time = None;
                 self.last_registration_probe_time = None;
-                self.pending_registration_response = None;
                 self.command_queue.clear();
                 self.cmd_tracker.reset();
                 self.pump_timers.cancel_all();
@@ -751,9 +730,9 @@ mod tests {
         }
     }
 
-    fn ready_frame() -> Frame {
+    fn ready_frame(channel: u8) -> Frame {
         Frame {
-            message_type: [0x10, 0xBF],
+            message_type: [channel, 0xBF],
             payload: vec![0x06],
         }
     }
@@ -794,26 +773,15 @@ mod tests {
             0,
             "NewClientResponse is handled by sync fast-path"
         );
-        assert!(!app.has_pending_registration_response());
         assert!(!app.is_registered());
 
-        // Ready/CTS frame → nothing queued, no action
-        let actions = app.process_frame(&ready_frame());
-        assert_eq!(actions.len(), 0, "nothing queued, no action on CTS");
-        assert!(!app.is_registered());
-
-        // Send ClientIdAssignment → ACK is queued (not sent immediately)
+        // Send ClientIdAssignment → ACK is sent immediately
         let actions = app.process_frame(&client_id_assignment_frame(0x05));
         assert_eq!(
             actions.len(),
-            0,
-            "ACK should be queued, not sent immediately"
+            1,
+            "ACK should be sent immediately on assignment"
         );
-        assert!(app.is_registered());
-
-        // Send Ready frame → triggers the queued ClientIdAck
-        let actions = app.process_frame(&ready_frame());
-        assert_eq!(actions.len(), 1, "queued ACK should be sent on Ready");
         match &actions[0] {
             AppAction::SendFrame(_bytes) => {}
             _ => panic!("Expected SendFrame"),
@@ -853,7 +821,7 @@ mod tests {
         assert_eq!(app.queued_command_count(), 1);
 
         // Ready arrives → command is dequeued and sent
-        let actions = app.process_frame(&ready_frame());
+        let actions = app.process_frame(&ready_frame(0x03));
         let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
         assert!(has_send);
         assert_eq!(app.queued_command_count(), 0);
@@ -865,7 +833,7 @@ mod tests {
         let mut app = app;
         app.force_registered(0x03);
 
-        let actions = app.process_frame(&ready_frame());
+        let actions = app.process_frame(&ready_frame(0x03));
         // Should send NothingToSend
         let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
         assert!(has_send);
@@ -1027,10 +995,9 @@ mod tests {
         assert_eq!(app.failed_registration_attempts, 5);
 
         // Now succeed — complete registration (NewClientResponse suppressed,
-        // fast-path handles it; ClientIdAck still queued for Ready)
+        // fast-path handles it; ClientIdAck sent immediately)
         app.process_frame(&new_client_query_frame()); // suppressed, fast-path handles
-        app.process_frame(&client_id_assignment_frame(0x04)); // queues ACK
-        app.process_frame(&ready_frame()); // sends queued ACK
+        app.process_frame(&client_id_assignment_frame(0x04)); // sends ACK immediately
 
         assert!(app.is_registered());
         assert_eq!(app.failed_registration_attempts, 0);
@@ -1082,7 +1049,7 @@ mod tests {
         );
 
         // Ready frame should dequeue and send the hold toggle command
-        let ready_actions = app.process_frame(&ready_frame());
+        let ready_actions = app.process_frame(&ready_frame(0x03));
         assert!(
             ready_actions
                 .iter()
@@ -1100,7 +1067,7 @@ mod tests {
         app.process_frame(&status_frame());
         // Drain any remaining queue
         while app.queued_command_count() > 0 {
-            app.process_frame(&ready_frame());
+            app.process_frame(&ready_frame(0x03));
         }
 
         // Bug 1 fix: after firing AND hold mode released, re-enter hold mode.
@@ -1115,7 +1082,7 @@ mod tests {
         );
 
         // And Ready frame dequeues it
-        let ready_actions2 = app.process_frame(&ready_frame());
+        let ready_actions2 = app.process_frame(&ready_frame(0x03));
         assert!(
             ready_actions2
                 .iter()
@@ -1156,7 +1123,7 @@ mod tests {
         );
 
         // Ready frame should dequeue and send the pump toggle-off command
-        let ready_actions = app.process_frame(&ready_frame());
+        let ready_actions = app.process_frame(&ready_frame(0x03));
         assert!(
             ready_actions
                 .iter()
@@ -1177,7 +1144,7 @@ mod tests {
 
         // Queue and send toggle on Ready
         app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
-        app.process_frame(&ready_frame());
+        app.process_frame(&ready_frame(0x03));
 
         assert_eq!(app.queued_command_count(), 0);
 
@@ -1202,7 +1169,7 @@ mod tests {
 
         // Queue and send toggle on Ready
         app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
-        app.process_frame(&ready_frame());
+        app.process_frame(&ready_frame(0x03));
 
         // Advance past timeout (5s) but don't change status
         clock.advance_ms(6_000);
@@ -1218,7 +1185,7 @@ mod tests {
         assert!(app.total_retries() > 0);
 
         // Ready frame dequeues and sends the retry
-        let ready_actions = app.process_frame(&ready_frame());
+        let ready_actions = app.process_frame(&ready_frame(0x03));
         assert!(
             ready_actions
                 .iter()
@@ -1297,15 +1264,15 @@ mod tests {
         assert_eq!(app.queued_command_count(), 3);
 
         // First Ready → send pump1
-        app.process_frame(&ready_frame());
+        app.process_frame(&ready_frame(0x03));
         assert_eq!(app.queued_command_count(), 2);
 
         // Second Ready → send pump2
-        app.process_frame(&ready_frame());
+        app.process_frame(&ready_frame(0x03));
         assert_eq!(app.queued_command_count(), 1);
 
         // Third Ready → send pump3
-        app.process_frame(&ready_frame());
+        app.process_frame(&ready_frame(0x03));
         assert_eq!(app.queued_command_count(), 0);
     }
 
@@ -1336,7 +1303,7 @@ mod tests {
 
         // Drain one via Ready, then queue should accept again
         app.process_frame(&status_frame());
-        app.process_frame(&ready_frame());
+        app.process_frame(&ready_frame(0x03));
         assert_eq!(app.queued_command_count(), MAX_COMMAND_QUEUE - 1);
 
         app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump2));
@@ -1700,7 +1667,7 @@ mod tests {
         }
 
         // Now send Ready → command dequeued
-        let actions = app.process_frame(&ready_frame());
+        let actions = app.process_frame(&ready_frame(0x03));
         let send_frames: Vec<_> = actions
             .iter()
             .filter(|a| matches!(a, AppAction::SendFrame(_)))
@@ -1732,7 +1699,7 @@ mod tests {
         assert_eq!(app.queued_command_count(), 3);
 
         // Ready 1 → dequeue first command
-        app.process_frame(&ready_frame());
+        app.process_frame(&ready_frame(0x03));
         assert_eq!(app.queued_command_count(), 2);
 
         // Another status — no additional dequeue
@@ -1740,11 +1707,11 @@ mod tests {
         assert_eq!(app.queued_command_count(), 2);
 
         // Ready 2 → dequeue second
-        app.process_frame(&ready_frame());
+        app.process_frame(&ready_frame(0x03));
         assert_eq!(app.queued_command_count(), 1);
 
         // Ready 3 → dequeue third
-        app.process_frame(&ready_frame());
+        app.process_frame(&ready_frame(0x03));
         assert_eq!(app.queued_command_count(), 0);
     }
 
@@ -1786,7 +1753,7 @@ mod tests {
         assert_eq!(app.queued_command_count(), 1);
 
         // Ready dequeues and starts tracking
-        let actions = app.process_frame(&ready_frame());
+        let actions = app.process_frame(&ready_frame(0x03));
         let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
         assert!(has_send);
         assert_eq!(app.queued_command_count(), 0);
@@ -1803,7 +1770,7 @@ mod tests {
         app.process_frame(&status_frame());
 
         // No command queued → Ready sends NothingToSend
-        let actions = app.process_frame(&ready_frame());
+        let actions = app.process_frame(&ready_frame(0x03));
         let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
         assert!(
             has_send,
@@ -1826,7 +1793,7 @@ mod tests {
         // Ready arrives before status — command is sent but NOT tracked
         // (no pre_status for tracker). This is expected behavior: the command
         // goes on the wire even if we can't track confirmation.
-        let actions = app.process_frame(&ready_frame());
+        let actions = app.process_frame(&ready_frame(0x03));
         let has_send = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
         assert!(
             has_send,
@@ -1907,5 +1874,46 @@ mod tests {
         // Press 3: queue again
         app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
         assert_eq!(app.queued_command_count(), 1);
+    }
+
+    /// CTS filtering: registered app ignores Ready frames on wrong channel.
+    #[test]
+    fn test_cts_filtered_by_client_id() {
+        let (_clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x11);
+        app.process_frame(&status_frame());
+
+        // Queue a command
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        assert_eq!(app.queued_command_count(), 1);
+
+        // CTS on wrong channel (0x10 = display panel) → ignored
+        let actions = app.process_frame(&ready_frame(0x10));
+        assert!(
+            !actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))),
+            "CTS on wrong channel should be ignored"
+        );
+        assert_eq!(
+            app.queued_command_count(),
+            1,
+            "command should remain queued"
+        );
+
+        // CTS on another wrong channel (0x12) → ignored
+        let actions = app.process_frame(&ready_frame(0x12));
+        assert!(
+            !actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))),
+            "CTS on other channel should be ignored"
+        );
+        assert_eq!(app.queued_command_count(), 1);
+
+        // CTS on our channel (0x11) → command dequeued
+        let actions = app.process_frame(&ready_frame(0x11));
+        assert!(
+            actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))),
+            "CTS on our channel should dequeue command"
+        );
+        assert_eq!(app.queued_command_count(), 0);
     }
 }

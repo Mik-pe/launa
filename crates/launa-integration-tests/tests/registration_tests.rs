@@ -71,7 +71,7 @@ fn test_full_registration_flow() {
             channel,
             client_hash,
         }) => {
-            assert_eq!(channel, 0x02);
+            assert_eq!(channel, 0x11);
             // Hash should be echoed back
             assert_eq!(client_hash, TEST_HASH);
 
@@ -84,14 +84,14 @@ fn test_full_registration_flow() {
                 RegistrationAction::SendClientIdAck { client_id: channel }
             );
             assert!(client_sm.is_registered());
-            assert_eq!(client_sm.client_id(), Some(0x02));
+            assert_eq!(client_sm.client_id(), Some(0x11));
 
             let ack = RegistrationMessage::ClientIdAck { channel }
                 .encode()
                 .unwrap();
             let ack_frames = decoder.feed_slice(&ack);
             sim.process_frame(&ack_frames[0]);
-            assert_eq!(sim.client_id, Some(0x02));
+            assert_eq!(sim.client_id, Some(0x11));
         }
         _ => panic!("Expected Registration(ClientIdAssignment)"),
     }
@@ -249,26 +249,13 @@ fn test_registration_race_condition() {
         !actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))),
         "NewClientResponse is handled by sync fast-path, no action from SpaApp"
     );
-    assert!(
-        !app.has_pending_registration_response(),
-        "no response queued"
-    );
-
-    // Ready frame — nothing queued, no action
-    let actions = app.process_frame(&make_ready_frame());
-    assert!(
-        !actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))),
-        "nothing queued, no action on Ready"
-    );
-    assert!(!app.is_registered());
 
     // Process assignment (as if the sync fast-path response was received by spa)
-    let _actions = app.process_frame(&make_client_id_assignment_frame(0x03));
-    // ACK is queued — send Ready frame to trigger it
-    let actions = app.process_frame(&make_ready_frame());
+    let actions = app.process_frame(&make_client_id_assignment_frame(0x03));
+    // ACK is sent immediately on assignment
     assert!(
         actions.iter().any(|a| matches!(a, AppAction::SendFrame(_))),
-        "should send ID ack on Ready frame"
+        "should send ID ack immediately on assignment"
     );
     assert!(app.is_registered());
     assert_eq!(app.client_id(), Some(0x03));
@@ -284,7 +271,7 @@ fn test_registration_race_condition() {
     let mut sent_commands: Vec<Vec<u8>> = Vec::new();
     for i in 0..3 {
         let actions = app.process_frame(&Frame {
-            message_type: [0x10, 0xBF],
+            message_type: [0x03, 0xBF],
             payload: vec![0x06],
         });
         let frame_data = actions
@@ -369,9 +356,9 @@ fn test_spaapp_registration_with_interleaved_frames() {
             );
 
             let assignment_frames = decoder.feed_slice(&assignment_bytes);
-            for frame in &assignment_frames {
-                app.process_frame(frame);
-            }
+            // Process assignment through SpaApp — ClientIdAck sent immediately
+            let actions = app.process_frame(&assignment_frames[0]);
+            all_actions.extend(actions);
         }
     }
     assert!(app.is_registered(), "should be registered after assignment");

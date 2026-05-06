@@ -393,5 +393,5 @@ fn test_dispatch_ready_message() {
         payload: vec![0x06],
     };
     let msg = dispatch_frame(&frame);
-    assert_eq!(msg, IncomingMessage::Ready);
+    assert_eq!(msg, IncomingMessage::Ready { channel: 0x10 });
 }

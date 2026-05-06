@@ -233,9 +233,12 @@ pub(crate) fn generate_status_frame(
     frame
 }
 
-/// Generate a `Ready` frame (`10 BF 06`).
-pub(crate) fn generate_ready_frame() -> Vec<u8> {
-    FrameEncoder::encode([0x10, 0xBF], &[0x06])
+/// Generate a `Ready` frame (`<channel> BF 06`).
+///
+/// When a client is registered, the channel is the client's assigned channel ID.
+/// When no client is registered, the channel is 0x10 (simulated display panel).
+pub(crate) fn generate_ready_frame(channel: u8) -> Vec<u8> {
+    FrameEncoder::encode([channel, 0xBF], &[0x06])
         .expect("ready frame encoding should never fail: payload is 1 byte")
 }
 

@@ -28,10 +28,7 @@ use launa_sim::{SimBroker, SpaSim, VirtualClock};
 /// Returns the SpaSim response decoded as IncomingMessage(s).
 fn send_command_and_get_response(harness: &mut TestHarness, cmd: Command) -> Vec<IncomingMessage> {
     harness.send_command(cmd);
-    let ready_frame = Frame {
-        message_type: [0x10, 0xBF],
-        payload: vec![0x06],
-    };
+    let ready_frame = harness.ready_frame();
     let actions = harness.app.process_frame(&ready_frame);
 
     let mut messages = Vec::new();
@@ -229,10 +226,7 @@ fn test_custom_spa_config_through_full_pipeline() {
     assert_eq!(harness.app.queued_command_count(), 1);
 
     // Trigger via Ready
-    let ready_frame = Frame {
-        message_type: [0x10, 0xBF],
-        payload: vec![0x06],
-    };
+    let ready_frame = harness.ready_frame();
     let actions = harness.app.process_frame(&ready_frame);
 
     // Find SendFrame and feed to SpaSim

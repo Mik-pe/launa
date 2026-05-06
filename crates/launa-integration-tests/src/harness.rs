@@ -84,6 +84,21 @@ impl TestHarness {
         self.app.on_mqtt_command(cmd)
     }
 
+    /// The client's assigned channel ID, if registered.
+    pub fn client_channel(&self) -> Option<u8> {
+        self.app.client_id()
+    }
+
+    /// Create a Ready (CTS) frame on the client's assigned channel.
+    /// Panics if the app is not registered.
+    pub fn ready_frame(&self) -> Frame {
+        let channel = self.app.client_id().expect("app must be registered");
+        Frame {
+            message_type: [channel, 0xBF],
+            payload: vec![0x06],
+        }
+    }
+
     /// Drive registration to completion by ticking the spa until registered.
     /// Returns the number of ticks needed.
     /// Panics if registration doesn't complete within `max_ticks`.
@@ -91,6 +106,9 @@ impl TestHarness {
     /// The SpaApp's SendNewClientResponse handler is a no-op (the sync fast-path
     /// in uart_task handles it on real hardware). In tests, we detect the
     /// NewClientQuery frame and generate the response ourselves.
+    ///
+    /// The ClientIdAck is sent immediately by SpaApp upon receiving the
+    /// ClientIdAssignment (matching real Balboa display panel behavior).
     pub fn complete_registration(&mut self, max_ticks: usize) -> usize {
         use launa_protocol::registration::RegistrationMessage;
 
@@ -136,7 +154,7 @@ impl TestHarness {
             }
 
             // Process all SendFrame actions through the simulator.
-            // This handles ClientIdAck and command frames.
+            // This handles the immediately-sent ClientIdAck and command frames.
             for action in &all_actions {
                 match action {
                     AppAction::SendFrame(bytes) => {
@@ -161,23 +179,6 @@ impl TestHarness {
             }
 
             if self.app.is_registered() {
-                // Flush any pending registration ACK by injecting a Ready frame.
-                // The ACK is queued until the next CTS window.
-                if self.app.has_pending_registration_response() {
-                    let ready_frame = Frame {
-                        message_type: [0x10, 0xBF],
-                        payload: vec![0x06],
-                    };
-                    let ack_actions = self.app.process_frame(&ready_frame);
-                    for ra in &ack_actions {
-                        match ra {
-                            AppAction::SendFrame(rbytes) => {
-                                self.sim.process_incoming_bytes(rbytes);
-                            }
-                            _ => {}
-                        }
-                    }
-                }
                 return i + 1;
             }
         }

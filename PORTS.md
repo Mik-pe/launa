@@ -4,6 +4,7 @@ Device | USB Serial | MAC Address        | Flash | RS-485    | Notes
 -------|------------|--------------------|-------|-----------|---------------------
 A      | 0001       | 1c:c3:ab:ba:83:c8 | 4MB   | TX+RX OK | Main app firmware
 B      | 0001       | 1c:c3:ab:bc:12:bc | 4MB   | TX+RX OK | Spa emulator
+C      | 0001       | 1c:c3:ab:bc:2d:bc | 4MB   | RX only  | Passive sniffer (RO tap)
 
 > Both devices share the same USB serial number (`0001`, CP2102 adapters).
 > Use `cargo xtask list-ports` to see current port assignments, then
