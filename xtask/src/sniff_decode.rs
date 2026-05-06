@@ -171,7 +171,10 @@ fn handle_json_sniff(
                     message_type: "GARBAGE".to_string(),
                     crc_ok: false,
                     raw_hex: payload_hex.to_string(),
-                    parsed: Some(format!("{} bytes of inter-frame garbage", payload_bytes.len())),
+                    parsed: Some(format!(
+                        "{} bytes of inter-frame garbage",
+                        payload_bytes.len()
+                    )),
                 };
                 print_entry(&entry);
                 result.push(entry);

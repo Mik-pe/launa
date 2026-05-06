@@ -21,7 +21,12 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     }
 
     let config = crate::config::load().ok();
-    let port_name = crate::util::resolve_port(port_name.as_deref(), serial.as_deref(), port_index, config.as_ref())?;
+    let port_name = crate::util::resolve_port(
+        port_name.as_deref(),
+        serial.as_deref(),
+        port_index,
+        config.as_ref(),
+    )?;
 
     let port = serialport::new(&port_name, 115200)
         .timeout(Duration::from_millis(100))

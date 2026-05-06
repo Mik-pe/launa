@@ -25,7 +25,12 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 
     // Resolve serial port from config if not provided via CLI
     let config = crate::config::load().ok();
-    let port_name = crate::util::resolve_port(port_name.as_deref(), serial.as_deref(), port_index, config.as_ref())?;
+    let port_name = crate::util::resolve_port(
+        port_name.as_deref(),
+        serial.as_deref(),
+        port_index,
+        config.as_ref(),
+    )?;
 
     // Determine keychain username from config device ID
     let keychain_user = config

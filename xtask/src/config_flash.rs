@@ -41,7 +41,12 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     }
 
     let config = crate::config::load()?;
-    let port_name = crate::util::resolve_port(cli_port.as_deref(), serial.as_deref(), port_index, Some(&config))?;
+    let port_name = crate::util::resolve_port(
+        cli_port.as_deref(),
+        serial.as_deref(),
+        port_index,
+        Some(&config),
+    )?;
 
     // Build config payload
     let mut payload = String::from("CONFIG_START\r\n");
