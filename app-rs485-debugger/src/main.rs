@@ -20,17 +20,10 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::cell::UnsafeCell;
 
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, Either};
-use embassy_net::tcp::TcpSocket;
-use embassy_net::{
-    dns::DnsQueryType, Config as NetConfig, DhcpConfig, IpAddress, IpEndpoint, Ipv4Address,
-    Runner, Stack, StackResources,
-};
 use embassy_time::{Duration, Instant, Timer};
-use embedded_io_async::{Read, Write};
 use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
@@ -38,9 +31,11 @@ use esp_hal::gpio::{AnyPin, Level, Output, OutputConfig};
 use esp_hal::rng::Rng;
 use esp_hal::uart::Uart;
 use esp_hal::Async;
-use launa_mqtt::mqtt_codec::{encode_connect, encode_publish, parse_connack, ConnectConfig};
+use launa_app_common::wifi::wifi_init;
+use launa_app_common::MqttStateCore;
+use launa_mqtt::mqtt_codec::ConnectConfig;
 use launa_protocol::frame::FrameDecoder;
-use log::{info, warn};
+use log::info;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -96,16 +91,6 @@ macro_rules! dwarn {
     };
 }
 
-/// Create a `&'static mut` reference to a value using `static_cell`.
-macro_rules! mk_static {
-    ($t:ty,$val:expr) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
-        #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit().write(($val));
-        x
-    }};
-}
-
 // ── RS-485 Transport ─────────────────────────────────────────────────
 
 /// RS-485 half-duplex UART transport.
@@ -128,22 +113,16 @@ impl Rs485Transport {
         if let Some(de) = self.de_pin.as_mut() {
             de.set_high();
             Timer::after(Duration::from_micros(50)).await;
-            let mut written = 0;
-            while written < data.len() {
-                let n = self.uart.write(&data[written..]).map_err(|_| ())?;
-                written += n;
-            }
-            self.uart.flush().map_err(|_| ())?;
-            de.set_low();
-        } else {
-            let mut written = 0;
-            while written < data.len() {
-                let n = self.uart.write(&data[written..]).map_err(|_| ())?;
-                written += n;
-            }
-            self.uart.flush().map_err(|_| ())?;
         }
-
+        let mut written = 0;
+        while written < data.len() {
+            let n = self.uart.write(&data[written..]).map_err(|_| ())?;
+            written += n;
+        }
+        self.uart.flush().map_err(|_| ())?;
+        if let Some(de) = self.de_pin.as_mut() {
+            de.set_low();
+        }
         Timer::after(Duration::from_micros(5000)).await;
         Ok(())
     }
@@ -191,7 +170,7 @@ fn decode_sender(decoder: &mut FrameDecoder, bytes: &[u8]) -> (&'static str, Opt
 
 /// Re-sync slot counter based on a received frame's sender index.
 /// Sender just finished its slot, so our next slot starts at sender_index + 1.
-fn sync_slot(sender_index: u8, _dev: &Device) -> (u8, embassy_time::Instant) {
+fn sync_slot(sender_index: u8) -> (u8, embassy_time::Instant) {
     let new_counter = sender_index.wrapping_add(1);
     let new_deadline = embassy_time::Instant::now() + SLOT_DURATION;
     (new_counter, new_deadline)
@@ -245,7 +224,7 @@ fn handle_rx_bytes(
 
     if let Some(idx) = sender_idx {
         if idx != dev.index {
-            let (new_ctr, new_dl) = sync_slot(idx, dev);
+            let (new_ctr, new_dl) = sync_slot(idx);
             slot.slot_counter = new_ctr;
             slot.slot_deadline = new_dl;
             if !slot.synced {
@@ -258,194 +237,32 @@ fn handle_rx_bytes(
     }
 }
 
-// ── WiFi ─────────────────────────────────────────────────────────────
+// ── MQTT (crate-specific wrapper) ────────────────────────────────────
 
-/// Embassy task managing WiFi connection lifecycle.
-#[embassy_executor::task]
-async fn connection_task(mut controller: esp_radio::wifi::WifiController<'static>) {
-    loop {
-        match controller.connect_async().await {
-            Ok(_info) => {
-                info!("WiFi connected");
-                loop {
-                    if !controller.is_connected() {
-                        break;
-                    }
-                    Timer::after(Duration::from_secs(1)).await;
-                }
-                warn!("WiFi disconnected");
-            }
-            Err(e) => {
-                warn!("WiFi connect failed: {:?}", e);
-            }
-        }
-        Timer::after(Duration::from_secs(5)).await;
-    }
-}
-
-/// Embassy task running the embassy-net network stack.
-#[embassy_executor::task]
-async fn net_task(mut runner: Runner<'static, esp_radio::wifi::Interface<'static>>) {
-    runner.run().await;
-}
-
-/// Connect to WiFi, wait for DHCP, return network stack.
-fn wifi_init(
-    spawner: Spawner,
-    wifi_peripheral: esp_hal::peripherals::WIFI<'static>,
-    rng: Rng,
-) -> &'static Stack<'static> {
-    let station_config = esp_radio::wifi::Config::Station(
-        esp_radio::wifi::sta::StationConfig::default()
-            .with_ssid(WIFI_SSID)
-            .with_password(String::from(WIFI_PASSWORD)),
-    );
-
-    info!("Starting WiFi...");
-    let (controller, interfaces) = esp_radio::wifi::new(
-        wifi_peripheral,
-        esp_radio::wifi::ControllerConfig::default().with_initial_config(station_config),
-    )
-    .expect("WiFi init failed");
-
-    info!("WiFi started, connecting...");
-
-    let wifi_interface = interfaces.station;
-
-    let mut dhcp_config = DhcpConfig::default();
-    let hostname: heapless::String<32> = "launa-rs485dbg".parse().unwrap();
-    dhcp_config.hostname = Some(hostname);
-    let net_config = NetConfig::dhcpv4(dhcp_config);
-    let seed = ((rng.random() as u64) << 32) | (rng.random() as u64);
-
-    spawner.spawn(connection_task(controller).unwrap());
-    let (stack, runner) = embassy_net::new(
-        wifi_interface,
-        net_config,
-        mk_static!(StackResources<4>, StackResources::<4>::new()),
-        seed,
-    );
-    let stack_ref = mk_static!(Stack<'static>, stack);
-    spawner.spawn(net_task(runner).unwrap());
-
-    stack_ref
-}
-
-// ── Minimal MQTT ─────────────────────────────────────────────────────
-
-const MQTT_SOCKET_BUF_SIZE: usize = 512;
-const MQTT_KEEP_ALIVE_SECS: u16 = 60;
-
-/// Pre-allocated socket buffers (reused across reconnects).
-struct MqttBuffers {
-    rx: &'static UnsafeCell<[u8; MQTT_SOCKET_BUF_SIZE]>,
-    tx: &'static UnsafeCell<[u8; MQTT_SOCKET_BUF_SIZE]>,
-}
-
-/// Minimal MQTT state: just enough to connect and publish.
+/// Minimal MQTT state: wraps MqttStateCore with a status topic.
 struct MqttState {
-    stack: &'static Stack<'static>,
-    buffers: MqttBuffers,
-    transport: Option<TcpTransport>,
+    core: MqttStateCore,
     topic: String, // e.g. "launa/rs485_debugger/A/status"
-    last_outgoing: Instant,
-}
-
-/// Wrapper around embassy-net TcpSocket implementing embedded-io-async traits.
-struct TcpTransport {
-    socket: TcpSocket<'static>,
-}
-
-#[derive(Debug)]
-struct TransportError;
-
-impl core::fmt::Display for TransportError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "TransportError")
-    }
-}
-
-impl core::error::Error for TransportError {}
-
-impl embedded_io_async::Error for TransportError {
-    fn kind(&self) -> embedded_io_async::ErrorKind {
-        embedded_io_async::ErrorKind::Other
-    }
-}
-
-impl embedded_io_async::ErrorType for TcpTransport {
-    type Error = TransportError;
-}
-
-impl Read for TcpTransport {
-    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        self.socket.read(buf).await.map_err(|_| TransportError)
-    }
-}
-
-impl Write for TcpTransport {
-    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        self.socket.write(buf).await.map_err(|_| TransportError)
-    }
-
-    async fn flush(&mut self) -> Result<(), Self::Error> {
-        self.socket.flush().await.map_err(|_| TransportError)
-    }
 }
 
 impl MqttState {
-    fn new(stack: &'static Stack<'static>, device_id: &str) -> Self {
-        let rx = mk_static!(
-            UnsafeCell<[u8; MQTT_SOCKET_BUF_SIZE]>,
-            UnsafeCell::new([0u8; MQTT_SOCKET_BUF_SIZE])
-        );
-        let tx = mk_static!(
-            UnsafeCell<[u8; MQTT_SOCKET_BUF_SIZE]>,
-            UnsafeCell::new([0u8; MQTT_SOCKET_BUF_SIZE])
-        );
+    fn new(stack: &'static embassy_net::Stack<'static>, device_id: &str) -> Self {
         MqttState {
-            stack,
-            buffers: MqttBuffers { rx, tx },
-            transport: None,
+            core: MqttStateCore::new(stack),
             topic: format!("launa/rs485_debugger/{}/status", device_id),
-            last_outgoing: Instant::now(),
         }
     }
 
     fn is_connected(&self) -> bool {
-        self.transport.is_some()
+        self.core.is_connected()
     }
 
     /// Connect TCP + MQTT CONNECT handshake. Returns true on success.
     async fn connect(&mut self) -> bool {
-        self.transport.take();
-
-        // SAFETY: old TcpSocket was dropped above. We are the only task
-        // accessing these buffers (single executor, cooperative scheduling).
-        let rx: &'static mut [u8] = unsafe { &mut *self.buffers.rx.get() };
-        let tx: &'static mut [u8] = unsafe { &mut *self.buffers.tx.get() };
-        let mut socket = TcpSocket::new(*self.stack, rx, tx);
-
-        // Resolve MQTT host
-        let addr = match resolve_host(self.stack, MQTT_HOST).await {
-            Some(a) => a,
-            None => {
-                warn!("MQTT: DNS failed for '{}'", MQTT_HOST);
-                return false;
-            }
-        };
-        let endpoint = IpEndpoint {
-            addr: IpAddress::Ipv4(Ipv4Address::from_octets(addr)),
-            port: MQTT_PORT.parse().unwrap_or(1883),
-        };
-
-        if let Err(e) = socket.connect(endpoint).await {
-            warn!("MQTT: TCP connect to {}:{} failed: {:?}", MQTT_HOST, endpoint.port, e);
+        let port: u16 = MQTT_PORT.parse().unwrap_or(1883);
+        if self.core.connect_tcp(MQTT_HOST, port).await.is_err() {
             return false;
         }
-
-        self.transport = Some(TcpTransport { socket });
-        self.last_outgoing = Instant::now();
 
         // MQTT CONNECT with LWT on the status topic
         let client_id = format!("launa_rs485dbg_{}", self.topic.split('/').nth(2).unwrap_or("?"));
@@ -454,118 +271,19 @@ impl MqttState {
             lwt_topic: &self.topic,
             username: None,
             password: None,
-            keep_alive: MQTT_KEEP_ALIVE_SECS,
+            keep_alive: launa_app_common::MQTT_KEEP_ALIVE_SECS,
         };
-        let connect_packet = encode_connect(&config);
-
-        if self.send_bytes(&connect_packet).await.is_err() {
-            warn!("MQTT: CONNECT send failed");
-            self.transport.take();
-            return false;
-        }
-
-        // Read CONNACK (at least 4 bytes)
-        let mut buf = [0u8; 64];
-        match self.read_exact(&mut buf, 4).await {
-            Ok(n) if n >= 4 => {
-                if parse_connack(&buf[..n]).is_err() {
-                    warn!("MQTT: CONNACK rejected");
-                    self.transport.take();
-                    return false;
-                }
-            }
-            _ => {
-                warn!("MQTT: CONNACK read failed");
-                self.transport.take();
-                return false;
-            }
-        }
-
-        self.last_outgoing = Instant::now();
-        info!("MQTT connected to {}:{}", MQTT_HOST, endpoint.port);
-        true
+        self.core.mqtt_connect_handshake(&config, MQTT_HOST, port).await
     }
 
     /// Publish a QoS 0 payload to the status topic. Non-blocking on failure.
     async fn publish_status(&mut self, payload: &[u8]) -> bool {
-        if let Ok(packet) = encode_publish(&self.topic, payload, 0, false, None) {
-            self.send_bytes(&packet).await.is_ok()
-        } else {
-            false
-        }
+        self.core.publish(&self.topic, payload).await
     }
 
     /// Send keepalive PINGREQ if half the keepalive has elapsed.
     async fn maybe_ping(&mut self) -> bool {
-        let half = Duration::from_secs(MQTT_KEEP_ALIVE_SECS as u64 / 2);
-        if self.last_outgoing.elapsed() >= half {
-            let ping = launa_mqtt::mqtt_codec::encode_pingreq();
-            if self.send_bytes(&ping).await.is_err() {
-                return false;
-            }
-        }
-        true
-    }
-
-    async fn send_bytes(&mut self, data: &[u8]) -> Result<(), ()> {
-        let transport = self.transport.as_mut().ok_or(())?;
-        transport.write_all(data).await.map_err(|_| ())?;
-        transport.flush().await.map_err(|_| ())?;
-        self.last_outgoing = Instant::now();
-        Ok(())
-    }
-
-    async fn read_exact(&mut self, buf: &mut [u8], min_bytes: usize) -> Result<usize, ()> {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut pos = 0;
-        while pos < min_bytes {
-            if Instant::now() >= deadline {
-                return Err(());
-            }
-            let transport = self.transport.as_mut().ok_or(())?;
-            match transport.read(&mut buf[pos..]).await {
-                Ok(0) => Timer::after(Duration::from_millis(10)).await,
-                Ok(n) => pos += n,
-                Err(_) => return Err(()),
-            }
-        }
-        Ok(pos)
-    }
-}
-
-/// Resolve hostname to IPv4 address.
-async fn resolve_host(stack: &Stack<'static>, host: &str) -> Option<[u8; 4]> {
-    // Fast path: try parsing as dotted quad
-    let parts: Vec<&str> = host.split('.').collect();
-    if parts.len() == 4 {
-        let mut octets = [0u8; 4];
-        let mut valid = true;
-        for (i, p) in parts.iter().enumerate() {
-            match p.parse::<u8>() {
-                Ok(v) => octets[i] = v,
-                Err(_) => valid = false,
-            }
-        }
-        if valid {
-            return Some(octets);
-        }
-    }
-
-    // DNS resolution
-    match stack.dns_query(host, DnsQueryType::A).await {
-        Ok(addrs) => {
-            if let Some(addr) = addrs.first() {
-                let IpAddress::Ipv4(v4) = *addr;
-                Some(v4.octets())
-            } else {
-                warn!("DNS: no A record for '{}'", host);
-                None
-            }
-        }
-        Err(e) => {
-            warn!("DNS: failed to resolve '{}': {:?}", host, e);
-            None
-        }
+        self.core.maybe_ping().await
     }
 }
 
@@ -604,7 +322,7 @@ async fn main(spawner: Spawner) {
     // ── WiFi + MQTT ──
     info!("[{}] Connecting to SSID: {:?}", dev.id, WIFI_SSID);
     let rng = Rng::new();
-    let net_stack = wifi_init(spawner, peripherals.WIFI, rng);
+    let net_stack = wifi_init(spawner, peripherals.WIFI, rng, WIFI_SSID, WIFI_PASSWORD, "launa-rs485dbg");
     info!("Waiting for DHCP...");
     net_stack.wait_config_up().await;
     if let Some(cfg) = net_stack.config_v4() {
@@ -720,7 +438,7 @@ async fn main(spawner: Spawner) {
             if mqtt.is_connected() {
                 if !mqtt.maybe_ping().await {
                     dwarn!(dev, "MQTT ping failed, disconnecting");
-                    mqtt.transport.take();
+                    mqtt.core.disconnect();
                 }
             }
 
@@ -751,7 +469,7 @@ async fn main(spawner: Spawner) {
                 );
                 if !mqtt.publish_status(json.as_bytes()).await {
                     dwarn!(dev, "MQTT publish failed");
-                    mqtt.transport.take();
+                    mqtt.core.disconnect();
                     mqtt_reconnect_at = Instant::now() + Duration::from_secs(30);
                 }
             }

@@ -1186,6 +1186,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "launa-app-common"
+version = "0.1.0"
+dependencies = [
+ "embassy-executor",
+ "embassy-net",
+ "embassy-time",
+ "embedded-io-async 0.7.0",
+ "esp-hal",
+ "esp-radio",
+ "heapless 0.9.3",
+ "launa-mqtt",
+ "log",
+ "static_cell",
+]
+
+[[package]]
 name = "launa-mqtt"
 version = "0.1.0"
 dependencies = [
@@ -1217,6 +1233,7 @@ dependencies = [
  "esp-radio",
  "esp-rtos",
  "heapless 0.9.3",
+ "launa-app-common",
  "launa-mqtt",
  "launa-protocol",
  "log",
