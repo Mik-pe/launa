@@ -72,7 +72,6 @@ fn read_key() -> [u8; 16] {
 }
 
 /// Generate a 12-byte random nonce using the hardware RNG.
-#[allow(dead_code)]
 fn random_nonce(rng: &mut Rng) -> [u8; 12] {
     let mut nonce = [0u8; 12];
     for byte in nonce.iter_mut() {
@@ -96,7 +95,6 @@ fn increment_counter(counter: &mut [u8; 16]) {
 /// Returns `"enc:"` + hex(12-byte-nonce + padded-ciphertext).
 /// A new random nonce is generated for each call, so the same plaintext
 /// produces different ciphertext each time.
-#[allow(dead_code)]
 pub fn encrypt(plaintext: &str, aes: &mut Aes, rng: &mut Rng) -> String {
     if plaintext.is_empty() {
         return String::new();

@@ -41,20 +41,19 @@ use esp_hal::system::Cpu;
 static UART_LOCK: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "serial-log")]
-fn color_for_level(level: Level) -> (&'static str, &'static str) {
-    const RESET: &str = "\u{001B}[0m";
+fn color_for_level(level: Level) -> &'static str {
     const RED: &str = "\u{001B}[31m";
     const GREEN: &str = "\u{001B}[32m";
     const YELLOW: &str = "\u{001B}[33m";
     const BLUE: &str = "\u{001B}[34m";
-    const CYAN: &str = "\u{001B}[35m";
+    const CYAN: &str = "\u{001B}[36m";
 
     match level {
-        Level::Error => (RED, RESET),
-        Level::Warn => (YELLOW, RESET),
-        Level::Debug => (BLUE, RESET),
-        Level::Info => (GREEN, RESET),
-        Level::Trace => (CYAN, RESET),
+        Level::Error => RED,
+        Level::Warn => YELLOW,
+        Level::Debug => BLUE,
+        Level::Info => GREEN,
+        Level::Trace => CYAN,
     }
 }
 
@@ -118,7 +117,8 @@ impl log::Log for Logger {
                 Cpu::AppCpu => 1,
             };
 
-            let (color, reset) = color_for_level(record.level());
+            let color = color_for_level(record.level());
+            const RESET: &str = "\u{001B}[0m";
             let ts_ms = embassy_time::Instant::now().as_millis();
             let msg = alloc::format!(
                 "{}[C{}] {:5}.{:03}s {} - {}{}\n",
@@ -128,7 +128,7 @@ impl log::Log for Logger {
                 ts_ms % 1000,
                 record.level(),
                 record.args(),
-                reset,
+                RESET,
             );
 
             crate::uart_raw::write_bytes(msg.as_bytes());

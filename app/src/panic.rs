@@ -6,10 +6,6 @@
 
 use crate::{crash_info, uart_raw};
 
-/// Custom panic handler: logs panic location, stores crash info to NVS,
-/// waits for UART flush, then triggers a software reset.
-/// Replaces esp-backtrace's default infinite loop to allow automatic recovery
-/// from panics. Crash info is published via MQTT on next boot.
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     // Write directly to UART0 registers — don't use the logger since

@@ -18,7 +18,7 @@ use esp_backtrace as _;
 esp_bootloader_esp_idf::esp_app_desc!();
 
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU16, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, select3, Either, Either3};
@@ -92,7 +92,7 @@ static MQTT_RECONNECT_COUNT: AtomicU32 = AtomicU32::new(0);
 static MQTT_LOSS_COUNT: AtomicU32 = AtomicU32::new(0);
 static FRAME_ERROR_COUNT: AtomicU32 = AtomicU32::new(0);
 static UART_BYTES_RECEIVED: AtomicU32 = AtomicU32::new(0);
-static UART_FIRST_BYTE_SEEN: AtomicU32 = AtomicU32::new(0); // 0=no, 1=yes
+static UART_FIRST_BYTE_SEEN: AtomicBool = AtomicBool::new(false);
 static UART_LAST_NO_BYTE_ALERT_SECS: AtomicU32 = AtomicU32::new(0); // uptime when last alert sent
 
 /// Boot timestamp in seconds (lower 32 bits of millis/1000), set once in main().
@@ -165,7 +165,7 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
 
                 if !first_bytes_logged {
                     first_bytes_logged = true;
-                    UART_FIRST_BYTE_SEEN.store(1, Ordering::Relaxed);
+                    UART_FIRST_BYTE_SEEN.store(true, Ordering::Relaxed);
                     let hex_dump: Vec<u8> = buf[..n.min(16)].to_vec();
                     let hex_str = launa_protocol::hex::to_hex(&hex_dump);
                     info!("UART: first {} bytes from spa bus: {}", n, hex_str);
@@ -191,7 +191,7 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                             };
                             if let Ok(encoded) = response.encode() {
                                 info!("REG fast-path: sending NewClientResponse immediately");
-                                if let Err(_) = transport.write(&encoded).await {
+                                if transport.write(&encoded).await.is_err() {
                                     rate_error!(UART_WRITE_ERR, "UART write error: Io");
                                 }
                             }
@@ -235,7 +235,7 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
         if let Ok(data) = uart_rx.try_receive() {
             let result = transport.write(&data).await;
             info!("UART TX: {} bytes", data.len());
-            if let Err(_) = result {
+            if result.is_err() {
                 rate_error!(UART_WRITE_ERR, "UART write error: Io");
             }
         }
@@ -313,7 +313,7 @@ async fn execute_actions(
             } => {
                 let frame_errors = FRAME_ERROR_COUNT.load(Ordering::Relaxed);
                 let uart_bytes = UART_BYTES_RECEIVED.load(Ordering::Relaxed);
-                let uart_active = UART_FIRST_BYTE_SEEN.load(Ordering::Relaxed);
+                let uart_active = UART_FIRST_BYTE_SEEN.load(Ordering::Relaxed) as u32;
                 publish_diagnostics(
                     device_id,
                     *uptime_secs,
@@ -328,7 +328,7 @@ async fn execute_actions(
                 );
             }
             AppAction::RequestOta { url } => {
-                if let Err(_) = OTA_CHANNEL.try_send(url.clone()) {
+                if OTA_CHANNEL.try_send(url.clone()).is_err() {
                     warn!("OTA channel full, dropping URL: {:?}", url);
                     send_alert("error", "ota_channel_full");
                 }
@@ -349,32 +349,17 @@ async fn handle_mqtt_command(
 ) {
     match cmd {
         Command::Sniff(enable) => {
-            if enable {
-                info!("Sniff burst capture requested via MQTT");
-                sniff::SNIFF_CAPTURE.store(true, Ordering::Relaxed);
-                // Set sniff_mode in state so UI shows it's active
-                *sniff_mode = true;
-                let actions = app.force_publish();
-                execute_actions(
-                    &actions,
-                    device_id,
-                    true,
-                    read_wifi_rssi(),
-                )
-                .await;
-            } else {
-                // Manual disable if capture hasn't started yet
-                sniff::SNIFF_CAPTURE.store(false, Ordering::Relaxed);
-                *sniff_mode = false;
-                let actions = app.force_publish();
-                execute_actions(
-                    &actions,
-                    device_id,
-                    false,
-                    read_wifi_rssi(),
-                )
-                .await;
-            }
+            info!("Sniff burst capture {} requested via MQTT", if enable { "ON" } else { "OFF" });
+            *sniff_mode = enable;
+            sniff::SNIFF_CAPTURE.store(enable, Ordering::Relaxed);
+            let actions = app.force_publish();
+            execute_actions(
+                &actions,
+                device_id,
+                enable,
+                read_wifi_rssi(),
+            )
+            .await;
         }
         Command::Reboot => {
             info!("Remote reboot requested via MQTT, resetting in 1s...");
@@ -412,8 +397,6 @@ async fn handle_ota_request<TG: esp_hal::timer::timg::TimerGroupInstance>(
     >,
     wdt: &mut esp_hal::timer::timg::Wdt<TG>,
 ) {
-    use launa_ota::OtaUpdate;
-
     let Ok(firmware_url) = ota_rx.try_receive() else {
         return;
     };
@@ -667,7 +650,7 @@ impl<'a> MainLoop<'a> {
         // UART health check: alert if no bytes received after 30s of uptime
         // Re-alert every 5 minutes until bytes are seen
         let uptime = uptime_secs();
-        if UART_FIRST_BYTE_SEEN.load(Ordering::Relaxed) == 0 && uptime >= 30 {
+        if !UART_FIRST_BYTE_SEEN.load(Ordering::Relaxed) && uptime >= 30 {
             let last_alert = UART_LAST_NO_BYTE_ALERT_SECS.load(Ordering::Relaxed) as u64;
             if uptime - last_alert >= 300 || last_alert == 0 {
                 UART_LAST_NO_BYTE_ALERT_SECS.store(uptime as u32, Ordering::Relaxed);
@@ -844,7 +827,7 @@ async fn main(spawner: Spawner) {
         let alarm_json = crash_info::crash_alarm_json(crash, FIRMWARE_VERSION);
         let _ = ALERT_CHANNEL.try_send(Vec::from(alarm_json.as_bytes()));
         info!("Crash alarm queued: reason={}", crash.reason.as_str());
-        drop(pending_crash_alarm.take());
+        pending_crash_alarm.take();
     }
 
     let device_id_str: &str = &app_config.device_id;

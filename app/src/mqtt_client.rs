@@ -37,7 +37,6 @@ use crate::mk_static;
 use crate::net_util;
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum MqttAction {
     Command(Command),
     StartPumpTimer { pump: u8, minutes: u32 },
@@ -100,7 +99,7 @@ impl Write for TcpTransport {
 }
 
 const DEFAULT_KEEP_ALIVE_SECS: u16 = 30;
-const RX_BUFFER_MAX_SIZE: usize = 2048; // 2 KiB cap
+const RX_BUFFER_MAX_SIZE: usize = 2048;
 
 /// MQTT packet type constants (upper nibble of fixed header byte 1).
 const PACKET_PUBLISH: u8 = 3;
@@ -617,7 +616,6 @@ impl MqttClient {
     }
 
     pub async fn recv(&mut self) -> Option<(String, Vec<u8>)> {
-        #[allow(unused_assignments)]
         let mut read_retries: u16 = 0;
 
         loop {
@@ -835,24 +833,7 @@ impl MqttClient {
         self.publish(&avail_topic, b"stale", 1, true).await
     }
 
-    /// Publish an alert message to the alert topic.
-    /// `level` should be "warn" or "error". `message` describes the alert condition.
-    /// `uptime_secs` is the device uptime in seconds.
-    #[allow(dead_code)]
-    pub async fn publish_alert(
-        &mut self,
-        level: &str,
-        message: &str,
-        uptime_secs: u64,
-    ) -> Result<(), MqttError> {
-        let topics = TopicBuilder::new(&self.device_id);
-        let alert_topic = topics.alert_topic();
-        let json = format!(
-            r#"{{"level":"{}","message":"{}","timestamp":{}}}"#,
-            level, message, uptime_secs
-        );
-        self.publish(&alert_topic, json.as_bytes(), 1, false).await
-    }
+
 
     pub async fn publish_discovery(&mut self, celsius: bool) -> Result<(), MqttError> {
         let builder = DiscoveryBuilder::new(&self.device_id)

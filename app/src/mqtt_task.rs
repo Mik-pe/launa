@@ -28,6 +28,38 @@ static MQTT_PUB_WARN: launa_core::RateLog = launa_core::RateLog::new();
 /// value hasn't changed in 30 seconds it means the MQTT task is frozen.
 pub(crate) static MQTT_TASK_TICK: AtomicU32 = AtomicU32::new(0);
 
+/// Compute whether the last known temperature scale is Celsius.
+fn is_celsius(
+    last_scale_range: &Option<(
+        launa_protocol::status::TemperatureScale,
+        launa_protocol::status::TempRange,
+    )>,
+) -> bool {
+    last_scale_range.map_or(false, |(s, _)| {
+        matches!(s, launa_protocol::status::TemperatureScale::Celsius)
+    })
+}
+
+/// Build a `LastState` snapshot from the current tracking variables.
+fn build_last_state<'a>(
+    status: &'a Option<StatusUpdate>,
+    fault: &'a Option<FaultBuf>,
+    sniff_mode: bool,
+    wifi_rssi: Option<i32>,
+    registration_state: &'a str,
+) -> Option<mqtt_client::LastState<'a>> {
+    status.as_ref().map(|s| {
+        let fault_str = fault.as_ref().and_then(|f| f.as_str());
+        mqtt_client::LastState {
+            status: s,
+            fault: fault_str,
+            sniff_mode,
+            wifi_rssi,
+            registration_state,
+        }
+    })
+}
+
 #[embassy_executor::task]
 pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
     let cmd_sender = COMMAND_CHANNEL.sender();
@@ -89,26 +121,19 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
     // Signal to main task that MQTT is connected
     crate::MQTT_CONNECTED_SIGNAL.signal(());
 
-    // Main loop (existing code, unchanged)
-    #[allow(unused_assignments)]
     loop {
         // Check for WiFi reconnect signal — force MQTT reconnect
         if WIFI_RECONNECT_SIGNAL.try_take().is_some() {
             warn!("WiFi reconnect detected, forcing MQTT reconnect");
             MQTT_RECONNECT_COUNT.fetch_add(1, Ordering::Relaxed);
-            let celsius = last_scale_range.map_or(false, |(s, _)| {
-                matches!(s, launa_protocol::status::TemperatureScale::Celsius)
-            });
-            let last_state = last_published_status.as_ref().map(|status| {
-                let fault_str = last_published_fault.as_ref().and_then(|f| f.as_str());
-                mqtt_client::LastState {
-                    status,
-                    fault: fault_str,
-                    sniff_mode: last_sniff_mode,
-                    wifi_rssi: last_wifi_rssi,
-                    registration_state: last_registration_state,
-                }
-            });
+            let celsius = is_celsius(&last_scale_range);
+            let last_state = build_last_state(
+                &last_published_status,
+                &last_published_fault,
+                last_sniff_mode,
+                last_wifi_rssi,
+                last_registration_state,
+            );
             crate::net_util::reconnect_with_backoff(
                 &mut mqtt,
                 celsius,
@@ -123,19 +148,14 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
         // Skip all publish work when MQTT is disconnected. This avoids:
         // - Draining the remote log buffer only to fail the publish (logs lost)
         // - Wasting CPU on failed publish attempts for diagnostics/alerts/sniff/state
-        if !mqtt.is_connected() {
-            // Still need to drain the command channel so it doesn't fill up
-            // during disconnection — but recv() below handles reconnection.
-            // Jump straight to the recv/select block.
-        } else {
+        if mqtt.is_connected() {
             const MAX_NON_CMD_RECEIVES: u8 = 5;
-            #[allow(unused_assignments)]
             let mut non_cmd_count: u8 = 0;
 
             // Check for diagnostics payloads to publish (non-blocking)
             if non_cmd_count < MAX_NON_CMD_RECEIVES {
                 if let Ok(diag_payload) = diag_rx.try_receive() {
-                    if let Err(_) = mqtt.publish(&diag_topic, &diag_payload, 0, false).await {
+                    if mqtt.publish(&diag_topic, &diag_payload, 0, false).await.is_err() {
                         rate_warn!(MQTT_PUB_WARN, "MQTT diagnostics publish failed");
                     }
                     non_cmd_count += 1;
@@ -146,7 +166,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
             // Check for alert payloads to publish (non-blocking)
             if non_cmd_count < MAX_NON_CMD_RECEIVES {
                 if let Ok(alert_payload) = alert_rx.try_receive() {
-                    if let Err(_) = mqtt.publish(&alert_topic, &alert_payload, 1, false).await {
+                    if mqtt.publish(&alert_topic, &alert_payload, 1, false).await.is_err() {
                         rate_warn!(MQTT_PUB_WARN, "MQTT alert publish failed");
                     }
                     non_cmd_count += 1;
@@ -157,7 +177,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
             // Check for sniff frame payloads to publish (non-blocking)
             if non_cmd_count < MAX_NON_CMD_RECEIVES {
                 if let Ok(sniff_payload) = sniff_rx.try_receive() {
-                    if let Err(_) = mqtt.publish(&sniff_topic, &sniff_payload, 0, false).await {
+                    if mqtt.publish(&sniff_topic, &sniff_payload, 0, false).await.is_err() {
                         rate_warn!(MQTT_PUB_WARN, "MQTT sniff publish failed");
                     }
                     non_cmd_count += 1;
@@ -165,32 +185,9 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                 }
             }
 
-            // Drain remote log buffer and publish entries (non-blocking)
-            #[cfg(feature = "remote-log")]
-            if non_cmd_count < MAX_NON_CMD_RECEIVES {
-                if let Some(log_buf) = crate::remote_log::remote_log_buffer() {
-                    if !log_buf.is_empty() {
-                        let entries = log_buf.drain();
-                        for entry in &entries {
-                            let log_entry = launa_mqtt::RemoteLogEntry {
-                                level: entry.level,
-                                message: entry.message.clone(),
-                                timestamp_ms: entry.timestamp_ms,
-                            };
-                            let json = launa_mqtt::log_entry_to_json(&log_entry);
-                            let payload = json.as_bytes();
-                            if let Err(_) = mqtt.publish(&log_topic, payload, 0, false).await {
-                                rate_warn!(MQTT_PUB_WARN, "MQTT log publish failed");
-                                break;
-                            }
-                        }
-                        non_cmd_count += 1;
-                        continue;
-                    }
-                }
-            }
-
-            // Check for state updates to publish (non-blocking)
+            // Check for state updates to publish (non-blocking).
+            // Checked before remote-log drain so that state changes (which
+            // drive the web UI) are never starved by a flood of log entries.
             if non_cmd_count < MAX_NON_CMD_RECEIVES {
                 if let Ok(msg) = state_rx.try_receive() {
                     let status = msg.status;
@@ -220,7 +217,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                     if is_stale || changed || rssi_changed {
                         last_published_status = Some(status.clone());
                         last_published_fault = Some(fault);
-                        if let Err(_) = mqtt
+                        if mqtt
                             .publish_state(
                                 &status,
                                 fault.as_str(),
@@ -230,12 +227,13 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                                 registration_state,
                             )
                             .await
+                            .is_err()
                         {
                             rate_warn!(MQTT_PUB_WARN, "MQTT state publish failed");
                         }
                     }
                     if is_stale {
-                        if let Err(_) = mqtt.publish_availability_stale().await {
+                        if mqtt.publish_availability_stale().await.is_err() {
                             rate_warn!(MQTT_PUB_WARN, "MQTT stale availability publish failed");
                         }
                     } else {
@@ -246,7 +244,38 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                     continue;
                 }
             }
-        } // end else (connected)
+
+            // Drain remote log buffer and publish entries (non-blocking).
+            // Limited to MAX_LOG_ENTRIES_PER_ITER to prevent starving the
+            // recv/select block below when log production is high.
+            #[cfg(feature = "remote-log")]
+            if non_cmd_count < MAX_NON_CMD_RECEIVES {
+                if let Some(log_buf) = crate::remote_log::remote_log_buffer() {
+                    if !log_buf.is_empty() {
+                        const MAX_LOG_ENTRIES_PER_ITER: usize = 3;
+                        let entries = log_buf.drain();
+                        for (i, entry) in entries.iter().enumerate() {
+                            if i >= MAX_LOG_ENTRIES_PER_ITER {
+                                break;
+                            }
+                            let log_entry = launa_mqtt::RemoteLogEntry {
+                                level: entry.level,
+                                message: entry.message.clone(),
+                                timestamp_ms: entry.timestamp_ms,
+                            };
+                            let json = launa_mqtt::log_entry_to_json(&log_entry);
+                            let payload = json.as_bytes();
+                            if mqtt.publish(&log_topic, payload, 0, false).await.is_err() {
+                                rate_warn!(MQTT_PUB_WARN, "MQTT log publish failed");
+                                break;
+                            }
+                        }
+                        non_cmd_count += 1;
+                        continue;
+                    }
+                }
+            }
+        } // end if connected
 
         // Check for incoming MQTT messages, with a 1-second timeout so we
         // re-check the channels above even when no MQTT messages arrive.
@@ -285,9 +314,7 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                             let status = core::str::from_utf8(&payload).unwrap_or("");
                             if status == "online" {
                                 info!("Home Assistant came online, re-publishing discovery");
-                                let celsius = last_scale_range.map_or(false, |(s, _)| {
-                                    matches!(s, launa_protocol::status::TemperatureScale::Celsius)
-                                });
+                                let celsius = is_celsius(&last_scale_range);
                                 if let Err(e) = mqtt.publish_discovery(celsius).await {
                                     warn!("HA status: publish discovery failed: {:?}", e);
                                 }
@@ -358,19 +385,14 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                         warn!("MQTT connection lost ({}), attempting reconnect...", reason);
                         MQTT_RECONNECT_COUNT.fetch_add(1, Ordering::Relaxed);
                         MQTT_LOSS_COUNT.fetch_add(1, Ordering::Relaxed);
-                        let celsius = last_scale_range.map_or(false, |(s, _)| {
-                            matches!(s, launa_protocol::status::TemperatureScale::Celsius)
-                        });
-                        let last_state = last_published_status.as_ref().map(|status| {
-                            let fault_str = last_published_fault.as_ref().and_then(|f| f.as_str());
-                            mqtt_client::LastState {
-                                status,
-                                fault: fault_str,
-                                sniff_mode: last_sniff_mode,
-                                wifi_rssi: last_wifi_rssi,
-                                registration_state: last_registration_state,
-                            }
-                        });
+                        let celsius = is_celsius(&last_scale_range);
+                        let last_state = build_last_state(
+                            &last_published_status,
+                            &last_published_fault,
+                            last_sniff_mode,
+                            last_wifi_rssi,
+                            last_registration_state,
+                        );
                         crate::net_util::reconnect_with_backoff(
                             &mut mqtt,
                             celsius,

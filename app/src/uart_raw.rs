@@ -1,7 +1,7 @@
 //! Raw ESP32 UART0 register access helpers.
 //!
 //! Provides low-level constants and read/write primitives for UART0,
-//! shared by the panic handler (main.rs), the serial logger
+//! shared by the panic handler (panic.rs), the serial logger
 //! (logger.rs), and the serial config receiver. All bypass the HAL
 //! and access hardware registers directly.
 

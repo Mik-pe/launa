@@ -6,14 +6,9 @@
 
 use launa_hal::{Clock, Timestamp};
 
-/// Real-time clock using `embassy_time::Instant::now()`.
-///
-/// This is the production clock for the ESP32 firmware. It delegates to
-/// the embassy runtime's monotonic timer.
 pub struct EmbassyClock;
 
 impl EmbassyClock {
-    /// Create a new embassy-backed clock.
     pub const fn new() -> Self {
         EmbassyClock
     }

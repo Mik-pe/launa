@@ -17,5 +17,4 @@ pub(crate) struct StateMessage {
     pub registration_state: &'static str,
 }
 
-// Re-export FaultBuf from launa-core for convenience
 pub(crate) use launa_core::FaultBuf;

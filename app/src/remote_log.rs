@@ -64,20 +64,15 @@ impl RemoteLogBuffer {
 
     /// Initialize the buffer with capacity. Must be called once before use.
     pub fn init(&mut self) {
-        if unsafe { &mut *self.entries.get() }.is_empty() {
-            unsafe { &mut *self.entries.get() }.reserve_exact(REMOTE_LOG_BUF_SIZE);
+        let entries = unsafe { &mut *self.entries.get() };
+        if entries.is_empty() {
+            entries.reserve_exact(REMOTE_LOG_BUF_SIZE);
         }
     }
 
     /// Enable or disable log capture.
     pub fn set_enabled(&self, enabled: bool) {
         self.enabled.store(enabled, Ordering::Relaxed);
-    }
-
-    /// Whether log capture is enabled.
-    #[allow(dead_code)]
-    pub fn is_enabled(&self) -> bool {
-        self.enabled.load(Ordering::Relaxed)
     }
 
     /// Push a log entry into the ring buffer.

@@ -77,6 +77,20 @@ impl OtaBuffers {
         let tx_buf = mk_static!([u8; OTA_SOCKET_TX_BUF_SIZE], [0u8; OTA_SOCKET_TX_BUF_SIZE]);
         Self { rx_buf, tx_buf }
     }
+
+    /// Create a TcpSocket from these pre-allocated buffers.
+    ///
+    /// SAFETY: The caller must ensure no other TcpSocket is currently using
+    /// these buffers (the previous socket must have been dropped).
+    pub fn create_socket(&mut self, stack: &'static Stack<'static>) -> TcpSocket<'static> {
+        // SAFETY: We are the only task accessing these buffers. The previous
+        // TcpSocket (if any) was dropped at the end of the last call.
+        let rx: &'static mut [u8] =
+            unsafe { &mut *(self.rx_buf as *mut [u8; OTA_SOCKET_RX_BUF_SIZE] as *mut [u8]) };
+        let tx: &'static mut [u8] =
+            unsafe { &mut *(self.tx_buf as *mut [u8; OTA_SOCKET_TX_BUF_SIZE] as *mut [u8]) };
+        TcpSocket::new(*stack, rx, tx)
+    }
 }
 
 /// Perform an OTA update by downloading firmware from the given HTTP URL.
@@ -114,13 +128,7 @@ pub async fn perform_ota_update(
     info!("OTA: downloading from {}:{}{}", host, port, path);
 
     // Reuse pre-allocated TCP socket buffers.
-    // SAFETY: We are the only task accessing these buffers. The previous
-    // TcpSocket (if any) was dropped at the end of the last call.
-    let rx: &'static mut [u8] =
-        unsafe { &mut *(buffers.rx_buf as *mut [u8; OTA_SOCKET_RX_BUF_SIZE] as *mut [u8]) };
-    let tx: &'static mut [u8] =
-        unsafe { &mut *(buffers.tx_buf as *mut [u8; OTA_SOCKET_TX_BUF_SIZE] as *mut [u8]) };
-    let mut socket = TcpSocket::new(*stack, rx, tx);
+    let mut socket = buffers.create_socket(stack);
     socket.set_timeout(Some(Duration::from_secs(OTA_DOWNLOAD_TIMEOUT_SECS as u64)));
 
     // Resolve host: try IPv4 parse first, then DNS
@@ -305,11 +313,7 @@ pub async fn tcp_test(
     );
 
     // Reuse pre-allocated TCP socket buffers (same pattern as perform_ota_update)
-    let rx: &'static mut [u8] =
-        unsafe { &mut *(buffers.rx_buf as *mut [u8; OTA_SOCKET_RX_BUF_SIZE] as *mut [u8]) };
-    let tx: &'static mut [u8] =
-        unsafe { &mut *(buffers.tx_buf as *mut [u8; OTA_SOCKET_TX_BUF_SIZE] as *mut [u8]) };
-    let mut socket = TcpSocket::new(*stack, rx, tx);
+    let mut socket = buffers.create_socket(stack);
     socket.set_timeout(Some(Duration::from_secs(OTA_TCP_TEST_TIMEOUT_SECS as u64)));
 
     info!("TCP_TEST: resolving host '{}'", host);

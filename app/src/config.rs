@@ -19,8 +19,11 @@ const KEY_MQTT_USER: &str = "mqtt_user";
 const KEY_MQTT_PASS: &str = "mqtt_pass";
 const KEY_DEVICE_ID: &str = "device_id";
 
+const DEFAULT_MQTT_HOST: &str = "192.168.1.100";
+const DEFAULT_MQTT_PORT: u16 = 1883;
+const DEFAULT_DEVICE_ID: &str = "launa_spa";
+
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct AppConfig {
     pub wifi_ssid: String,
     pub wifi_password: String,
@@ -36,11 +39,11 @@ impl Default for AppConfig {
         AppConfig {
             wifi_ssid: String::from("YOUR_WIFI_SSID"),
             wifi_password: String::from("YOUR_WIFI_PASSWORD"),
-            mqtt_host: String::from("192.168.1.100"),
-            mqtt_port: 1883,
+            mqtt_host: String::from(DEFAULT_MQTT_HOST),
+            mqtt_port: DEFAULT_MQTT_PORT,
             mqtt_user: String::new(),
             mqtt_password: String::new(),
-            device_id: String::from("launa_spa"),
+            device_id: String::from(DEFAULT_DEVICE_ID),
         }
     }
 }
@@ -64,16 +67,16 @@ impl AppConfig {
             .map(|v| crypto::maybe_decrypt(&v, aes, rng))
             .unwrap_or_else(|| String::from(Self::PLACEHOLDER_WIFI_PASS));
         let mqtt_host =
-            nvs_get_str(nvs, &ns, KEY_MQTT_HOST).unwrap_or_else(|| String::from("192.168.1.100"));
+            nvs_get_str(nvs, &ns, KEY_MQTT_HOST).unwrap_or_else(|| String::from(DEFAULT_MQTT_HOST));
         let mqtt_port = nvs
             .get::<u16>(&ns, &esp_nvs::Key::from_str(KEY_MQTT_PORT))
-            .unwrap_or(1883);
+            .unwrap_or(DEFAULT_MQTT_PORT);
         let mqtt_user = nvs_get_str(nvs, &ns, KEY_MQTT_USER).unwrap_or_else(|| String::new());
         let mqtt_password = nvs_get_str(nvs, &ns, KEY_MQTT_PASS)
             .map(|v| crypto::maybe_decrypt(&v, aes, rng))
             .unwrap_or_else(|| String::new());
         let device_id =
-            nvs_get_str(nvs, &ns, KEY_DEVICE_ID).unwrap_or_else(|| String::from("launa_spa"));
+            nvs_get_str(nvs, &ns, KEY_DEVICE_ID).unwrap_or_else(|| String::from(DEFAULT_DEVICE_ID));
 
         let has_placeholder_creds =
             wifi_ssid == Self::PLACEHOLDER_SSID || wifi_password == Self::PLACEHOLDER_WIFI_PASS;
@@ -104,7 +107,6 @@ impl AppConfig {
         }
     }
 
-    #[allow(dead_code)]
     pub fn save(
         &self,
         nvs: &mut esp_nvs::Nvs<esp_storage::FlashStorage<'static>>,
@@ -169,7 +171,6 @@ fn nvs_get_str(
 }
 
 /// Write a value to NVS, logging a warning on failure.
-#[allow(dead_code)]
 fn nvs_set<R>(
     nvs: &mut esp_nvs::Nvs<esp_storage::FlashStorage<'static>>,
     namespace: &esp_nvs::Key,
