@@ -117,6 +117,13 @@ fn push_capped<T>(deque: &mut VecDeque<T>, item: T, max: usize) {
     deque.push_back(item);
 }
 
+/// Convert a `HashMap<String, VecDeque<T>>` to `HashMap<String, Vec<T>>` for JSON serialization.
+fn deque_map_to_vec<T: Clone>(map: &HashMap<String, VecDeque<T>>) -> HashMap<String, Vec<T>> {
+    map.iter()
+        .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
+        .collect()
+}
+
 /// Return the last `limit` items in chronological order (oldest first).
 fn recent<T: Clone>(deque: &VecDeque<T>, limit: usize) -> Vec<T> {
     let skip = deque.len().saturating_sub(limit);
@@ -258,41 +265,13 @@ impl MemoryStore {
         let serialized = SerializedStore {
             devices: self.devices.clone(),
             accessory_config: Some(self.accessory_config.clone()),
-            logs: self
-                .logs
-                .iter()
-                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
-                .collect(),
-            diagnostics: self
-                .diagnostics
-                .iter()
-                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
-                .collect(),
-            alerts: self
-                .alerts
-                .iter()
-                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
-                .collect(),
-            sniff_frames: self
-                .sniff_frames
-                .iter()
-                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
-                .collect(),
-            availability: self
-                .availability
-                .iter()
-                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
-                .collect(),
-            temperatures: self
-                .temperatures
-                .iter()
-                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
-                .collect(),
-            component_events: self
-                .component_events
-                .iter()
-                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
-                .collect(),
+            logs: deque_map_to_vec(&self.logs),
+            diagnostics: deque_map_to_vec(&self.diagnostics),
+            alerts: deque_map_to_vec(&self.alerts),
+            sniff_frames: deque_map_to_vec(&self.sniff_frames),
+            availability: deque_map_to_vec(&self.availability),
+            temperatures: deque_map_to_vec(&self.temperatures),
+            component_events: deque_map_to_vec(&self.component_events),
         };
         match serde_json::to_string(&serialized) {
             Ok(json) => {

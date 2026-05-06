@@ -364,7 +364,18 @@ mod tests {
     use super::*;
 
     fn encode_remaining_length_helper(buf: &mut Vec<u8>, len: usize) {
-        encode_remaining_length(buf, len);
+        let mut len = len;
+        loop {
+            let mut byte = (len & 0x7F) as u8;
+            len >>= 7;
+            if len > 0 {
+                byte |= 0x80;
+            }
+            buf.push(byte);
+            if len == 0 {
+                break;
+            }
+        }
     }
 
     // ── encode_remaining_length tests ──

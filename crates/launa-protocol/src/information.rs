@@ -6,6 +6,7 @@
 /// Field:  SI SI SV SV SM(8B)   SU CS(4B)    HT HT  DS DS
 /// ```
 extern crate alloc;
+
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -38,7 +39,6 @@ pub enum HeaterVoltage {
 pub enum HeaterType {
     Unknown(u8),
     Standard,
-    // Other known variants can be added
 }
 
 impl HeaterVoltage {

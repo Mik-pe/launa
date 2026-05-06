@@ -7,7 +7,9 @@ use chrono::Utc;
 use serde::Deserialize;
 use tracing::info;
 
-use crate::memory::{DeviceSummary, GraphData, MemoryStore};
+use crate::memory::{
+    AccessoryConfigData as AccessoryConfig, DeviceSummary, GraphData, MemoryStore,
+};
 use crate::Config;
 
 pub async fn start(
@@ -78,9 +80,6 @@ pub fn build_router(state: AppState) -> Router {
 pub struct AppState {
     pub mem: Arc<RwLock<MemoryStore>>,
 }
-
-/// Re-export for convenience; the web layer serializes this as the config API shape.
-pub use crate::memory::AccessoryConfigData as AccessoryConfig;
 
 // --- Query parameter types ---
 

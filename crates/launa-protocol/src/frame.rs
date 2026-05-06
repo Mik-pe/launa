@@ -480,7 +480,6 @@ mod tests {
             decoder.feed(0x40 + (i % 10) as u8); // non-marker, non-escape bytes
         }
 
-        // Buffer should have been cleared on overflow, state reset, frame_error_count incremented
         assert_eq!(decoder.frame_error_count(), 1);
     }
 

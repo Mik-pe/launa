@@ -691,8 +691,12 @@ pub fn derive_client_hash(device_id: &str) -> [u8; 2] {
         h ^= b as u16;
         h = h.wrapping_mul(0x0101); // FNV-1a 16-bit prime
     }
-    if h == 0 { h = 1; }
-    if h == 0xF173 { h = 0xF174; }
+    if h == 0 {
+        h = 1;
+    }
+    if h == 0xF173 {
+        h = 0xF174;
+    }
     [(h >> 8) as u8, (h & 0xFF) as u8]
 }
 

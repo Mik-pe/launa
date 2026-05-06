@@ -51,5 +51,5 @@ pub use log_buffer::{LogEntry, RemoteLogBuffer, MAX_LOG_MESSAGE_LEN, REMOTE_LOG_
 pub use network::{backoff_secs, parse_ip};
 pub use rate_limiter::{RateLimiter, RATE_LIMIT_MAX_COMMANDS, RATE_LIMIT_WINDOW_MS};
 pub use rate_log::{RateLog, RATE_LOG_COOLDOWN_SECS};
-pub use spa_app::{SpaApp, derive_client_hash};
+pub use spa_app::{derive_client_hash, SpaApp};
 pub use timers::{HoldModeTimer, PumpTimer, PumpTimerManager};

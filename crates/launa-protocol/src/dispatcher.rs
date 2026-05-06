@@ -343,7 +343,6 @@ mod tests {
     use super::*;
     use crate::status::{HeatingMode, PumpState, TempRange, TemperatureScale};
     use crate::Temperature;
-    use std::string::String;
 
     fn hex_decode(s: &str) -> Vec<u8> {
         (0..s.len())
