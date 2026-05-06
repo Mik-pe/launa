@@ -372,14 +372,15 @@ async fn read_response_window(
     uart: &mut Uart<'static, esp_hal::Async>,
     frame_decoder: &mut FrameDecoder,
     read_buf: &mut [u8],
+    frames: &mut Vec<launa_protocol::frame::Frame>,
     window: Duration,
-) -> (u64, Vec<launa_protocol::frame::Frame>) {
+) -> u64 {
     let deadline = Instant::now() + window;
     let mut rx_bytes: u64 = 0;
-    let mut frames = Vec::new();
+    frames.clear();
 
     while Instant::now() < deadline {
-        let remaining = deadline - Instant::now();
+        let remaining = deadline.saturating_duration_since(Instant::now());
         let timeout = remaining.min(Duration::from_millis(2));
 
         match select(uart.read_async(read_buf), Timer::after(timeout)).await {
@@ -397,7 +398,7 @@ async fn read_response_window(
         }
     }
 
-    (rx_bytes, frames)
+    rx_bytes
 }
 
 // ── Frame extraction helpers ─────────────────────────────────────────
@@ -512,6 +513,11 @@ async fn main(spawner: Spawner) {
 
     info!("Spa simulator started, realistic ~20ms frame timing...");
 
+    // Pre-allocate hot-loop Vecs outside the loop to reduce heap churn.
+    // Reused every ~20ms iteration (50Hz); clear() preserves capacity.
+    let mut tx_data = Vec::with_capacity(64);
+    let mut response_frames = Vec::with_capacity(8);
+
     loop {
         // ── Phase 1: TX — Send CTS/Status/Query frame ──
         //
@@ -523,7 +529,7 @@ async fn main(spawner: Spawner) {
         // We TX first, then open a brief response window for the client.
         // This matches the real spa's behavior: it sends, then listens for
         // the display panel's response in the next ~1-2ms.
-        let mut tx_data = Vec::new();
+        tx_data.clear();
 
         // Determine if this CTS slot should carry a registration query instead.
         // The real BP6013G1 sends FEBF 00 in its own ~20ms slot (never combined
@@ -593,10 +599,11 @@ async fn main(spawner: Spawner) {
         // Capture frame error count before RX window for delta tracking
         let prev_err = frame_decoder.frame_error_count();
 
-        let (window_bytes, frames) = read_response_window(
+        let window_bytes = read_response_window(
             &mut uart,
             &mut frame_decoder,
             &mut read_buf,
+            &mut response_frames,
             RX_RESPONSE_WINDOW,
         )
         .await;
@@ -613,7 +620,7 @@ async fn main(spawner: Spawner) {
         }
 
         // Process decoded frames
-        for frame in &frames {
+        for frame in &response_frames {
             decoded_frames += 1;
             let mt = alloc::format!(
                 "{:02X}{:02X}",
@@ -722,7 +729,7 @@ async fn main(spawner: Spawner) {
         // Wait until next frame interval
         let now = Instant::now();
         if now < frame_deadline {
-            Timer::after(frame_deadline - now).await;
+            Timer::after(frame_deadline.saturating_duration_since(now)).await;
         }
 
         // Advance sub-frame counter
