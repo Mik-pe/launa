@@ -257,8 +257,10 @@ where
 
         // Check if the running partition's otadata slot has a valid CRC
         // and points to the correct partition.
-        let running_entry = if running_slot == 0 { &entry0 } else { &entry1 };
-        let running_valid = if running_slot == 0 { valid0 } else { valid1 };
+        let entries = [&entry0, &entry1];
+        let valids = [valid0, valid1];
+        let running_entry = entries[running_slot];
+        let running_valid = valids[running_slot];
         let running_seq = if running_valid {
             crate::flash::seq_from_entry(running_entry)
         } else {
@@ -266,7 +268,7 @@ where
         };
         let running_correct = running_seq > 0 && (running_seq - 1) % 2 == running_slot as u32;
 
-        let other_valid = if running_slot == 0 { valid1 } else { valid0 };
+        let other_valid = valids[1 - running_slot];
 
         if running_correct && other_valid {
             debug!(
@@ -293,8 +295,10 @@ where
             };
         let running_index = self.running.index();
 
-        let entry = if running_index == 0 { &entry0 } else { &entry1 };
-        let valid = if running_index == 0 { valid0 } else { valid1 };
+        let entries = [&entry0, &entry1];
+        let valids = [valid0, valid1];
+        let entry = entries[running_index];
+        let valid = valids[running_index];
 
         // If CRC is invalid, needs validation
         if !valid {

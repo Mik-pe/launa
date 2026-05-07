@@ -122,15 +122,21 @@ pub fn parse_content_length(headers: &[u8]) -> Option<u32> {
     value_str.trim().parse::<u32>().ok()
 }
 
-/// Case-insensitive version of `find_header_value_start`.
+/// Common implementation for finding the start of a header value.
 ///
-/// Compares bytes case-insensitively without allocating a lowercase copy.
-fn find_header_value_start_case_insensitive(headers: &[u8], name: &[u8]) -> Option<usize> {
+/// Iterates over HTTP header lines and uses the `matches` closure to compare
+/// each line start against `name`. Returns the position of the first non-space
+/// byte after the matched header name.
+fn find_header_value_start_impl(
+    headers: &[u8],
+    name: &[u8],
+    matches: impl Fn(&[u8], &[u8]) -> bool,
+) -> Option<usize> {
     if name.is_empty() {
         return None;
     }
     // Check at position 0 (first line)
-    if starts_with_ignore_case(headers, name) {
+    if matches(headers, name) {
         return Some(skip_spaces(headers, name.len()));
     }
     // Check after each \r\n
@@ -142,7 +148,7 @@ fn find_header_value_start_case_insensitive(headers: &[u8], name: &[u8]) -> Opti
             .position(|w| w == separator)
         {
             let line_start = search_start + pos + separator.len();
-            if starts_with_ignore_case(&headers[line_start..], name) {
+            if matches(&headers[line_start..], name) {
                 let abs_pos = line_start + name.len();
                 return Some(skip_spaces(headers, abs_pos));
             }
@@ -152,6 +158,25 @@ fn find_header_value_start_case_insensitive(headers: &[u8], name: &[u8]) -> Opti
         }
     }
     None
+}
+
+/// Find the start of a header value after the header name (case-sensitive).
+///
+/// Performs a case-sensitive search for `name` in `headers`, only matching
+/// at the start of a line (i.e., at position 0 or immediately after `\r\n`).
+/// Returns the position of the first non-space byte after the header name.
+/// Returns `None` if the header name is not found.
+pub fn find_header_value_start(headers: &[u8], name: &[u8]) -> Option<usize> {
+    find_header_value_start_impl(headers, name, |data, prefix| {
+        data.get(..prefix.len()) == Some(prefix)
+    })
+}
+
+/// Case-insensitive version of `find_header_value_start`.
+///
+/// Compares bytes case-insensitively without allocating a lowercase copy.
+fn find_header_value_start_case_insensitive(headers: &[u8], name: &[u8]) -> Option<usize> {
+    find_header_value_start_impl(headers, name, starts_with_ignore_case)
 }
 
 /// Check if `data` starts with `prefix`, comparing case-insensitively.
@@ -169,40 +194,6 @@ fn skip_spaces(data: &[u8], mut pos: usize) -> usize {
         pos += 1;
     }
     pos
-}
-
-/// Find the start of a header value after the header name.
-///
-/// Performs a case-sensitive search for `name` in `headers`, only matching
-/// at the start of a line (i.e., at position 0 or immediately after `\r\n`).
-/// Returns the position of the first non-space byte after the header name.
-/// Returns `None` if the header name is not found.
-pub fn find_header_value_start(headers: &[u8], name: &[u8]) -> Option<usize> {
-    if name.is_empty() {
-        return None;
-    }
-    // Check at position 0 (first line)
-    if headers.get(..name.len()) == Some(name) {
-        return Some(skip_spaces(headers, name.len()));
-    }
-    // Check after each \r\n
-    let separator = b"\r\n";
-    let mut search_start = 0;
-    while search_start + separator.len() < headers.len() {
-        if let Some(pos) = headers[search_start..]
-            .windows(separator.len())
-            .position(|w| w == separator)
-        {
-            let line_start = search_start + pos + separator.len();
-            if headers.get(line_start..line_start + name.len()) == Some(name) {
-                return Some(skip_spaces(headers, line_start + name.len()));
-            }
-            search_start = line_start;
-        } else {
-            break;
-        }
-    }
-    None
 }
 
 #[cfg(test)]
