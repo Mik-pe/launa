@@ -30,15 +30,13 @@ impl SpaConfig {
             return Err(ConfigError::UnexpectedLength(payload.len()));
         }
 
-        let decode_pump = |bits: u8| match bits {
-            0 => PumpConfig::None,
-            1 => PumpConfig::SingleSpeed,
-            2 => PumpConfig::TwoSpeed,
-            _ => PumpConfig::None,
-        };
-
-        let raw_pumps = crate::pump_bits::decode_pump_raw(payload[5], payload[6]);
-        let pump_configs = raw_pumps.map(decode_pump);
+        let pump_configs =
+            crate::pump_bits::decode_pumps(payload[5], payload[6], |bits| match bits {
+                0 => PumpConfig::None,
+                1 => PumpConfig::SingleSpeed,
+                2 => PumpConfig::TwoSpeed,
+                _ => PumpConfig::None,
+            });
 
         Ok(SpaConfig {
             pump_configs,

@@ -139,6 +139,21 @@ impl FrameDecoder {
         self.max_buffer_size
     }
 
+    /// Reset decoder to idle state and increment the error counter.
+    fn reset_on_error(&mut self) {
+        self.buffer.clear();
+        self.in_frame = false;
+        self.expected_length = 0;
+        self.frame_error_count = self.frame_error_count.saturating_add(1);
+    }
+
+    /// Reset decoder to idle state (after successful frame decode or to prepare for new frame).
+    fn reset(&mut self) {
+        self.buffer.clear();
+        self.in_frame = false;
+        self.expected_length = 0;
+    }
+
     /// Feed a single byte. Returns `Some(Frame)` when a complete frame is decoded.
     ///
     /// Uses length-field framing: once the first byte after the start marker is
@@ -151,9 +166,7 @@ impl FrameDecoder {
                     // We have enough bytes — try to parse using length-field framing.
                     // Use only the bytes up to expected_length for the frame body.
                     let result = Frame::parse(&self.buffer[..self.expected_length]);
-                    self.buffer.clear();
-                    self.in_frame = false;
-                    self.expected_length = 0;
+                    self.reset();
                     match result {
                         Ok(frame) => Some(frame),
                         Err(_) => {
@@ -171,10 +184,7 @@ impl FrameDecoder {
                 } else if !self.buffer.is_empty() {
                     // No length known yet (only 1 byte buffered which is the length).
                     // A premature 0x7E means malformed data — treat as error.
-                    self.buffer.clear();
-                    self.in_frame = false;
-                    self.expected_length = 0;
-                    self.frame_error_count = self.frame_error_count.saturating_add(1);
+                    self.reset_on_error();
                     // This 0x7E might be a new start marker, so start a new frame
                     self.in_frame = true;
                     None
@@ -185,9 +195,9 @@ impl FrameDecoder {
                 }
             } else {
                 // Start of a new frame
-                self.in_frame = true;
                 self.buffer.clear();
                 self.expected_length = 0;
+                self.in_frame = true;
                 None
             }
         } else if self.in_frame {
@@ -198,17 +208,11 @@ impl FrameDecoder {
                 self.expected_length = byte as usize;
                 // Validate: minimum frame length is 4 (length + type(2) + crc)
                 if self.expected_length < 4 {
-                    self.buffer.clear();
-                    self.in_frame = false;
-                    self.expected_length = 0;
-                    self.frame_error_count = self.frame_error_count.saturating_add(1);
+                    self.reset_on_error();
                     return None;
                 }
                 if self.expected_length > self.max_buffer_size {
-                    self.buffer.clear();
-                    self.in_frame = false;
-                    self.expected_length = 0;
-                    self.frame_error_count = self.frame_error_count.saturating_add(1);
+                    self.reset_on_error();
                     return None;
                 }
             }
@@ -253,10 +257,7 @@ impl FrameDecoder {
                 self.buffer.push(data[i]);
                 self.expected_length = data[i] as usize;
                 if self.expected_length < 4 || self.expected_length > self.max_buffer_size {
-                    self.buffer.clear();
-                    self.in_frame = false;
-                    self.expected_length = 0;
-                    self.frame_error_count = self.frame_error_count.saturating_add(1);
+                    self.reset_on_error();
                 }
                 i += 1;
                 continue;
@@ -280,9 +281,7 @@ impl FrameDecoder {
             if i < data.len() {
                 if data[i] == FRAME_MARKER {
                     let result = Frame::parse(&self.buffer[..self.expected_length]);
-                    self.buffer.clear();
-                    self.in_frame = false;
-                    self.expected_length = 0;
+                    self.reset();
                     match result {
                         Ok(frame) => frames.push(frame),
                         Err(_) => {
@@ -291,10 +290,7 @@ impl FrameDecoder {
                     }
                 } else {
                     // Expected end marker but got something else — frame error
-                    self.buffer.clear();
-                    self.in_frame = false;
-                    self.expected_length = 0;
-                    self.frame_error_count = self.frame_error_count.saturating_add(1);
+                    self.reset_on_error();
                 }
                 i += 1;
             }

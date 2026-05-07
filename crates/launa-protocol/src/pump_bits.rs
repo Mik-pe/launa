@@ -19,3 +19,14 @@ pub fn decode_pump_raw(byte1: u8, byte2: u8) -> [u8; 6] {
         (byte2 >> 2) & 0x03,
     ]
 }
+
+/// Decode 6 packed pump bytes into typed pump values using a conversion function.
+///
+/// `f` maps raw 2-bit values (0–3) to the target type:
+/// - 0 → off/none variant
+/// - 1 → low/single-speed variant
+/// - 2 → high/two-speed variant
+/// - _ (3 or other) → fallback (typically same as 0)
+pub fn decode_pumps<T>(byte1: u8, byte2: u8, f: impl Fn(u8) -> T) -> [T; 6] {
+    decode_pump_raw(byte1, byte2).map(f)
+}

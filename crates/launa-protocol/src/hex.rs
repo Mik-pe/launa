@@ -9,22 +9,14 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
+
 /// Convert a byte slice to a lowercase hex string.
 pub fn to_hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for &b in bytes {
-        let hi = (b >> 4) & 0x0f;
-        let lo = b & 0x0f;
-        s.push(if hi < 10 {
-            (b'0' + hi) as char
-        } else {
-            (b'a' + hi - 10) as char
-        });
-        s.push(if lo < 10 {
-            (b'0' + lo) as char
-        } else {
-            (b'a' + lo - 10) as char
-        });
+        s.push(HEX_CHARS[(b >> 4) as usize] as char);
+        s.push(HEX_CHARS[(b & 0x0f) as usize] as char);
     }
     s
 }
@@ -35,6 +27,16 @@ pub fn to_hex(bytes: &[u8]) -> String {
 /// on the 32 KiB ESP32 heap.
 pub const MAX_HEX_LEN: usize = 1024;
 
+/// Decode a single hex nibble (ASCII byte) to its numeric value (0–15).
+/// Returns `None` for non-hex characters.
+fn decode_nibble(byte: u8) -> Option<u8> {
+    match byte.to_ascii_lowercase() {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte.to_ascii_lowercase() - b'a' + 10),
+        _ => None,
+    }
+}
+
 /// Parse a hex string into a byte vector.
 ///
 /// Returns `None` if the input has odd length, contains non-hex characters,
@@ -43,23 +45,16 @@ pub fn from_hex(hex: &str) -> Option<Vec<u8>> {
     if !hex.len().is_multiple_of(2) || hex.len() > MAX_HEX_LEN {
         return None;
     }
-    let mut bytes = Vec::with_capacity(hex.len() / 2);
-    for i in (0..hex.len()).step_by(2) {
-        let hi = hex.as_bytes()[i].to_ascii_lowercase();
-        let lo = hex.as_bytes()[i + 1].to_ascii_lowercase();
-        let h = match hi {
-            b'0'..=b'9' => hi - b'0',
-            b'a'..=b'f' => hi - b'a' + 10,
-            _ => return None,
-        };
-        let l = match lo {
-            b'0'..=b'9' => lo - b'0',
-            b'a'..=b'f' => lo - b'a' + 10,
-            _ => return None,
-        };
-        bytes.push(h << 4 | l);
-    }
-    Some(bytes)
+    let bytes = hex
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let hi = decode_nibble(pair[0])?;
+            let lo = decode_nibble(pair[1])?;
+            Some(hi << 4 | lo)
+        })
+        .collect::<Option<Vec<u8>>>();
+    bytes
 }
 
 #[cfg(test)]

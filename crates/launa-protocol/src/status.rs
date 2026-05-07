@@ -134,8 +134,7 @@ impl StatusUpdate {
             _ => HeatingMode::Ready,
         };
 
-        let raw_pumps = crate::pump_bits::decode_pump_raw(payload[11], payload[12]);
-        let pumps = raw_pumps.map(decode_pump_state);
+        let pumps = crate::pump_bits::decode_pumps(payload[11], payload[12], decode_pump_state);
 
         let circ_blower = payload[13];
         let circ_pump = circ_blower & 0x02 != 0;

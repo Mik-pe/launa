@@ -43,9 +43,7 @@ pub enum IncomingMessage {
     },
 }
 
-// ---------------------------------------------------------------------------
 // Helper: construct Unknown variant
-// ---------------------------------------------------------------------------
 
 #[inline]
 fn unknown_msg(msg_type: [u8; 2], payload: &[u8]) -> IncomingMessage {
@@ -83,9 +81,7 @@ where
     }
 }
 
-// ---------------------------------------------------------------------------
 // Per-message-type handlers
-// ---------------------------------------------------------------------------
 
 /// Handle status update frames (message type `FF AF`).
 ///
@@ -289,9 +285,7 @@ fn handle_0abf(msg_type: [u8; 2], payload: &[u8]) -> IncomingMessage {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Main dispatcher — thin router
-// ---------------------------------------------------------------------------
 
 /// Dispatch a parsed frame into a typed `IncomingMessage`.
 pub fn dispatch_frame(frame: &Frame) -> IncomingMessage {

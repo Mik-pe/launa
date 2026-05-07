@@ -21,9 +21,7 @@ extern crate alloc;
 
 use crate::frame::{FrameEncoder, FrameError};
 
-// ---------------------------------------------------------------------------
 // Channel type
-// ---------------------------------------------------------------------------
 
 /// Valid client channel range (CTS-based, most common).
 pub const CLIENT_CTS_RANGE: core::ops::RangeInclusive<u8> = 0x10..=0x2F;
@@ -121,9 +119,7 @@ impl core::fmt::Display for Channel {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Typed registration messages
-// ---------------------------------------------------------------------------
 
 /// A parsed registration protocol message from the RS-485 bus.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -312,9 +308,7 @@ impl RegistrationMessage {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Registration state machine
-// ---------------------------------------------------------------------------
 
 /// Client ID registration state.
 ///
@@ -497,9 +491,7 @@ impl RegistrationStateMachine {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
