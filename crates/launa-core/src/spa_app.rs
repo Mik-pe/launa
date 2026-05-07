@@ -243,16 +243,30 @@ impl<'a> SpaApp<'a> {
         self.failed_registration_attempts = 0;
     }
 
-    /// Force-reset the registration state machine to WaitingForQuery (for tests).
-    /// Useful after injecting rapid NewClientQuery frames that leave the SM
-    /// in WaitingForAssignment state with no pending assignment response.
-    pub fn force_reset_registration(&mut self) {
+    /// Reset registration state and optionally clear command queues.
+    ///
+    /// Centralizes the registration reset pattern used on CTS loss, stale
+    /// detection, and test helpers. When `clear_commands` is true, also
+    /// clears the command queue, tracker, and pump timers.
+    fn reset_registration_state(&mut self, clear_commands: bool) {
         self.registration.reset();
         self.client_id = None;
         self.registration_started_at = None;
         self.last_unregistered_frame_time = None;
         self.last_registration_probe_time = None;
         self.last_cts_time = None;
+        if clear_commands {
+            self.command_queue.clear();
+            self.cmd_tracker.reset();
+            self.pump_timers.cancel_all();
+        }
+    }
+
+    /// Force-reset the registration state machine to WaitingForQuery (for tests).
+    /// Useful after injecting rapid NewClientQuery frames that leave the SM
+    /// in WaitingForAssignment state with no pending assignment response.
+    pub fn force_reset_registration(&mut self) {
+        self.reset_registration_state(false);
     }
 
     /// Rotate the client hash to try a different identity on the bus.
@@ -602,15 +616,7 @@ impl<'a> SpaApp<'a> {
                     "CTS loss detected: {} — resetting registration",
                     elapsed_desc
                 );
-                self.registration.reset();
-                self.client_id = None;
-                self.registration_started_at = None;
-                self.last_unregistered_frame_time = None;
-                self.last_registration_probe_time = None;
-                self.last_cts_time = None;
-                self.command_queue.clear();
-                self.cmd_tracker.reset();
-                self.pump_timers.cancel_all();
+                self.reset_registration_state(true);
                 actions.push(AppAction::PublishAlert {
                     level: String::from("warn"),
                     message: String::from("cts_loss"),
@@ -642,15 +648,7 @@ impl<'a> SpaApp<'a> {
             // The spa may have rebooted and forgotten our client ID.
             if elapsed >= STALE_THRESHOLD_MS && !self.was_stale {
                 self.was_stale = true;
-                self.registration.reset();
-                self.client_id = None;
-                self.registration_started_at = None;
-                self.last_unregistered_frame_time = None;
-                self.last_registration_probe_time = None;
-                self.last_cts_time = None;
-                self.command_queue.clear();
-                self.cmd_tracker.reset();
-                self.pump_timers.cancel_all();
+                self.reset_registration_state(true);
                 actions.push(AppAction::PublishAlert {
                     level: String::from("warn"),
                     message: String::from("spa_communication_lost"),

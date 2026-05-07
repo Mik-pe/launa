@@ -67,11 +67,17 @@ impl RemoteLogBuffer {
             return;
         }
 
-        let mut truncated: String = message.chars().take(MAX_LOG_MESSAGE_LEN).collect();
-        // Ensure byte length doesn't exceed limit (multi-byte UTF-8)
-        while truncated.len() > MAX_LOG_MESSAGE_LEN {
-            truncated.pop();
-        }
+        let truncated: String = message
+            .chars()
+            .scan(0, |bytes, ch| {
+                *bytes += ch.len_utf8();
+                if *bytes > MAX_LOG_MESSAGE_LEN {
+                    None
+                } else {
+                    Some(ch)
+                }
+            })
+            .collect();
         let entry = LogEntry {
             level,
             message: truncated,
@@ -101,9 +107,7 @@ impl RemoteLogBuffer {
         let mut result = Vec::new();
         for i in 0..capacity {
             let idx = (self.head + i) % self.entries.len();
-            if idx < self.entries.len() {
-                result.push(self.entries[idx].clone());
-            }
+            result.push(self.entries[idx].clone());
         }
 
         self.entries.clear();
