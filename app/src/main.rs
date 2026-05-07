@@ -325,7 +325,7 @@ async fn execute_actions(
             } => {
                 let frame_errors = FRAME_ERROR_COUNT.load(Ordering::Relaxed);
                 let uart_bytes = UART_BYTES_RECEIVED.load(Ordering::Relaxed);
-                let uart_active = UART_FIRST_BYTE_SEEN.load(Ordering::Relaxed) as u32;
+                let uart_active = u32::from(UART_FIRST_BYTE_SEEN.load(Ordering::Relaxed));
                 publish_diagnostics(
                     device_id,
                     *uptime_secs,
@@ -779,6 +779,32 @@ async fn main(spawner: Spawner) {
                 crash_info::set_nvs_ptr(&mut nvs);
             }
 
+            // Early serial config check: if NVS has placeholder credentials,
+            // poll UART0 RX FIFO for config-flash data before proceeding.
+            // This allows config-flash to work even when NVS is empty (device
+            // can't reach main loop without valid WiFi credentials).
+            // Runs for up to 5 seconds, checking every 100ms.
+            let is_placeholder = app_config.wifi_ssid == config::AppConfig::PLACEHOLDER_SSID
+                || app_config.wifi_password == config::AppConfig::PLACEHOLDER_WIFI_PASS;
+            if is_placeholder {
+                info!("Placeholder credentials detected, waiting for serial config (5s window)...");
+                crash_info::clear_nvs_ptr(); // safe to clear before polling
+                let mut serial_cfg = serial_config::SerialConfigReceiver::new();
+                let start = embassy_time::Instant::now();
+                loop {
+                    if let Some(new_config) = serial_cfg.poll() {
+                        new_config.save(&mut nvs, &mut aes, &mut rng);
+                        info!("Serial config saved to NVS (early), rebooting...");
+                        esp_hal::system::software_reset();
+                    }
+                    if start.elapsed().as_secs() >= 5 {
+                        info!("No serial config received, proceeding with placeholder config");
+                        break;
+                    }
+                    embassy_time::Timer::after(embassy_time::Duration::from_millis(100)).await;
+                }
+            }
+
             nvs_handle = Some(nvs);
         }
         None => {
@@ -843,18 +869,17 @@ async fn main(spawner: Spawner) {
     MQTT_CONNECTED_SIGNAL.wait().await;
 
     // Publish crash alarm from previous boot if present.
-    if let Some(ref crash) = pending_crash_alarm {
-        let alarm_json = crash_info::crash_alarm_json(crash, FIRMWARE_VERSION);
-        let _ = ALERT_CHANNEL.try_send(Vec::from(alarm_json.as_bytes()));
+    if let Some(crash) = pending_crash_alarm.take() {
+        let alarm_json = crash_info::crash_alarm_json(&crash, FIRMWARE_VERSION);
+        let _ = ALERT_CHANNEL.try_send(alarm_json.into_bytes());
         info!("Crash alarm queued: reason={}", crash.reason.as_str());
-        pending_crash_alarm.take();
     }
 
     let device_id_str: &str = &app_config.device_id;
     let ota_rx = OTA_CHANNEL.receiver();
 
     // --- OTA Validation (runs only when partition is freshly flashed) ---
-    if ota.as_mut().map_or(false, |o| o.needs_validation()) {
+    if ota.as_mut().is_some_and(|o| o.needs_validation()) {
         info!("OTA partition unvalidated, running boot validation...");
         let mut validation_loop = MainLoop::new(device_id_str);
         // Run a few ticks to prove core logic doesn't crash

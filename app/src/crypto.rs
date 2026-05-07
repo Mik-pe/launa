@@ -74,8 +74,9 @@ fn read_key() -> [u8; 16] {
 /// Generate a 12-byte random nonce using the hardware RNG.
 fn random_nonce(rng: &mut Rng) -> [u8; 12] {
     let mut nonce = [0u8; 12];
-    for byte in nonce.iter_mut() {
-        *byte = rng.random() as u8;
+    for chunk in nonce.chunks_exact_mut(4) {
+        let rand_u32: [u8; 4] = rng.random().to_le_bytes();
+        chunk.copy_from_slice(&rand_u32);
     }
     nonce
 }
@@ -87,6 +88,20 @@ fn increment_counter(counter: &mut [u8; 16]) {
         if *byte != 0 {
             break;
         }
+    }
+}
+
+/// CTR-mode encrypt/decrypt in-place. For each 16-byte block, encrypts the
+/// counter to produce a keystream block, XORs it with the data, then increments
+/// the counter. CTR mode is symmetric: encrypt and decrypt are the same operation.
+fn ctr_crypt(buf: &mut [u8], aes: &mut Aes, key: &[u8; 16], counter: &mut [u8; 16]) {
+    for chunk in buf.chunks_exact_mut(16) {
+        let mut keystream = *counter;
+        aes.encrypt(&mut keystream, Key::Key128(*key));
+        for (i, b) in chunk.iter_mut().enumerate() {
+            *b ^= keystream[i];
+        }
+        increment_counter(counter);
     }
 }
 
@@ -118,19 +133,7 @@ pub fn encrypt(plaintext: &str, aes: &mut Aes, rng: &mut Rng) -> String {
 
     // CTR-mode encrypt: for each 16-byte block, encrypt counter to get
     // keystream, XOR with plaintext, then increment counter.
-    for chunk in buf.chunks_exact_mut(16) {
-        // Encrypt counter to get keystream block (uses public Aes::encrypt API)
-        let mut keystream = counter;
-        aes.encrypt(&mut keystream, Key::Key128(key));
-
-        // XOR plaintext with keystream
-        for (i, b) in chunk.iter_mut().enumerate() {
-            *b ^= keystream[i];
-        }
-
-        // Increment counter for next block
-        increment_counter(&mut counter);
-    }
+    ctr_crypt(&mut buf, aes, &key, &mut counter);
 
     // Build output: "enc:" + hex(nonce_12 + ciphertext)
     let mut combined = Vec::with_capacity(12 + buf.len());
@@ -201,19 +204,7 @@ pub fn maybe_decrypt(value: &str, aes: &mut Aes, _rng: &mut Rng) -> String {
     // Decrypt using CTR mode (same operation as encrypt: encrypt counter, XOR)
     let mut buf = ciphertext.to_vec();
 
-    for chunk in buf.chunks_exact_mut(16) {
-        // Encrypt counter to get keystream block (CTR decrypt = encrypt counter)
-        let mut keystream = counter;
-        aes.encrypt(&mut keystream, Key::Key128(key));
-
-        // XOR ciphertext with keystream to get plaintext
-        for (i, b) in chunk.iter_mut().enumerate() {
-            *b ^= keystream[i];
-        }
-
-        // Increment counter for next block
-        increment_counter(&mut counter);
-    }
+    ctr_crypt(&mut buf, aes, &key, &mut counter);
 
     // Remove PKCS7 padding
     if let Some(&pad_val) = buf.last() {

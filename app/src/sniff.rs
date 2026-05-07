@@ -64,7 +64,7 @@ fn build_sniff_json(frames: &[SniffCaptureFrame], capture_us: u64) -> Vec<u8> {
     }
 
     json.push_str("]}");
-    Vec::from(json.as_bytes())
+    json.into_bytes()
 }
 
 /// Sniff burst capture state, grouped for clarity.

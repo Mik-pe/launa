@@ -4,7 +4,6 @@
 //! and alert channels. They perform a heap-free check to avoid OOM panics
 //! when memory is critically low.
 
-use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
 use launa_mqtt::escape::escape_json_string;
@@ -58,7 +57,7 @@ pub(crate) fn publish_diagnostics(
 
     // Try to send non-blocking; if the channel is full, the diagnostics
     // update is simply skipped (it will be published next cycle).
-    let payload = Vec::from(json.as_bytes());
+    let payload = json.into_bytes();
     let _ = DIAGNOSTICS_CHANNEL.try_send(payload);
 }
 
@@ -81,6 +80,6 @@ pub(crate) fn send_alert(level: &str, message: &str) {
 
     // Try to send non-blocking; if the channel is full, the alert is dropped
     // (alerts are best-effort and should not block the main loop).
-    let payload = Vec::from(json.as_bytes());
+    let payload = json.into_bytes();
     let _ = ALERT_CHANNEL.try_send(payload);
 }

@@ -184,15 +184,8 @@ pub(crate) fn write_crash_info(reason: CrashReason, message: &str) -> bool {
         return false;
     }
 
-    let mut success = true;
-
-    if let Err(_) = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_MAGIC), CRASH_MAGIC) {
-        success = false;
-    }
-
-    if let Err(_) = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_REASON), reason as u8) {
-        success = false;
-    }
+    let ok1 = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_MAGIC), CRASH_MAGIC).is_ok();
+    let ok2 = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_REASON), reason as u8).is_ok();
 
     // Truncate message to MAX_MESSAGE_LEN
     let truncated = if message.len() > MAX_MESSAGE_LEN {
@@ -201,11 +194,9 @@ pub(crate) fn write_crash_info(reason: CrashReason, message: &str) -> bool {
         message
     };
 
-    if let Err(_) = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_MESSAGE), truncated) {
-        success = false;
-    }
+    let ok3 = nvs.set(&ns, &esp_nvs::Key::from_str(KEY_MESSAGE), truncated).is_ok();
 
-    success
+    ok1 && ok2 && ok3
 }
 
 /// Crash info read from NVS on boot.

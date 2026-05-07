@@ -2,7 +2,6 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
 use embassy_net::{dns::DnsQueryType, IpAddress, Stack};
 use embassy_time::{Duration, Instant, Timer};
 use log::{error, info, warn};
@@ -55,7 +54,7 @@ pub async fn reconnect_with_backoff<'a>(
                             attempt,
                             crate::uptime_secs()
                         );
-                        let payload = Vec::from(json.as_bytes());
+                        let payload = json.into_bytes();
                         let _ = crate::ALERT_CHANNEL.try_send(payload);
                         last_alert_time = Some(now);
                     }

@@ -115,49 +115,37 @@ impl Transport for Rs485Transport {
             if self.de_assert_delay_us > 0 {
                 Timer::after(Duration::from_micros(self.de_assert_delay_us)).await;
             }
+        }
 
-            let mut written = 0;
-            while written < data.len() {
-                let n = self
-                    .uart
-                    .write(&data[written..])
-                    .map_err(|_e| TransportError::Io)?;
-                written += n;
-            }
+        // Write all bytes to UART (shared by both DE-pin and auto-direction paths).
+        let mut written = 0;
+        while written < data.len() {
+            let n = self
+                .uart
+                .write(&data[written..])
+                .map_err(|_e| TransportError::Io)?;
+            written += n;
+        }
 
-            let flush_result = self.uart.flush();
+        let flush_result = self.uart.flush();
+
+        if guard.de.is_some() {
+            // Explicit DE pin path: handle flush errors and release DE.
             if flush_result.is_err() {
                 warn!("UART flush failed — safety delay before releasing DE pin");
                 Timer::after(Duration::from_micros(DE_SAFETY_DELAY_US)).await;
             }
             guard.release();
+        }
 
-            // Post-TX turnaround delay: wait for the RS-485 transceiver to
-            // switch from TX to RX mode. Auto-direction transceivers like
-            // the MAX13487E need a brief settling period after the last TX
-            // byte before they reliably release the bus and start receiving.
-            Timer::after(Duration::from_micros(1000)).await;
+        // Post-TX turnaround delay: wait for the RS-485 transceiver to
+        // switch from TX to RX mode. Auto-direction transceivers like
+        // the MAX13487E need a brief settling period after the last TX
+        // byte before they reliably release the bus and start receiving.
+        Timer::after(Duration::from_micros(1000)).await;
 
-            if let Err(_e) = flush_result {
-                return Err(TransportError::Io);
-            }
-        } else {
-            // Auto-direction transceiver: send data directly.
-            let mut written = 0;
-            while written < data.len() {
-                let n = self
-                    .uart
-                    .write(&data[written..])
-                    .map_err(|_e| TransportError::Io)?;
-                written += n;
-            }
-            self.uart.flush().map_err(|_e| TransportError::Io)?;
-
-            // Post-TX turnaround delay: wait for the auto-direction
-            // transceiver (MAX13487E) to switch from TX to RX mode.
-            // Without this, RX reads immediately after TX can capture
-            // bus garbage or miss the start of the response.
-            Timer::after(Duration::from_micros(1000)).await;
+        if let Err(_e) = flush_result {
+            return Err(TransportError::Io);
         }
 
         trace!("UART wrote all {} bytes", data.len());
