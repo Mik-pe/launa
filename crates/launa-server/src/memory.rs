@@ -475,11 +475,11 @@ impl MemoryStore {
         current_temp: Option<f64>,
         set_temp: Option<f64>,
     ) {
+        let now = now_rfc3339();
         let deque = self.temperatures.entry(device_id.to_string()).or_default();
 
         let should_insert = match deque.back() {
             Some(last) => {
-                let now = now_rfc3339();
                 let elapsed = now
                     .parse::<chrono::DateTime<chrono::Utc>>()
                     .ok()
@@ -513,7 +513,7 @@ impl MemoryStore {
                 TemperatureSample {
                     current_temp,
                     set_temp,
-                    received_at: now_rfc3339(),
+                    received_at: now,
                 },
                 MAX_TEMPERATURE_ENTRIES,
             );

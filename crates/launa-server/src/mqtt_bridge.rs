@@ -52,12 +52,12 @@ fn handle_forward(mem: &RwLock<MemoryStore>, publish: &rumqttd::protocol::Publis
     };
 
     // Topic format: launa/<device_id>/<subtopic>
-    let parts: Vec<&str> = topic.splitn(3, '/').collect();
-    if parts.len() < 3 || parts[0] != "launa" {
-        return;
-    }
-    let device_id = parts[1];
-    let subtopic = parts[2];
+    let mut parts = topic.splitn(3, '/');
+    let _ = parts.next(); // "launa"
+    let (device_id, subtopic) = match (parts.next(), parts.next()) {
+        (Some(d), Some(s)) => (d, s),
+        _ => return,
+    };
 
     match subtopic {
         "availability" => handle_availability(mem, device_id, payload),
