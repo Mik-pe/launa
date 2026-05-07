@@ -154,10 +154,7 @@ pub async fn perform_ota_update(
     info!("OTA: connected to {}:{}", host, port);
 
     // Send HTTP GET request
-    let request = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        path, host
-    );
+    let request = build_http_get(&host, &path);
     if let Err(e) = socket.write_all(request.as_bytes()).await {
         error!("OTA: failed to send HTTP request: {:?}", e);
         return Err(());
@@ -347,10 +344,7 @@ pub async fn tcp_test(
     }
     info!("TCP_TEST: connected to {}:{}", host, port);
 
-    let request = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-        path, host
-    );
+    let request = build_http_get(&host, &path);
     info!("TCP_TEST: sending HTTP request ({} bytes)", request.len());
     if let Err(e) = socket.write_all(request.as_bytes()).await {
         error!("TCP_TEST: failed to send HTTP request: {:?}", e);
@@ -438,6 +432,14 @@ pub async fn tcp_test(
 
     info!("TCP_TEST: SUCCESS ({} bytes read)", total_read);
     Ok(())
+}
+
+/// Build an HTTP/1.1 GET request string with Host and Connection: close headers.
+fn build_http_get(host: &str, path: &str) -> alloc::string::String {
+    alloc::format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        path, host
+    )
 }
 
 /// Roll back OTA and immediately reboot. Used on download/write failures

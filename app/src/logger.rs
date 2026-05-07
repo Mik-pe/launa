@@ -57,9 +57,7 @@ fn color_for_level(level: Level) -> &'static str {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Level filter and init
-// ---------------------------------------------------------------------------
 
 fn level_from_env() -> LevelFilter {
     match option_env!("ESP_LOG") {

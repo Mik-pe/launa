@@ -112,6 +112,9 @@ const PACKET_DISCONNECT: u8 = 14;
 /// SUBACK fixed header byte (packet type 9 << 4).
 const HEADER_SUBACK: u8 = PACKET_SUBACK << 4;
 
+/// Home Assistant status topic for online/offline birth/last-will messages.
+const HA_STATUS_TOPIC: &str = "homeassistant/status";
+
 /// TCP socket buffer sizes for MQTT connections.
 const MQTT_SOCKET_BUF_SIZE: usize = 1024;
 
@@ -318,17 +321,15 @@ impl MqttClient {
         let client_id = format!("launa_{}", self.device_id);
         let topics = TopicBuilder::new(&self.device_id);
         let avail_topic = topics.availability_topic();
-        let config_user = self.config_user.clone();
-        let config_password = self.config_password.clone();
-        let username = if config_user.is_empty() {
+        let username = if self.config_user.is_empty() {
             None
         } else {
-            Some(config_user.as_str())
+            Some(self.config_user.as_str())
         };
-        let password = if config_password.is_empty() {
+        let password = if self.config_password.is_empty() {
             None
         } else {
-            Some(config_password.as_str())
+            Some(self.config_password.as_str())
         };
 
         self.send_connect(&client_id, &avail_topic, username, password)
@@ -884,7 +885,7 @@ impl MqttClient {
     }
 
     pub fn is_ha_status_topic(&self, topic: &str) -> bool {
-        topic == "homeassistant/status"
+        topic == HA_STATUS_TOPIC
     }
 
     /// Check if a command is allowed under the rate limit.
