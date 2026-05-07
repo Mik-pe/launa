@@ -15,8 +15,6 @@ const props = withDefaults(defineProps<{
 
 const status = computed(() => props.spaState)
 
-const scale = computed(() => status.value?.temp_scale === 'celsius' ? 'C' : 'F')
-
 const components = computed(() => {
   if (!status.value) return []
   const s = status.value
@@ -64,37 +62,6 @@ const infoRows = computed(() => {
     </div>
 
     <template v-else>
-      <!-- Temperature hero card (only shown when spa is reporting a temperature) -->
-      <div v-if="status.current_temp != null" class="relative overflow-hidden rounded-2xl ring-1 ring-neutral-800">
-        <div class="absolute inset-0 bg-gradient-to-br from-blue-600/10 via-transparent to-orange-500/10" />
-        <div class="relative bg-neutral-900/80 backdrop-blur px-6 py-8 text-center">
-          <p class="text-[11px] text-neutral-500 uppercase tracking-[0.2em] font-semibold mb-3">Water Temperature</p>
-          <div class="flex items-baseline justify-center gap-1.5">
-            <span class="text-6xl sm:text-7xl font-extralight text-white tabular-nums tracking-tight">
-              {{ status.current_temp }}
-            </span>
-            <span class="text-2xl text-neutral-500 font-light">°{{ scale }}</span>
-          </div>
-          <div class="mt-4 flex items-center justify-center gap-6">
-            <div class="flex items-center gap-2 text-sm text-neutral-400">
-              <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 11.25l-3-3m0 0l-3 3m3-3v7.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-              <span>Target <span class="text-white font-medium">{{ status.set_temp ?? '--' }}°</span></span>
-            </div>
-            <div v-if="status.is_heating" class="flex items-center gap-2 text-sm">
-              <span class="relative flex h-2.5 w-2.5">
-                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75" />
-                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-orange-400" />
-              </span>
-              <span class="text-orange-400 font-medium">Heating</span>
-            </div>
-            <div v-else class="flex items-center gap-2 text-sm text-neutral-500">
-              <span class="w-2.5 h-2.5 rounded-full bg-neutral-600" />
-              <span>Idle</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <!-- Info grid -->
       <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <div

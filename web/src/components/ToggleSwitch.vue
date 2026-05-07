@@ -53,7 +53,7 @@ function toggle(): void {
       v-if="!readOnly"
       :class="[
         'relative w-10 h-[22px] rounded-full transition-colors duration-200 shrink-0',
-        modelValue ? 'bg-blue-500' : 'bg-slate-300'
+        modelValue ? 'bg-blue-500' : 'bg-neutral-600'
       ]"
     >
       <div

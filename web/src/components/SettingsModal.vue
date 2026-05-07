@@ -30,13 +30,29 @@ const emit = defineEmits<{
 const form = ref<MqttSettings>({ ...props.settings })
 const accForm = ref<AccessoryConfig>({ ...props.accessoryConfig })
 
+const knownDevices = ref<{device_id: string; status: string}[]>([])
+const deviceListLoading = ref(false)
+
 watch(() => props.settings, (s) => { form.value = { ...s } }, { deep: true })
 watch(() => props.modelValue, (open: boolean) => {
   if (open) {
     form.value = { ...props.settings }
     accForm.value = { ...props.accessoryConfig }
+    fetchDevices()
   }
 })
+
+async function fetchDevices() {
+  deviceListLoading.value = true
+  try {
+    const res = await fetch('/api/devices')
+    if (res.ok) {
+      knownDevices.value = await res.json()
+    }
+  } catch { /* ignore */ } finally {
+    deviceListLoading.value = false
+  }
+}
 
 // --- Validation ---
 const DEVICE_ID_RE = /^[a-zA-Z0-9_-]+$/
@@ -105,11 +121,21 @@ function toggleSniff(val: boolean): void {
 
             <div>
               <label class="block text-sm font-medium text-neutral-400 mb-1">Device ID</label>
-              <input v-model="form.deviceId"
-                type="text"
-                placeholder="launa_spa"
-                :class="['w-full px-3 py-2 bg-neutral-800 border rounded-lg text-sm text-white placeholder-neutral-600 focus:ring-2 focus:border-blue-500 outline-none', deviceIdError ? 'border-red-500 focus:ring-red-500' : 'border-neutral-700 focus:ring-blue-500']" />
+              <div class="flex gap-2">
+                <select v-model="form.deviceId"
+                  :class="['flex-1 px-3 py-2 bg-neutral-800 border rounded-lg text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none appearance-none', deviceIdError ? 'border-red-500 focus:ring-red-500' : 'border-neutral-700']">
+                  <option value="" disabled selected v-if="!knownDevices.length">No devices found</option>
+                  <option v-for="d in knownDevices" :key="d.device_id" :value="d.device_id">
+                    {{ d.device_id + (d.status === 'online' ? ' (online)' : '') }}
+                  </option>
+                </select>
+                <input v-model="form.deviceId"
+                  type="text"
+                  placeholder="or type custom ID"
+                  :class="['flex-1 px-3 py-2 bg-neutral-800 border rounded-lg text-sm text-white placeholder-neutral-600 focus:ring-2 focus:border-blue-500 outline-none', deviceIdError ? 'border-red-500 focus:ring-red-500' : 'border-neutral-700 focus:ring-blue-500']" />
+              </div>
               <p v-if="deviceIdError" class="text-xs text-red-400 mt-1">{{ deviceIdError }}</p>
+              <p v-if="deviceListLoading" class="text-xs text-neutral-600 mt-1">Loading devices...</p>
             </div>
 
             <div class="grid grid-cols-2 gap-3">

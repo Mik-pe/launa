@@ -24,19 +24,6 @@ const currentTemp = computed(() => props.state?.current_temp)
 const setTemp = computed(() => props.state?.set_temp)
 const tempScale = computed(() => props.state?.temp_scale === 'celsius' ? 'C' : 'F')
 const isHeating = computed(() => props.state?.is_heating === true)
-const heatingMode = computed(() => {
-  const m = props.state?.heating_mode
-  if (m === 'ready') return 'Ready'
-  if (m === 'rest') return 'Rest'
-  if (m === 'ready_in_rest') return 'Ready in Rest'
-  return m || '--'
-})
-const tempRange = computed(() => {
-  const r = props.state?.temp_range
-  if (r === 'high') return 'High'
-  if (r === 'low') return 'Low'
-  return r || '--'
-})
 
 // Track a local target so rapid +/- presses accumulate instead of
 // re-reading the stale set_temp from the ESP (which hasn't acked yet).
@@ -108,10 +95,6 @@ function adjustTemp(delta: number): void {
           ]">
           +
         </button>
-      </div>
-      <div class="flex gap-4 mt-3 text-xs text-neutral-500">
-        <span>Mode: <span class="text-neutral-300">{{ heatingMode }}</span></span>
-        <span>Range: <span class="text-neutral-300">{{ tempRange }}</span></span>
       </div>
     </div>
   </div>
