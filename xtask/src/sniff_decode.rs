@@ -1,4 +1,4 @@
-use anyhow::{bail, Context};
+use anyhow::Context;
 use launa_protocol::{dispatch_frame, Frame, FrameDecoder, IncomingMessage};
 use std::time::Duration;
 
@@ -19,26 +19,11 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     }
 
     // Fall back to launa.toml config if --host not given
-    if host.is_empty() || port == 0 {
-        match crate::config::load_without_serial_port_check() {
-            Ok(config) => {
-                if host.is_empty() {
-                    host = config.mqtt.host;
-                }
-                if port == 0 {
-                    port = config.mqtt.port;
-                }
-            }
-            Err(e) => {
-                if host.is_empty() || port == 0 {
-                    bail!(
-                        "Cannot load launa.toml: {}\nUse --host and --port to specify the MQTT broker.",
-                        e
-                    );
-                }
-            }
-        }
-    }
+    crate::util::resolve_mqtt_config(
+        &mut host,
+        &mut port,
+        crate::config::load_without_serial_port_check,
+    )?;
 
     let mut mqttoptions = rumqttc::MqttOptions::new("xtask-sniff-decode", &host, port);
     mqttoptions.set_keep_alive(Duration::from_secs(5));
@@ -182,64 +167,12 @@ fn handle_json_sniff(
             }
 
             // Regular frame entry
-            let type_bytes = hex_to_bytes(type_str);
-            let payload_bytes = hex_to_bytes(payload_hex);
-
-            let msg_type = if type_bytes.len() == 2 {
-                format!("{:02X} {:02X}", type_bytes[0], type_bytes[1])
-            } else {
-                type_str.to_string()
-            };
-
-            let frame = Frame {
-                message_type: if type_bytes.len() == 2 {
-                    [type_bytes[0], type_bytes[1]]
-                } else {
-                    [0x00, 0x00]
-                },
-                payload: payload_bytes.clone(),
-            };
-            let msg = dispatch_frame(&frame);
-            let parsed = describe_message(&msg);
-
-            let raw_frame = frame.encode().unwrap_or_else(|_| payload_bytes.clone());
-            let raw_hex_str = raw_frame
-                .iter()
-                .map(|b| format!("{:02X}", b))
-                .collect::<Vec<_>>()
-                .join("");
-
-            let entry = SniffEntry {
-                device_id: device_id.to_string(),
-                timestamp: Some(format!("+{}us", ts_us)),
-                message_type: msg_type,
-                crc_ok: true,
-                raw_hex: raw_hex_str,
-                parsed: Some(parsed),
-            };
-            print_entry(&entry);
+            let entry = decode_burst_entry(device_id, ts_us, type_str, payload_hex);
             result.push(entry);
         }
 
         // Print timing summary
-        if result.len() >= 2 {
-            println!("--- Timing summary ---");
-            for i in 1..result.len() {
-                let prev_ts = parse_ts_us(&result[i - 1].timestamp);
-                let cur_ts = parse_ts_us(&result[i].timestamp);
-                if let (Some(prev), Some(cur)) = (prev_ts, cur_ts) {
-                    let delta = cur.saturating_sub(prev);
-                    println!(
-                        "  {} -> {} : {}us ({:.1}ms)",
-                        result[i - 1].message_type,
-                        result[i].message_type,
-                        delta,
-                        delta as f64 / 1000.0,
-                    );
-                }
-            }
-            println!();
-        }
+        print_timing_summary(&result);
 
         return result;
     }
@@ -269,63 +202,11 @@ fn handle_json_sniff(
             let type_hex = arr[1].as_str().unwrap_or("");
             let payload_hex = arr[2].as_str().unwrap_or("");
 
-            let type_bytes = hex_to_bytes(type_hex);
-            let payload_bytes = hex_to_bytes(payload_hex);
-
-            let msg_type = if type_bytes.len() == 2 {
-                format!("{:02X} {:02X}", type_bytes[0], type_bytes[1])
-            } else {
-                type_hex.to_string()
-            };
-
-            let frame = Frame {
-                message_type: if type_bytes.len() == 2 {
-                    [type_bytes[0], type_bytes[1]]
-                } else {
-                    [0x00, 0x00]
-                },
-                payload: payload_bytes.clone(),
-            };
-            let msg = dispatch_frame(&frame);
-            let parsed = describe_message(&msg);
-
-            let raw_frame = frame.encode().unwrap_or_else(|_| payload_bytes.clone());
-            let raw_hex_str = raw_frame
-                .iter()
-                .map(|b| format!("{:02X}", b))
-                .collect::<Vec<_>>()
-                .join("");
-
-            let entry = SniffEntry {
-                device_id: device_id.to_string(),
-                timestamp: Some(format!("+{}us", ts_us)),
-                message_type: msg_type,
-                crc_ok: true,
-                raw_hex: raw_hex_str,
-                parsed: Some(parsed),
-            };
-            print_entry(&entry);
+            let entry = decode_burst_entry(device_id, ts_us, type_hex, payload_hex);
             entries.push(entry);
         }
 
-        if entries.len() >= 2 {
-            println!("--- Timing summary ---");
-            for i in 1..entries.len() {
-                let prev_ts = parse_ts_us(&entries[i - 1].timestamp);
-                let cur_ts = parse_ts_us(&entries[i].timestamp);
-                if let (Some(prev), Some(cur)) = (prev_ts, cur_ts) {
-                    let delta = cur.saturating_sub(prev);
-                    println!(
-                        "  {} -> {} : {}us ({:.1}ms)",
-                        entries[i - 1].message_type,
-                        entries[i].message_type,
-                        delta,
-                        delta as f64 / 1000.0,
-                    );
-                }
-            }
-            println!();
-        }
+        print_timing_summary(&entries);
 
         return entries;
     }
@@ -357,7 +238,7 @@ fn handle_json_sniff(
             timestamp,
             message_type: msg_type,
             crc_ok,
-            raw_hex: format!("{:02X?}", raw_bytes),
+            raw_hex: bytes_to_hex(&raw_bytes),
             parsed: Some(parsed),
         };
         print_entry(&entry);
@@ -401,7 +282,7 @@ fn handle_raw_sniff(decoder: &mut FrameDecoder, device_id: &str, text: &str) -> 
             timestamp: None,
             message_type: msg_type,
             crc_ok: true,
-            raw_hex: format!("{:02X?}", raw_bytes),
+            raw_hex: bytes_to_hex(&raw_bytes),
             parsed: Some(parsed),
         };
         print_entry(&entry);
@@ -412,7 +293,7 @@ fn handle_raw_sniff(decoder: &mut FrameDecoder, device_id: &str, text: &str) -> 
             timestamp: None,
             message_type: "unknown".to_string(),
             crc_ok: false,
-            raw_hex: format!("{:02X?}", raw_bytes),
+            raw_hex: bytes_to_hex(&raw_bytes),
             parsed: None,
         };
         print_entry(&entry);
@@ -598,17 +479,80 @@ fn print_entry(entry: &SniffEntry) {
 
 fn hex_to_bytes(hex: &str) -> Vec<u8> {
     let hex = hex.trim().trim_start_matches("0x").trim_start_matches("0X");
-    let hex = if !hex.len().is_multiple_of(2) {
-        // Odd-length: prepend '0' so "1A3B5" becomes "01A3B5"
-        let mut padded = String::with_capacity(hex.len() + 1);
-        padded.push('0');
-        padded.push_str(hex);
-        padded
+    let hex: std::borrow::Cow<str> = if !hex.len().is_multiple_of(2) {
+        format!("0{}", hex).into()
     } else {
-        hex.to_string()
+        hex.into()
     };
     (0..hex.len())
         .step_by(2)
         .filter_map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
         .collect()
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02X}", b)).collect()
+}
+
+fn decode_burst_entry(
+    device_id: &str,
+    ts_us: u64,
+    type_str: &str,
+    payload_hex: &str,
+) -> SniffEntry {
+    let type_bytes = hex_to_bytes(type_str);
+    let payload_bytes = hex_to_bytes(payload_hex);
+
+    let msg_type = if type_bytes.len() == 2 {
+        format!("{:02X} {:02X}", type_bytes[0], type_bytes[1])
+    } else {
+        type_str.to_string()
+    };
+
+    let frame = Frame {
+        message_type: if type_bytes.len() == 2 {
+            [type_bytes[0], type_bytes[1]]
+        } else {
+            [0x00, 0x00]
+        },
+        payload: payload_bytes.clone(),
+    };
+    let msg = dispatch_frame(&frame);
+    let parsed = describe_message(&msg);
+
+    let raw_frame = frame.encode().unwrap_or_else(|_| payload_bytes);
+    let raw_hex = bytes_to_hex(&raw_frame);
+
+    let entry = SniffEntry {
+        device_id: device_id.to_string(),
+        timestamp: Some(format!("+{}us", ts_us)),
+        message_type: msg_type,
+        crc_ok: true,
+        raw_hex,
+        parsed: Some(parsed),
+    };
+    print_entry(&entry);
+    entry
+}
+
+fn print_timing_summary(entries: &[SniffEntry]) {
+    if entries.len() < 2 {
+        return;
+    }
+    println!("--- Timing summary ---");
+    for i in 1..entries.len() {
+        let prev_ts = parse_ts_us(&entries[i - 1].timestamp);
+        let cur_ts = parse_ts_us(&entries[i].timestamp);
+        if let (Some(prev), Some(cur)) = (prev_ts, cur_ts) {
+            let delta = cur.saturating_sub(prev);
+            println!(
+                "  {} -> {} : {}us ({:.1}ms)",
+                entries[i - 1].message_type,
+                entries[i].message_type,
+                delta,
+                delta as f64 / 1000.0,
+            );
+        }
+    }
+    println!();
 }

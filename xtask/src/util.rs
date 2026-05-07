@@ -4,6 +4,41 @@ use anyhow::{bail, Context};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Resolve MQTT host/port from CLI args, falling back to launa.toml config.
+///
+/// If `host` is empty or `port` is 0, loads config via `config_loader` and
+/// fills in the missing values. If config loading also fails and values are
+/// still missing, returns an error with guidance.
+pub fn resolve_mqtt_config(
+    host: &mut String,
+    port: &mut u16,
+    config_loader: impl FnOnce() -> anyhow::Result<crate::config::Config>,
+) -> anyhow::Result<()> {
+    if !host.is_empty() && *port != 0 {
+        return Ok(());
+    }
+    match config_loader() {
+        Ok(config) => {
+            if host.is_empty() {
+                *host = config.mqtt.host;
+            }
+            if *port == 0 {
+                *port = config.mqtt.port;
+            }
+            Ok(())
+        }
+        Err(e) => {
+            if host.is_empty() || *port == 0 {
+                bail!(
+                    "Cannot load launa.toml: {}\nUse --host and --port to specify the MQTT broker.",
+                    e
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
 /// Returns the project root directory (parent of xtask/).
 ///
 /// Uses `CARGO_MANIFEST_DIR` which points to `xtask/` at compile time,
@@ -581,8 +616,7 @@ pub fn flash_app(
     if monitor {
         println!("  Monitor: enabled (serial log after flash)");
     }
-    if config.is_some() {
-        let cfg = config.unwrap();
+    if let Some(cfg) = config {
         println!("  WiFi SSID: {}", cfg.wifi.ssid);
         println!("  MQTT host: {}:{}", cfg.mqtt.host, cfg.mqtt.port);
     }

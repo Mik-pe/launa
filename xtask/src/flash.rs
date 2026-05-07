@@ -29,7 +29,6 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
         port_index,
         config.as_ref(),
     )?;
-    let port = Some(port);
 
     let app_dir = crate::util::project_root().join("app");
     let partitions_csv = app_dir.join("partitions.csv");
@@ -56,10 +55,9 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             .arg(format!("0x{:X}", part.offset))
             .arg(format!("0x{:X}", part.size))
             .arg("--chip")
-            .arg("esp32");
-        if let Some(ref p) = port {
-            erase_cmd.arg("-p").arg(p);
-        }
+            .arg("esp32")
+            .arg("-p")
+            .arg(&port);
         erase_cmd.current_dir(&app_dir);
 
         let erase_status = erase_cmd
@@ -91,9 +89,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     if let Some(ref f) = feature {
         cmd.arg("--features").arg(f);
     }
-    if let Some(ref p) = port {
-        cmd.arg("-p").arg(p);
-    }
+    cmd.arg("-p").arg(&port);
 
     cmd.current_dir(&app_dir);
 
@@ -102,9 +98,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     if let Some(ref f) = feature {
         println!("  Feature: {}", f);
     }
-    if let Some(ref p) = port {
-        println!("  Port: {}", p);
-    }
+    println!("  Port: {}", port);
     if monitor {
         println!("  Monitor: enabled (serial log after flash)");
     }

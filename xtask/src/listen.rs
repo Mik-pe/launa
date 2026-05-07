@@ -1,4 +1,4 @@
-use anyhow::{bail, Context};
+use anyhow::Context;
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,26 +28,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     }
 
     // Fall back to launa.toml config if --host not given
-    if host.is_empty() || port == 0 {
-        match crate::config::load() {
-            Ok(config) => {
-                if host.is_empty() {
-                    host = config.mqtt.host;
-                }
-                if port == 0 {
-                    port = config.mqtt.port;
-                }
-            }
-            Err(e) => {
-                if host.is_empty() || port == 0 {
-                    bail!(
-                        "Cannot load launa.toml: {}\nUse --host and --port to specify the MQTT broker.",
-                        e
-                    );
-                }
-            }
-        }
-    }
+    crate::util::resolve_mqtt_config(&mut host, &mut port, crate::config::load)?;
 
     let client_id = format!("xtask-listen-{}", std::process::id());
     let mut mqttoptions = rumqttc::MqttOptions::new(client_id, &host, port);
