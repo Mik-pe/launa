@@ -67,17 +67,11 @@ impl RemoteLogBuffer {
             return;
         }
 
-        let truncated: String = message.chars().take(MAX_LOG_MESSAGE_LEN).collect();
-        let truncated = if truncated.len() > MAX_LOG_MESSAGE_LEN {
-            // Multi-byte UTF-8 chars may exceed the byte budget
-            let mut s = truncated;
-            while s.len() > MAX_LOG_MESSAGE_LEN {
-                s.pop();
-            }
-            s
-        } else {
-            truncated
-        };
+        let mut truncated: String = message.chars().take(MAX_LOG_MESSAGE_LEN).collect();
+        // Ensure byte length doesn't exceed limit (multi-byte UTF-8)
+        while truncated.len() > MAX_LOG_MESSAGE_LEN {
+            truncated.pop();
+        }
         let entry = LogEntry {
             level,
             message: truncated,

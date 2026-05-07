@@ -108,7 +108,7 @@ pub fn status_to_json(
         },
         firmware_ver,
         sniff_mode,
-        wifi_rssi.map_or(String::from("null"), |r| format!("{}", r)),
+        wifi_rssi.map_or_else(|| String::from("null"), |r| alloc::format!("{}", r)),
         registration_state,
     )
 }

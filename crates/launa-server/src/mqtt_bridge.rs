@@ -124,10 +124,10 @@ fn handle_boot(mem: &RwLock<MemoryStore>, device_id: &str, payload: &str) {
 fn handle_log(mem: &RwLock<MemoryStore>, device_id: &str, payload: &str) {
     let (level, message, timestamp_ms) = match serde_json::from_str::<serde_json::Value>(payload) {
         Ok(val) => {
-            let level = val["level"].as_str().unwrap_or("unknown");
-            let message = val["message"].as_str().unwrap_or(payload);
+            let level = val["level"].as_str().unwrap_or("unknown").to_string();
+            let message = val["message"].as_str().unwrap_or(payload).to_string();
             let ts = val["ts"].as_u64().unwrap_or(0);
-            (level.to_string(), message.to_string(), ts)
+            (level, message, ts)
         }
         Err(_) => ("unknown".to_string(), payload.to_string(), 0),
     };

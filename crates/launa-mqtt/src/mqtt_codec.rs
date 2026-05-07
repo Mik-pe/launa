@@ -153,9 +153,6 @@ pub fn encode_publish(
     if qos > 1 {
         return Err(PublishError::InvalidQoS(qos));
     }
-    if qos > 0 && packet_id.is_none() {
-        return Err(PublishError::MissingPacketId);
-    }
 
     let retain_flag = if retain { 0x01 } else { 0x00 };
     let qos_flag = (qos & 0x03) << 1;
@@ -172,8 +169,7 @@ pub fn encode_publish(
     packet.extend_from_slice(topic_bytes);
 
     if qos > 0 {
-        // SAFETY: checked above that packet_id is Some when qos > 0
-        let id = packet_id.unwrap();
+        let id = packet_id.ok_or(PublishError::MissingPacketId)?;
         packet.extend_from_slice(&id.to_be_bytes());
     }
 

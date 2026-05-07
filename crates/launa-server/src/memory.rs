@@ -349,10 +349,9 @@ impl MemoryStore {
 
     /// Return the last `limit` log entries, newest first.
     pub fn get_logs(&self, device_id: &str, limit: u64) -> Vec<LogEntry> {
-        match self.logs.get(device_id) {
-            Some(d) => recent(d, limit as usize).into_iter().rev().collect(),
-            None => Vec::new(),
-        }
+        self.logs.get(device_id).map_or(Vec::new(), |d| {
+            recent(d, limit as usize).into_iter().rev().collect()
+        })
     }
 
     pub fn clear_logs(&mut self, device_id: &str) {
@@ -374,10 +373,9 @@ impl MemoryStore {
 
     /// Return the last `limit` diagnostics entries, newest first.
     pub fn get_diagnostics(&self, device_id: &str, limit: u64) -> Vec<TimestampedEntry> {
-        match self.diagnostics.get(device_id) {
-            Some(d) => recent(d, limit as usize).into_iter().rev().collect(),
-            None => Vec::new(),
-        }
+        self.diagnostics.get(device_id).map_or(Vec::new(), |d| {
+            recent(d, limit as usize).into_iter().rev().collect()
+        })
     }
 
     pub fn clear_diagnostics(&mut self, device_id: &str) {
@@ -399,10 +397,9 @@ impl MemoryStore {
 
     /// Return the last `limit` alerts, newest first.
     pub fn get_alerts(&self, device_id: &str, limit: u64) -> Vec<TimestampedEntry> {
-        match self.alerts.get(device_id) {
-            Some(d) => recent(d, limit as usize).into_iter().rev().collect(),
-            None => Vec::new(),
-        }
+        self.alerts.get(device_id).map_or(Vec::new(), |d| {
+            recent(d, limit as usize).into_iter().rev().collect()
+        })
     }
 
     pub fn clear_alerts(&mut self, device_id: &str) {
@@ -424,10 +421,9 @@ impl MemoryStore {
 
     /// Return the last `limit` sniff frames, newest first.
     pub fn get_sniff_frames(&self, device_id: &str, limit: u64) -> Vec<TimestampedEntry> {
-        match self.sniff_frames.get(device_id) {
-            Some(d) => recent(d, limit as usize).into_iter().rev().collect(),
-            None => Vec::new(),
-        }
+        self.sniff_frames.get(device_id).map_or(Vec::new(), |d| {
+            recent(d, limit as usize).into_iter().rev().collect()
+        })
     }
 
     pub fn clear_sniff_frames(&mut self, device_id: &str) {
@@ -451,10 +447,9 @@ impl MemoryStore {
 
     /// Return the last `limit` availability entries, newest first.
     pub fn get_availability_history(&self, device_id: &str, limit: u64) -> Vec<AvailabilityEntry> {
-        match self.availability.get(device_id) {
-            Some(d) => recent(d, limit as usize).into_iter().rev().collect(),
-            None => Vec::new(),
-        }
+        self.availability.get(device_id).map_or(Vec::new(), |d| {
+            recent(d, limit as usize).into_iter().rev().collect()
+        })
     }
 
     /// Return availability entries since `since`, chronological order (oldest first).
@@ -463,10 +458,9 @@ impl MemoryStore {
         device_id: &str,
         since: &str,
     ) -> Vec<AvailabilityEntry> {
-        match self.availability.get(device_id) {
-            Some(d) => recent_since(d, |e| &e.received_at, since),
-            None => Vec::new(),
-        }
+        self.availability
+            .get(device_id)
+            .map_or(Vec::new(), |d| recent_since(d, |e| &e.received_at, since))
     }
 
     // --- Graph data (temperature + components) ---
@@ -562,18 +556,16 @@ impl MemoryStore {
         device_id: &str,
         since: &str,
     ) -> Vec<TemperatureSample> {
-        match self.temperatures.get(device_id) {
-            Some(d) => recent_since(d, |e| &e.received_at, since),
-            None => Vec::new(),
-        }
+        self.temperatures
+            .get(device_id)
+            .map_or(Vec::new(), |d| recent_since(d, |e| &e.received_at, since))
     }
 
     /// Return component events since `since`, chronological order.
     pub fn get_component_events_since(&self, device_id: &str, since: &str) -> Vec<ComponentEvent> {
-        match self.component_events.get(device_id) {
-            Some(d) => recent_since(d, |e| &e.received_at, since),
-            None => Vec::new(),
-        }
+        self.component_events
+            .get(device_id)
+            .map_or(Vec::new(), |d| recent_since(d, |e| &e.received_at, since))
     }
 }
 
