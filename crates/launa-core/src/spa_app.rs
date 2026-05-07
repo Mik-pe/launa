@@ -584,10 +584,12 @@ impl<'a> SpaApp<'a> {
             let cts_lost = match self.last_cts_time {
                 Some(last_cts) => now.elapsed_since(last_cts) >= CTS_LOSS_THRESHOLD_MS,
                 None => {
-                    // We're registered but have never received a CTS.
-                    // Only trigger if we've been registered for > 5 seconds.
-                    self.registration_started_at
-                        .is_none_or(|rs| now.elapsed_since(rs) >= CTS_LOSS_THRESHOLD_MS)
+                    // We're registered but have never received a CTS yet.
+                    // Don't trigger CTS loss until we've seen at least one CTS —
+                    // the spa may not have sent one yet (it sends CTS every ~20ms
+                    // but there's a brief window after registration before the first
+                    // CTS on our channel arrives).
+                    false
                 }
             };
 
