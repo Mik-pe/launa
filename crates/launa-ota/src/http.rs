@@ -5,7 +5,6 @@
 //! effects, making them easy to test on desktop.
 
 use alloc::string::String;
-use alloc::vec::Vec;
 
 /// Validate that the HTTP response status line indicates success (200).
 ///
@@ -112,23 +111,64 @@ pub fn parse_http_url(url: &str) -> Option<(String, u16, String)> {
 /// and parses its value as a `u32`. Returns `None` if the header is
 /// not found or the value is not a valid number.
 pub fn parse_content_length(headers: &[u8]) -> Option<u32> {
-    // Search case-insensitively for "Content-Length:"
-    let header_name = b"content-length:";
-    let headers_lower: Vec<u8> = headers.iter().map(|&b| b.to_ascii_lowercase()).collect();
+    let header_name = b"Content-Length:";
+    let pos = find_header_value_start_case_insensitive(headers, header_name)?;
+    let value_end = headers[pos..]
+        .iter()
+        .position(|&b| b == b'\r' || b == b'\n')
+        .map(|i| pos + i)
+        .unwrap_or(headers.len());
+    let value_str = core::str::from_utf8(&headers[pos..value_end]).ok()?;
+    value_str.trim().parse::<u32>().ok()
+}
 
-    if let Some(pos) = find_header_value_start(&headers_lower, header_name) {
-        let value_start = pos;
-        let value_end = headers_lower[value_start..]
-            .iter()
-            .position(|&b| b == b'\r' || b == b'\n')
-            .map(|i| value_start + i)
-            .unwrap_or(headers_lower.len());
-        let value_str = core::str::from_utf8(&headers[value_start..value_end]).ok()?;
-        let trimmed = value_str.trim();
-        trimmed.parse::<u32>().ok()
-    } else {
-        None
+/// Case-insensitive version of `find_header_value_start`.
+///
+/// Compares bytes case-insensitively without allocating a lowercase copy.
+fn find_header_value_start_case_insensitive(headers: &[u8], name: &[u8]) -> Option<usize> {
+    if name.is_empty() {
+        return None;
     }
+    // Check at position 0 (first line)
+    if starts_with_ignore_case(headers, name) {
+        return Some(skip_spaces(headers, name.len()));
+    }
+    // Check after each \r\n
+    let separator = b"\r\n";
+    let mut search_start = 0;
+    while search_start + separator.len() < headers.len() {
+        if let Some(pos) = headers[search_start..]
+            .windows(separator.len())
+            .position(|w| w == separator)
+        {
+            let line_start = search_start + pos + separator.len();
+            if starts_with_ignore_case(&headers[line_start..], name) {
+                let abs_pos = line_start + name.len();
+                return Some(skip_spaces(headers, abs_pos));
+            }
+            search_start = line_start;
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+/// Check if `data` starts with `prefix`, comparing case-insensitively.
+fn starts_with_ignore_case(data: &[u8], prefix: &[u8]) -> bool {
+    data.len() >= prefix.len()
+        && data[..prefix.len()]
+            .iter()
+            .zip(prefix.iter())
+            .all(|(&a, &b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+}
+
+/// Skip space bytes starting at `pos`, returning the position of the first non-space byte.
+fn skip_spaces(data: &[u8], mut pos: usize) -> usize {
+    while pos < data.len() && data[pos] == b' ' {
+        pos += 1;
+    }
+    pos
 }
 
 /// Find the start of a header value after the header name.
@@ -142,17 +182,12 @@ pub fn find_header_value_start(headers: &[u8], name: &[u8]) -> Option<usize> {
         return None;
     }
     // Check at position 0 (first line)
-    let mut search_start = 0;
     if headers.get(..name.len()) == Some(name) {
-        let abs_pos = name.len();
-        let mut start = abs_pos;
-        while start < headers.len() && headers[start] == b' ' {
-            start += 1;
-        }
-        return Some(start);
+        return Some(skip_spaces(headers, name.len()));
     }
     // Check after each \r\n
     let separator = b"\r\n";
+    let mut search_start = 0;
     while search_start + separator.len() < headers.len() {
         if let Some(pos) = headers[search_start..]
             .windows(separator.len())
@@ -160,12 +195,7 @@ pub fn find_header_value_start(headers: &[u8], name: &[u8]) -> Option<usize> {
         {
             let line_start = search_start + pos + separator.len();
             if headers.get(line_start..line_start + name.len()) == Some(name) {
-                let abs_pos = line_start + name.len();
-                let mut start = abs_pos;
-                while start < headers.len() && headers[start] == b' ' {
-                    start += 1;
-                }
-                return Some(start);
+                return Some(skip_spaces(headers, line_start + name.len()));
             }
             search_start = line_start;
         } else {
