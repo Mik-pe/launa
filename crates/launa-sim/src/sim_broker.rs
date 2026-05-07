@@ -89,10 +89,9 @@ impl SimBroker {
         if self.next_packet_id == 0 {
             self.next_packet_id = 1;
         }
-        self.published
-            .push((topic.to_string(), payload.to_string()));
-        self.unacked
-            .insert(id, (topic.to_string(), payload.to_string()));
+        let entry = (topic.to_string(), payload.to_string());
+        self.unacked.insert(id, entry.clone());
+        self.published.push(entry);
         id
     }
 

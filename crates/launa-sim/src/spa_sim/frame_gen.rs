@@ -60,9 +60,7 @@ pub(crate) fn apply_toggle_by_code(state: &mut SpaState, item_code: u8) {
     match item_code {
         0x04..=0x09 => {
             let idx = (item_code - 0x04) as usize;
-            if idx < 6 {
-                state.pumps[idx] = cycle_pump(state.pumps[idx]);
-            }
+            state.pumps[idx] = cycle_pump(state.pumps[idx]);
         }
         0x0C => state.blower = !state.blower,
         0x11 => state.lights[0] = !state.lights[0],

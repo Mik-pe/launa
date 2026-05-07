@@ -101,19 +101,11 @@ impl ErrorInjection {
 
     /// Consume the corrupt-next flag (one-shot).
     pub fn take_corrupt_next(&mut self) -> bool {
-        let v = self.inject_corrupt_next;
-        if v {
-            self.inject_corrupt_next = false;
-        }
-        v
+        core::mem::take(&mut self.inject_corrupt_next)
     }
 
     /// Consume the duplicate-next flag (one-shot).
     pub fn take_duplicate_next(&mut self) -> bool {
-        let v = self.duplicate_next;
-        if v {
-            self.duplicate_next = false;
-        }
-        v
+        core::mem::take(&mut self.duplicate_next)
     }
 }

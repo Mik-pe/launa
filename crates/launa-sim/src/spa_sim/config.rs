@@ -132,9 +132,7 @@ pub struct InformationConfig {
 
 impl Default for InformationConfig {
     fn default() -> Self {
-        let mut model = [b' '; 8];
-        let model_str = b"BFBP20  ";
-        model.copy_from_slice(model_str);
+        let model = *b"BFBP20  ";
 
         InformationConfig {
             software_id_byte0: 0x64,
@@ -171,10 +169,9 @@ impl Default for SpaConfigConfig {
         payload[1] = 0x02;
         // payload[2] = 0x00 (default)
         // payload[3] = 0x00 (Fahrenheit default)
-        payload[5] = 0x02 | (0x02 << 2); // pump1=TwoSpeed, pump2=TwoSpeed
-        payload[7] |= 0x01; // light1 present
-        payload[8] |= 0x80; // circ pump present
-        payload[8] |= 0x01; // blower present
+        payload[5] = 0x0A; // pump1=TwoSpeed, pump2=TwoSpeed
+        payload[7] = 0x01; // light1 present
+        payload[8] = 0x81; // circ pump present, blower present
         SpaConfigConfig {
             raw_payload: payload,
         }
