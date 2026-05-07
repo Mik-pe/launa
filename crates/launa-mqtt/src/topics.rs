@@ -2,7 +2,6 @@
 extern crate alloc;
 
 use alloc::string::String;
-use alloc::string::ToString;
 
 const BASE_TOPIC: &str = "launa";
 
@@ -66,8 +65,8 @@ impl TopicBuilder {
 
     /// Topic for subscribing to Home Assistant status (online/offline).
     /// Used to re-publish discovery when HA restarts.
-    pub fn ha_status_topic(&self) -> String {
-        "homeassistant/status".to_string()
+    pub fn ha_status_topic(&self) -> &'static str {
+        "homeassistant/status"
     }
 
     /// Topic for publishing diagnostic counters and uptime.
@@ -100,7 +99,7 @@ pub struct LwtConfig {
 /// Build LWT configuration for a device. This should be set during MQTT connect.
 pub fn lwt_config(device_id: &str) -> LwtConfig {
     LwtConfig {
-        topic: alloc::format!("{}/{}/availability", BASE_TOPIC, device_id),
+        topic: TopicBuilder::new(device_id).availability_topic(),
         payload: AVAILABILITY_OFFLINE,
         qos: 1,
         retain: true,
@@ -119,7 +118,7 @@ pub struct BirthConfig {
 /// Build birth message configuration for a device.
 pub fn birth_config(device_id: &str) -> BirthConfig {
     BirthConfig {
-        topic: alloc::format!("{}/{}/availability", BASE_TOPIC, device_id),
+        topic: TopicBuilder::new(device_id).availability_topic(),
         payload: AVAILABILITY_ONLINE,
         qos: 1,
         retain: true,

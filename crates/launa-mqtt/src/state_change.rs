@@ -17,10 +17,7 @@ use launa_protocol::status::StatusUpdate;
 ///
 /// If `prev` is `None` (first publish or after mode change reset), returns `true`.
 pub fn status_changed(prev: Option<&StatusUpdate>, current: &StatusUpdate) -> bool {
-    match prev {
-        None => true,
-        Some(prev) => status_fields_differ(prev, current),
-    }
+    prev.is_none_or(|p| status_fields_differ(p, current))
 }
 
 /// Compare all published fields of two status updates.
