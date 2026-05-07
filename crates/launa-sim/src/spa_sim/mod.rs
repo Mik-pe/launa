@@ -104,15 +104,15 @@ pub struct SpaSim {
 
     // Physics model fields
     /// Ambient temperature used for cooling calculations.
-    /// Always stored as Fahrenheit internally.
-    /// Default: 70.0°F (backward compatible with original hardcoded value).
+    /// Stored as a `Temperature` (internally converted as needed).
+    /// Default: 21.0°C (~70°F).
     ambient_temp: Temperature,
     /// Heat contribution per tick per running pump (in °F). Even when is_heating=false,
     /// running pumps slowly raise water temp via waste heat.
-    /// Default: 0.0 (backward compatible — no pump heat contribution).
+    /// Default: 0.0 (no pump heat contribution).
     pump_heat_contribution: f32,
     /// Number of ticks after creation that report 0xFF for current_temp.
-    /// Default: 0 (backward compatible — no unknown temp period).
+    /// Default: 0 (no unknown temp period).
     physics_unknown_temp_ticks: u64,
     /// Counter for how many ticks have run since creation (used for unknown temp period).
     physics_tick_count: u64,
@@ -196,7 +196,7 @@ impl SpaSim {
             report_unknown_temp: false,
             sensor_noise_jitter: 0.0,
 
-            ambient_temp: Temperature::fahrenheit(70.0),
+            ambient_temp: Temperature::celsius(21.0),
             pump_heat_contribution: 0.0,
             physics_unknown_temp_ticks: 0,
             physics_tick_count: 0,
@@ -382,8 +382,8 @@ impl SpaSim {
     /// Set the ambient temperature used for cooling calculations.
     ///
     /// Takes a `Temperature` so the scale is explicit: `Temperature::fahrenheit(70.0)`
-    /// or `Temperature::celsius(21.1)`.
-    /// Default: `Temperature::fahrenheit(70.0)`.
+    /// or `Temperature::celsius(21.0)`.
+    /// Default: `Temperature::celsius(21.0)`.
     pub fn set_ambient_temp(&mut self, temp: Temperature) {
         self.ambient_temp = temp;
     }
@@ -895,21 +895,16 @@ impl SpaSim {
 
     /// Simulate temperature changes and time progression.
     ///
-    /// Uses a realistic thermal model:
-    /// - **Heating**: Rate proportional to `(set_temp + overshoot - current_temp) / delta_range`.
-    ///   Base rate ~0.5°F/tick at full delta, tapering as temp approaches target.
-    ///   Heating only active when at least one pump or circ_pump is running.
+    /// Uses a simple on/off thermostat with hysteresis:
+    /// - **Heater ON** when: `current_temp < set_temp - hysteresis`
+    /// - **Heater OFF** when: `current_temp >= set_temp + hysteresis`
+    /// - **Hysteresis**: derived from `physics_overshoot` (overshoot/2, default 0.5°F)
+    /// - **Heating rate**: configurable via `physics_overshoot` (default ~0.3°F/tick)
     /// - **Cooling**: Rate proportional to `(current_temp - ambient_temp) / cooling_range`.
-    ///   Base rate ~0.1°F/tick when well above ambient, tapering near ambient.
-    /// - **Pump heat**: Running pumps contribute waste heat (configurable via
-    ///   `set_pump_heat_contribution()`). Each running pump adds the configured amount
-    ///   per tick. Default: 0.0 (off).
-    /// - **Overshoot**: If `physics_overshoot > 0`, heating continues past `set_temp`
-    ///   by the overshoot amount before stopping. Re-heats at `set_temp - overshoot/2`.
     /// - **Interlock**: `is_heating` is forced false whenever all pumps and circ_pump
-    ///   are off. Heating resumes automatically when a pump restarts (if temp < set_point).
+    ///   are off. Heating resumes automatically when a pump or circ_pump restarts.
     ///
-    /// Assumptions: ambient temperature defaults to 70°F (configurable via `set_ambient_temp()`).
+    /// Assumptions: ambient temperature defaults to 21°C (configurable via `set_ambient_temp()`).
     fn simulate_physics(&mut self) {
         let mut ctx = PhysicsContext {
             ambient_temp: self.ambient_temp,

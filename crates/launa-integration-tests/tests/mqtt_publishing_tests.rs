@@ -25,13 +25,12 @@ fn test_status_to_mqtt_json() {
                 launa_mqtt::state::status_to_json(&status, None, None, false, None, "registered");
             let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
-            assert_eq!(parsed["current_temp"], 100.0);
-            assert_eq!(parsed["set_temp"], 104.0);
-            // Default SpaState has is_heating=false (no circulation = no heating)
-            assert_eq!(parsed["is_heating"], false);
+            assert_eq!(parsed["current_temp"], 38.0);
+            assert_eq!(parsed["set_temp"], 40.0);
+            // Default SpaState has circ_pump=true, so heating can be active if temp < set_temp
             assert_eq!(parsed["heating_mode"], "ready");
             assert_eq!(parsed["temp_range"], "high");
-            assert_eq!(parsed["temp_scale"], "fahrenheit");
+            assert_eq!(parsed["temp_scale"], "celsius");
         }
         _ => panic!("Expected StatusUpdate"),
     }
@@ -40,8 +39,8 @@ fn test_status_to_mqtt_json() {
 #[test]
 fn test_full_pipeline_status_frame_to_mqtt_json() {
     let mut sim = SpaSim::new();
-    sim.state.current_temp = Temperature::fahrenheit(100.0);
-    sim.state.set_temp = Temperature::fahrenheit(104.0);
+    sim.state.current_temp = Temperature::celsius(38.0);
+    sim.state.set_temp = Temperature::celsius(40.0);
     sim.state.pumps[0] = PumpState::Low;
     sim.state.pumps[1] = PumpState::Off;
     sim.state.pumps[2] = PumpState::Off;
@@ -64,8 +63,8 @@ fn test_full_pipeline_status_frame_to_mqtt_json() {
                 launa_mqtt::state::status_to_json(&status, None, None, false, None, "registered");
             let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
-            assert_eq!(parsed["current_temp"], 100.0);
-            assert_eq!(parsed["set_temp"], 104.0);
+            assert_eq!(parsed["current_temp"], 38.0);
+            assert_eq!(parsed["set_temp"], 40.0);
             assert_eq!(parsed["is_heating"], true);
             assert_eq!(parsed["pump1_on"], true);
             assert_eq!(parsed["pump2_on"], false);

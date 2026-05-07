@@ -86,6 +86,11 @@ impl std::ops::DerefMut for TempPhysicsHarness {
 fn test_overshoot_full_cycle_heat_overshoot_stop_cool_hysteresis_reheat() {
     let mut harness = TempPhysicsHarness::new();
 
+    // Use Fahrenheit so raw_value() returns °F
+    harness.sim.state.temp_scale = TemperatureScale::Fahrenheit;
+    harness.sim.state.set_temp = Temperature::fahrenheit(104.0);
+    harness.sim.state.current_temp = Temperature::fahrenheit(95.0);
+
     // Configure overshoot = 2°F
     harness
         .sim
@@ -680,6 +685,12 @@ fn test_noise_stale_triggers_at_30s_silence() {
 #[test]
 fn test_overshoot_mqtt_state_reflects_peak() {
     let mut harness = TempPhysicsHarness::new();
+
+    // Use Fahrenheit so raw_value() returns °F
+    harness.sim.state.temp_scale = TemperatureScale::Fahrenheit;
+    harness.sim.state.set_temp = Temperature::fahrenheit(104.0);
+    harness.sim.state.current_temp = Temperature::fahrenheit(95.0);
+
     harness
         .sim
         .set_physics_overshoot(Temperature::fahrenheit(2.0));

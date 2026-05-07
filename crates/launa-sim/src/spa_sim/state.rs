@@ -51,16 +51,16 @@ pub struct SpaState {
 impl Default for SpaState {
     fn default() -> Self {
         SpaState {
-            current_temp: Temperature::fahrenheit(100.0),
-            set_temp: Temperature::fahrenheit(104.0),
-            set_temp_high: Temperature::fahrenheit(104.0),
-            set_temp_low: Temperature::fahrenheit(80.0),
+            current_temp: Temperature::celsius(38.0),
+            set_temp: Temperature::celsius(40.0),
+            set_temp_high: Temperature::celsius(40.0),
+            set_temp_low: Temperature::celsius(26.0),
             heating_mode: HeatingMode::Ready,
-            temp_scale: TemperatureScale::Fahrenheit,
+            temp_scale: TemperatureScale::Celsius,
             is_heating: false,
             temp_range: TempRange::High,
             pumps: [PumpState::Off; 6],
-            circ_pump: false,
+            circ_pump: true,
             blower: false,
             lights: [false; 4],
             mister: false,

@@ -22,6 +22,9 @@ use launa_sim::SpaSim;
 #[test]
 fn test_validated_temperature_pipeline_fahrenheit() {
     let mut sim = SpaSim::new();
+    // Set Fahrenheit scale so raw wire value 100 is interpreted as 100°F
+    sim.state.temp_scale = TemperatureScale::Fahrenheit;
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
 
     let parse_result = launa_mqtt::command_parser::parse_set_temperature_validated(
         "100",
@@ -108,6 +111,9 @@ fn test_validated_temperature_pipeline_through_spaapp_fahrenheit() {
     let mut app = app;
     app.force_registered(0x03);
     let mut sim = SpaSim::new();
+    // Set Fahrenheit scale so raw wire value 102 is interpreted as 102°F
+    sim.state.temp_scale = TemperatureScale::Fahrenheit;
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
 
     app.process_frame(&make_status_frame());
 

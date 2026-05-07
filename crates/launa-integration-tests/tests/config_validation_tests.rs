@@ -494,90 +494,86 @@ fn test_temp_boundary_validation_through_mqtt_parser() {
 
 // Test Group 3: Temperature Scale Switching Mid-Session
 
-/// VAL-CROSS-010: Switch temperature scale from Fahrenheit to Celsius mid-session.
+/// VAL-CROSS-010: Switch temperature scale from Celsius to Fahrenheit mid-session.
 #[test]
-fn test_scale_switch_f_to_c_wire_values_2x() {
+fn test_scale_switch_c_to_f_wire_values_2x() {
     let mut sim = SpaSim::new();
 
-    // Verify initial Fahrenheit state through decoded status frame (not sim.state)
-    let status_bytes_f = sim.generate_status_frame();
-    let mut decoder = FrameDecoder::new();
-    let frames_f = decoder.feed_slice(&status_bytes_f);
-    assert_eq!(frames_f.len(), 1);
-    let msg_f = launa_protocol::dispatcher::dispatch_frame(&frames_f[0]);
-    match msg_f {
-        IncomingMessage::StatusUpdate(s) => {
-            assert_eq!(s.set_temp, Temperature::fahrenheit(104.0));
-            assert_eq!(s.temperature_scale, TemperatureScale::Fahrenheit);
-        }
-        _ => panic!("Expected StatusUpdate"),
-    }
-
-    // Switch to Celsius
-    // Rationale: sim.state fields are test scenario setup inputs for mid-session
-    // scale switching — verification is through decoded status frames below.
-    sim.state.temp_scale = TemperatureScale::Celsius;
-    sim.state.set_temp = Temperature::celsius(40.0);
-
-    // Generate status frame in Celsius — set_temp wire value should be 80 (40*2)
+    // Verify initial Celsius state through decoded status frame (not sim.state)
     let status_bytes_c = sim.generate_status_frame();
+    let mut decoder = FrameDecoder::new();
     let frames_c = decoder.feed_slice(&status_bytes_c);
     assert_eq!(frames_c.len(), 1);
     let msg_c = launa_protocol::dispatcher::dispatch_frame(&frames_c[0]);
     match msg_c {
         IncomingMessage::StatusUpdate(s) => {
-            assert_eq!(
-                s.set_temp,
-                Temperature::celsius(40.0),
-                "Celsius set_temp should decode to 40.0"
-            );
+            assert_eq!(s.set_temp, Temperature::celsius(40.0));
             assert_eq!(s.temperature_scale, TemperatureScale::Celsius);
         }
         _ => panic!("Expected StatusUpdate"),
     }
 
-    // Verify wire encoding: encode_temp(40.0, Celsius) = 80
-    // We can check the raw frame bytes contain 80 in the set_temp position
-    // The set_temp is at payload offset 20 in the status frame
+    // Switch to Fahrenheit
+    // Rationale: sim.state fields are test scenario setup inputs for mid-session
+    // scale switching — verification is through decoded status frames below.
+    sim.state.temp_scale = TemperatureScale::Fahrenheit;
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
+
+    // Generate status frame in Fahrenheit — set_temp wire value should be 104
+    let status_bytes_f = sim.generate_status_frame();
+    let frames_f = decoder.feed_slice(&status_bytes_f);
+    assert_eq!(frames_f.len(), 1);
+    let msg_f = launa_protocol::dispatcher::dispatch_frame(&frames_f[0]);
+    match msg_f {
+        IncomingMessage::StatusUpdate(s) => {
+            assert_eq!(
+                s.set_temp,
+                Temperature::fahrenheit(104.0),
+                "Fahrenheit set_temp should decode to 104.0"
+            );
+            assert_eq!(s.temperature_scale, TemperatureScale::Fahrenheit);
+        }
+        _ => panic!("Expected StatusUpdate"),
+    }
 }
 
-/// VAL-CROSS-010: F→C mid-session, MQTT state shows correct Celsius values.
+/// VAL-CROSS-010: C→F mid-session, MQTT state shows correct Fahrenheit values.
 #[test]
-fn test_scale_switch_f_to_c_mqtt_state() {
+fn test_scale_switch_c_to_f_mqtt_state() {
     let mut harness = TestHarness::new();
     harness.complete_registration(5);
 
-    // Collect initial state in Fahrenheit
+    // Collect initial state in Celsius
     let _actions = harness.collect_actions();
 
-    // Verify initial MQTT state shows Fahrenheit
+    // Verify initial MQTT state shows Celsius
     let last_state = harness.broker.last_state().unwrap_or("");
     if !last_state.is_empty() {
         let parsed: serde_json::Value = serde_json::from_str(last_state).unwrap();
-        assert_eq!(parsed["temp_scale"], "fahrenheit");
+        assert_eq!(parsed["temp_scale"], "celsius");
     }
 
-    // Switch sim to Celsius mid-session
+    // Switch sim to Fahrenheit mid-session
     // Rationale: sim.state fields are test scenario setup for mid-session scale switch.
     // Verification is through the MQTT JSON state published by the broker.
-    harness.sim.state.temp_scale = TemperatureScale::Celsius;
-    harness.sim.state.set_temp = Temperature::celsius(38.0); // 38°C
-    harness.sim.state.current_temp = Temperature::celsius(36.0); // 36°C
+    harness.sim.state.temp_scale = TemperatureScale::Fahrenheit;
+    harness.sim.state.set_temp = Temperature::fahrenheit(104.0); // 104°F
+    harness.sim.state.current_temp = Temperature::fahrenheit(100.0); // 100°F
 
     // Tick a few times to get new status
     for _ in 0..3 {
         harness.collect_actions();
     }
 
-    // Verify MQTT state now shows Celsius
+    // Verify MQTT state now shows Fahrenheit
     let last_state = harness.broker.last_state().unwrap();
     let parsed: serde_json::Value = serde_json::from_str(last_state).unwrap();
     assert_eq!(
-        parsed["temp_scale"], "celsius",
-        "temp_scale should be celsius after switch"
+        parsed["temp_scale"], "fahrenheit",
+        "temp_scale should be fahrenheit after switch"
     );
-    // set_temp should be 38.0 in the JSON (decoded from wire value 76)
-    assert_eq!(parsed["set_temp"], 38.0, "set_temp should be 38.0°C");
+    // set_temp should be 104.0 in the JSON
+    assert_eq!(parsed["set_temp"], 104.0, "set_temp should be 104.0°F");
 }
 
 /// VAL-CROSS-010: F→C mid-session, validation uses Celsius range.
@@ -630,11 +626,11 @@ fn test_scale_switch_f_to_c_validation_uses_celsius_range() {
 
 /// VAL-CROSS-010: Full end-to-end scale switch through SpaApp pipeline.
 #[test]
-fn test_scale_switch_f_to_c_e2e_pipeline() {
+fn test_scale_switch_c_to_f_e2e_pipeline() {
     let mut harness = TestHarness::new();
     harness.complete_registration(5);
 
-    // Get initial Fahrenheit status
+    // Get initial Celsius status
     let actions = harness.collect_actions();
     let initial_state = actions.iter().find_map(|a| match a {
         AppAction::PublishState { status, .. } => Some(status.temperature_scale),
@@ -642,24 +638,24 @@ fn test_scale_switch_f_to_c_e2e_pipeline() {
     });
     assert_eq!(
         initial_state,
-        Some(TemperatureScale::Fahrenheit),
-        "initial scale should be Fahrenheit"
+        Some(TemperatureScale::Celsius),
+        "initial scale should be Celsius"
     );
 
-    // Switch sim to Celsius mid-session
+    // Switch sim to Fahrenheit mid-session
     // Rationale: sim.state fields are test scenario setup for mid-session scale switch.
-    // Verification is through the PublishState action carrying Celsius values.
-    harness.sim.state.temp_scale = TemperatureScale::Celsius;
-    harness.sim.state.set_temp = Temperature::celsius(38.0);
-    harness.sim.state.current_temp = Temperature::celsius(36.0);
+    // Verification is through the PublishState action carrying Fahrenheit values.
+    harness.sim.state.temp_scale = TemperatureScale::Fahrenheit;
+    harness.sim.state.set_temp = Temperature::fahrenheit(104.0);
+    harness.sim.state.current_temp = Temperature::fahrenheit(100.0);
 
     // Tick through the pipeline and verify Celsius state in MQTT
     let actions = harness.full_tick();
 
     // Find a PublishState action
-    let celsius_state = actions.iter().find_map(|a| match a {
+    let fahrenheit_state = actions.iter().find_map(|a| match a {
         AppAction::PublishState { status, .. } => {
-            if status.temperature_scale == TemperatureScale::Celsius {
+            if status.temperature_scale == TemperatureScale::Fahrenheit {
                 Some(status.set_temp)
             } else {
                 None
@@ -669,13 +665,13 @@ fn test_scale_switch_f_to_c_e2e_pipeline() {
     });
 
     assert!(
-        celsius_state.is_some(),
-        "should get a Celsius state after switch"
+        fahrenheit_state.is_some(),
+        "should get a Fahrenheit state after switch"
     );
     assert_eq!(
-        celsius_state.unwrap(),
-        Temperature::celsius(38.0),
-        "set_temp should be 38.0°C in the published state"
+        fahrenheit_state.unwrap(),
+        Temperature::fahrenheit(104.0),
+        "set_temp should be 104.0°F in the published state"
     );
 }
 

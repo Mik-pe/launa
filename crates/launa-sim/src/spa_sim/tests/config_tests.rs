@@ -226,7 +226,7 @@ fn test_default_config_response_unchanged() {
             assert!(config.circ_pump);
             assert!(config.blower);
             assert!(config.lights[0]);
-            assert!(!config.temperature_scale_celsius);
+            assert!(config.temperature_scale_celsius);
         }
         other => panic!("Expected ControlConfiguration, got {:?}", other),
     }

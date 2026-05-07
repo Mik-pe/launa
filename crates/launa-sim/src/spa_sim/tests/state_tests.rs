@@ -216,7 +216,7 @@ fn test_simulate_unknown_temp_reports_none() {
 fn test_simulate_unknown_temp_clear_restores() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = Temperature::fahrenheit(100.0);
+    sim.state.current_temp = Temperature::celsius(38.0);
 
     sim.simulate_unknown_temp();
     sim.clear_unknown_temp();
@@ -230,7 +230,7 @@ fn test_simulate_unknown_temp_clear_restores() {
     };
     assert_eq!(
         s.current_temp,
-        Some(Temperature::fahrenheit(100.0)),
+        Some(Temperature::celsius(38.0)),
         "temp should be restored after clear_unknown_temp"
     );
 }
@@ -239,10 +239,11 @@ fn test_simulate_unknown_temp_clear_restores() {
 fn test_simulate_sensor_noise_with_jitter() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = Temperature::fahrenheit(100.0);
-    sim.state.set_temp = Temperature::fahrenheit(100.0);
+    sim.state.current_temp = Temperature::celsius(38.0);
+    sim.state.set_temp = Temperature::celsius(40.0);
     sim.simulate_sensor_noise(2.0);
 
+    let baseline_f = Temperature::celsius(38.0).to_fahrenheit();
     // Collect temps from 100 ticks
     let mut temps: Vec<f32> = Vec::new();
     for _ in 0..100 {
@@ -258,20 +259,22 @@ fn test_simulate_sensor_noise_with_jitter() {
         }
     }
 
-    // All temps should be within ±2.0 of baseline (100.0)
+    // All temps should be within ±2.0 of baseline
     for &t in &temps {
         assert!(
-            t >= 98.0 && t <= 102.0,
-            "temp {} should be within ±2.0 of 100.0",
-            t
+            t >= baseline_f - 2.0 && t <= baseline_f + 2.0,
+            "temp {} should be within ±2.0 of {}",
+            t,
+            baseline_f
         );
     }
 
-    // With jitter=2.0, not all temps should be exactly 100.0
-    let exact_count = temps.iter().filter(|&&t| t == 100.0).count();
+    // With jitter=2.0, not all temps should be exactly baseline
+    let exact_count = temps.iter().filter(|&&t| t == baseline_f).count();
     assert!(
         exact_count < temps.len(),
-        "with jitter=2.0, not all temps should be exactly 100.0 (got {}/{})",
+        "with jitter=2.0, not all temps should be exactly {} (got {}/{})",
+        baseline_f,
         exact_count,
         temps.len()
     );
@@ -281,8 +284,8 @@ fn test_simulate_sensor_noise_with_jitter() {
 fn test_simulate_sensor_noise_zero_jitter() {
     let mut sim = SpaSim::new();
     sim.registered = true;
-    sim.state.current_temp = Temperature::fahrenheit(100.0);
-    sim.state.set_temp = Temperature::fahrenheit(100.0);
+    sim.state.current_temp = Temperature::celsius(38.0);
+    sim.state.set_temp = Temperature::celsius(40.0);
     sim.simulate_sensor_noise(0.0); // No noise
 
     for _ in 0..20 {
@@ -295,7 +298,7 @@ fn test_simulate_sensor_noise_zero_jitter() {
         };
         assert_eq!(
             s.current_temp,
-            Some(Temperature::fahrenheit(100.0)),
+            Some(Temperature::celsius(38.0)),
             "with jitter=0.0, temp should be exact"
         );
     }

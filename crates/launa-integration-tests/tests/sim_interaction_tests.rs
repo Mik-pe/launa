@@ -59,8 +59,8 @@ fn test_simulator_tick_heating_approaches_set_temp() {
     // the test scenario — we're testing that the sim's thermal model heats
     // correctly and the result is observable through decoded status frames.
     // The state fields are test inputs, not test assertions.
-    sim.state.current_temp = Temperature::fahrenheit(95.0);
-    sim.state.set_temp = Temperature::fahrenheit(100.0);
+    sim.state.current_temp = Temperature::celsius(35.0);
+    sim.state.set_temp = Temperature::celsius(38.0);
     sim.state.is_heating = true;
     sim.state.pumps[0] = PumpState::Low;
 
@@ -74,7 +74,7 @@ fn test_simulator_tick_heating_approaches_set_temp() {
         let msg = dispatch_frame(&frames[0]);
         if let IncomingMessage::StatusUpdate(s) = msg {
             if let Some(temp) = s.current_temp {
-                if temp.raw_value() >= 100.0 {
+                if temp.to_fahrenheit() >= 100.0 {
                     reached = true;
                     break;
                 }

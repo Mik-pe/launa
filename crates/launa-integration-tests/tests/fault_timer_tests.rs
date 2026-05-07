@@ -18,7 +18,7 @@ use launa_core::AppAction;
 use launa_integration_tests::harness::TestHarness;
 use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::fault::FaultCode;
-use launa_protocol::status::PumpState;
+use launa_protocol::status::{PumpState, TemperatureScale};
 use launa_protocol::Temperature;
 
 // Test 1: Fault appears/clears lifecycle (VAL-TEST-007, VAL-CROSS-002)
@@ -807,6 +807,10 @@ fn test_rapid_toggle_race_parity() {
 fn test_rapid_temperature_race_last_wins() {
     let mut h = TestHarness::new();
     h.complete_registration(5);
+    // Set Fahrenheit scale for this test — raw wire values are Fahrenheit
+    h.sim.state.temp_scale = TemperatureScale::Fahrenheit;
+    h.sim.state.set_temp = Temperature::fahrenheit(104.0);
+    h.sim.state.current_temp = Temperature::fahrenheit(100.0);
     h.collect_actions();
 
     // Record initial set_temp through decoded status frame

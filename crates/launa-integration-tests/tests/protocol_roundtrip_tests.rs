@@ -30,14 +30,12 @@ fn test_status_frame_round_trip() {
     let msg = dispatch_frame(frame);
     match msg {
         IncomingMessage::StatusUpdate(status) => {
-            assert_eq!(status.current_temp, Some(Temperature::fahrenheit(100.0)));
-            assert_eq!(status.set_temp, Temperature::fahrenheit(104.0));
+            assert_eq!(status.current_temp, Some(Temperature::celsius(38.0)));
+            assert_eq!(status.set_temp, Temperature::celsius(40.0));
             assert_eq!(status.hour, 14);
             assert_eq!(status.minute, 30);
             assert_eq!(status.heating_mode, HeatingMode::Ready);
-            assert_eq!(status.temperature_scale, TemperatureScale::Fahrenheit);
-            // Default SpaState has is_heating=false (no circulation = no heating)
-            assert!(!status.is_heating);
+            assert_eq!(status.temperature_scale, TemperatureScale::Celsius);
             assert_eq!(status.temp_range, TempRange::High);
         }
         _ => panic!("Expected StatusUpdate, got {:?}", msg),
@@ -254,6 +252,9 @@ fn test_toggle_light_command() {
 #[test]
 fn test_set_temperature_command() {
     let mut sim = SpaSim::new();
+    // Use Fahrenheit so raw wire value 100 is interpreted as 100°F
+    sim.state.temp_scale = TemperatureScale::Fahrenheit;
+    sim.state.set_temp = Temperature::fahrenheit(104.0);
     let mut decoder = FrameDecoder::new();
 
     // Verify initial state through decoded status frame
@@ -363,6 +364,8 @@ fn test_status_unknown_temp() {
     let mut sim = SpaSim::new();
     // Rationale: sim.state.current_temp is test input to configure unknown temp (255).
     // Verification is through the decoded status frame's current_temp being None.
+    // Use Fahrenheit scale so 255 wire value maps to 255°F (above valid range → None)
+    sim.state.temp_scale = TemperatureScale::Fahrenheit;
     sim.state.current_temp = Temperature::fahrenheit(255.0);
 
     let encoded = sim.generate_status_frame();
@@ -383,6 +386,8 @@ fn test_status_max_temp() {
     let mut sim = SpaSim::new();
     // Rationale: sim.state fields are test inputs for boundary values.
     // Verification is through the decoded status frame.
+    // Use Fahrenheit so wire values are direct (254°F)
+    sim.state.temp_scale = TemperatureScale::Fahrenheit;
     sim.state.current_temp = Temperature::fahrenheit(254.0);
     sim.state.set_temp = Temperature::fahrenheit(254.0);
 
@@ -405,6 +410,8 @@ fn test_status_min_temp() {
     let mut sim = SpaSim::new();
     // Rationale: sim.state fields are test inputs for boundary values.
     // Verification is through the decoded status frame.
+    // Use Fahrenheit so wire values are direct (1°F)
+    sim.state.temp_scale = TemperatureScale::Fahrenheit;
     sim.state.current_temp = Temperature::fahrenheit(1.0);
     sim.state.set_temp = Temperature::fahrenheit(1.0);
 

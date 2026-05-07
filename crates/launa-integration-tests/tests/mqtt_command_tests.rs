@@ -10,7 +10,7 @@
 use launa_protocol::command::{Command, ToggleItem};
 use launa_protocol::dispatcher::{dispatch_frame, IncomingMessage};
 use launa_protocol::frame::{FrameDecoder, FrameEncoder};
-use launa_protocol::status::PumpState;
+use launa_protocol::status::{PumpState, TemperatureScale};
 use launa_protocol::Temperature;
 use launa_sim::SpaSim;
 
@@ -108,6 +108,8 @@ fn test_mqtt_command_to_frame_to_simulator() {
 #[test]
 fn test_mqtt_set_temperature_pipeline() {
     let mut sim = SpaSim::new();
+    // Use Fahrenheit so raw wire value 102 is interpreted as 102°F
+    sim.state.temp_scale = TemperatureScale::Fahrenheit;
 
     let cmd = launa_mqtt::command_parser::parse_command_ok(
         "launa/test_spa/command",
@@ -185,6 +187,8 @@ fn test_command_round_trip_pump_toggle() {
 #[test]
 fn test_command_round_trip_set_temperature() {
     let mut sim = SpaSim::new();
+    // Use Fahrenheit so raw wire value 100 is interpreted as 100°F
+    sim.state.temp_scale = TemperatureScale::Fahrenheit;
 
     let cmd = launa_mqtt::command_parser::parse_command_ok(
         "launa/spa/command",
