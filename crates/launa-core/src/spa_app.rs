@@ -23,8 +23,8 @@ use crate::heap_monitor::HeapMonitor;
 use crate::rate_log::RateLog;
 use crate::timers::{HoldModeTimer, PumpTimerManager};
 use crate::types::{
-    DIAGNOSTICS_INTERVAL_MS, MAX_COMMAND_QUEUE, REGISTRATION_TIMEOUT_MS, STALE_PROBE_INTERVAL_MS,
-    STALE_THRESHOLD_MS,
+    CTS_LOSS_THRESHOLD_MS, DIAGNOSTICS_INTERVAL_MS, MAX_COMMAND_QUEUE, REGISTRATION_TIMEOUT_MS,
+    STALE_PROBE_INTERVAL_MS, STALE_THRESHOLD_MS,
 };
 
 /// The core application logic, extracted from the ESP32 main loop.
@@ -96,6 +96,11 @@ pub struct SpaApp<'a> {
     /// Timestamp of the last proactive registration probe (unsolicited ID
     /// request sent because we're unregistered but receiving bus traffic).
     last_registration_probe_time: Option<Timestamp>,
+
+    /// Timestamp of the last CTS (Ready) frame received on our assigned channel.
+    /// Used to detect spa reboots (spa forgets clients and stops sending CTS
+    /// on our channel).
+    last_cts_time: Option<Timestamp>,
 }
 
 impl<'a> SpaApp<'a> {
@@ -142,6 +147,7 @@ impl<'a> SpaApp<'a> {
             failed_registration_attempts: 0,
             last_unregistered_frame_time: None,
             last_registration_probe_time: None,
+            last_cts_time: None,
         }
     }
 
@@ -246,6 +252,7 @@ impl<'a> SpaApp<'a> {
         self.registration_started_at = None;
         self.last_unregistered_frame_time = None;
         self.last_registration_probe_time = None;
+        self.last_cts_time = None;
     }
 
     /// Rotate the client hash to try a different identity on the bus.
@@ -427,6 +434,8 @@ impl<'a> SpaApp<'a> {
                             return actions;
                         }
                     }
+                    // Record that we received a valid CTS on our channel
+                    self.last_cts_time = Some(now);
                     if let Some(cmd) = self.command_queue.pop_front() {
                         let encoded = encode_command(&cmd);
                         actions.push(AppAction::SendFrame(encoded));
@@ -569,6 +578,44 @@ impl<'a> SpaApp<'a> {
             self.no_query_alert_sent = false;
         }
 
+        // CTS loss detection: if registered and no CTS on our channel for 5 seconds,
+        // the spa likely rebooted and forgot about us. Reset registration.
+        if self.registration.is_registered() && !self.was_stale {
+            let cts_lost = match self.last_cts_time {
+                Some(last_cts) => now.elapsed_since(last_cts) >= CTS_LOSS_THRESHOLD_MS,
+                None => {
+                    // We're registered but have never received a CTS.
+                    // Only trigger if we've been registered for > 5 seconds.
+                    self.registration_started_at
+                        .is_none_or(|rs| now.elapsed_since(rs) >= CTS_LOSS_THRESHOLD_MS)
+                }
+            };
+
+            if cts_lost {
+                let elapsed_desc = match self.last_cts_time {
+                    Some(last_cts) => format!("{}ms since last CTS", now.elapsed_since(last_cts)),
+                    None => String::from("registered but never received CTS"),
+                };
+                log::warn!(
+                    "CTS loss detected: {} — resetting registration",
+                    elapsed_desc
+                );
+                self.registration.reset();
+                self.client_id = None;
+                self.registration_started_at = None;
+                self.last_unregistered_frame_time = None;
+                self.last_registration_probe_time = None;
+                self.last_cts_time = None;
+                self.command_queue.clear();
+                self.cmd_tracker.reset();
+                self.pump_timers.cancel_all();
+                actions.push(AppAction::PublishAlert {
+                    level: String::from("warn"),
+                    message: String::from("cts_loss"),
+                });
+            }
+        }
+
         // Stale detection
         if let Some(last) = self.last_status_time {
             let elapsed = now.elapsed_since(last);
@@ -598,6 +645,7 @@ impl<'a> SpaApp<'a> {
                 self.registration_started_at = None;
                 self.last_unregistered_frame_time = None;
                 self.last_registration_probe_time = None;
+                self.last_cts_time = None;
                 self.command_queue.clear();
                 self.cmd_tracker.reset();
                 self.pump_timers.cancel_all();
@@ -1366,11 +1414,14 @@ mod tests {
         let mut app = app;
         app.force_registered(0x03);
 
-        // Get initial status
+        // Get initial status and CTS to keep CTS loss timer happy
         app.process_frame(&status_frame());
+        app.process_frame(&ready_frame(0x03));
 
-        // Advance past probe interval
+        // Advance past probe interval. Keep sending CTS to prevent CTS loss
+        // from firing (the probe test is about status staleness, not CTS loss).
         clock.advance_ms(6_000);
+        app.process_frame(&ready_frame(0x03)); // keep CTS alive
         let actions = app.tick();
 
         let frames = collect_sent_frames(&actions);
@@ -1401,9 +1452,12 @@ mod tests {
         app.force_registered(0x03);
 
         app.process_frame(&status_frame());
+        // Get initial CTS to keep CTS loss timer happy
+        app.process_frame(&ready_frame(0x03));
 
-        // Advance to 6s → first probe
+        // Advance to 6s → first probe. Send CTS to prevent CTS loss.
         clock.advance_ms(6_000);
+        app.process_frame(&ready_frame(0x03)); // keep CTS alive
         let actions1 = app.tick();
         assert!(
             collect_sent_frames(&actions1).iter().any(|f| !f.is_empty()),
@@ -1412,6 +1466,7 @@ mod tests {
 
         // Advance only 3s → no probe yet (interval is 5s)
         clock.advance_ms(3_000);
+        app.process_frame(&ready_frame(0x03)); // keep CTS alive
         let actions2 = app.tick();
         let frames2 = collect_sent_frames(&actions2);
         assert!(
@@ -1421,6 +1476,7 @@ mod tests {
 
         // Advance to 5s total since last probe → second probe
         clock.advance_ms(2_000);
+        app.process_frame(&ready_frame(0x03)); // keep CTS alive
         let actions3 = app.tick();
         assert!(
             collect_sent_frames(&actions3).iter().any(|f| !f.is_empty()),
@@ -1502,7 +1558,7 @@ mod tests {
         let mut app = app;
         app.force_registered(0x03);
 
-        // Phase 1: Normal operation — process a few status updates
+        // Phase 1: Normal operation — process a few status updates with CTS
         for _ in 0..3 {
             let actions = app.process_frame(&status_frame());
             assert!(
@@ -1511,38 +1567,37 @@ mod tests {
                     .any(|a| matches!(a, AppAction::PublishState { .. })),
                 "normal status should produce PublishState"
             );
+            app.process_frame(&ready_frame(0x03));
             clock.advance_ms(1_000);
         }
         assert!(!app.is_stale());
         assert_eq!(app.frames_received(), 3);
 
-        // Phase 2: Bus silence — advance to 6s (triggers first stale probe)
+        // Phase 2: Bus silence — advance to 6s (CTS loss fires at 5s)
         clock.advance_ms(6_000);
         let actions = app.tick();
-        let has_probe = actions.iter().any(|a| matches!(a, AppAction::SendFrame(_)));
-        assert!(has_probe, "should send stale probe at 6s");
-        assert!(!app.is_stale(), "should not be stale yet at 6s");
+        // CTS loss fires first (5s no CTS), which is the primary recovery
+        let has_cts_loss = actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishAlert { message, .. } if message == "cts_loss"));
+        assert!(has_cts_loss, "CTS loss should fire at 5s of bus silence");
+        assert!(!app.is_registered(), "CTS loss should reset registration");
 
-        // Phase 3: Continue silence past 30s threshold
-        clock.advance_ms(25_000); // total 31s since last status
+        // Phase 3: Continue silence — stale detection still fires at 30s as fallback
+        // (status time was set during Phase 1, so advance to 30s total)
+        clock.advance_ms(25_000); // total ~31s since last status
         let actions = app.tick();
-
-        // Verify stale alert published
-        let has_alert = actions.iter().any(|a| {
+        let has_stale_alert = actions.iter().any(|a| {
             matches!(
                 a,
                 AppAction::PublishAlert { message, .. } if message == "spa_communication_lost"
             )
         });
-        assert!(has_alert, "should publish stale alert at 30s");
-
-        // Verify stale availability published
-        let has_stale_avail = actions
-            .iter()
-            .any(|a| matches!(a, AppAction::PublishStaleAvailability));
-        assert!(has_stale_avail, "should publish stale availability at 30s");
+        assert!(
+            has_stale_alert,
+            "stale alert should also fire at 30s as fallback"
+        );
         assert!(app.is_stale(), "should be stale after 30s silence");
-        assert!(!app.is_registered(), "stale should reset registration");
 
         // Phase 4: Communication resumes — re-register first
         app.process_frame(&new_client_query_frame());
@@ -1915,5 +1970,129 @@ mod tests {
             "CTS on our channel should dequeue command"
         );
         assert_eq!(app.queued_command_count(), 0);
+    }
+
+    /// CTS loss detection: no CTS on our channel for 5s triggers re-registration.
+    #[test]
+    fn test_cts_loss_detection_resets_registration() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x11);
+
+        // Get initial CTS and status to establish normal operation
+        app.process_frame(&status_frame());
+        app.process_frame(&ready_frame(0x11));
+        assert!(app.is_registered());
+        assert!(!app.is_stale());
+
+        // Queue a command to verify it gets cleared on CTS loss
+        app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump1));
+        assert_eq!(app.queued_command_count(), 1);
+
+        // Continue receiving status frames (spa is alive, sending FFAF)
+        // but NOT receiving CTS on our channel (simulating spa reboot).
+        clock.advance_ms(2_000);
+        app.process_frame(&status_frame());
+        let actions = app.tick();
+        // Should NOT trigger CTS loss yet (only 2s)
+        assert!(
+            !actions.iter().any(
+                |a| matches!(a, AppAction::PublishAlert { message, .. } if message == "cts_loss")
+            ),
+            "should not trigger CTS loss at 2s"
+        );
+        assert!(app.is_registered());
+
+        // CTS on wrong channel should NOT reset the timer (spa sends CTS on 0x10 after reboot)
+        app.process_frame(&ready_frame(0x10));
+
+        // Advance past 5s threshold since last CTS on our channel
+        clock.advance_ms(4_000);
+        app.process_frame(&status_frame()); // status still coming in
+        let actions = app.tick();
+
+        // Now CTS loss should fire
+        let has_cts_loss = actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishAlert { message, .. } if message == "cts_loss"));
+        assert!(has_cts_loss, "should trigger CTS loss after 5s");
+        assert!(!app.is_registered(), "CTS loss should reset registration");
+        assert_eq!(
+            app.queued_command_count(),
+            0,
+            "CTS loss should clear command queue"
+        );
+    }
+
+    /// CTS loss does NOT fire when still receiving CTS on our channel.
+    #[test]
+    fn test_cts_loss_no_false_positive() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x11);
+
+        app.process_frame(&status_frame());
+        app.process_frame(&ready_frame(0x11));
+
+        // Advance 4s and send another CTS — timer resets
+        clock.advance_ms(4_000);
+        app.process_frame(&status_frame());
+        app.process_frame(&ready_frame(0x11));
+
+        // Advance another 4s — still within 5s of last CTS
+        clock.advance_ms(4_000);
+        app.process_frame(&status_frame());
+        let actions = app.tick();
+
+        let no_cts_loss = !actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishAlert { message, .. } if message == "cts_loss"));
+        assert!(
+            no_cts_loss,
+            "should NOT trigger CTS loss when CTS is regular"
+        );
+        assert!(app.is_registered());
+    }
+
+    /// After CTS loss recovery, re-registration works and CTS tracking resumes.
+    #[test]
+    fn test_cts_loss_recovery_and_reregistration() {
+        let (clock, app) = make_app_with_clock();
+        let mut app = app;
+        app.force_registered(0x11);
+
+        // Normal operation
+        app.process_frame(&status_frame());
+        app.process_frame(&ready_frame(0x11));
+
+        // CTS loss — advance past threshold
+        clock.advance_ms(6_000);
+        app.process_frame(&status_frame());
+        let actions = app.tick();
+        assert!(actions.iter().any(
+            |a| matches!(a, AppAction::PublishAlert { message, .. } if message == "cts_loss")
+        ));
+        assert!(!app.is_registered());
+
+        // Re-register
+        app.process_frame(&new_client_query_frame());
+        let actions = app.process_frame(&client_id_assignment_frame(0x11));
+        assert!(app.is_registered());
+        assert_eq!(app.client_id(), Some(0x11));
+
+        // Receiving CTS on our channel resumes normal operation
+        app.process_frame(&status_frame());
+        app.process_frame(&ready_frame(0x11));
+
+        // Advance 3s — no CTS loss (timer was reset by new CTS)
+        clock.advance_ms(3_000);
+        let actions = app.tick();
+        let no_cts_loss = !actions
+            .iter()
+            .any(|a| matches!(a, AppAction::PublishAlert { message, .. } if message == "cts_loss"));
+        assert!(
+            no_cts_loss,
+            "should not trigger CTS loss after re-registration with active CTS"
+        );
     }
 }

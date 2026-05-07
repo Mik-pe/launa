@@ -114,6 +114,12 @@ fn uptime_secs() -> u64 {
 /// Set once at startup from device_id via FNV-1a.
 static REG_CLIENT_HASH: AtomicU16 = AtomicU16::new(0);
 
+/// Whether the SpaApp is currently registered with the spa controller.
+/// Updated by the main loop after processing frames/ticks; read by the
+/// UART fast-path to avoid sending NewClientResponse when already registered
+/// (which would cause the spa to assign a new channel every ~1 second).
+static APP_REGISTERED: AtomicBool = AtomicBool::new(false);
+
 static FRAME_CHANNEL: Channel<CriticalSectionRawMutex, Frame, 4> = Channel::new();
 static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, Command, 4> = Channel::new();
 static UART_TX_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
@@ -179,8 +185,14 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                         // the idle-gap queue and avoids the ~20ms latency from
                         // the 200us read timeout cycle. Critical for RS-485
                         // half-duplex where the emulator only listens briefly.
+                        //
+                        // Only respond when NOT already registered — the spa
+                        // sends FE BF 00 every ~1s to discover new clients.
+                        // If we're registered, responding would cause the spa
+                        // to assign a new channel every cycle.
                         if frame.message_type == [0xFE, 0xBF]
                             && frame.payload.first() == Some(&0x00)
+                            && !APP_REGISTERED.load(Ordering::Relaxed)
                         {
                             let hash_be = REG_CLIENT_HASH.load(Ordering::Relaxed);
                             let hash_hi = (hash_be >> 8) as u8;
@@ -449,7 +461,7 @@ async fn process_uart_frames(
     sniff_mode: bool,
     frame_rx: &embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, Frame, 4>,
 ) {
-    let mut actions = app.process_frame(&frame);
+    let actions = app.process_frame(&frame);
 
     execute_actions(
         &actions,
@@ -459,8 +471,11 @@ async fn process_uart_frames(
     )
     .await;
 
+    // Update registration state for UART fast-path
+    APP_REGISTERED.store(app.is_registered(), Ordering::Relaxed);
+
     while let Ok(frame) = frame_rx.try_receive() {
-        let mut actions = app.process_frame(&frame);
+        let actions = app.process_frame(&frame);
         execute_actions(
             &actions,
             device_id,
@@ -469,6 +484,8 @@ async fn process_uart_frames(
         )
         .await;
     }
+
+    APP_REGISTERED.store(app.is_registered(), Ordering::Relaxed);
 }
 
 /// Connect to WiFi with fatal error handling.
@@ -636,6 +653,9 @@ impl<'a> MainLoop<'a> {
             read_wifi_rssi(),
         )
         .await;
+
+        // Update registration state for UART fast-path (CTS loss may have reset it)
+        APP_REGISTERED.store(self.app.is_registered(), Ordering::Relaxed);
 
         // Heap check (uses actual ESP32 free heap)
         let heap_actions = self.app.check_heap(esp_alloc::HEAP.free());

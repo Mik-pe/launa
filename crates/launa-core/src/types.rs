@@ -12,6 +12,10 @@ pub(crate) const DEFAULT_HOLD_MODE_TIMEOUT_MS: u64 = 60 * 60 * 1000;
 
 pub(crate) const STALE_PROBE_INTERVAL_MS: u64 = 5_000;
 pub(crate) const STALE_THRESHOLD_MS: u64 = 30_000;
+/// Time without receiving a CTS frame on our assigned channel before
+/// we assume the spa has rebooted or dropped us. Spa sends CTS every
+/// ~20ms, so 5 seconds = ~250 missed frames.
+pub(crate) const CTS_LOSS_THRESHOLD_MS: u64 = 5_000;
 pub(crate) const REGISTRATION_TIMEOUT_MS: u64 = 5_000;
 pub(crate) const DIAGNOSTICS_INTERVAL_MS: u64 = 60_000;
 

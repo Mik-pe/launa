@@ -385,17 +385,20 @@ fn test_broker_loss_rate_no_panics_eventual_consistency() {
 }
 
 // Test 7: VAL-TEST-015 — Slow degraded bus endurance
-// Combined: jitter(5) + latency(2) + variable Ready(3,8) + success_rate(0.7),
+// Combined: jitter(5) + latency(2) + variable Ready(1,3) + success_rate(0.7),
 // run 100 ticks. Verify no panics, no stuck commands, no protocol desync.
+// Note: Ready interval kept to (1,3) so CTS arrives within the 5s CTS loss
+// threshold. Longer intervals would trigger CTS loss recovery, which is
+// tested separately in cts_loss_tests.rs.
 
 #[test]
 fn test_degraded_bus_100_ticks_stable() {
     let mut harness = TestHarness::new();
 
-    // Configure combined degradation
+    // Configure combined degradation (Ready interval 1-3 to stay under CTS loss threshold)
     harness.sim.set_jitter_padding_bytes(5);
     harness.sim.set_command_latency_ticks(2);
-    harness.sim.set_ready_interval_range(3, 8);
+    harness.sim.set_ready_interval_range(1, 3);
     harness.sim.set_command_success_rate(0.7);
 
     // Complete registration (works even with degradation)

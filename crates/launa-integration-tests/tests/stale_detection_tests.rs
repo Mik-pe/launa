@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::{make_spaapp, make_status_frame};
+use common::{make_ready_frame, make_spaapp, make_status_frame};
 
 use launa_core::AppAction;
 use launa_protocol::command::Command;
@@ -20,9 +20,13 @@ fn test_spaapp_stale_detection_flow() {
     app.force_registered(0x03);
 
     app.process_frame(&make_status_frame());
+    // Send CTS to prevent CTS loss from firing during stale probe tests
+    app.process_frame(&make_ready_frame(0x03));
     assert!(!app.is_stale());
 
     clock.advance_ms(6_000);
+    // Send CTS right before tick to keep CTS loss timer happy
+    app.process_frame(&make_ready_frame(0x03));
     let actions = app.tick();
     let has_probe = actions
         .iter()
@@ -69,12 +73,15 @@ fn test_spaapp_stale_detection_lifecycle() {
     app.force_registered(0x03);
 
     app.process_frame(&make_status_frame());
+    // Send CTS to prevent CTS loss from firing during stale probe tests
+    app.process_frame(&make_ready_frame(0x03));
     assert!(
         !app.is_stale(),
         "should not be stale during normal operation"
     );
 
     clock.advance_ms(6_000);
+    app.process_frame(&make_ready_frame(0x03)); // keep CTS alive
     let actions = app.tick();
     let probe_frames: Vec<&Vec<u8>> = actions
         .iter()
@@ -95,6 +102,7 @@ fn test_spaapp_stale_detection_lifecycle() {
     assert!(!app.is_stale(), "should not be stale at 6s");
 
     clock.advance_ms(5_000);
+    app.process_frame(&make_ready_frame(0x03)); // keep CTS alive
     let actions = app.tick();
     let probe2_frames: Vec<&Vec<u8>> = actions
         .iter()
@@ -109,6 +117,7 @@ fn test_spaapp_stale_detection_lifecycle() {
     );
 
     clock.advance_ms(5_000);
+    app.process_frame(&make_ready_frame(0x03)); // keep CTS alive
     let actions = app.tick();
     let probe3_frames: Vec<&Vec<u8>> = actions
         .iter()
@@ -151,6 +160,8 @@ fn test_spaapp_stale_detection_lifecycle() {
     app.force_registered(0x03);
 
     let actions = app.process_frame(&make_status_frame());
+    // Send CTS to establish normal CTS tracking after re-registration
+    app.process_frame(&make_ready_frame(0x03));
     assert!(!app.is_stale(), "Phase 4: should recover after status");
 
     let has_recovery = actions.iter().any(|a| {
@@ -165,6 +176,7 @@ fn test_spaapp_stale_detection_lifecycle() {
     assert!(has_recovery, "Phase 4: should indicate stale recovery");
 
     clock.advance_ms(6_000);
+    app.process_frame(&make_ready_frame(0x03)); // keep CTS alive
     let actions = app.tick();
     let no_stale_alert = !actions.iter().any(|a| {
         matches!(
