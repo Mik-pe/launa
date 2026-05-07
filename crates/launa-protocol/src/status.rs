@@ -135,14 +135,7 @@ impl StatusUpdate {
         };
 
         let raw_pumps = crate::pump_bits::decode_pump_raw(payload[11], payload[12]);
-        let pumps = [
-            decode_pump_state(raw_pumps[0]),
-            decode_pump_state(raw_pumps[1]),
-            decode_pump_state(raw_pumps[2]),
-            decode_pump_state(raw_pumps[3]),
-            decode_pump_state(raw_pumps[4]),
-            decode_pump_state(raw_pumps[5]),
-        ];
+        let pumps = raw_pumps.map(decode_pump_state);
 
         let circ_blower = payload[13];
         let circ_pump = circ_blower & 0x02 != 0;

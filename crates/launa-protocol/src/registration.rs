@@ -108,12 +108,6 @@ impl From<Channel> for u8 {
     }
 }
 
-impl From<&Channel> for u8 {
-    fn from(channel: &Channel) -> u8 {
-        u8::from(*channel)
-    }
-}
-
 impl core::fmt::Display for Channel {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

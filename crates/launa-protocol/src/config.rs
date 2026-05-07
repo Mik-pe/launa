@@ -38,10 +38,7 @@ impl SpaConfig {
         };
 
         let raw_pumps = crate::pump_bits::decode_pump_raw(payload[5], payload[6]);
-        let mut pump_configs = [PumpConfig::None; 6];
-        for (i, &raw) in raw_pumps.iter().enumerate() {
-            pump_configs[i] = decode_pump(raw);
-        }
+        let pump_configs = raw_pumps.map(decode_pump);
 
         Ok(SpaConfig {
             pump_configs,
