@@ -81,7 +81,7 @@ pub enum Command {
     InformationRequest,
     FaultLogRequest { entry: u8 },
     NothingToSend { client_id: u8 },
-    Sniff(bool),
+    Sniff(Option<u16>),
     Reboot,
 }
 

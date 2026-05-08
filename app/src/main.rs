@@ -360,10 +360,16 @@ async fn handle_mqtt_command(
     device_id: &str,
 ) {
     match cmd {
-        Command::Sniff(enable) => {
-            info!("Sniff burst capture {} requested via MQTT", if enable { "ON" } else { "OFF" });
-            *sniff_mode = enable;
-            sniff::SNIFF_CAPTURE.store(enable, Ordering::Relaxed);
+        Command::Sniff(frame_count) => {
+            if let Some(n) = frame_count {
+                info!("Sniff burst capture requested: {} frames", n);
+                *sniff_mode = true;
+                sniff::SNIFF_CAPTURE.store(n, Ordering::Relaxed);
+            } else {
+                info!("Sniff burst capture OFF requested via MQTT");
+                *sniff_mode = false;
+                sniff::SNIFF_CAPTURE.store(0, Ordering::Relaxed);
+            }
             let actions = app.force_publish();
             execute_actions(
                 &actions,
@@ -631,7 +637,7 @@ impl<'a> MainLoop<'a> {
 
         // Auto-disable sniff_mode after burst capture completes.
         // The uart_task clears SNIFF_CAPTURE when the capture is done.
-        if self.sniff_mode && !sniff::SNIFF_CAPTURE.load(Ordering::Relaxed) {
+        if self.sniff_mode && sniff::SNIFF_CAPTURE.load(Ordering::Relaxed) == 0 {
             self.sniff_mode = false;
             let actions = self.app.force_publish();
             execute_actions(

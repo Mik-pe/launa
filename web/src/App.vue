@@ -116,7 +116,7 @@ function handleTempRange(val: string): void {
     <!-- Tab bar (always visible) -->
     <div class="bg-neutral-900/80 backdrop-blur-xl border-b border-neutral-800/60 sticky top-0 z-30">
       <div class="max-w-3xl mx-auto px-2">
-        <nav class="flex overflow-x-auto gap-1 py-2 scrollbar-hide">
+        <nav class="flex justify-center overflow-x-auto gap-1 py-2 scrollbar-hide">
           <button
             v-for="tab in tabs"
             :key="tab.id"
@@ -182,7 +182,7 @@ function handleTempRange(val: string): void {
           />
 
           <!-- Selects: Heat Mode, Temp Range -->
-          <div class="bg-neutral-900 rounded-2xl ring-1 ring-neutral-800 overflow-hidden divide-y divide-neutral-800">
+          <div class="bg-neutral-900 rounded-2xl ring-1 ring-neutral-800 divide-y divide-neutral-800">
             <!-- Heat Mode: tristate cycle button -->
             <div :class="['flex items-center justify-between gap-2 px-4 py-3 rounded-xl transition-all', (!isOnline || !isRegistered) ? 'opacity-40' : '']">
               <div class="flex items-center gap-2">
@@ -272,7 +272,13 @@ function handleTempRange(val: string): void {
           <LogViewer v-if="devSubTab === 'logs'" />
           <AlertsView v-else-if="devSubTab === 'alerts'" />
           <DiagnosticsView v-else-if="devSubTab === 'diagnostics'" />
-          <SniffFramesView v-else-if="devSubTab === 'sniff'" />
+          <SniffFramesView
+            v-else-if="devSubTab === 'sniff'"
+            :sniff-enabled="sniffEnabled"
+            :sniff-pending="isPending('sniff_mode')"
+            @capture="(n) => setSniff(n)"
+            @stop="setSniff(false)"
+          />
         </template>
 
       </div>
@@ -289,14 +295,11 @@ function handleTempRange(val: string): void {
       v-model="showSettings"
       :settings="settings"
       :accessory-config="serverConfig ?? { pumps: 2, lights: 1, blower: true, mister: false }"
-      :sniff-enabled="sniffEnabled"
-      :sniff-pending="isPending('sniff_mode')"
       :spa-hour="spaState?.hour"
       :spa-minute="spaState?.minute"
       :spa-time-format="spaState?.time_format"
       @save="handleSave"
       @save-accessory-config="saveAccessoryConfig"
-      @toggle-sniff="setSniff"
       @set-time="setTime"
     />
   </div>

@@ -114,11 +114,15 @@ export function useSpaState() {
   }
 
   function setSniff(
-    enabled: boolean,
+    frameCount: number | false,
     publish: (subtopic: string, payload: string | number | boolean) => void,
   ) {
     addPending('sniff_mode')
-    publish('sniff', enabled ? 'ON' : 'OFF')
+    if (frameCount === false) {
+      publish('sniff', 'OFF')
+    } else {
+      publish('sniff', JSON.stringify({ frames: frameCount }))
+    }
   }
 
   function cleanup() {

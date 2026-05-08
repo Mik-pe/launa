@@ -18,14 +18,15 @@ use crate::*;
 /// Channel for sending raw sniff frame JSON from uart_task to MQTT task.
 pub(crate) static SNIFF_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
 
-/// Set to `true` to request a one-shot burst capture of RS-485 frames.
-/// The uart_task reads this, captures frames with timestamps, publishes
+/// Set to a non-zero value to request a one-shot burst capture of RS-485 frames.
+/// The uart_task reads this, captures up to N frames with timestamps, publishes
 /// the result to SNIFF_CHANNEL, then auto-clears it.
-pub(crate) static SNIFF_CAPTURE: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
+/// A value of 0 means no capture is active.
+pub(crate) static SNIFF_CAPTURE: core::sync::atomic::AtomicU16 =
+    core::sync::atomic::AtomicU16::new(0);
 
-/// Maximum number of frames to capture in one burst.
-const SNIFF_MAX_FRAMES: usize = 200;
+/// Default maximum number of frames to capture in one burst.
+const SNIFF_MAX_FRAMES: u16 = 200;
 
 /// Maximum capture duration in microseconds (2s to catch FEBF query cycle).
 const SNIFF_MAX_DURATION_US: u64 = 2_000_000;
@@ -83,11 +84,33 @@ impl SniffState {
         }
     }
 
+    /// Maximum frames for the current capture, read from SNIFF_CAPTURE at start.
+    max_frames: u16,
+}
+
+impl SniffState {
+    pub const fn new() -> Self {
+        SniffState {
+            active: false,
+            start: None,
+            frames: Vec::new(),
+            max_frames: SNIFF_MAX_FRAMES,
+        }
+    }
+
     pub fn check_start(&mut self) {
-        if !self.active && SNIFF_CAPTURE.load(Ordering::Relaxed) {
-            self.active = true;
-            self.start = Some(Instant::now());
-            self.frames.clear();
+        if !self.active {
+            let requested = SNIFF_CAPTURE.load(Ordering::Relaxed);
+            if requested > 0 {
+                self.active = true;
+                self.start = Some(Instant::now());
+                self.frames.clear();
+                self.max_frames = if requested > SNIFF_MAX_FRAMES {
+                    SNIFF_MAX_FRAMES
+                } else {
+                    requested
+                };
+            }
         }
     }
 
@@ -105,7 +128,7 @@ impl SniffState {
             message_type: frame.message_type,
             payload: frame.payload.clone(),
         });
-        self.frames.len() >= SNIFF_MAX_FRAMES || ts_us >= SNIFF_MAX_DURATION_US
+        self.frames.len() >= self.max_frames as usize || ts_us >= SNIFF_MAX_DURATION_US
     }
 
     /// Finalize capture: build JSON, publish, reset state.
@@ -116,7 +139,7 @@ impl SniffState {
         self.frames.clear();
         self.active = false;
         self.start = None;
-        SNIFF_CAPTURE.store(false, Ordering::Relaxed);
+        SNIFF_CAPTURE.store(0, Ordering::Relaxed);
         if SNIFF_CHANNEL.try_send(json).is_err() {
             warn!("SNIFF_CHANNEL full, dropping burst capture");
         }

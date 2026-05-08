@@ -217,6 +217,6 @@ export function useMqtt() {
     serverConfig: accessory.serverConfig,
     saveAccessoryConfig: accessory.saveAccessoryConfig,
     sniffEnabled: spa.sniffEnabled,
-    setSniff: (enabled: boolean) => spa.setSniff(enabled, publish),
+    setSniff: (frameCount: number | false) => spa.setSniff(frameCount, publish),
   }
 }

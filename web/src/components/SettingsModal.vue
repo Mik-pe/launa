@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
-import ToggleSwitch from './ToggleSwitch.vue'
 import ClockSetting from './ClockSetting.vue'
 import type { MqttSettings, AccessoryConfig } from '../types'
 
@@ -8,22 +7,17 @@ const props = withDefaults(defineProps<{
   modelValue?: boolean
   settings: MqttSettings
   accessoryConfig: AccessoryConfig
-  sniffEnabled?: boolean
-  sniffPending?: boolean
   spaHour?: number
   spaMinute?: number
   spaTimeFormat?: '12h' | '24h'
 }>(), {
   modelValue: false,
-  sniffEnabled: false,
-  sniffPending: false,
 })
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   'save': [settings: MqttSettings]
   'saveAccessoryConfig': [config: AccessoryConfig]
-  'toggleSniff': [enabled: boolean]
   'setTime': [hour: number, minute: number, is24h: boolean]
 }>()
 
@@ -89,10 +83,6 @@ function save(): void {
 function close(): void {
   emit('update:modelValue', false)
 }
-
-function toggleSniff(val: boolean): void {
-  emit('toggleSniff', val)
-}
 </script>
 
 <template>
@@ -154,18 +144,6 @@ function toggleSniff(val: boolean): void {
                   class="w-full px-3 py-2 bg-neutral-800 border border-neutral-700 rounded-lg text-sm text-white placeholder-neutral-600 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
               </div>
             </div>
-          </div>
-
-          <!-- Sniff Mode -->
-          <div class="pt-2 border-t border-neutral-700">
-            <ToggleSwitch
-              label="Sniff Mode"
-              :model-value="sniffEnabled"
-              :pending="sniffPending"
-              :disabled="false"
-              @update:model-value="toggleSniff"
-            />
-            <p class="text-xs text-neutral-500 mt-1 px-4">Capture raw RS-485 frames to MQTT</p>
           </div>
 
           <!-- Clock sync -->

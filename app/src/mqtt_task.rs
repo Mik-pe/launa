@@ -248,6 +248,10 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
             // Drain remote log buffer and publish entries (non-blocking).
             // Limited to MAX_LOG_ENTRIES_PER_ITER to prevent starving the
             // recv/select block below when log production is high.
+            //
+            // If publish fails, we silently stop trying this iteration to
+            // avoid a feedback loop: failed publish -> log::warn -> new
+            // log entry -> drain -> failed publish -> ...
             #[cfg(feature = "remote-log")]
             if non_cmd_count < MAX_NON_CMD_RECEIVES {
                 if let Some(log_buf) = crate::remote_log::remote_log_buffer() {
@@ -266,7 +270,6 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                             let json = launa_mqtt::log_entry_to_json(&log_entry);
                             let payload = json.as_bytes();
                             if mqtt.publish(&log_topic, payload, 0, false).await.is_err() {
-                                rate_warn!(MQTT_PUB_WARN, "MQTT log publish failed");
                                 break;
                             }
                         }
@@ -325,15 +328,31 @@ pub(crate) async fn mqtt_task(mut mqtt: mqtt_client::MqttClient) {
                             continue;
                         }
 
-                        // Handle sniff mode toggle command
+                        // Handle sniff mode command: JSON {"frames":N} or "OFF" to cancel
                         if topic.strip_prefix(&cmd_base) == Some("/sniff") {
                             let payload_str = core::str::from_utf8(&payload).unwrap_or("");
-                            let enable = matches!(payload_str, "ON" | "on" | "1" | "true" | "TRUE");
+                            let frame_count: Option<u16> = if payload_str
+                                .eq_ignore_ascii_case("OFF")
+                            {
+                                None
+                            } else {
+                                // Minimal JSON parsing for {"frames":N}
+                                payload_str
+                                    .find("\"frames\"")
+                                    .and_then(|pos| {
+                                        let rest = &payload_str[pos + 8..];
+                                        rest.trim_start().strip_prefix(':').map(|s| s.trim_start())
+                                    })
+                                    .and_then(|s| {
+                                        let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+                                        if end == 0 { None } else { s[..end].parse().ok() }
+                                    })
+                            };
                             info!(
                                 "MQTT sniff mode command: {}",
-                                if enable { "ON" } else { "OFF" }
+                                frame_count.map_or("OFF".into(), |n| alloc::format!("{} frames", n))
                             );
-                            cmd_sender.send(Command::Sniff(enable)).await;
+                            cmd_sender.send(Command::Sniff(frame_count)).await;
                             continue;
                         }
 
