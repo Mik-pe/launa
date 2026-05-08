@@ -8,12 +8,17 @@ import LoadingSpinner from './LoadingSpinner.vue'
 const { data: alerts, loading, error, refresh } = useAlerts(100, 8000)
 const clearing = ref(false)
 
+const emit = defineEmits<{
+  cleared: []
+}>()
+
 async function handleClear(): Promise<void> {
   if (clearing.value) return
   clearing.value = true
   try {
     await clearAlerts()
     await refresh()
+    emit('cleared')
   } catch { /* ignore */ } finally {
     clearing.value = false
   }

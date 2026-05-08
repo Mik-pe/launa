@@ -203,6 +203,7 @@ export function useMqtt() {
     isRegistered,
     spaState: spa.spaState,
     alert: spa.alert,
+    clearAlert: spa.clearAlert,
     settings: conn.settings,
     retryCount: conn.retryCount,
     saveSettings,

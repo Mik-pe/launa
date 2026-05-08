@@ -22,6 +22,7 @@ const {
   isRegistered,
   spaState,
   alert: alertMsg,
+  clearAlert,
   settings,
   saveSettings,
   connect,
@@ -270,7 +271,7 @@ function handleTempRange(val: string): void {
 
           <!-- Developer sub-tab content -->
           <LogViewer v-if="devSubTab === 'logs'" />
-          <AlertsView v-else-if="devSubTab === 'alerts'" />
+          <AlertsView v-else-if="devSubTab === 'alerts'" @cleared="clearAlert" />
           <DiagnosticsView v-else-if="devSubTab === 'diagnostics'" />
           <SniffFramesView
             v-else-if="devSubTab === 'sniff'"

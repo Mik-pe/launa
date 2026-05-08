@@ -125,6 +125,10 @@ export function useSpaState() {
     }
   }
 
+  function clearAlert() {
+    alertMessage.value = null
+  }
+
   function cleanup() {
     clearTimeout(reconnectingTimer!)
     for (const t of pendingTimers.values()) clearTimeout(t)
@@ -136,6 +140,7 @@ export function useSpaState() {
     spaState,
     availability,
     alert: alertMessage,
+    clearAlert,
     pendingKeys,
     sniffEnabled,
     onConnect,
