@@ -860,6 +860,43 @@ async fn main(spawner: Spawner) {
     )
     .await;
 
+    // --- Config-poll window ---
+    // Fast-poll UART0 for serial config data before spawning MQTT/UART tasks.
+    // The main loop only polls once per ~1s tick, which is too slow to drain
+    // the UART0 128-byte RX FIFO before it overflows with config lines sent
+    // at 150ms intervals. This 10-second window at 10ms polling cadence ensures
+    // config-flash reliably delivers the full config payload.
+    {
+        let mut cfg_rx = serial_config::SerialConfigReceiver::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        info!("Config-poll window open (10s)...");
+        loop {
+            if let Some(new_config) = cfg_rx.poll() {
+                if let Some(ota_handler) = ota.take() {
+                    let flash = ota_handler.into_flash();
+                    match esp_nvs::Nvs::new(0x9000, 0x6000, flash) {
+                        Ok(mut nvs) => {
+                            let mut aes = esp_hal::aes::Aes::new(unsafe { esp_hal::peripherals::AES::steal() });
+                            let mut rng = esp_hal::rng::Rng::new();
+                            new_config.save(&mut nvs, &mut aes, &mut rng);
+                            info!("Serial config saved to NVS, rebooting...");
+                        }
+                        Err(e) => {
+                            error!("Failed to open NVS for serial config save: {:?}", e);
+                        }
+                    }
+                    esp_hal::system::software_reset();
+                }
+                break;
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            Timer::after(Duration::from_millis(10)).await;
+        }
+        info!("Config-poll window closed");
+    }
+
     // Create MqttClient on the stack. Socket buffers inside are pre-allocated
     // via mk_static! in new() — only the struct itself is stack-local, and it
     // moves into the embassy task on spawn.

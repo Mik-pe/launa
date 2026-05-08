@@ -30,12 +30,17 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut cli_port = None;
     let mut serial = None;
     let mut port_index = None;
+    let mut no_reset = false;
     let mut parser = crate::util::Args::new(args);
     while parser.has_more() {
         match parser.peek().unwrap() {
             "--port" => cli_port = Some(parser.value("--port")?.to_string()),
             "--serial" => serial = Some(parser.value("--serial")?.to_string()),
             "--port-index" => port_index = parser.optional_parsed("--port-index")?,
+            "--no-reset" => {
+                no_reset = true;
+                parser.skip();
+            }
             _ => return Err(parser.unknown_arg()),
         }
     }
@@ -77,31 +82,34 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut drain = [0u8; 4096];
     let _ = port.read(&mut drain);
 
-    // Reset ESP32 via DTR/RTS (standard auto-reset circuit on NodeMCU-style boards).
-    // Circuit: RTS -> NPN -> EN, DTR -> NPN -> GPIO0
-    // For normal boot: GPIO0 must be HIGH when EN rises.
-    //   DTR=LOW (GPIO0=HIGH), RTS=HIGH (EN=LOW=assert reset), then RTS=LOW (EN=HIGH=release)
-    println!("Resetting ESP32...");
-    port.write_data_terminal_ready(false)
-        .context("Failed to set DTR")?; // GPIO0 = HIGH (normal boot, not download)
-    port.write_request_to_send(true)
-        .context("Failed to set RTS")?; // EN = LOW (assert reset)
-    std::thread::sleep(Duration::from_millis(100));
-    port.write_request_to_send(false)
-        .context("Failed to set RTS")?; // EN = HIGH (release reset)
-                                        // Give ESP32 time to boot and enter the config window.
-                                        // Boot takes ~500ms, then the app waits 5s for serial config.
-                                        // Wait 1.5s to be safely past the bootloader and into the app.
-    println!("Waiting for ESP32 to boot...");
-    std::thread::sleep(Duration::from_millis(1500));
-
-    // Drain any boot output
-    let _ = port.read(&mut drain);
+    if !no_reset {
+        // Reset ESP32 via DTR/RTS (standard auto-reset circuit on NodeMCU-style boards).
+        println!("Resetting ESP32...");
+        port.write_data_terminal_ready(false)
+            .context("Failed to set DTR")?;
+        port.write_request_to_send(true)
+            .context("Failed to set RTS")?;
+        std::thread::sleep(Duration::from_millis(100));
+        port.write_request_to_send(false)
+            .context("Failed to set RTS")?;
+        println!("Waiting for ESP32 to boot...");
+        std::thread::sleep(Duration::from_millis(5000));
+        // Drain any boot output
+        let _ = port.read(&mut drain);
+    }
 
     println!("Sending config...");
-    port.write_all(payload.as_bytes())
-        .context("Failed to write config")?;
-    port.flush().context("Failed to flush")?;
+    // Send line-by-line with 50ms delays to avoid overflowing the ESP32's
+    // 128-byte UART RX FIFO. The total config payload (~180 bytes) exceeds
+    // the FIFO size, so sending all at once causes silent data loss.
+    for line in payload.lines() {
+        port.write_all(line.as_bytes())
+            .context("Failed to write config line")?;
+        port.write_all(b"\r\n")
+            .context("Failed to write line ending")?;
+        port.flush().context("Failed to flush")?;
+        std::thread::sleep(Duration::from_millis(150));
+    }
 
     // Wait for CONFIG_OK or CONFIG_ERROR
     let resp_deadline = Instant::now() + Duration::from_secs(10);
