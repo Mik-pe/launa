@@ -1,19 +1,19 @@
-//! Launa RS-485 Sniffer — passive bus monitor that publishes decoded frames to MQTT.
+//! Launa RS-485 Sniffer — passive bus monitor that publishes raw byte captures to MQTT.
 //!
 //! Third device on the RS-485 bus that only listens. Never transmits.
-//! Decodes all Balboa protocol frames and publishes them to MQTT in the
-//! same burst-capture JSON format as the main app's sniffer, so
-//! `cargo xtask sniff-decode` works with it out of the box.
+//! Captures raw UART byte chunks with timestamps and publishes them as JSON.
+//! Frame decoding and garbage detection are done by the host-side decoder
+//! (`cargo xtask sniff-decode` or the web frontend), not in firmware.
 //!
 //! **Early capture**: UART listening starts immediately at boot, before WiFi
-//! connects. Frames are buffered in RAM and flushed to MQTT once the
+//! connects. Raw bytes are buffered in RAM and flushed to MQTT once the
 //! connection is established. This captures the topside panel's registration
 //! handshake during spa power-up.
 //!
 //! GPIO17 = TX (unused, but configured), GPIO16 = RX (UART1, 115200 baud)
 //!
 //! MQTT topics:
-//!   launa/sniffer/sniff   — burst capture JSON (compatible with sniff-decode)
+//!   launa/sniffer/sniff   — raw byte burst capture JSON (compatible with sniff-decode)
 //!   launa/sniffer/status  — sniffer health/diagnostics
 
 #![no_std]
@@ -33,11 +33,10 @@ use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::rng::Rng;
 use esp_hal::uart::Uart;
+use embedded_io_async::Read;
 use launa_app_common::wifi::wifi_init;
 use launa_app_common::MqttStateCore;
-use embedded_io_async::Read;
 use launa_mqtt::mqtt_codec::ConnectConfig;
-use launa_protocol::dispatcher::dispatch_frame;
 use launa_protocol::frame::FrameDecoder;
 use log::{info, warn};
 
@@ -52,193 +51,45 @@ const WIFI_PASSWORD: &str = env!("LAUNA_WIFI_PASSWORD");
 const MQTT_HOST: &str = env!("LAUNA_MQTT_HOST");
 const MQTT_PORT: &str = env!("LAUNA_MQTT_PORT");
 
-/// Accumulate frames for this long before publishing a burst.
+/// Accumulate raw chunks for this long before publishing a burst.
 const BURST_INTERVAL: Duration = Duration::from_secs(1);
-/// Maximum frames per burst before forcing a publish.
-const MAX_BURST_FRAMES: usize = 100;
-/// Maximum frames to buffer before WiFi/MQTT is ready.
-/// At ~80 bytes per frame struct, 500 frames ≈ 40 KiB on a 72 KiB heap.
-const BOOT_BUFFER_MAX_FRAMES: usize = 500;
+/// Maximum total hex bytes per burst before forcing a publish.
+const MAX_BURST_HEX_LEN: usize = 8000;
+/// Maximum total hex bytes to buffer before WiFi/MQTT is ready.
+/// At 2 chars per byte, 20000 hex chars ≈ 10KB on a 72 KiB heap.
+const BOOT_BUFFER_MAX_HEX: usize = 20_000;
 
-// ── Frame capture ────────────────────────────────────────────────────
+// ── Raw chunk capture ────────────────────────────────────────────────
 
-/// A decoded protocol frame captured from the bus.
-struct CapturedFrame {
+/// A raw byte chunk captured from the RS-485 bus with timestamp.
+struct RawChunk {
     ts_us: u64,
-    message_type: [u8; 2],
-    payload: Vec<u8>,
+    hex: String,
 }
 
-/// Raw bytes captured between valid frame boundaries (garbage/collisions).
-struct GarbageBytes {
-    ts_us: u64,
-    bytes: Vec<u8>,
-}
-
-/// Either a decoded frame or raw garbage bytes from the bus.
-enum CaptureEntry {
-    Frame(CapturedFrame),
-    Garbage(GarbageBytes),
-}
-
-/// Tracks raw bytes on the RS-485 bus to detect garbage between valid frames.
+/// Build the JSON burst capture payload from collected chunks.
 ///
-/// Works alongside `FrameDecoder`. Watches for `0x7E` frame markers and
-/// accumulates raw bytes inside frame boundaries. When the decoder reports
-/// an error (bad CRC, bad length), or bytes appear outside any frame, they
-/// are emitted as `GarbageBytes` entries.
-struct RawBusTracker {
-    /// Bytes accumulated inside the current 0x7E...0x7E boundary.
-    pending: Vec<u8>,
-    /// Whether we're inside a frame (saw start 0x7E, waiting for end 0x7E).
-    in_frame: bool,
-    /// Timestamp (us) when the current garbage sequence started.
-    garbage_start_us: Option<u64>,
-    /// Maximum garbage bytes to buffer before forcing an emit.
-    max_garbage: usize,
-}
-
-impl RawBusTracker {
-    fn new() -> Self {
-        RawBusTracker {
-            pending: Vec::new(),
-            in_frame: false,
-            garbage_start_us: None,
-            max_garbage: 64,
-        }
-    }
-
-    /// Feed a slice of raw UART bytes. Returns garbage entries for any
-    /// bytes that fall outside valid frame boundaries.
-    ///
-    /// The caller should also feed the same bytes to `FrameDecoder` to get
-    /// the decoded frames. This tracker only captures interstitial garbage.
-    fn feed(&mut self, data: &[u8], ts_us: u64) -> Vec<GarbageBytes> {
-        let mut garbage = Vec::new();
-
-        for &byte in data {
-            if byte == 0x7E {
-                if self.in_frame {
-                    // End of frame boundary. The pending bytes are the frame body
-                    // (which FrameDecoder will parse). Clear pending — not garbage.
-                    self.pending.clear();
-                    self.in_frame = false;
-                    self.garbage_start_us = None;
-                } else {
-                    // Start of a new frame boundary.
-                    // Any pending bytes before this are inter-frame garbage.
-                    if !self.pending.is_empty() {
-                        garbage.push(GarbageBytes {
-                            ts_us: self.garbage_start_us.unwrap_or(ts_us),
-                            bytes: core::mem::take(&mut self.pending),
-                        });
-                        self.garbage_start_us = None;
-                    }
-                    self.in_frame = true;
-                }
-            } else if self.in_frame {
-                // Inside a frame boundary — accumulate (will be cleared on end 0x7E).
-                self.pending.push(byte);
-            } else {
-                // Outside any frame boundary — this is inter-frame garbage.
-                if self.garbage_start_us.is_none() {
-                    self.garbage_start_us = Some(ts_us);
-                }
-                self.pending.push(byte);
-
-                // Force emit if buffer grows too large
-                if self.pending.len() >= self.max_garbage {
-                    garbage.push(GarbageBytes {
-                        ts_us: self.garbage_start_us.unwrap_or(ts_us),
-                        bytes: core::mem::take(&mut self.pending),
-                    });
-                    self.garbage_start_us = None;
-                }
-            }
-        }
-
-        garbage
-    }
-
-    /// Flush any remaining pending garbage at the end of a burst.
-    fn flush(&mut self, ts_us: u64) -> Option<GarbageBytes> {
-        if self.pending.is_empty() {
-            None
-        } else {
-            let garbage = GarbageBytes {
-                ts_us: self.garbage_start_us.unwrap_or(ts_us),
-                bytes: core::mem::take(&mut self.pending),
-            };
-            self.garbage_start_us = None;
-            self.in_frame = false;
-            Some(garbage)
-        }
-    }
-}
-
-fn build_burst_json(entries: &[CaptureEntry], capture_us: u64) -> Vec<u8> {
-    let frame_count = entries.iter().filter(|e| matches!(e, CaptureEntry::Frame(_))).count();
-    let mut json = String::with_capacity(80 + entries.len() * 40);
+/// Format: `{"capture_us":N,"chunks":[["R",ts,"HEX"],...]}`
+/// The sniffer is RX-only, so all chunks have direction "R".
+fn build_burst_json(chunks: &[RawChunk], capture_us: u64) -> Vec<u8> {
+    let mut json = String::with_capacity(80 + chunks.len() * 60);
     json.push_str("{\"capture_us\":");
     let _ = core::fmt::Write::write_fmt(&mut json, core::format_args!("{}", capture_us));
-    json.push_str(",\"frame_count\":");
-    let _ = core::fmt::Write::write_fmt(&mut json, core::format_args!("{}", frame_count));
-    json.push_str(",\"entries\":[");
+    json.push_str(",\"chunks\":[");
 
-    for (i, entry) in entries.iter().enumerate() {
+    for (i, c) in chunks.iter().enumerate() {
         if i > 0 {
             json.push(',');
         }
-        match entry {
-            CaptureEntry::Frame(frame) => {
-                // [ts_us, "TYPE", "PAYLOAD_HEX"]
-                json.push('[');
-                let _ = core::fmt::Write::write_fmt(&mut json, core::format_args!("{}", frame.ts_us));
-                json.push(',');
-                let _ = core::fmt::Write::write_fmt(
-                    &mut json,
-                    core::format_args!("\"{:02X}{:02X}\"", frame.message_type[0], frame.message_type[1]),
-                );
-                json.push_str(",\"");
-                for b in &frame.payload {
-                    let _ = core::fmt::Write::write_fmt(&mut json, core::format_args!("{:02X}", b));
-                }
-                json.push_str("\"]");
-            }
-            CaptureEntry::Garbage(garbage) => {
-                // [ts_us, "garbage", "RAW_HEX"]
-                json.push('[');
-                let _ = core::fmt::Write::write_fmt(&mut json, core::format_args!("{}", garbage.ts_us));
-                json.push_str(",\"garbage\",\"");
-                for b in &garbage.bytes {
-                    let _ = core::fmt::Write::write_fmt(&mut json, core::format_args!("{:02X}", b));
-                }
-                json.push_str("\"]");
-            }
-        }
+        json.push_str("[\"R\",");
+        let _ = core::fmt::Write::write_fmt(&mut json, core::format_args!("{}", c.ts_us));
+        json.push_str(",\"");
+        json.push_str(&c.hex);
+        json.push_str("\"]");
     }
 
     json.push_str("]}");
     json.into_bytes()
-}
-
-/// Produce a short human-readable description of a decoded message.
-fn describe_message(msg: &launa_protocol::dispatcher::IncomingMessage) -> &'static str {
-    use launa_protocol::dispatcher::IncomingMessage;
-    match msg {
-        IncomingMessage::StatusUpdate(_) => "Status",
-        IncomingMessage::Ready { .. } => "Ready",
-        IncomingMessage::ConfigurationResponse(_) => "Config",
-        IncomingMessage::ControlConfiguration(_) => "CtrlConfig",
-        IncomingMessage::InformationResponse(_) => "Info",
-        IncomingMessage::FaultLogResponse(_) => "Fault",
-        IncomingMessage::FilterCyclesResponse(_) => "Filter",
-        IncomingMessage::Registration(_) => "Registration",
-        IncomingMessage::PreferencesResponse { .. } => "Preferences",
-        IncomingMessage::SetupParametersResponse { .. } => "SetupParams",
-        IncomingMessage::Unknown { .. } => "Unknown",
-        _ => "?",
-    }
 }
 
 // ── MQTT (crate-specific wrapper) ────────────────────────────────────
@@ -304,25 +155,16 @@ impl MqttState {
 
 // ── UART capture helper ──────────────────────────────────────────────
 
-/// Read UART, decode frames, and append to the burst buffer.
-/// Also tracks interstitial garbage bytes via the RawBusTracker.
-/// Returns the number of new entries (frames + garbage) decoded.
-fn capture_uart(
+/// Read UART and append raw byte chunks to the burst buffer.
+/// Returns the number of bytes captured.
+fn capture_uart_raw(
     uart: &mut Uart<'static, esp_hal::Async>,
-    decoder: &mut FrameDecoder,
-    raw_tracker: &mut RawBusTracker,
     buf: &mut [u8],
-    entries: &mut Vec<CaptureEntry>,
+    chunks: &mut Vec<RawChunk>,
+    total_hex_len: &mut usize,
     burst_start: Instant,
-    total_frames: &mut u64,
     total_bytes: &mut u64,
-    total_errors: &mut u64,
-    total_garbage: &mut u64,
-    log_frames: bool,
 ) -> usize {
-    let mut new_entries = 0;
-
-    // Non-blocking read from UART
     let n = match uart.read(buf) {
         Ok(n) => n,
         Err(_) => {
@@ -338,87 +180,22 @@ fn capture_uart(
 
     *total_bytes += n as u64;
     let ts_us = burst_start.elapsed().as_micros();
+    let hex = launa_protocol::hex::to_hex(&buf[..n]);
+    *total_hex_len += hex.len();
 
-    // Track raw bytes for garbage detection
-    for g in raw_tracker.feed(&buf[..n], ts_us) {
-        *total_garbage += 1;
-        new_entries += 1;
-        if log_frames {
-            info!(
-                "GARBAGE ({} bytes): {}",
-                g.bytes.len(),
-                launa_protocol::hex::to_hex(&g.bytes[..g.bytes.len().min(32)])
-            );
-        }
-        entries.push(CaptureEntry::Garbage(g));
-    }
+    info!("RX {} bytes at +{}us", n, ts_us);
 
-    // Decode frames
-    let prev_errors = decoder.frame_error_count() as u64;
-    let frames = decoder.feed_slice(&buf[..n]);
-    let new_error_count = decoder.frame_error_count() as u64;
-    if new_error_count > prev_errors {
-        *total_errors += new_error_count - prev_errors;
-    }
+    chunks.push(RawChunk { ts_us, hex });
 
-    for frame in &frames {
-        *total_frames += 1;
-        new_entries += 1;
-
-        let ts_us = burst_start.elapsed().as_micros();
-
-        if log_frames {
-            let msg = dispatch_frame(frame);
-            let desc = describe_message(&msg);
-            let mt = format!(
-                "{:02X}{:02X}",
-                frame.message_type[0], frame.message_type[1]
-            );
-            let payload_hex =
-                launa_protocol::hex::to_hex(&frame.payload[..frame.payload.len().min(32)]);
-            info!(
-                "FRAME {} ({}, {} bytes): {}",
-                mt,
-                desc,
-                frame.payload.len(),
-                payload_hex
-            );
-        }
-
-        entries.push(CaptureEntry::Frame(CapturedFrame {
-            ts_us,
-            message_type: frame.message_type,
-            payload: frame.payload.clone(),
-        }));
-    }
-
-    new_entries
+    n
 }
 
-/// Count frames in a list of CaptureEntry.
-fn count_frames(entries: &[CaptureEntry]) -> usize {
-    entries.iter().filter(|e| matches!(e, CaptureEntry::Frame(_))).count()
-}
-
-/// Trim entries to keep within budget, preferring to keep garbage (rare) over frames (common).
-fn trim_entries(entries: &mut Vec<CaptureEntry>, max: usize) {
-    if entries.len() <= max {
-        return;
+/// Trim chunks to keep total hex length within budget, dropping oldest first.
+fn trim_chunks(chunks: &mut Vec<RawChunk>, max_hex: usize, total_hex_len: &mut usize) {
+    while *total_hex_len > max_hex && !chunks.is_empty() {
+        let removed = chunks.remove(0);
+        *total_hex_len -= removed.hex.len();
     }
-    // Remove oldest frame entries first, keep garbage
-    let excess = entries.len() - max;
-    let mut removed = 0;
-    entries.retain(|e| {
-        if removed >= excess {
-            return true;
-        }
-        if matches!(e, CaptureEntry::Frame(_)) {
-            removed += 1;
-            false
-        } else {
-            true
-        }
-    });
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -454,44 +231,41 @@ async fn main(spawner: Spawner) {
     let mut drain = [0u8; 64];
     let _ = uart.read_buffered(&mut drain);
 
-    let mut decoder = FrameDecoder::new();
-    let mut raw_tracker = RawBusTracker::new();
     let mut read_buf = [0u8; 128];
     let boot_start = Instant::now();
 
-    // Boot buffer: accumulate entries while WiFi/MQTT connects
-    let mut boot_entries: Vec<CaptureEntry> = Vec::new();
-    let mut total_frames: u64 = 0;
+    // Boot buffer: accumulate raw chunks while WiFi/MQTT connects
+    let mut boot_chunks: Vec<RawChunk> = Vec::new();
+    let mut boot_hex_len: usize = 0;
     let mut total_bytes: u64 = 0;
-    let mut total_errors: u64 = 0;
-    let mut total_garbage: u64 = 0;
+
+    // We still need a decoder for local log output and frame/error counting
+    let mut decoder = FrameDecoder::new();
 
     // ── Phase 2: Start WiFi, continue capturing during connect ───────
     let rng = Rng::new();
     let net_stack = wifi_init(spawner, peripherals.WIFI, rng, WIFI_SSID, WIFI_PASSWORD, "launa-sniffer");
     info!("WiFi connecting, still capturing...");
 
-    // Capture frames while waiting for DHCP
+    // Capture raw bytes while waiting for DHCP
     loop {
         if net_stack.is_config_up() {
             break;
         }
 
-        capture_uart(
+        capture_uart_raw(
             &mut uart,
-            &mut decoder,
-            &mut raw_tracker,
             &mut read_buf,
-            &mut boot_entries,
+            &mut boot_chunks,
+            &mut boot_hex_len,
             boot_start,
-            &mut total_frames,
             &mut total_bytes,
-            &mut total_errors,
-            &mut total_garbage,
-            true,
         );
 
-        trim_entries(&mut boot_entries, BOOT_BUFFER_MAX_FRAMES);
+        // Also feed decoder for local logging
+        let _ = decoder.feed_slice(&read_buf);
+
+        trim_chunks(&mut boot_chunks, BOOT_BUFFER_MAX_HEX, &mut boot_hex_len);
 
         Timer::after(Duration::from_millis(10)).await;
     }
@@ -508,21 +282,16 @@ async fn main(spawner: Spawner) {
     let mut mqtt_attempts: u32 = 0;
 
     while !mqtt_connected {
-        capture_uart(
+        capture_uart_raw(
             &mut uart,
-            &mut decoder,
-            &mut raw_tracker,
             &mut read_buf,
-            &mut boot_entries,
+            &mut boot_chunks,
+            &mut boot_hex_len,
             boot_start,
-            &mut total_frames,
             &mut total_bytes,
-            &mut total_errors,
-            &mut total_garbage,
-            true,
         );
 
-        trim_entries(&mut boot_entries, BOOT_BUFFER_MAX_FRAMES);
+        trim_chunks(&mut boot_chunks, BOOT_BUFFER_MAX_HEX, &mut boot_hex_len);
 
         if Instant::now() >= mqtt_reconnect_at {
             mqtt_attempts += 1;
@@ -540,49 +309,41 @@ async fn main(spawner: Spawner) {
     }
 
     // ── Phase 4: Flush boot buffer to MQTT ───────────────────────────
-    let boot_frame_count;
-    if !boot_entries.is_empty() {
-        // Flush any pending garbage from the tracker
-        let ts_us = boot_start.elapsed().as_micros();
-        if let Some(g) = raw_tracker.flush(ts_us) {
-            boot_entries.push(CaptureEntry::Garbage(g));
-        }
-
+    let boot_chunk_count = boot_chunks.len();
+    if !boot_chunks.is_empty() {
         let capture_us = boot_start.elapsed().as_micros();
-        let json = build_burst_json(&boot_entries, capture_us);
-        boot_frame_count = count_frames(&boot_entries);
-        let garbage_count = boot_entries.len() - boot_frame_count;
+        let json = build_burst_json(&boot_chunks, capture_us);
         info!(
-            "Flushing boot buffer: {} frames + {} garbage entries ({}ms)",
-            boot_frame_count,
-            garbage_count,
+            "Flushing boot buffer: {} chunks, {}ms",
+            boot_chunk_count,
             capture_us / 1000
         );
 
         if mqtt.publish(SNIFF_TOPIC, &json).await {
-            info!("Boot buffer published: {} entries, {} bytes", boot_entries.len(), json.len());
+            info!("Boot buffer published: {} bytes", json.len());
         } else {
-            warn!("Boot buffer publish failed, entries lost");
+            warn!("Boot buffer publish failed, chunks lost");
             mqtt.core.disconnect();
         }
-        boot_entries.clear();
+        boot_chunks.clear();
+        boot_hex_len = 0;
     } else {
-        boot_frame_count = 0;
-        info!("No frames captured during boot");
+        info!("No data captured during boot");
     }
 
     // Publish initial status
     {
         let uptime_secs = boot_start.elapsed().as_secs();
         let status_json = format!(
-            r#"{{"frames":{},"bytes":{},"errors":{},"garbage":{},"uptime_secs":{},"version":"{}","boot_capture_frames":{}}}"#,
-            total_frames, total_bytes, total_errors, total_garbage, uptime_secs, FIRMWARE_VERSION, boot_frame_count,
+            r#"{{"bytes":{},"uptime_secs":{},"version":"{}","boot_chunks":{}}}"#,
+            total_bytes, uptime_secs, FIRMWARE_VERSION, boot_chunk_count,
         );
         let _ = mqtt.publish(STATUS_TOPIC, status_json.as_bytes()).await;
     }
 
     // ── Phase 5: Normal burst-capture loop ───────────────────────────
-    let mut burst_entries: Vec<CaptureEntry> = Vec::new();
+    let mut burst_chunks: Vec<RawChunk> = Vec::new();
+    let mut burst_hex_len: usize = 0;
     let mut burst_start = Instant::now();
     let start_time = Instant::now();
 
@@ -596,57 +357,27 @@ async fn main(spawner: Spawner) {
         {
             Either::First(Ok(n)) if n > 0 => {
                 total_bytes += n as u64;
-                let ts_us = burst_start.elapsed().as_micros();
 
-                // Track raw bytes for garbage detection
-                for g in raw_tracker.feed(&read_buf[..n], ts_us) {
-                    total_garbage += 1;
-                    info!(
-                        "GARBAGE ({} bytes): {}",
-                        g.bytes.len(),
-                        launa_protocol::hex::to_hex(&g.bytes[..g.bytes.len().min(32)])
-                    );
-                    burst_entries.push(CaptureEntry::Garbage(g));
-                }
-
-                // Decode frames
-                let prev_errors = decoder.frame_error_count() as u64;
-                let frames = decoder.feed_slice(&read_buf[..n]);
-                let new_errors = decoder.frame_error_count() as u64;
-                if new_errors > prev_errors {
-                    total_errors += new_errors - prev_errors;
-                }
-
-                if burst_entries.is_empty() {
+                if burst_chunks.is_empty() {
                     burst_start = Instant::now();
                 }
 
+                let ts_us = burst_start.elapsed().as_micros();
+                let hex = launa_protocol::hex::to_hex(&read_buf[..n]);
+                burst_hex_len += hex.len();
+
+                info!("RX {} bytes at +{}us", n, ts_us);
+
+                burst_chunks.push(RawChunk { ts_us, hex });
+
+                // Also feed decoder for local log output
+                let frames = decoder.feed_slice(&read_buf[..n]);
                 for frame in &frames {
-                    total_frames += 1;
-
-                    let ts_us = burst_start.elapsed().as_micros();
-                    let msg = dispatch_frame(frame);
-                    let desc = describe_message(&msg);
-
                     let mt = format!(
                         "{:02X}{:02X}",
                         frame.message_type[0], frame.message_type[1]
                     );
-                    let payload_hex =
-                        launa_protocol::hex::to_hex(&frame.payload[..frame.payload.len().min(32)]);
-                    info!(
-                        "FRAME {} ({}, {} bytes): {}",
-                        mt,
-                        desc,
-                        frame.payload.len(),
-                        payload_hex
-                    );
-
-                    burst_entries.push(CaptureEntry::Frame(CapturedFrame {
-                        ts_us,
-                        message_type: frame.message_type,
-                        payload: frame.payload.clone(),
-                    }));
+                    info!("Decoded: {} ({} bytes)", mt, frame.payload.len());
                 }
             }
             Either::First(Err(_)) => {
@@ -659,21 +390,14 @@ async fn main(spawner: Spawner) {
 
         // ── Publish burst when interval elapsed or buffer full ──
         let burst_elapsed = burst_start.elapsed() >= BURST_INTERVAL;
-        let entry_count = burst_entries.len();
-        let burst_full = entry_count >= MAX_BURST_FRAMES;
+        let burst_full = burst_hex_len >= MAX_BURST_HEX_LEN;
 
-        if !burst_entries.is_empty() && (burst_elapsed || burst_full) {
-            // Flush any pending garbage
-            let ts_us = burst_start.elapsed().as_micros();
-            if let Some(g) = raw_tracker.flush(ts_us) {
-                burst_entries.push(CaptureEntry::Garbage(g));
-            }
-
+        if !burst_chunks.is_empty() && (burst_elapsed || burst_full) {
             let capture_us = burst_start.elapsed().as_micros();
-            let json = build_burst_json(&burst_entries, capture_us);
-            let frame_count = count_frames(&burst_entries);
-            let garbage_count = burst_entries.len() - frame_count;
-            burst_entries.clear();
+            let json = build_burst_json(&burst_chunks, capture_us);
+            let chunk_count = burst_chunks.len();
+            burst_chunks.clear();
+            burst_hex_len = 0;
 
             // MQTT keepalive
             if mqtt.is_connected() {
@@ -698,12 +422,7 @@ async fn main(spawner: Spawner) {
             // Publish burst capture
             if mqtt.is_connected() {
                 if mqtt.publish(SNIFF_TOPIC, &json).await {
-                    let garb_str = if garbage_count > 0 {
-                        alloc::format!(" + {} garbage", garbage_count)
-                    } else {
-                        String::new()
-                    };
-                    info!("Published burst: {} frames{} ({} bytes)", frame_count, garb_str, json.len());
+                    info!("Published burst: {} chunks ({} bytes)", chunk_count, json.len());
                 } else {
                     warn!("MQTT sniff publish failed");
                     mqtt.core.disconnect();
@@ -711,12 +430,12 @@ async fn main(spawner: Spawner) {
                 }
             }
 
-            // Publish status diagnostics every ~100 frames
-            if total_frames % 100 < frame_count as u64 && mqtt.is_connected() {
+            // Publish status diagnostics periodically
+            if mqtt.is_connected() {
                 let uptime_secs = start_time.elapsed().as_secs();
                 let status_json = format!(
-                    r#"{{"frames":{},"bytes":{},"errors":{},"garbage":{},"uptime_secs":{},"version":"{}"}}"#,
-                    total_frames, total_bytes, total_errors, total_garbage, uptime_secs, FIRMWARE_VERSION
+                    r#"{{"bytes":{},"uptime_secs":{},"version":"{}"}}"#,
+                    total_bytes, uptime_secs, FIRMWARE_VERSION
                 );
                 let _ = mqtt.publish(STATUS_TOPIC, status_json.as_bytes()).await;
             }

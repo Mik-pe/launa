@@ -1,7 +1,8 @@
-//! RS-485 burst frame capture for remote diagnostics.
+//! RS-485 raw byte burst capture for remote diagnostics.
 //!
-//! When triggered via MQTT, captures decoded frames with timestamps for
-//! a configurable duration, then publishes the result as JSON.
+//! When triggered via MQTT, captures raw UART byte chunks (both RX and TX)
+//! with timestamps, then publishes as JSON. Frame decoding is done by the
+//! frontend/decoder, not here.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -10,57 +11,62 @@ use core::sync::atomic::Ordering;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::Instant;
-use launa_protocol::frame::Frame;
 use log::{info, warn};
 
-use crate::*;
-
-/// Channel for sending raw sniff frame JSON from uart_task to MQTT task.
+/// Channel for sending sniff capture JSON from uart_task to MQTT task.
 pub(crate) static SNIFF_CHANNEL: Channel<CriticalSectionRawMutex, Vec<u8>, 4> = Channel::new();
 
-/// Set to a non-zero value to request a one-shot burst capture of RS-485 frames.
-/// The uart_task reads this, captures up to N frames with timestamps, publishes
-/// the result to SNIFF_CHANNEL, then auto-clears it.
+/// Set to a non-zero value to request a one-shot burst capture.
+/// The uart_task reads this, captures raw byte chunks with timestamps,
+/// publishes the result to SNIFF_CHANNEL, then auto-clears it.
 /// A value of 0 means no capture is active.
 pub(crate) static SNIFF_CAPTURE: core::sync::atomic::AtomicU16 =
     core::sync::atomic::AtomicU16::new(0);
 
-/// Default maximum number of frames to capture in one burst.
-const SNIFF_MAX_FRAMES: u16 = 200;
-
 /// Maximum capture duration in microseconds (2s to catch FEBF query cycle).
 const SNIFF_MAX_DURATION_US: u64 = 2_000_000;
 
-/// A decoded frame with its timestamp relative to capture start.
-struct SniffCaptureFrame {
-    ts_us: u64,
-    message_type: [u8; 2],
-    payload: Vec<u8>,
+/// Maximum total hex bytes across all chunks before forcing capture end.
+/// Prevents unbounded RAM use. ~200 frames * ~30 bytes = ~6KB hex.
+const SNIFF_MAX_TOTAL_HEX_LEN: usize = 12_000;
+
+/// Direction marker for a raw byte chunk.
+#[derive(Clone, Copy)]
+pub(crate) enum Direction {
+    Rx,
+    Tx,
 }
 
-/// Build the JSON burst capture payload from collected frames.
-fn build_sniff_json(frames: &[SniffCaptureFrame], capture_us: u64) -> Vec<u8> {
-    let mut json = String::with_capacity(80 + frames.len() * 40);
+/// A raw byte chunk captured from the RS-485 bus with timestamp.
+struct RawChunk {
+    ts_us: u64,
+    dir: Direction,
+    hex: String,
+}
+
+/// Build the JSON burst capture payload from collected chunks.
+///
+/// Format: `{"capture_us":N,"chunks":[["R",ts,"HEX"],...]}`
+fn build_sniff_json(chunks: &[RawChunk], capture_us: u64) -> Vec<u8> {
+    let mut json = String::with_capacity(80 + chunks.len() * 60);
     json.push_str("{\"capture_us\":");
     let _ = core::fmt::Write::write_fmt(&mut json, core::format_args!("{}", capture_us));
-    json.push_str(",\"frame_count\":");
-    let _ = core::fmt::Write::write_fmt(&mut json, core::format_args!("{}", frames.len()));
-    json.push_str(",\"frames\":[");
+    json.push_str(",\"chunks\":[");
 
-    for (i, f) in frames.iter().enumerate() {
+    for (i, c) in chunks.iter().enumerate() {
         if i > 0 {
             json.push(',');
         }
-        json.push('[');
-        let _ = core::fmt::Write::write_fmt(&mut json, core::format_args!("{}", f.ts_us));
+        let dir = match c.dir {
+            Direction::Rx => 'R',
+            Direction::Tx => 'T',
+        };
+        json.push_str("[\"");
+        json.push(dir);
+        json.push_str("\",");
+        let _ = core::fmt::Write::write_fmt(&mut json, core::format_args!("{}", c.ts_us));
         json.push_str(",\"");
-        let _ = core::fmt::Write::write_fmt(
-            &mut json,
-            core::format_args!("{:02X}{:02X}", f.message_type[0], f.message_type[1]),
-        );
-        json.push_str("\",\"");
-        let payload_hex = launa_protocol::hex::to_hex(&f.payload);
-        json.push_str(&payload_hex);
+        json.push_str(&c.hex);
         json.push_str("\"]");
     }
 
@@ -68,11 +74,12 @@ fn build_sniff_json(frames: &[SniffCaptureFrame], capture_us: u64) -> Vec<u8> {
     json.into_bytes()
 }
 
-/// Sniff burst capture state, grouped for clarity.
+/// Sniff burst capture state.
 pub(crate) struct SniffState {
     active: bool,
     start: Option<Instant>,
-    frames: Vec<SniffCaptureFrame>,
+    chunks: Vec<RawChunk>,
+    total_hex_len: usize,
 }
 
 impl SniffState {
@@ -80,21 +87,8 @@ impl SniffState {
         SniffState {
             active: false,
             start: None,
-            frames: Vec::new(),
-        }
-    }
-
-    /// Maximum frames for the current capture, read from SNIFF_CAPTURE at start.
-    max_frames: u16,
-}
-
-impl SniffState {
-    pub const fn new() -> Self {
-        SniffState {
-            active: false,
-            start: None,
-            frames: Vec::new(),
-            max_frames: SNIFF_MAX_FRAMES,
+            chunks: Vec::new(),
+            total_hex_len: 0,
         }
     }
 
@@ -104,18 +98,14 @@ impl SniffState {
             if requested > 0 {
                 self.active = true;
                 self.start = Some(Instant::now());
-                self.frames.clear();
-                self.max_frames = if requested > SNIFF_MAX_FRAMES {
-                    SNIFF_MAX_FRAMES
-                } else {
-                    requested
-                };
+                self.chunks.clear();
+                self.total_hex_len = 0;
             }
         }
     }
 
-    /// Record a decoded frame. Returns true if capture completed this call.
-    pub fn record_frame(&mut self, frame: &Frame) -> bool {
+    /// Record a raw byte chunk. Returns true if capture should end this call.
+    pub fn record_chunk(&mut self, dir: Direction, data: &[u8]) -> bool {
         if !self.active {
             return false;
         }
@@ -123,20 +113,21 @@ impl SniffState {
             return false;
         };
         let ts_us = start.elapsed().as_micros();
-        self.frames.push(SniffCaptureFrame {
-            ts_us,
-            message_type: frame.message_type,
-            payload: frame.payload.clone(),
-        });
-        self.frames.len() >= self.max_frames as usize || ts_us >= SNIFF_MAX_DURATION_US
+        let hex = launa_protocol::hex::to_hex(data);
+        self.total_hex_len += hex.len();
+
+        self.chunks.push(RawChunk { ts_us, dir, hex });
+
+        ts_us >= SNIFF_MAX_DURATION_US || self.total_hex_len >= SNIFF_MAX_TOTAL_HEX_LEN
     }
 
     /// Finalize capture: build JSON, publish, reset state.
     pub fn finish(&mut self) {
         let capture_us = self.start.unwrap().elapsed().as_micros();
-        let count = self.frames.len();
-        let json = build_sniff_json(&self.frames, capture_us);
-        self.frames.clear();
+        let count = self.chunks.len();
+        let json = build_sniff_json(&self.chunks, capture_us);
+        self.chunks.clear();
+        self.total_hex_len = 0;
         self.active = false;
         self.start = None;
         SNIFF_CAPTURE.store(0, Ordering::Relaxed);
@@ -144,7 +135,7 @@ impl SniffState {
             warn!("SNIFF_CHANNEL full, dropping burst capture");
         }
         info!(
-            "Sniff burst capture complete: {} frames in {}us",
+            "Sniff burst capture complete: {} chunks in {}us",
             count, capture_us
         );
     }

@@ -177,6 +177,11 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                     info!("UART: first {} bytes from spa bus: {}", n, hex_str);
                 }
 
+                // Record raw RX bytes for sniff capture before decoding
+                if sniff.record_chunk(sniff::Direction::Rx, &buf[..n]) {
+                    sniff.finish();
+                }
+
                 let prev_errors = decoder.frame_error_count();
                 for &byte in &buf[..n] {
                     if let Some(frame) = decoder.feed(byte) {
@@ -203,6 +208,10 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                             };
                             if let Ok(encoded) = response.encode() {
                                 info!("REG fast-path: sending NewClientResponse immediately");
+                                // Record the fast-path TX response in sniff capture
+                                if sniff.record_chunk(sniff::Direction::Tx, &encoded) {
+                                    sniff.finish();
+                                }
                                 if transport.write(&encoded).await.is_err() {
                                     rate_error!(UART_WRITE_ERR, "UART write error: Io");
                                 }
@@ -216,10 +225,6 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                                 frame.message_type[1],
                                 frame.payload.len()
                             );
-                        }
-
-                        if sniff.record_frame(&frame) {
-                            sniff.finish();
                         }
 
                         frame_sender.send(frame).await;
@@ -245,6 +250,10 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
         // ── TRANSMIT (bus idle) ────────────────────────────────────────────
         // TX from main loop (commands, registration responses via SpaApp)
         if let Ok(data) = uart_rx.try_receive() {
+            // Record raw TX bytes for sniff capture before writing
+            if sniff.record_chunk(sniff::Direction::Tx, &data) {
+                sniff.finish();
+            }
             let result = transport.write(&data).await;
             info!("UART TX: {} bytes", data.len());
             if result.is_err() {
@@ -362,7 +371,7 @@ async fn handle_mqtt_command(
     match cmd {
         Command::Sniff(frame_count) => {
             if let Some(n) = frame_count {
-                info!("Sniff burst capture requested: {} frames", n);
+                info!("Sniff burst capture requested: {} target chunks", n);
                 *sniff_mode = true;
                 sniff::SNIFF_CAPTURE.store(n, Ordering::Relaxed);
             } else {
@@ -374,7 +383,7 @@ async fn handle_mqtt_command(
             execute_actions(
                 &actions,
                 device_id,
-                enable,
+                *sniff_mode,
                 read_wifi_rssi(),
             )
             .await;

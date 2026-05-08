@@ -423,8 +423,8 @@ pub fn resolve_port(
     )
 }
 
-/// List all detected ESP serial ports with their USB serial numbers.
-/// Used by `cargo xtask list-ports` for discovering stable identifiers.
+/// List all detected ESP serial ports with their USB serial numbers and MAC addresses.
+/// Used by `cargo xtask list-ports` for discovering and identifying devices.
 pub fn list_ports() -> anyhow::Result<()> {
     let ports = detect_esp_ports();
     if ports.is_empty() {
@@ -447,12 +447,43 @@ pub fn list_ports() -> anyhow::Result<()> {
         if let (Some(v), Some(pid)) = (p.vid, p.pid) {
             println!("       VID:PID: {:04x}:{:04x}", v, pid);
         }
+        // Query MAC address via espflash board-info
+        if let Some(mac) = query_mac_address(&p.port_name) {
+            println!("       MAC address: {}", mac);
+        }
         println!();
     }
 
-    println!("Tip: Use --serial <usb-serial> to target a specific device across replugs.");
-    println!("     The USB serial number is stable even when the /dev/ path changes.");
+    println!("Tip: Use --port-index <N> to target a specific device by number.");
+    println!("     Use --serial <usb-serial> if serial numbers are unique across replugs.");
     Ok(())
+}
+
+/// Query the MAC address of an ESP32 on the given port using `espflash board-info`.
+fn query_mac_address(port_name: &str) -> Option<String> {
+    let output = std::process::Command::new("espflash")
+        .args(["board-info", "--port", port_name])
+        .output()
+        .ok()?;
+
+    // espflash outputs to stderr with log prefixes, check both
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for line in combined.lines() {
+        // Strip log prefix like "[INFO ...] " to get the actual content
+        let stripped = if let Some(idx) = line.find("] ") {
+            &line[idx + 2..]
+        } else {
+            line
+        };
+        if stripped.starts_with("MAC address:") {
+            return Some(stripped["MAC address:".len()..].trim().to_string());
+        }
+    }
+    None
 }
 
 /// Resolve the serial port with auto-detection fallback.
