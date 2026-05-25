@@ -517,6 +517,31 @@ impl<'a> SpaApp<'a> {
             }
         }
 
+        // For SetTime with is_24h, first queue a SetPreference to ensure the
+        // spa's clock mode matches before sending the time command.
+        if let Command::SetTime { is_24h: true, .. } = &cmd {
+            let pref = Command::SetPreference {
+                code: launa_protocol::command::preference::CLOCK_MODE,
+                value: 1,
+            };
+            // Only queue if not already queued
+            if !self.command_queue.iter().any(|c| {
+                matches!(
+                    c,
+                    Command::SetPreference {
+                        code: launa_protocol::command::preference::CLOCK_MODE,
+                        ..
+                    }
+                )
+            }) {
+                if self.command_queue.len() >= MAX_COMMAND_QUEUE {
+                    self.cmd_tracker.record_dropped();
+                } else {
+                    self.command_queue.push_back(pref);
+                }
+            }
+        }
+
         // For ToggleItem, cancel out duplicate toggles: if the same item is
         // already queued, remove it (two toggles = no-op) instead of queuing
         // another one. This prevents rapid button presses from cycling the

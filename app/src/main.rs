@@ -248,7 +248,6 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                 sniff.finish();
             }
             let result = transport.write(&data).await;
-            info!("UART TX: {} bytes", data.len());
             if result.is_err() {
                 rate_error!(UART_WRITE_ERR, "UART write error: Io");
             }
