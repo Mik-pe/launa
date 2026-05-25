@@ -6,7 +6,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use launa_protocol::command::{Command, TempError, ToggleItem, ABSOLUTE_MAX_TEMP_F};
+use launa_protocol::command::{self, Command, TempError, ToggleItem, ABSOLUTE_MAX_TEMP_F};
 use launa_protocol::status::{TempRange, TemperatureScale};
 
 /// Recognized command subtopics. Anything not in this list is silently rejected.
@@ -40,6 +40,7 @@ const ALLOWED_SUBTOPICS: &[&str] = &[
     "clear_notification",
     "set_temperature",
     "set_time",
+    "set_preference",
 ];
 
 /// Result of parsing a command, including temperature validation status.
@@ -142,6 +143,7 @@ pub fn parse_command(command_topic_base: &str, topic: &str, payload: &[u8]) -> P
         "clear_notification" => parse_toggle(payload_str, ToggleItem::ClearNotification),
         "set_temperature" => parse_set_temperature(payload_str),
         "set_time" => parse_set_time(payload_str),
+        "set_preference" => parse_set_preference(payload_str),
         _ => ParseResult::UnknownSubtopic(subtopic.to_string()),
     }
 }
@@ -236,6 +238,75 @@ fn parse_pump_timer(payload: &str, pump_index: u8) -> ParseResult {
         }
         Err(_) => ParseResult::InvalidPayload(format!("not a number: {:?}", payload)),
     }
+}
+
+/// Parse a set-preference command. Accepts JSON `{"code":C,"value":V}` or named
+/// preferences like `{"name":"clock_mode","value":"24h"}`.
+fn parse_set_preference(payload: &str) -> ParseResult {
+    let trimmed = payload.trim();
+    if !trimmed.starts_with('{') {
+        return ParseResult::InvalidPayload(alloc::format!(
+            "invalid set_preference payload, expected JSON: {:?}",
+            payload
+        ));
+    }
+
+    // Try named preference first: {"name":"clock_mode","value":"24h"}
+    if let Some(name) = extract_json_string(trimmed, "name") {
+        let value_str = extract_json_string(trimmed, "value").unwrap_or_default();
+        let code = match name.as_str() {
+            "reminders" => command::preference::REMINDERS,
+            "temperature_scale" => command::preference::TEMPERATURE_SCALE,
+            "clock_mode" => command::preference::CLOCK_MODE,
+            "cleanup_cycle" => command::preference::CLEANUP_CYCLE,
+            "m8_ai" => command::preference::M8_AI,
+            _ => {
+                return ParseResult::InvalidPayload(alloc::format!(
+                    "unknown preference name: {:?}",
+                    name
+                ))
+            }
+        };
+        let value: u8 = match value_str.as_str() {
+            "12h" | "fahrenheit" | "off" | "no" => 0,
+            "24h" | "celsius" | "on" | "yes" => 1,
+            _ => match value_str.parse::<u8>() {
+                Ok(v) => v,
+                Err(_) => {
+                    return ParseResult::InvalidPayload(alloc::format!(
+                        "invalid preference value: {:?}",
+                        value_str
+                    ))
+                }
+            },
+        };
+        return ParseResult::Valid(Command::SetPreference { code, value });
+    }
+
+    // Fallback: {"code":C,"value":V}
+    let code = extract_json_number(trimmed, "code");
+    let value = extract_json_number(trimmed, "value");
+    match (code, value) {
+        (Some(c), Some(v)) => ParseResult::Valid(Command::SetPreference { code: c, value: v }),
+        _ => ParseResult::InvalidPayload(alloc::format!(
+            "invalid set_preference JSON: {:?}",
+            payload
+        )),
+    }
+}
+
+/// Extract a string value from a simple JSON object by key name.
+fn extract_json_string(json: &str, key: &str) -> Option<String> {
+    let pattern = alloc::format!("\"{}\":", key);
+    let start = json.find(&pattern)?;
+    let rest = &json[start + pattern.len()..];
+    let rest = rest.trim_start();
+    if !rest.starts_with('"') {
+        return None;
+    }
+    let inner = &rest[1..];
+    let end = inner.find('"')?;
+    Some(inner[..end].to_string())
 }
 
 /// Parse a set-time command. Accepts `HH:MM` or JSON `{"hour":H,"minute":M}`.

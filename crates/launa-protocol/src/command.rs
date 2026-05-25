@@ -75,6 +75,7 @@ pub enum Command {
     ToggleItem(ToggleItem),
     SetTemperature(u8),
     SetTime { hour: u8, minute: u8, is_24h: bool },
+    SetPreference { code: u8, value: u8 },
     SetTemperatureScale(bool), // true = Celsius
     SettingsRequest(SettingsType),
     FilterCyclesRequest,
@@ -199,6 +200,24 @@ pub enum SettingsType {
     Preferences,
 }
 
+/// Balboa preference codes for Set Preference Request (type `0x27`).
+///
+/// Per the Balboa protocol, each preference is set with a (code, value) pair.
+/// The Main Board responds with a full Preferences Response (0x26) on the
+/// broadcast channel.
+pub mod preference {
+    /// Reminders: 0=OFF, 1=ON
+    pub const REMINDERS: u8 = 0x00;
+    /// Temperature Scale: 0=1°F, 1=0.5°C
+    pub const TEMPERATURE_SCALE: u8 = 0x01;
+    /// Clock Mode: 0=12-hour, 1=24-hour
+    pub const CLOCK_MODE: u8 = 0x02;
+    /// Cleanup Cycle: 0=OFF, 1-8 (30 minute increments)
+    pub const CLEANUP_CYCLE: u8 = 0x03;
+    /// M8 Artificial Intelligence: 0=OFF, 1=ON
+    pub const M8_AI: u8 = 0x06;
+}
+
 impl Command {
     /// Returns the message type bytes and payload for this command.
     ///
@@ -231,6 +250,7 @@ impl Command {
                 let h = if *is_24h { *hour | 0x80 } else { *hour };
                 Ok(([0x0A, 0xBF], vec![0x21, h, *minute]))
             }
+            Command::SetPreference { code, value } => Ok(([0x0A, 0xBF], vec![0x27, *code, *value])),
             Command::SetTemperatureScale(celsius) => {
                 let ts = if *celsius { 0x01 } else { 0x00 };
                 Ok(([0x0A, 0xBF], vec![0x27, 0x01, ts]))
@@ -409,6 +429,24 @@ mod tests {
                 },
                 expected_mt: [0x0A, 0xBF],
                 expected_payload: vec![0x21, 9, 5],
+            },
+            Case {
+                name: "SetPreference clock mode 24h",
+                cmd: Command::SetPreference {
+                    code: preference::CLOCK_MODE,
+                    value: 1,
+                },
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x27, 0x02, 0x01],
+            },
+            Case {
+                name: "SetPreference clock mode 12h",
+                cmd: Command::SetPreference {
+                    code: preference::CLOCK_MODE,
+                    value: 0,
+                },
+                expected_mt: [0x0A, 0xBF],
+                expected_payload: vec![0x27, 0x02, 0x00],
             },
             Case {
                 name: "SetTemperatureScale(celsius)",
