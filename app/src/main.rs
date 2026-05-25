@@ -218,14 +218,7 @@ async fn uart_task(mut transport: transport::Rs485Transport) {
                             }
                         }
 
-                        if frame.message_type != [0x10, 0xBF] {
-                            info!(
-                                "UART: decoded frame type={:02X}{:02X} len={}",
-                                frame.message_type[0],
-                                frame.message_type[1],
-                                frame.payload.len()
-                            );
-                        }
+
 
                         frame_sender.send(frame).await;
                     }
