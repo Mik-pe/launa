@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
 import ClockSetting from './ClockSetting.vue'
-import type { MqttSettings, AccessoryConfig } from '../types'
+import type { MqttSettings, AccessoryConfig, NotificationConfig } from '../types'
 
 const props = withDefaults(defineProps<{
   modelValue?: boolean
   settings: MqttSettings
   accessoryConfig: AccessoryConfig
+  notificationConfig: NotificationConfig
   spaHour?: number
   spaMinute?: number
   spaTimeFormat?: '12h' | '24h'
@@ -18,11 +19,13 @@ const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   'save': [settings: MqttSettings]
   'saveAccessoryConfig': [config: AccessoryConfig]
+  'saveNotificationConfig': [config: NotificationConfig]
   'setTime': [hour: number, minute: number, is24h: boolean]
 }>()
 
 const form = ref<MqttSettings>({ ...props.settings })
 const accForm = ref<AccessoryConfig>({ ...props.accessoryConfig })
+const notifForm = ref<NotificationConfig>({ ...props.notificationConfig })
 
 const knownDevices = ref<{device_id: string; status: string}[]>([])
 const deviceListLoading = ref(false)
@@ -32,6 +35,7 @@ watch(() => props.modelValue, (open: boolean) => {
   if (open) {
     form.value = { ...props.settings }
     accForm.value = { ...props.accessoryConfig }
+    notifForm.value = { ...props.notificationConfig }
     fetchDevices()
   }
 })
@@ -77,6 +81,7 @@ function save(): void {
   if (hasErrors.value) return
   emit('save', { ...form.value })
   emit('saveAccessoryConfig', { ...accForm.value })
+  emit('saveNotificationConfig', { ...notifForm.value })
   emit('update:modelValue', false)
 }
 
@@ -188,6 +193,52 @@ function close(): void {
                     class="w-4 h-4 rounded bg-neutral-800 border-neutral-600 text-blue-500 focus:ring-blue-500" />
                   <span class="text-sm text-neutral-300">Mister</span>
                 </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Notifications -->
+          <div class="pt-2 border-t border-neutral-700">
+            <h3 class="text-sm font-semibold text-neutral-300 mb-3">Notifications</h3>
+            <div class="space-y-3">
+              <div>
+                <label class="block text-sm font-medium text-neutral-400 mb-1">Discord Webhook URL</label>
+                <input v-model="notifForm.discord_webhook_url"
+                  type="text"
+                  placeholder="https://discord.com/api/webhooks/..."
+                  class="w-full px-3 py-2 bg-neutral-800 border border-neutral-700 rounded-lg text-sm text-white placeholder-neutral-600 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                <p class="text-xs text-neutral-600 mt-1">Leave empty to disable notifications</p>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-400 mb-1">Offline threshold (hours)</label>
+                <input v-model.number="notifForm.offline_threshold_hours"
+                  type="number"
+                  min="1"
+                  max="72"
+                  class="w-full px-3 py-2 bg-neutral-800 border border-neutral-700 rounded-lg text-sm text-white placeholder-neutral-600 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                <p class="text-xs text-neutral-600 mt-1">Alert after this many consecutive hours offline</p>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-neutral-400 mb-1">Monitored devices</label>
+                <div class="flex flex-wrap gap-2 mb-2">
+                  <span v-for="(dev, idx) in notifForm.monitored_devices" :key="idx"
+                    class="inline-flex items-center gap-1 px-2 py-1 bg-blue-500/15 text-blue-400 rounded-lg text-xs ring-1 ring-blue-500/25">
+                    <span>{{ dev }}</span>
+                    <button @click="notifForm.monitored_devices.splice(idx, 1)"
+                      class="text-blue-400/60 hover:text-blue-300 cursor-pointer">&times;</button>
+                  </span>
+                  <span v-if="!notifForm.monitored_devices.length"
+                    class="text-xs text-neutral-600">All devices monitored when empty</span>
+                </div>
+                <div class="flex gap-2">
+                  <select @change="($event: Event) => { const v = ($event.target as HTMLSelectElement).value; if (v && !notifForm.monitored_devices.includes(v)) { notifForm.monitored_devices.push(v); } ($event.target as HTMLSelectElement).value = ''; }"
+                    class="flex-1 px-3 py-2 bg-neutral-800 border border-neutral-700 rounded-lg text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
+                    <option value="">Add device...</option>
+                    <option v-for="d in knownDevices.filter(d => !notifForm.monitored_devices.includes(d.device_id))" :key="d.device_id" :value="d.device_id">
+                      {{ d.device_id }}
+                    </option>
+                  </select>
+                </div>
               </div>
             </div>
           </div>

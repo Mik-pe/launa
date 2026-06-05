@@ -12,6 +12,7 @@ app/vendor/
 *.swo
 *~
 launa.toml
+launa-server.toml
 launa.key
 launa.db
 *.toml.bak

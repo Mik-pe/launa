@@ -4,6 +4,7 @@ use rumqttd::local::{LinkRx, LinkTx};
 use rumqttd::{Broker, Notification};
 use tracing::{error, info, warn};
 
+use crate::google_home;
 use crate::memory::{MemoryStore, COMPONENT_FIELDS};
 
 pub fn start(
@@ -13,12 +14,28 @@ pub fn start(
     let (mut link_tx, mut link_rx) = broker.link("data-store")?;
     link_tx.subscribe("launa/#")?;
 
+    // Create a publisher link for Google Home commands
+    let (mut pub_tx, _) = broker.link("google-home-pub")?;
+    let cmd_rx = google_home::create_mqtt_command_channel();
+
     info!("MQTT data-store bridge subscribed to launa/#");
 
     std::thread::Builder::new()
         .name("mqtt-bridge".into())
         .spawn(move || {
             run_bridge(&mut link_tx, &mut link_rx, &mem);
+        })?;
+
+    // Spawn a thread to forward Google Home commands to MQTT
+    std::thread::Builder::new()
+        .name("gh-mqtt-pub".into())
+        .spawn(move || {
+            while let Ok((topic, payload)) = cmd_rx.recv() {
+                if let Err(e) = pub_tx.publish(topic, payload) {
+                    warn!("Google Home MQTT publish failed: {e:?}");
+                }
+            }
+            warn!("Google Home MQTT publisher thread exited");
         })?;
 
     Ok(())

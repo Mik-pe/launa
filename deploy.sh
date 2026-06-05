@@ -49,6 +49,7 @@ echo "  Web:    $(du -sh /tmp/launa-deploy-web | cut -f1)"
 echo "[4/5] Deploying to $PI_HOST..."
 ssh -t "$PI_HOST" "sudo systemctl stop launa-server 2>/dev/null; sudo mkdir -p $PI_DIR/web/dist $PI_DIR/data && sudo chown -R \$(whoami):\$(id -gn) $PI_DIR"
 scp /tmp/launa-deploy/launa-server "$PI_HOST:$PI_DIR/launa-server"
+scp launa-server.toml "$PI_HOST:$PI_DIR/launa-server.toml"
 ssh "$PI_HOST" "rm -rf $PI_DIR/web/dist"
 ssh "$PI_HOST" "mkdir -p $PI_DIR/web/dist"
 scp -r /tmp/launa-deploy-web/* "$PI_HOST:$PI_DIR/web/dist/"
@@ -66,7 +67,7 @@ Type=simple
 User=mikpe
 WorkingDirectory=/opt/launa
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-ExecStart=/opt/launa/launa-server --web-dir /opt/launa/web --state-path /opt/launa/data/launa-state.json --http-port 80
+ExecStart=/opt/launa/launa-server --config /opt/launa/launa-server.toml
 Restart=on-failure
 RestartSec=5
 

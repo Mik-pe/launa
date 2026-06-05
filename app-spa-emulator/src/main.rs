@@ -379,6 +379,17 @@ async fn read_response_window(
     let mut rx_bytes: u64 = 0;
     frames.clear();
 
+    // Drain bytes that arrived during the post-TX delay. These bytes are
+    // already in the UART RX FIFO but may not trigger a new interrupt for
+    // read_async() to pick up, causing them to be silently missed.
+    if let Ok(n) = uart.read_buffered(read_buf) {
+        if n > 0 {
+            rx_bytes += n as u64;
+            let new_frames = frame_decoder.feed_slice(&read_buf[..n]);
+            frames.extend(new_frames);
+        }
+    }
+
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
         let timeout = remaining.min(Duration::from_millis(2));

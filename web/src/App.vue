@@ -2,7 +2,7 @@
 import { ref, watch } from 'vue'
 import { useMqtt, connectionErrorToast } from './composables/useMqtt'
 import PendingDot from './components/PendingDot.vue'
-import type { MqttSettings, AccessoryConfig } from './types'
+import type { MqttSettings, AccessoryConfig, NotificationConfig } from './types'
 import LoadingSpinner from './components/LoadingSpinner.vue'
 import ConnectionBar from './components/ConnectionBar.vue'
 import TemperatureCard from './components/TemperatureCard.vue'
@@ -38,6 +38,8 @@ const {
   sniffEnabled,
   setSniff,
   retryCount,
+  notificationConfig,
+  saveNotificationConfig,
 } = useMqtt()
 
 const showSettings = ref(false)
@@ -93,6 +95,10 @@ const tempRangeOptions: { value: string; label: string }[] = [
 
 function handleSave(s: MqttSettings): void {
   saveSettings(s)
+}
+
+function handleSaveNotificationConfig(cfg: NotificationConfig): void {
+  saveNotificationConfig(cfg)
 }
 
 function cycleHeatMode(): void {
@@ -296,11 +302,13 @@ function handleTempRange(val: string): void {
       v-model="showSettings"
       :settings="settings"
       :accessory-config="serverConfig ?? { pumps: 2, lights: 1, blower: true, mister: false }"
+      :notification-config="notificationConfig"
       :spa-hour="spaState?.hour"
       :spa-minute="spaState?.minute"
       :spa-time-format="spaState?.time_format"
       @save="handleSave"
       @save-accessory-config="saveAccessoryConfig"
+      @save-notification-config="handleSaveNotificationConfig"
       @set-time="setTime"
     />
   </div>

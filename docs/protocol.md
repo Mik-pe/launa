@@ -112,105 +112,196 @@ Pump 6 = (P2 >> 2) & 0x03
 
 ### Configuration Response
 
-- Type: `0A BF 94` or `0A BF 2E`
+- Type: `0A BF 2E`
+- Length: 11
+
+| Byte | Name | Values |
+|------|------|--------|
+| 0 | Pumps 1-4 | Bits N to N+1: Pump N/2+1 (0=None, 1=1-speed, 2=2-speed) |
+| 1 | Pumps 5-6 | Bits 0-1: Pump 5, Bits 6-7: Pump 6 (0=None, 1=1-speed, 2=2-speed) |
+| 2 | Lights | Bits 0-1: Light 1, Bits 6-7: Light 2 (0=None, 1=Present) |
+| 3 | Flags Byte 3 | Bits 0-1: Blower, Bit 7: Circulation Pump |
+| 4 | Flags Byte 4 | Bit 0: Aux 1, Bit 1: Aux 2, Bits 4-5: Mister |
+| 5 | Unknown | 0x00 or 0x68 |
+
+Examples:
 
 ```
-Offset: 0  1  2  3  4  5  6  7  8  9 ...
-Data:   02 02 80 00 15 27 10 AB D2 00 ...
+2 1-speed pumps, 1 light, circ pump:  0B 10 BF 2E 05 00 01 90 00 68
+2 2-speed pumps, 1 light, no circ/blower: 0B 0A BF 2E 0A 00 01 50 00 00
+2 2-speed + 1 1-speed pump, 1 light, circ pump: 0B 10 BF 2E 1A 00 01 90 00 68
+3 2-speed pumps, 1 light, no circ/blower: 0B 10 BF 2E 2A 00 01 50 00 00
 ```
 
-Configuration byte mapping (from `0A BF 2E`):
+### WiFi Module Configuration Response
 
-| Byte | Bits | Description |
-|------|------|-------------|
-| 5 | 0-1 | Pump 1 (0=none, 1=1-speed, 2=2-speed) |
-| 5 | 2-3 | Pump 2 |
-| 5 | 4-5 | Pump 3 |
-| 5 | 6-7 | Pump 4 |
-| 6 | 0-1 | Pump 5 |
-| 6 | 2-3 | Pump 6 |
-| 7 | 0-1 | Light 1 |
-| 7 | 2-3 | Light 2 |
-| 8 | 0-1 | Blower |
-| 8 | 7 | Circulation pump |
-| 9 | 0 | Aux 1 |
-| 9 | 1 | Aux 2 |
-| 9 | 4-5 | Mister |
-| 3 | 0 | Temperature scale (0=F, 1=C) |
+- Type: `0A BF 94`
+- Length: 29
 
-### Filter Cycles Response
+| Byte(s) | Name | Values |
+|---------|------|--------|
+| 0-2 | Unknown | Unknown |
+| 3-8 | Full MAC address | Varies |
+| 9-16 | Unknown | 0 |
+| 17-19 | MAC address: OUI | 00:15:27 (Balboa Instruments) |
+| 20-21 | Unknown | 0xFF |
+| 22-24 | MAC address: NIC-specific | Varies |
+
+Examples:
+
+```
+1D 0A BF 94 02 02 80 00 15 27 10 AB D2 00 00 00 00 00 00 00 00 00 15 27 FF FF 10 AB D2
+1D 0A BF 94 02 14 80 00 15 27 3F 9B 95 00 00 00 00 00 00 00 00 00 15 27 FF FF 3F 9B 95
+```
+
+### Settings Request
+
+- Type: `0A BF 22`
+- Length: 8
+- Payload: `CC AA BB` (settings code + 2 argument bytes)
+
+| Code | Name | Arguments | Response |
+|------|------|-----------|----------|
+| 0x00 | Configuration | `0x00 0x01` | Configuration Response (0x2E) |
+| 0x01 | Filter Cycles | `0x00 0x00` | Filter Cycles Message (0x23) |
+| 0x02 | Information | `0x00 0x00` | Information Response (0x24) |
+| 0x04 | Unknown | `0x00 0x00` | Settings 0x04 Response (0x25) |
+| 0x08 | Preferences | `0x00 0x00` | Preferences Response (0x26) |
+| 0x10 | Unknown | `0x00 0x00` | (None) |
+| 0x20 | Fault Log | `EN 0x00` | Fault Log Response (0x28) |
+| 0x40 | Unknown | `0x00 0x00` | Settings 0x40 Response |
+| 0x80 | GFCI Test | `0x00 0x00` | GFCI Test Response (0x2B) |
+
+> EN: entry number 0-23 (0xFF = last fault).
+
+### Filter Cycles Message
 
 - Type: `0A BF 23`
+- Length: 12
+- Sent by Main Board in response to Settings Request, or sent by client to write filter cycle settings.
+- Writing does not generate a response from the Main Board.
 
-```
-Offset: 0  1  2  3  4  5  6  7
-Field:  1H 1M 1D 1E 2H 2M 2D 2E
-```
-
-- Filter 1 start hour, minute, duration hours, duration minutes
-- Filter 2 start hour (high bit = enable flag), minute, duration hours, duration minutes
+| Byte | Name | Values |
+|------|------|--------|
+| 0 | Filter 1 Start: Hour | 0-23 |
+| 1 | Filter 1 Start: Minute | 0-59 |
+| 2 | Filter 1 Duration: Hours | 0-23 |
+| 3 | Filter 1 Duration: Minutes | 0-59 |
+| 4 | Filter 2 Enable/Start: Hour | Bits 0-6: Hour (0-23), Bit 7: Enable (0=OFF, 1=ON) |
+| 5 | Filter 2 Start: Minute | 0-59 |
+| 6 | Filter 2 Duration: Hours | 0-23 |
+| 7 | Filter 2 Duration: Minutes | 0-59 |
 
 ### Information Response
 
 - Type: `0A BF 24`
+- Length: 25
+
+| Byte(s) | Name | Description/Values |
+|---------|------|---------------------|
+| 0-3 | Software ID (SSID) | Displayed (decimal): "M\<byte0\>_\<byte1\> V\<byte2\>[.\<byte3\>]" |
+| 4-11 | System Model Number | ASCII-encoded string |
+| 12 | Current Setup Number | Refer to controller tech sheets |
+| 13-16 | Configuration Signature | Checksum of system configuration file |
+| 17 | Heater Voltage | 0x01=240V |
+| 18 | Heater Type | 0x06, 0x0A=Standard |
+| 19-20 | DIP Switch Settings | LSB-first (bit 0 of byte 19 is position 1) |
+
+Examples:
 
 ```
-Offset: 0  1  2  3  4-11     12 13-16     17-18  19-20
-Field:  SI SI SV SV SM(8B)   SU CS(4B)    HT HT  DS DS
+M100_210 V6, CSTBP3UL, Setup 2, Sig 57072108, 240V, Standard, DIP 0100000000
+  25 10 BF 24 64 D2 06 00 43 53 54 42 50 33 55 4C 02 57 07 21 08 01 0A 02 00
+
+M100_201 V44, MBP501UX, Setup 3, Sig A82F6383, 240V, Standard, DIP 101000
+  25 10 BF 24 64 C9 2C 00 4D 42 50 35 30 31 55 58 03 A8 2F 63 83 01 06 05 00
 ```
 
-- SI: Software ID (e.g. "M100_220")
-- SV: Software Version (e.g. "V17")
-- SM: System Model, ASCII (e.g. "BFBP20  ")
-- SU: Current Setup
-- CS: Configuration Signature (e.g. "3D12382E")
-- HT: Heater Voltage (0x01=240V), Heater Type (0x0A=Standard)
-- DS: DIP Switch Settings
+### Settings 0x04 Response
+
+- Type: `0A BF 25`
+- Length varies by SSID (14-15 bytes observed).
+- Payload format unknown.
+
+Examples:
+
+```
+0E 10 BF 25 02 02 32 63 50 68 20 07 01
+0E 0A BF 25 05 01 32 63 50 68 61 07 41
+0F 10 BF 25 09 03 32 63 50 68 49 03 41 02
+```
+
+### Preferences Response
+
+- Type: `0A BF 26`
+- Length: 23
+- Sent by Main Board after Settings Request (same channel), or after Set Preference Request (broadcast channel).
+
+| Byte(s) | Name | Description/Values |
+|---------|------|---------------------|
+| 0 | Unknown | 0 |
+| 1 | Reminders | 0=OFF, 1=ON |
+| 2 | Unknown | 0 |
+| 3 | Temperature Scale | 0=1°F, 1=0.5°C |
+| 4 | Clock Mode | 0=12-hour, 1=24-hour |
+| 5 | Cleanup Cycle | 0=OFF, 1-8 (30 minute increments) |
+| 6 | Dolphin Address | 0=none, 1-7=address |
+| 7 | Unknown | 0 |
+| 8 | M8 Artificial Intelligence | 0=OFF, 1=ON |
+| 9-17 | Unknown | 0 |
 
 ### Fault Log Response
 
 - Type: `0A BF 28`
+- Length: 15
 
-```
-Offset: 0  1  2  3  4  5  6  7  8  9
-Field:  FC EN MC DD HH MM FF ST TA TB
-```
-
-| Offset | Description |
-|--------|-------------|
-| 0 | Fault Count |
-| 1 | Entry Number |
-| 2 | Message Code (see fault codes below) |
-| 3 | Days Ago |
-| 4 | Time Hours |
-| 5 | Time Minutes |
-| 6 | Flags (Heating Mode, Temp Range) |
-| 7 | Set Temperature |
-| 8 | Sensor A Temperature |
-| 9 | Sensor B Temperature |
+| Byte | Name | Values |
+|------|------|--------|
+| 0 | Total Entries | 0-24 |
+| 1 | Entry Number | 0-23 (0=Entry #1) |
+| 2 | Message Code | (see fault codes below) |
+| 3 | Days Ago | 0-255 |
+| 4 | Time: Hour | 0-23 |
+| 5 | Time: Minute | 0-59 |
+| 6 | Flags | TODO |
+| 7 | Set Temperature | Scaled by Temperature Scale |
+| 8 | Sensor A Temperature | Scaled by Temperature Scale |
+| 9 | Sensor B Temperature | Scaled by Temperature Scale |
 
 #### Fault Codes
 
-| Code | Description |
-|------|-------------|
-| 15 | Sync |
-| 16 | Low flow |
-| 17 | Flow failed |
-| 18 | Settings reset |
-| 19 | Priming |
-| 20 | Clock failed |
-| 22 | Program memory |
-| 26 | Sync — call service |
-| 27 | Heater dry |
-| 28 | Heater maybe dry |
-| 29 | Water too hot |
-| 30 | Heater too hot |
-| 31 | Sensor A fault |
-| 32 | Sensor B fault |
-| 34 | Pump stuck on |
+| Code | Message |
+|------|---------|
+| 15 | Sensors are out of sync |
+| 16 | The water flow is low |
+| 17 | The water flow has failed |
+| 18 | The settings have been reset |
+| 19 | Priming Mode |
+| 20 | The clock has failed |
+| 21 | The settings have been reset |
+| 22 | Program memory failure |
+| 26 | Sensors are out of sync — Call for service |
+| 27 | The heater is dry |
+| 28 | The heater may be dry |
+| 29 | The water is too hot |
+| 30 | The heater is too hot |
+| 31 | Sensor A Fault |
+| 32 | Sensor B Fault |
+| 34 | A pump may be stuck on |
 | 35 | Hot fault |
-| 36 | GFCI test failed |
-| 37 | Standby / Hold |
+| 36 | The GFCI test failed |
+| 37 | Standby Mode (Hold Mode) |
+
+### GFCI Test Response
+
+- Type: `0A BF 2B`
+- Length: 6
+- Sent during initialization and after Settings Request with code 0x80.
+
+| Byte 0 | Description |
+|--------|-------------|
+| 0x00 | N/A or FAIL |
+| 0x01 | PASS |
 
 ## Outgoing Messages
 
@@ -229,11 +320,24 @@ Field:  FC EN MC DD HH MM FF ST TA TB
 | Pump 1 | 0x04 |
 | Pump 2 | 0x05 |
 | Pump 3 | 0x06 |
+| Pump 4 | 0x07 |
+| Pump 5 | 0x08 |
+| Pump 6 | 0x09 |
 | Blower | 0x0C |
+| Mister | 0x0E |
 | Light 1 | 0x11 |
+| Light 2 | 0x12 |
+| Light 3 | 0x13 |
+| Light 4 | 0x14 |
+| Aux 1 | 0x16 |
+| Aux 2 | 0x17 |
+| Soak Mode | 0x1D |
+| Circulation Pump | 0x3D |
 | Hold Mode | 0x3C |
-| Heating Mode | 0x51 |
 | Temperature Range | 0x50 |
+| Heating Mode | 0x51 |
+| Normal Operation | 0x01 |
+| Clear Notification | 0x03 |
 
 ### Set Temperature
 
@@ -251,17 +355,59 @@ Field:  FC EN MC DD HH MM FF ST TA TB
 - Type: `0A BF 21`
 - Payload: `HH MM` (high bit of HH enables 24h time)
 
-### Settings Request
+### Set Filter Cycles
 
-- Type: `0A BF 22`
+- Type: `0A BF 23`
+- Length: 12
+- Same format as Filter Cycles Message (see Incoming Messages).
+- Client sends to write filter cycle settings. Main Board does not respond.
 
-| Request | Payload |
-|---------|---------|
-| Panel | `00 00 01` |
-| Filter Cycles | `01 00 00` |
-| Information | `02 00 00` |
-| Preferences | `08 00 00` |
-| Fault Log | `20 EN 00` (EN=entry number, FF=last) |
+### Set Preference Request
+
+- Type: `0A BF 27`
+- Length: 7
+- Payload: `CC VV` (preference code + value)
+- Main Board responds with a full Preferences Response (0x26) on broadcast channel.
+
+| Code | Name | Values |
+|------|------|--------|
+| 0x00 | Reminders | 0=OFF, 1=ON |
+| 0x01 | Temperature Scale | 0=1°F, 1=0.5°C |
+| 0x02 | Clock Mode | 0=12-hour, 1=24-hour |
+| 0x03 | Cleanup Cycle | 0=OFF, 1-8 (30 minute increments) |
+| 0x04 | Dolphin Address | 0=none, 1-7=address |
+| 0x05 | Unknown | Unknown |
+| 0x06 | M8 Artificial Intelligence | 0=OFF, 1=ON |
+
+### Change Setup Request
+
+- Type: `0A BF 2A`
+- Length: 6
+- Payload: setup number
+- Main Board performs a reset after processing.
+
+### Lock Request
+
+- Type: `0A BF 2D`
+- Length: 6
+
+| Byte 0 | Description |
+|--------|-------------|
+| 0x01 | Lock Settings |
+| 0x02 | Lock Panel |
+| 0x03 | Unlock Settings |
+| 0x04 | Unlock Panel |
+
+### Toggle Test Setting Request
+
+- Type: `0A BF E0`
+- Length: 6
+
+| Byte 0 | Description |
+|--------|-------------|
+| 0x03 | Sensor A/B Temperatures |
+| 0x04 | Timeouts |
+| 0x05 | Temp Limits |
 
 ### Nothing to Send (no-op ack)
 

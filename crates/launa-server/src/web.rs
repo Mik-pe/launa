@@ -7,8 +7,10 @@ use chrono::Utc;
 use serde::Deserialize;
 use tracing::info;
 
+use crate::google_home;
 use crate::memory::{
     AccessoryConfigData as AccessoryConfig, DeviceSummary, GraphData, MemoryStore,
+    NotificationConfig,
 };
 use crate::Config;
 
@@ -28,9 +30,18 @@ pub async fn start(
         .into());
     }
 
-    let app_state = AppState { mem };
+    let app_state = AppState {
+        mem,
+        config: config.clone(),
+    };
 
-    let app = build_router(app_state).fallback_service(
+    let main_router = build_router().merge(google_home::build_router());
+
+    if config.google_home.is_some() {
+        info!("Google Home integration enabled");
+    }
+
+    let app = main_router.with_state(app_state).fallback_service(
         ServeDir::new(&web_dir).fallback(ServeFile::new(web_dir.join("index.html"))),
     );
 
@@ -44,7 +55,7 @@ pub async fn start(
     Ok(())
 }
 
-pub fn build_router(state: AppState) -> Router {
+pub fn build_router() -> Router<AppState> {
     let device_routes = Router::new()
         .route("/logs", axum::routing::get(get_logs).delete(clear_logs))
         .route("/status/graph", axum::routing::get(get_status_graph))
@@ -69,16 +80,20 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::get(get_config).put(set_config),
         )
         .route(
+            "/api/notifications",
+            axum::routing::get(get_notifications).put(set_notifications),
+        )
+        .route(
             "/api/devices/{device_id}/availability",
             axum::routing::get(get_device_availability),
         )
         .nest("/api/devices/{device_id}", device_routes)
-        .with_state(state)
 }
 
 #[derive(Clone)]
 pub struct AppState {
     pub mem: Arc<RwLock<MemoryStore>>,
+    pub config: Config,
 }
 
 // --- Query parameter types ---
@@ -146,6 +161,32 @@ async fn set_config(
         .unwrap()
         .set_accessory_config(clamped.clone());
     Json(clamped)
+}
+
+async fn get_notifications(State(state): State<AppState>) -> Json<NotificationConfig> {
+    Json(state.mem.read().unwrap().get_notification_config().clone())
+}
+
+async fn set_notifications(
+    State(state): State<AppState>,
+    Json(new_cfg): Json<NotificationConfig>,
+) -> Json<NotificationConfig> {
+    let sanitized = NotificationConfig {
+        discord_webhook_url: new_cfg.discord_webhook_url.trim().to_string(),
+        offline_threshold_hours: new_cfg.offline_threshold_hours.max(1),
+        monitored_devices: new_cfg
+            .monitored_devices
+            .into_iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+    };
+    state
+        .mem
+        .write()
+        .unwrap()
+        .set_notification_config(sanitized.clone());
+    Json(sanitized)
 }
 
 async fn get_logs(

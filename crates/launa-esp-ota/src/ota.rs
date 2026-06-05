@@ -249,10 +249,17 @@ where
     }
 
     fn mark_valid(&mut self) -> Result<(), OtaError> {
-        info!("OTA: marking firmware as valid (boot confirmed)");
-
         // Read both otadata entries and check CRC validity.
         let (entry0, valid0, entry1, valid1) = crate::flash::read_otadata_entries(&mut self.flash)?;
+
+        // Factory boot: both otadata slots are erased — nothing to validate or repair.
+        if !valid0 && !valid1 {
+            debug!("OTA: factory boot (otadata empty), skipping mark_valid");
+            return Ok(());
+        }
+
+        info!("OTA: marking firmware as valid (boot confirmed)");
+
         let running_slot = self.running.index();
 
         // Check if the running partition's otadata slot has a valid CRC
@@ -293,6 +300,12 @@ where
                 Ok(result) => result,
                 Err(_) => return true, // Can't read otadata → assume needs validation
             };
+
+        // Factory boot: both otadata slots erased — no OTA state to validate.
+        if !valid0 && !valid1 {
+            return false;
+        }
+
         let running_index = self.running.index();
 
         let entries = [&entry0, &entry1];
@@ -478,10 +491,17 @@ mod tests {
     }
 
     #[test]
-    fn test_mark_valid() {
+    fn test_mark_valid_factory_boot_noop() {
+        // Factory boot (both otadata slots erased): mark_valid should be a no-op.
         let flash = MockFlash::new(total_flash_size());
+        let snapshot = flash.data.clone();
         let mut ota = EspOtaFlash::new(flash, Partition::Ota1);
         ota.mark_valid().unwrap();
+        // Flash must be unchanged — no otadata write on factory boot
+        assert_eq!(
+            ota.flash.data, snapshot,
+            "mark_valid should not write on factory boot"
+        );
     }
 
     #[test]
@@ -503,6 +523,17 @@ mod tests {
         let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
         let detected = ota.detect_running_partition().unwrap();
         assert_eq!(detected, Partition::Ota0);
+    }
+
+    #[test]
+    fn test_needs_validation_factory_boot_false() {
+        // Factory boot (both otadata slots erased): needs_validation should return false.
+        let flash = MockFlash::new(total_flash_size());
+        let mut ota = EspOtaFlash::new(flash, Partition::Ota0);
+        assert!(
+            !ota.needs_validation(),
+            "factory boot should not need validation"
+        );
     }
 
     #[test]

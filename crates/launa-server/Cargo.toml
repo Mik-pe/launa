@@ -20,6 +20,12 @@ clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = { workspace = true }
 ctrlc = "3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+jsonwebtoken = "9"
+bcrypt = "0.16"
+rand = "0.8"
+tower = "0.5"
+flume = "0.11"
 
 [dev-dependencies]
 axum-test = "20"

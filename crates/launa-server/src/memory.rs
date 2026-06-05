@@ -147,21 +147,6 @@ fn recent_since<T: Clone>(
 
 // --- Serialization ---
 
-/// Serializable representation of MemoryStore contents.
-/// Uses Vec instead of VecDeque for clean JSON serialization.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct SerializedStore {
-    devices: HashMap<String, DeviceStatus>,
-    accessory_config: Option<AccessoryConfigData>,
-    logs: HashMap<String, Vec<LogEntry>>,
-    diagnostics: HashMap<String, Vec<TimestampedEntry>>,
-    alerts: HashMap<String, Vec<TimestampedEntry>>,
-    sniff_frames: HashMap<String, Vec<TimestampedEntry>>,
-    availability: HashMap<String, Vec<AvailabilityEntry>>,
-    temperatures: HashMap<String, Vec<TemperatureSample>>,
-    component_events: HashMap<String, Vec<ComponentEvent>>,
-}
-
 /// Persisted accessory configuration. Stored inside SerializedStore.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AccessoryConfigData {
@@ -171,11 +156,58 @@ pub struct AccessoryConfigData {
     pub mister: bool,
 }
 
+/// Persisted notification configuration. Stored inside SerializedStore.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NotificationConfig {
+    /// Discord webhook URL. Empty = notifications disabled.
+    #[serde(default)]
+    pub discord_webhook_url: String,
+    /// How many consecutive hours offline before notifying.
+    #[serde(default = "default_offline_threshold_hours")]
+    pub offline_threshold_hours: u64,
+    /// Device IDs to monitor for offline alerts. Empty = all devices.
+    #[serde(default)]
+    pub monitored_devices: Vec<String>,
+}
+
+fn default_offline_threshold_hours() -> u64 {
+    6
+}
+
+impl Default for NotificationConfig {
+    fn default() -> Self {
+        Self {
+            discord_webhook_url: String::new(),
+            offline_threshold_hours: default_offline_threshold_hours(),
+            monitored_devices: Vec::new(),
+        }
+    }
+}
+
+/// Serializable representation of MemoryStore contents.
+/// Uses Vec instead of VecDeque for clean JSON serialization.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SerializedStore {
+    devices: HashMap<String, DeviceStatus>,
+    accessory_config: Option<AccessoryConfigData>,
+    notification_config: Option<NotificationConfig>,
+    logs: HashMap<String, Vec<LogEntry>>,
+    diagnostics: HashMap<String, Vec<TimestampedEntry>>,
+    alerts: HashMap<String, Vec<TimestampedEntry>>,
+    sniff_frames: HashMap<String, Vec<TimestampedEntry>>,
+    availability: HashMap<String, Vec<AvailabilityEntry>>,
+    temperatures: HashMap<String, Vec<TemperatureSample>>,
+    component_events: HashMap<String, Vec<ComponentEvent>>,
+    #[serde(default)]
+    offline_since: HashMap<String, String>,
+}
+
 // --- MemoryStore ---
 
 pub struct MemoryStore {
     devices: HashMap<String, DeviceStatus>,
     accessory_config: AccessoryConfigData,
+    notification_config: NotificationConfig,
     logs: HashMap<String, VecDeque<LogEntry>>,
     diagnostics: HashMap<String, VecDeque<TimestampedEntry>>,
     alerts: HashMap<String, VecDeque<TimestampedEntry>>,
@@ -183,6 +215,8 @@ pub struct MemoryStore {
     availability: HashMap<String, VecDeque<AvailabilityEntry>>,
     temperatures: HashMap<String, VecDeque<TemperatureSample>>,
     component_events: HashMap<String, VecDeque<ComponentEvent>>,
+    /// Maps device_id -> RFC3339 timestamp when the device went offline/stale.
+    offline_since: HashMap<String, String>,
 }
 
 impl MemoryStore {
@@ -190,6 +224,7 @@ impl MemoryStore {
         Self {
             devices: HashMap::new(),
             accessory_config: AccessoryConfigData::default(),
+            notification_config: NotificationConfig::default(),
             logs: HashMap::new(),
             diagnostics: HashMap::new(),
             alerts: HashMap::new(),
@@ -197,6 +232,7 @@ impl MemoryStore {
             availability: HashMap::new(),
             temperatures: HashMap::new(),
             component_events: HashMap::new(),
+            offline_since: HashMap::new(),
         }
     }
 
@@ -209,6 +245,7 @@ impl MemoryStore {
                     let store = Self {
                         devices: s.devices,
                         accessory_config: s.accessory_config.unwrap_or_default(),
+                        notification_config: s.notification_config.unwrap_or_default(),
                         logs: s.logs.into_iter().map(|(k, v)| (k, v.into())).collect(),
                         diagnostics: s
                             .diagnostics
@@ -236,6 +273,7 @@ impl MemoryStore {
                             .into_iter()
                             .map(|(k, v)| (k, v.into()))
                             .collect(),
+                        offline_since: s.offline_since,
                     };
                     let log_count = store.logs.values().map(|d| d.len()).sum::<usize>();
                     let temp_count = store.temperatures.values().map(|d| d.len()).sum::<usize>();
@@ -265,6 +303,7 @@ impl MemoryStore {
         let serialized = SerializedStore {
             devices: self.devices.clone(),
             accessory_config: Some(self.accessory_config.clone()),
+            notification_config: Some(self.notification_config.clone()),
             logs: deque_map_to_vec(&self.logs),
             diagnostics: deque_map_to_vec(&self.diagnostics),
             alerts: deque_map_to_vec(&self.alerts),
@@ -272,6 +311,7 @@ impl MemoryStore {
             availability: deque_map_to_vec(&self.availability),
             temperatures: deque_map_to_vec(&self.temperatures),
             component_events: deque_map_to_vec(&self.component_events),
+            offline_since: self.offline_since.clone(),
         };
         match serde_json::to_string(&serialized) {
             Ok(json) => {
@@ -302,6 +342,16 @@ impl MemoryStore {
                 updated_at: now,
             },
         );
+        // Track offline transitions
+        match status {
+            "online" => self.offline_since.remove(device_id),
+            _ => {
+                self.offline_since
+                    .entry(device_id.to_string())
+                    .or_insert_with(now_rfc3339);
+                None
+            }
+        };
     }
 
     pub fn get_device_status(&self, device_id: &str) -> Option<DeviceStatus> {
@@ -332,6 +382,54 @@ impl MemoryStore {
 
     pub fn set_accessory_config(&mut self, config: AccessoryConfigData) {
         self.accessory_config = config;
+    }
+
+    // --- Notification config ---
+
+    pub fn get_notification_config(&self) -> &NotificationConfig {
+        &self.notification_config
+    }
+
+    pub fn set_notification_config(&mut self, config: NotificationConfig) {
+        self.notification_config = config;
+    }
+
+    // --- Offline tracking ---
+
+    /// Record that a device went offline/stale at the given time.
+    pub fn mark_device_offline(&mut self, device_id: &str) {
+        self.offline_since
+            .entry(device_id.to_string())
+            .or_insert_with(now_rfc3339);
+    }
+
+    /// Clear offline tracking when a device comes back online.
+    pub fn mark_device_online(&mut self, device_id: &str) {
+        self.offline_since.remove(device_id);
+    }
+
+    /// Return devices that have been offline longer than the threshold,
+    /// respecting the monitored_devices filter.
+    /// Returns (device_id, offline_since_timestamp, duration_secs).
+    pub fn get_long_offline_devices(&self, threshold_secs: i64) -> Vec<(String, String, i64)> {
+        let now = Utc::now();
+        let monitored = &self.notification_config.monitored_devices;
+        let mut result = Vec::new();
+
+        for (device_id, since_str) in &self.offline_since {
+            // If monitored_devices is non-empty, only include listed devices
+            if !monitored.is_empty() && !monitored.contains(device_id) {
+                continue;
+            }
+            if let Ok(since) = since_str.parse::<chrono::DateTime<chrono::Utc>>() {
+                let elapsed = now.signed_duration_since(since).num_seconds();
+                if elapsed >= threshold_secs {
+                    result.push((device_id.clone(), since_str.clone(), elapsed));
+                }
+            }
+        }
+        result.sort_by(|a, b| a.0.cmp(&b.0));
+        result
     }
 
     // --- Logs ---
@@ -566,6 +664,28 @@ impl MemoryStore {
         self.component_events
             .get(device_id)
             .map_or(Vec::new(), |d| recent_since(d, |e| &e.received_at, since))
+    }
+
+    /// Return the most recent temperature sample for a device.
+    pub fn get_latest_temperature(&self, device_id: &str) -> Option<TemperatureSample> {
+        self.temperatures
+            .get(device_id)
+            .and_then(|deque| deque.back().cloned())
+    }
+
+    /// Return the latest state (true/false) of a named component field.
+    /// Searches component events in reverse chronological order.
+    pub fn get_latest_component_state(&self, device_id: &str, component: &str) -> bool {
+        self.component_events
+            .get(device_id)
+            .and_then(|deque| {
+                deque
+                    .iter()
+                    .rev()
+                    .find(|e| e.component == component)
+                    .map(|e| e.state != 0)
+            })
+            .unwrap_or(false)
     }
 }
 

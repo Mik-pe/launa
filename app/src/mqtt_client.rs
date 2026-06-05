@@ -324,15 +324,15 @@ impl MqttClient {
         let username = if self.config_user.is_empty() {
             None
         } else {
-            Some(self.config_user.as_str())
+            Some(String::from(self.config_user.as_str()))
         };
         let password = if self.config_password.is_empty() {
             None
         } else {
-            Some(self.config_password.as_str())
+            Some(String::from(self.config_password.as_str()))
         };
 
-        self.send_connect(&client_id, &avail_topic, username, password)
+        self.send_connect(&client_id, &avail_topic, username.as_deref(), password.as_deref())
             .await?;
 
         info!(

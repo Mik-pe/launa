@@ -77,3 +77,9 @@ export interface GraphData {
   temperatures: TemperatureSample[]
   components: ComponentEvent[]
 }
+
+export interface NotificationConfig {
+  discord_webhook_url: string
+  offline_threshold_hours: number
+  monitored_devices: string[]
+}

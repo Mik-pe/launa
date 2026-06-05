@@ -2,6 +2,7 @@ import { onMounted, onUnmounted, ref, watch, computed } from 'vue'
 import { useMqttConnection } from './useMqttConnection'
 import { useSpaState } from './useSpaState'
 import { useAccessoryConfig } from './useAccessoryConfig'
+import { useNotificationConfig } from './useNotificationConfig'
 
 /** Shared reactive toast state — consumed by App.vue */
 export const connectionErrorToast = { value: '' }
@@ -51,6 +52,7 @@ export function useMqtt() {
   const conn = useMqttConnection()
   const spa = useSpaState()
   const accessory = useAccessoryConfig()
+  const notifications = useNotificationConfig()
   const lastSeen = ref<string | null>(null)
 
   async function fetchLastSeen() {
@@ -182,6 +184,7 @@ export function useMqtt() {
 
   onMounted(() => {
     accessory.fetchServerConfig()
+    notifications.fetchNotificationConfig()
     connect()
   })
 
@@ -219,5 +222,7 @@ export function useMqtt() {
     saveAccessoryConfig: accessory.saveAccessoryConfig,
     sniffEnabled: spa.sniffEnabled,
     setSniff: (frameCount: number | false) => spa.setSniff(frameCount, publish),
+    notificationConfig: notifications.notificationConfig,
+    saveNotificationConfig: notifications.saveNotificationConfig,
   }
 }

@@ -1,0 +1,23 @@
+# Launa server configuration
+#
+# Copy this file to launa-server.toml and fill in your values.
+# launa-server.toml is gitignored -- your secrets never leave your machine.
+
+[server]
+mqtt_tcp_port = 1883            # MQTT broker TCP port
+mqtt_ws_port = 9001             # MQTT WebSocket port (for web GUI)
+http_port = 8080                # HTTP port for web UI + Google Home fulfillment
+web_dir = "web"                 # Path to web directory (containing dist/)
+state_path = "launa-state.json" # JSON state file (saved on shutdown, loaded on startup)
+
+# Uncomment to enable Google Home integration.
+# You must set oauth_client_id and oauth_client_secret.
+#
+# [google_home]
+# oauth_client_id = "XXX.apps.googleusercontent.com"
+# oauth_client_secret = "GOCSPX-XXX"
+# username = "admin"
+# password = "changeme"
+# jwt_secret = ""               # Auto-generated if empty
+# service_account_key_path = "" # Optional, for Report State
+# celsius = false

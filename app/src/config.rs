@@ -50,9 +50,9 @@ impl Default for AppConfig {
 
 impl AppConfig {
     /// Placeholder SSID that indicates no valid config has been flashed.
-    const PLACEHOLDER_SSID: &str = "YOUR_WIFI_SSID";
+    pub const PLACEHOLDER_SSID: &str = "YOUR_WIFI_SSID";
     /// Placeholder WiFi password that indicates no valid config has been flashed.
-    const PLACEHOLDER_WIFI_PASS: &str = "YOUR_WIFI_PASSWORD";
+    pub const PLACEHOLDER_WIFI_PASS: &str = "YOUR_WIFI_PASSWORD";
 
     pub fn load(
         nvs: &mut esp_nvs::Nvs<esp_storage::FlashStorage<'static>>,

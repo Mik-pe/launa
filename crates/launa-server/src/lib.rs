@@ -8,8 +8,10 @@ use tracing::{error, info};
 
 pub mod broker;
 pub mod error;
+pub mod google_home;
 pub mod memory;
 pub mod mqtt_bridge;
+pub mod notifier;
 pub mod web;
 
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -21,6 +23,31 @@ pub struct Config {
     pub http_port: u16,
     pub web_dir: PathBuf,
     pub state_path: PathBuf,
+    pub google_home: Option<GoogleHomeConfig>,
+}
+
+impl Config {
+    pub fn default_with_root(project_root: &PathBuf) -> Self {
+        Config {
+            mqtt_tcp_port: 1883,
+            mqtt_ws_port: 9001,
+            http_port: 8080,
+            web_dir: project_root.join("web"),
+            state_path: project_root.join("launa-state.json"),
+            google_home: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GoogleHomeConfig {
+    pub oauth_client_id: String,
+    pub oauth_client_secret: String,
+    pub username: String,
+    pub password: String,
+    pub jwt_secret: String,
+    pub service_account_key_path: Option<PathBuf>,
+    pub celsius: bool,
 }
 
 pub use error::Error;
@@ -45,6 +72,16 @@ pub fn run(config: Config) -> error::Result<()> {
     rt.spawn(async move {
         if let Err(e) = web::start(&web_config, web_mem).await {
             error!("Web server error: {e}");
+        }
+    });
+
+    // Start notification watchdog on the tokio runtime
+    let notifier = notifier::Notifier::new(mem_store.clone());
+    rt.spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            notifier.check().await;
         }
     });
 

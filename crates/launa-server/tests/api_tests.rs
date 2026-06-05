@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use axum_test::TestServer;
@@ -5,11 +6,27 @@ use serde_json::json;
 
 use launa_server::memory::MemoryStore;
 use launa_server::web::{build_router, AppState};
+use launa_server::Config;
+
+fn make_config() -> Config {
+    Config {
+        mqtt_tcp_port: 0,
+        mqtt_ws_port: 0,
+        http_port: 0,
+        web_dir: PathBuf::from("/dev/null"),
+        state_path: PathBuf::from("/dev/null"),
+        google_home: None,
+    }
+}
 
 fn test_server() -> (TestServer, Arc<RwLock<MemoryStore>>) {
     let mem = Arc::new(RwLock::new(MemoryStore::new()));
-    let state = AppState { mem: mem.clone() };
-    let server = TestServer::new(build_router(state));
+    let state = AppState {
+        mem: mem.clone(),
+        config: make_config(),
+    };
+    let router = build_router().with_state(state);
+    let server = TestServer::new(router);
     (server, mem)
 }
 
