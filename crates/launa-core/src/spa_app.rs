@@ -439,9 +439,9 @@ impl<'a> SpaApp<'a> {
                     registration_state: reg_state,
                 });
             }
-            IncomingMessage::Ready { channel } => {
+            IncomingMessage::Ready { channel }
                 // Only handle Ready when registered — commands require a client ID.
-                if self.registration.is_registered() {
+                if self.registration.is_registered() => {
                     // Only respond to CTS on our own channel
                     if let Some(my_id) = self.client_id {
                         if channel != my_id {
@@ -462,7 +462,6 @@ impl<'a> SpaApp<'a> {
                         actions.push(AppAction::SendFrame(encoded));
                     }
                 }
-            }
             IncomingMessage::Registration(
                 launa_protocol::registration::RegistrationMessage::NewClientQuery,
             ) => {

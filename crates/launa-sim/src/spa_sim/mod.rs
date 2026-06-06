@@ -838,7 +838,7 @@ impl SpaSim {
                             let previous_hash = self.pending_client_hash;
                             let id = if self.registered
                                 && self.client_id.is_some()
-                                && previous_hash.map_or(false, |h| h == hash)
+                                && (previous_hash == Some(hash))
                             {
                                 self.client_id.unwrap()
                             } else {

@@ -61,7 +61,7 @@ async fn auth_page(axum::extract::Query(params): axum::extract::Query<AuthParams
 </form>
 </body></html>"#,
         redirect_uri = html_escape(&params.redirect_uri),
-        state = html_escape(&params.state.as_deref().unwrap_or("")),
+        state = html_escape(params.state.as_deref().unwrap_or("")),
     ))
 }
 
@@ -271,7 +271,11 @@ async fn fulfillment_handler(
                     .get("payload")
                     .and_then(|p| p.get("devices"))
                     .and_then(|d| d.as_array());
-                let celsius = state.config.google_home.as_ref().map_or(false, |gh| gh.celsius);
+                let celsius = state
+                    .config
+                    .google_home
+                    .as_ref()
+                    .is_some_and(|gh| gh.celsius);
                 query_handler(&state.mem, celsius, devices, &mut payload_devices);
             }
             "action.devices.EXECUTE" => {
@@ -435,7 +439,7 @@ fn query_handler(
                             .unwrap_or(0.0);
                         serde_json::json!({
                             "status": "SUCCESS",
-                            "online": store.get_device_status(&device_id).map_or(false, |s| s.status == "online"),
+                            "online": store.get_device_status(&device_id).is_some_and(|s| s.status == "online"),
                             "thermostatMode": "heat",
                             "thermostatTemperatureAmbient": (ambient_c * 10.0).round() / 10.0,
                             "thermostatTemperatureSetpoint": (setpoint_c * 10.0).round() / 10.0,
@@ -466,7 +470,7 @@ fn query_handler(
                 let is_on = store.get_latest_component_state(&device_id, &component);
                 serde_json::json!({
                     "status": "SUCCESS",
-                    "online": store.get_device_status(&device_id).map_or(false, |s| s.status == "online"),
+                    "online": store.get_device_status(&device_id).is_some_and(|s| s.status == "online"),
                     "on": is_on,
                 })
             }
@@ -573,7 +577,7 @@ fn execute_command(
         .config
         .google_home
         .as_ref()
-        .map_or(false, |gh| gh.celsius);
+        .is_some_and(|gh| gh.celsius);
 
     let mqtt_topic_and_payload = match command {
         "action.devices.commands.ThermostatTemperatureSetpoint" => {

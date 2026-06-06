@@ -54,7 +54,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let mut buf = [0u8; 256];
     let mut port = port;
     let running_check = || running.load(std::sync::atomic::Ordering::SeqCst);
-    while deadline.map_or(true, |d| Instant::now() < d) && running_check() {
+    while deadline.is_none_or(|d| Instant::now() < d) && running_check() {
         match port.read(&mut buf) {
             Ok(n) => {
                 let text = String::from_utf8_lossy(&buf[..n]);

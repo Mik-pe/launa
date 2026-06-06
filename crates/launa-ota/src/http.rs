@@ -185,7 +185,7 @@ fn starts_with_ignore_case(data: &[u8], prefix: &[u8]) -> bool {
         && data[..prefix.len()]
             .iter()
             .zip(prefix.iter())
-            .all(|(&a, &b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+            .all(|(&a, &b)| a.eq_ignore_ascii_case(&b))
 }
 
 /// Skip space bytes starting at `pos`, returning the position of the first non-space byte.

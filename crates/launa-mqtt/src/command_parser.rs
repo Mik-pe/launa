@@ -170,7 +170,7 @@ fn parse_set_temperature(payload: &str) -> ParseResult {
         Err(_) => return ParseResult::InvalidPayload(format!("not a number: {:?}", payload)),
     };
 
-    if t.is_nan() || t < 0.0 || t > 255.0 {
+    if t.is_nan() || !(0.0..=255.0).contains(&t) {
         return ParseResult::InvalidPayload(format!(
             "temperature out of representable range: {:?}",
             payload

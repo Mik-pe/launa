@@ -151,7 +151,7 @@ fn handle_chunks_format(
             c.as_array()
                 .and_then(|a| a.first())
                 .and_then(|v| v.as_str())
-                .map_or(false, |s| s == "R")
+                == Some("R")
         })
         .count();
     let tx_count = chunks_arr.len() - rx_count;
@@ -332,7 +332,7 @@ fn find_chunk_for_offset<'a>(
     chunk_offsets: &[(usize, usize, usize, &'a ChunkInfo)],
     offset: usize,
 ) -> Option<(usize, &'a ChunkInfo)> {
-    for &(start, end, idx, ref c) in chunk_offsets {
+    for &(start, end, idx, c) in chunk_offsets {
         if offset >= start && offset < end {
             return Some((idx, c));
         }
@@ -340,8 +340,7 @@ fn find_chunk_for_offset<'a>(
     // Fallback: return the chunk with the highest start <= offset
     chunk_offsets
         .iter()
-        .filter(|(start, _, _, _)| *start <= offset)
-        .last()
+        .rfind(|(start, _, _, _)| *start <= offset)
         .map(|(_start, _, idx, c)| (*idx, *c))
 }
 
@@ -358,12 +357,7 @@ fn handle_entries_format(
         .unwrap_or(0);
     let garbage_count = entries_arr
         .iter()
-        .filter(|e| {
-            e.as_array()
-                .and_then(|a| a.get(1))
-                .and_then(|v| v.as_str())
-                .map_or(false, |s| s == "garbage")
-        })
+        .filter(|e| e.as_array().and_then(|a| a.get(1)).and_then(|v| v.as_str()) == Some("garbage"))
         .count();
 
     println!(
@@ -775,7 +769,7 @@ fn decode_burst_entry(
     let msg = dispatch_frame(&frame);
     let parsed = describe_message(&msg);
 
-    let raw_frame = frame.encode().unwrap_or_else(|_| payload_bytes);
+    let raw_frame = frame.encode().unwrap_or(payload_bytes);
     let raw_hex = bytes_to_hex(&raw_frame);
 
     let entry = SniffEntry {
@@ -838,14 +832,12 @@ impl OffsetFrameDecoder {
     /// Returns Some((start_offset, frame)) when a complete frame is decoded.
     fn feed(&mut self, byte: u8, offset: usize) -> Option<(usize, Frame)> {
         // Track 0x7E boundaries to know where frames start
-        if byte == 0x7E {
-            if !self.in_frame {
-                // Start of frame
-                self.in_frame = true;
-                self.frame_start = Some(offset);
-            }
-            // End of frame is handled by the decoder
+        if byte == 0x7E && !self.in_frame {
+            // Start of frame
+            self.in_frame = true;
+            self.frame_start = Some(offset);
         }
+        // End of frame is handled by the decoder
 
         let result = self.decoder.feed(byte);
         if result.is_some() {

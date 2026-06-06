@@ -219,6 +219,12 @@ pub struct MemoryStore {
     offline_since: HashMap<String, String>,
 }
 
+impl Default for MemoryStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemoryStore {
     pub fn new() -> Self {
         Self {
@@ -534,7 +540,7 @@ impl MemoryStore {
 
     pub fn insert_availability(&mut self, device_id: &str, status: &str) {
         let deque = self.availability.entry(device_id.to_string()).or_default();
-        if deque.back().map_or(true, |e| e.status != status) {
+        if deque.back().is_none_or(|e| e.status != status) {
             let entry = AvailabilityEntry {
                 status: status.to_string(),
                 received_at: now_rfc3339(),

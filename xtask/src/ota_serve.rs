@@ -95,7 +95,7 @@ pub fn serve(
                                         offset = end;
                                         progress.bytes_sent.store(offset, Ordering::SeqCst);
                                         let pct = ((offset as u64 * 100) / total as u64) as u8;
-                                        if pct >= last_pct + 1 || offset == total {
+                                        if pct > last_pct || offset == total {
                                             let bar_len = 30;
                                             let filled = (pct as usize * bar_len) / 100;
                                             let bar: String =

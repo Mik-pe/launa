@@ -282,7 +282,7 @@ pub fn resolve_port_by_serial(serial: &str) -> anyhow::Result<String> {
         .filter(|p| {
             p.serial_number
                 .as_ref()
-                .map_or(false, |sn| sn.to_lowercase().ends_with(&serial_lower))
+                .is_some_and(|sn| sn.to_lowercase().ends_with(&serial_lower))
         })
         .collect();
 

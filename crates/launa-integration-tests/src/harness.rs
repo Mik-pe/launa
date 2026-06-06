@@ -156,25 +156,19 @@ impl TestHarness {
             // Process all SendFrame actions through the simulator.
             // This handles the immediately-sent ClientIdAck and command frames.
             for action in &all_actions {
-                match action {
-                    AppAction::SendFrame(bytes) => {
-                        let responses = self.sim.process_incoming_bytes(bytes);
-                        if !responses.is_empty() {
-                            let resp_frames = self.decoder.feed_slice(&responses);
-                            for frame in &resp_frames {
-                                let resp_actions = self.app.process_frame(frame);
-                                for ra in &resp_actions {
-                                    match ra {
-                                        AppAction::SendFrame(rbytes) => {
-                                            self.sim.process_incoming_bytes(rbytes);
-                                        }
-                                        _ => {}
-                                    }
+                if let AppAction::SendFrame(bytes) = action {
+                    let responses = self.sim.process_incoming_bytes(bytes);
+                    if !responses.is_empty() {
+                        let resp_frames = self.decoder.feed_slice(&responses);
+                        for frame in &resp_frames {
+                            let resp_actions = self.app.process_frame(frame);
+                            for ra in &resp_actions {
+                                if let AppAction::SendFrame(rbytes) = ra {
+                                    self.sim.process_incoming_bytes(rbytes);
                                 }
                             }
                         }
                     }
-                    _ => {}
                 }
             }
 
@@ -190,11 +184,8 @@ impl TestHarness {
     /// commands) so the simulator can update its state.
     pub fn process_outgoing(&mut self, actions: &[AppAction]) {
         for action in actions {
-            match action {
-                AppAction::SendFrame(bytes) => {
-                    let _responses = self.sim.process_incoming_bytes(bytes);
-                }
-                _ => {}
+            if let AppAction::SendFrame(bytes) = action {
+                let _responses = self.sim.process_incoming_bytes(bytes);
             }
         }
     }
