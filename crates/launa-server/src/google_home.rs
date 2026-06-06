@@ -271,7 +271,8 @@ async fn fulfillment_handler(
                     .get("payload")
                     .and_then(|p| p.get("devices"))
                     .and_then(|d| d.as_array());
-                query_handler(&state.mem, devices, &mut payload_devices);
+                let celsius = state.config.google_home.as_ref().map_or(false, |gh| gh.celsius);
+                query_handler(&state.mem, celsius, devices, &mut payload_devices);
             }
             "action.devices.EXECUTE" => {
                 return Json(execute_handler(&state, &request_id, input));
@@ -402,11 +403,11 @@ fn sync_response(request_id: &str, state: &AppState) -> serde_json::Value {
 
 fn query_handler(
     mem: &Arc<RwLock<MemoryStore>>,
+    celsius: bool,
     requested_devices: Option<&Vec<serde_json::Value>>,
     results: &mut serde_json::Map<String, serde_json::Value>,
 ) {
     let store = mem.read().unwrap();
-    let celsius = false; // TODO: read from config
 
     let device_ids: Vec<String> = match requested_devices {
         Some(devices) => devices
@@ -889,7 +890,7 @@ mod tests {
         let state = test_app_state_with_device();
         let mut results = serde_json::Map::new();
         let devices = vec![serde_json::json!({ "id": "spa_001_thermostat" })];
-        query_handler(&state.mem, Some(&devices), &mut results);
+        query_handler(&state.mem, false, Some(&devices), &mut results);
 
         let thermo = &results["spa_001_thermostat"];
         assert_eq!(thermo["status"], "SUCCESS");
@@ -903,7 +904,7 @@ mod tests {
         let state = test_app_state_with_device();
         let mut results = serde_json::Map::new();
         let devices = vec![serde_json::json!({ "id": "spa_001_pump1" })];
-        query_handler(&state.mem, Some(&devices), &mut results);
+        query_handler(&state.mem, false, Some(&devices), &mut results);
 
         let pump = &results["spa_001_pump1"];
         assert_eq!(pump["status"], "SUCCESS");
@@ -920,7 +921,7 @@ mod tests {
             .update_device_status("spa_001", "online", None);
         let mut results = serde_json::Map::new();
         let devices = vec![serde_json::json!({ "id": "spa_001_thermostat" })];
-        query_handler(&state.mem, Some(&devices), &mut results);
+        query_handler(&state.mem, false, Some(&devices), &mut results);
 
         assert_eq!(results["spa_001_thermostat"]["status"], "OFFLINE");
     }
