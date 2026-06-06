@@ -675,7 +675,8 @@ fn publish_mqtt_command(_state: &AppState, topic: &str, payload: &str) {
 }
 
 /// Channel for sending MQTT commands from Google Home handlers to the bridge thread.
-static MQTT_CMD_CHANNEL: std::sync::LazyLock<RwLock<Option<flume::Sender<(String, String)>>>> =
+type MqttCmdSender = flume::Sender<(String, String)>;
+static MQTT_CMD_CHANNEL: std::sync::LazyLock<RwLock<Option<MqttCmdSender>>> =
     std::sync::LazyLock::new(|| RwLock::new(None));
 
 /// Register the MQTT command channel. Returns the receiver for the bridge thread.

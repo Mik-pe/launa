@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 use launa_server::{Config, GoogleHomeConfig};
@@ -48,7 +48,7 @@ fn main() {
     }
 }
 
-fn load_config(path: &std::path::Path, project_root: &PathBuf) -> Config {
+fn load_config(path: &std::path::Path, project_root: &Path) -> Config {
     let settings = config::Config::builder()
         .set_default("server.mqtt_tcp_port", 1883u64)
         .unwrap()

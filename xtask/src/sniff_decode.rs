@@ -840,11 +840,11 @@ impl OffsetFrameDecoder {
         // End of frame is handled by the decoder
 
         let result = self.decoder.feed(byte);
-        if result.is_some() {
+        if let Some(decoded) = result {
             // Frame complete — the start was at the opening 0x7E
             self.in_frame = false;
             let start = self.frame_start.take().unwrap_or(offset);
-            Some((start, result.unwrap()))
+            Some((start, decoded))
         } else {
             None
         }

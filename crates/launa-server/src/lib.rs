@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -27,7 +27,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn default_with_root(project_root: &PathBuf) -> Self {
+    pub fn default_with_root(project_root: &Path) -> Self {
         Config {
             mqtt_tcp_port: 1883,
             mqtt_ws_port: 9001,

@@ -171,7 +171,7 @@ pub fn detect_esp_ports() -> Vec<DetectedPort> {
     let mut detected: Vec<DetectedPort> = ports
         .into_iter()
         .filter(|p| is_likely_esp_port(&p.port_name))
-        .filter_map(|p| {
+        .map(|p| {
             let (manufacturer, product, serial_number, vid, pid) = match &p.port_type {
                 serialport::SerialPortType::UsbPort(usb) => (
                     usb.manufacturer.clone(),
@@ -182,14 +182,14 @@ pub fn detect_esp_ports() -> Vec<DetectedPort> {
                 ),
                 _ => (None, None, None, None, None),
             };
-            Some(DetectedPort {
+            DetectedPort {
                 port_name: p.port_name,
                 manufacturer,
                 product,
                 serial_number,
                 vid,
                 pid,
-            })
+            }
         })
         .collect();
 
@@ -479,8 +479,8 @@ fn query_mac_address(port_name: &str) -> Option<String> {
         } else {
             line
         };
-        if stripped.starts_with("MAC address:") {
-            return Some(stripped["MAC address:".len()..].trim().to_string());
+        if let Some(rest) = stripped.strip_prefix("MAC address:") {
+            return Some(rest.trim().to_string());
         }
     }
     None

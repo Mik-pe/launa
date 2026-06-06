@@ -22,6 +22,12 @@ pub struct ChannelAllocatorBroker {
     token_taken: AtomicBool,
 }
 
+impl Default for ChannelAllocatorBroker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ChannelAllocatorBroker {
     /// Create a new broker with the token initially available.
     pub const fn new() -> Self {

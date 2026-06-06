@@ -840,7 +840,8 @@ impl SpaSim {
                                 && self.client_id.is_some()
                                 && (previous_hash == Some(hash))
                             {
-                                self.client_id.unwrap()
+                                // SAFETY: we checked is_some() above
+                                unsafe { self.client_id.unwrap_unchecked() }
                             } else {
                                 let id = self.next_client_id;
                                 // Wrap around within the valid CTS client range (0x11..=0x2F).
