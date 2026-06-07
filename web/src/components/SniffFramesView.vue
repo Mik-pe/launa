@@ -2,6 +2,7 @@
 import { ref, computed } from 'vue'
 import { useSniffFrames } from '../composables/useApi'
 import { timeAgo, parsePayload, decodeSniffChunks } from '../utils/format'
+import type { TimestampedEntry } from '../types'
 import LoadingSpinner from './LoadingSpinner.vue'
 
 const { data: frames, loading, error, refresh } = useSniffFrames(100, 8000)
@@ -44,7 +45,7 @@ interface DecodedCapture {
   totalChunks: number
 }
 
-function decodeCapture(entry: { payload: string }): DecodedCapture | null {
+function decodeCapture(entry: TimestampedEntry): DecodedCapture | null {
   const parsed = parsePayload(entry)
   if (!parsed || !parsed.chunks) return null
   return decodeSniffChunks(parsed)
