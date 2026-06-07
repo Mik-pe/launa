@@ -12,8 +12,8 @@
 mod common;
 
 use common::{
-    full_registration, make_client_id_assignment_frame, make_new_client_query_frame,
-    make_ready_frame, make_spaapp, make_status_frame,
+    full_registration, make_client_id_assignment_frame, make_new_client_query_frame, make_spaapp,
+    make_status_frame,
 };
 
 use launa_core::AppAction;

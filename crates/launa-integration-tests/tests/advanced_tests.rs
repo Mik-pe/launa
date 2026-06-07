@@ -9,7 +9,7 @@
 
 use launa_core::{AppAction, SpaApp};
 use launa_integration_tests::harness::TestHarness;
-use launa_protocol::command::{Command, ToggleItem};
+use launa_protocol::command::Command;
 use launa_protocol::dispatcher::IncomingMessage;
 use launa_protocol::fault::FaultCode;
 use launa_sim::spa_sim::FaultLogConfig;

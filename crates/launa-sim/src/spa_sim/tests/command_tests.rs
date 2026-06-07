@@ -426,7 +426,7 @@ fn test_require_registration_accepts_toggle_after_registration() {
     // Sim sends ClientIdAssignment — extract and feed the ack
     let mut decoder = launa_protocol::frame::FrameDecoder::new();
     let frames = decoder.feed_slice(&responses);
-    let mut assigned_id = 0u8;
+    let mut assigned_id;
     for frame in &frames {
         if frame.message_type == [0xFE, 0xBF]
             && !frame.payload.is_empty()

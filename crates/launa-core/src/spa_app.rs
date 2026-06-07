@@ -2100,7 +2100,7 @@ mod tests {
 
         // Re-register
         app.process_frame(&new_client_query_frame());
-        let actions = app.process_frame(&client_id_assignment_frame(0x11));
+        let _actions = app.process_frame(&client_id_assignment_frame(0x11));
         assert!(app.is_registered());
         assert_eq!(app.client_id(), Some(0x11));
 

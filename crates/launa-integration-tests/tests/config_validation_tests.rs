@@ -16,7 +16,7 @@ use launa_core::{AppAction, SpaApp};
 use launa_integration_tests::harness::TestHarness;
 use launa_protocol::command::{validate_set_temperature, Command, TempError};
 use launa_protocol::dispatcher::IncomingMessage;
-use launa_protocol::frame::{Frame, FrameDecoder};
+use launa_protocol::frame::FrameDecoder;
 use launa_protocol::status::{HeatingMode, PumpState, TempRange, TemperatureScale, TimeFormat};
 use launa_protocol::Temperature;
 use launa_sim::spa_sim::{
