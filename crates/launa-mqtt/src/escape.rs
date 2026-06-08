@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn test_escape_all_combined() {
-        let input = alloc::format!("a\\b\"c\nd\re\tf\x01g");
+        let input = "a\\b\"c\nd\re\tf\x01g".to_string();
         let escaped = escape_json_string(&input);
         // Should produce a string that round-trips through JSON parsing
         let json = alloc::format!("\"{}\"", escaped);

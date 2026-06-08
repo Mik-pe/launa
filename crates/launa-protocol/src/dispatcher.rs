@@ -832,7 +832,7 @@ mod tests {
     use std::cell::RefCell;
 
     thread_local! {
-        static WARN_BUFFER: RefCell<Vec<String>> = RefCell::new(Vec::new());
+        static WARN_BUFFER: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     }
 
     struct CaptureLogger;

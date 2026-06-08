@@ -1051,7 +1051,7 @@ fn test_partial_frame_across_tick_boundary() {
     // Feed remainder through the decoder — should now produce complete frames
     let tick2_frames = harness.decoder.feed_slice(&tick2_bytes);
     assert!(
-        tick2_frames.len() >= 1,
+        !tick2_frames.is_empty(),
         "remainder should decode into at least 1 frame (status + possibly ready), got {}",
         tick2_frames.len()
     );

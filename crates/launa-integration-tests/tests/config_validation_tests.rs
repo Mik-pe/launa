@@ -812,7 +812,7 @@ fn test_mqtt_reconnect_discovery_in_broker() {
         let is_text = parsed
             .get("unique_id")
             .and_then(|v| v.as_str())
-            .map_or(false, |id| id.ends_with("_set_time"));
+            .is_some_and(|id| id.ends_with("_set_time"));
         if !is_optimistic && !is_button && !is_text {
             assert!(
                 parsed.get("state_topic").is_some(),

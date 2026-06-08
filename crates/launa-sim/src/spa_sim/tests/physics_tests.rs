@@ -67,7 +67,7 @@ fn test_realistic_thermal_heating_80_to_104() {
     }
 
     assert!(
-        ticks >= 48 && ticks <= 75,
+        (48..=75).contains(&ticks),
         "heating 80→104 should take 48-75 ticks, took {}",
         ticks
     );
@@ -92,7 +92,7 @@ fn test_realistic_thermal_cooling_104_to_80() {
     }
 
     assert!(
-        ticks >= 35 && ticks <= 65,
+        (35..=65).contains(&ticks),
         "cooling 104→80 should take 35-65 ticks, took {}",
         ticks
     );

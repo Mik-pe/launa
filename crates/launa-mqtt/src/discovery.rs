@@ -1062,12 +1062,12 @@ mod tests {
         }
 
         // Test combined special chars in a single string
-        let combined = alloc::format!("A\\B\"C\nD\rE\tF\x01G");
+        let combined = "A\\B\"C\nD\rE\tF\x01G".to_string();
         let block = json_device_block("id1", &combined, "Mfr", "Model", "1.0");
         let v = parse_json(&block);
         assert_eq!(
             v["name"].as_str(),
-            Some(alloc::format!("A\\B\"C\nD\rE\tF\u{0001}G").as_str())
+            Some("A\\B\"C\nD\rE\tF\u{0001}G".to_string().as_str())
         );
 
         // Test json_origin helper

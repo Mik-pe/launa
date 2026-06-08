@@ -311,7 +311,7 @@ fn test_command_success_rate_50_percent() {
 
     let acceptance_rate = accepted as f32 / total_commands as f32;
     assert!(
-        acceptance_rate >= 0.35 && acceptance_rate <= 0.65,
+        (0.35..=0.65).contains(&acceptance_rate),
         "with rate=0.5, expected ~50% acceptance (35-65%), got {:.0}% ({}/{})",
         acceptance_rate * 100.0,
         accepted,

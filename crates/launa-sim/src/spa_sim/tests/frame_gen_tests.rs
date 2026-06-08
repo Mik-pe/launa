@@ -109,7 +109,7 @@ fn test_ready_interval_randomized() {
     // With interval range (2,5), expect ~20-60 Ready frames in 100 ticks
     // (min 100/5=20, max 100/2=50, but allow some margin)
     assert!(
-        ready_count >= 15 && ready_count <= 55,
+        (15..=55).contains(&ready_count),
         "expected 15-55 Ready frames with range (2,5), got {}",
         ready_count
     );
@@ -289,7 +289,7 @@ fn test_partial_frame_split_at_zero() {
 
     // Should have decoded the status frame
     assert!(
-        frames1.len() >= 1,
+        !frames1.is_empty(),
         "tick1 with split_at=0 should produce the full status frame"
     );
     assert_eq!(
@@ -303,7 +303,7 @@ fn test_partial_frame_split_at_zero() {
     let mut decoder2 = FrameDecoder::new();
     let frames2 = decoder2.feed_slice(&tick2_bytes);
     assert!(
-        frames2.len() >= 1,
+        !frames2.is_empty(),
         "tick2 should produce at least the ready frame"
     );
     assert_eq!(
@@ -445,7 +445,7 @@ fn test_variable_ready_interval_gaps_in_range() {
 
     for (i, &gap) in gaps.iter().enumerate() {
         assert!(
-            gap >= 2 && gap <= 5,
+            (2..=5).contains(&gap),
             "gap {} should be in [2, 5], got {}",
             i,
             gap

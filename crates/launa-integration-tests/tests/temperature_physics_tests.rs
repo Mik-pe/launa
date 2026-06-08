@@ -273,7 +273,7 @@ fn test_celsius_overshoot_wire_values_correct() {
     let check_msg = dispatch_frame(&check_frames[0]);
     if let IncomingMessage::StatusUpdate(s) = check_msg {
         assert!(
-            s.current_temp.map_or(false, |t| t.raw_value() >= 41.0),
+            s.current_temp.is_some_and(|t| t.raw_value() >= 41.0),
             "decoded current_temp should be >= 41.0°C, got {:?}",
             s.current_temp
         );
@@ -292,7 +292,7 @@ fn test_celsius_overshoot_wire_values_correct() {
         // Wire value for current_temp should be approximately 2× display value
         // For 41.0°C, wire = round(41.0 * 2) = 82, decoded back = 82/2 = 41.0
         assert!(
-            s.current_temp.map_or(false, |t| t.raw_value() >= 40.0),
+            s.current_temp.is_some_and(|t| t.raw_value() >= 40.0),
             "decoded current_temp should be >= 40°C in Celsius mode, got {:?}",
             s.current_temp
         );

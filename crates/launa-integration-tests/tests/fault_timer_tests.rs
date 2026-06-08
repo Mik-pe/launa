@@ -59,7 +59,7 @@ fn test_fault_appears_and_clears_lifecycle() {
         if !response.is_empty() {
             let frames = h.decoder.feed_slice(&response);
             for frame in &frames {
-                h.app.process_frame(&frame);
+                h.app.process_frame(frame);
             }
         }
     }

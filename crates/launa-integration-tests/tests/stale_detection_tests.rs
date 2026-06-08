@@ -96,7 +96,7 @@ fn test_spaapp_stale_detection_lifecycle() {
         FrameEncoder::encode(mt, &payload).unwrap()
     };
     assert!(
-        probe_frames.iter().any(|f| *f == &nts_expected),
+        probe_frames.contains(&&nts_expected),
         "Phase 2: probe should be NothingToSend, not ConfigurationRequest"
     );
     assert!(!app.is_stale(), "should not be stale at 6s");

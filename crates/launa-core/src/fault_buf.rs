@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn test_clone() {
         let buf = FaultBuf::from_string("Test fault");
-        let cloned = buf.clone();
+        let cloned = buf;
         assert_eq!(buf.as_str(), cloned.as_str());
     }
 

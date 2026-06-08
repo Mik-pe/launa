@@ -1008,7 +1008,7 @@ mod tests {
     /// Proactive probe is disabled — it interfered with the spa's native
     /// FE BF 00 query cycle by keeping the SM in WaitingForAssignment.
     /// Keeping the "not sent when no bus traffic" test as a regression guard.
-
+    ///
     /// No unsolicited frames should be sent when there is no bus traffic.
     #[test]
     fn test_no_frames_sent_when_no_bus_traffic() {
@@ -1462,7 +1462,7 @@ mod tests {
             FrameEncoder::encode(mt, &payload).expect("encode should succeed")
         };
         assert!(
-            frames.iter().any(|f| *f == &expected),
+            frames.contains(&&expected),
             "stale probe should send NothingToSend, got frames: {:?}",
             frames
         );
@@ -1928,9 +1928,7 @@ mod tests {
         assert_eq!(app.queued_command_count(), 1);
 
         // Remaining command is the set-temp
-        match app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump2)) {
-            _ => {}
-        }
+        let _ = app.on_mqtt_command(Command::ToggleItem(ToggleItem::Pump2));
         assert_eq!(app.queued_command_count(), 2);
     }
 

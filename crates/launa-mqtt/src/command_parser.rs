@@ -472,7 +472,7 @@ mod tests {
 
         for (i, (subtopic, payload)) in invalid_cases.iter().enumerate() {
             let topic = format!("{}/{}", CMD_BASE, subtopic);
-            let result = parse_command(CMD_BASE, &topic, *payload);
+            let result = parse_command(CMD_BASE, &topic, payload);
             assert!(
                 matches!(result, ParseResult::InvalidPayload(_)),
                 "case {i}: invalid timer payload for {subtopic}: expected InvalidPayload, got {:?}",
@@ -673,7 +673,7 @@ mod tests {
         ];
 
         for (i, (base, topic, payload)) in cases.iter().enumerate() {
-            let result = parse_command(base, topic, *payload);
+            let result = parse_command(base, topic, payload);
             assert!(
                 matches!(result, ParseResult::UnknownSubtopic(_)),
                 "case {i}: topic '{topic}' with base '{base}': expected UnknownSubtopic, got {:?}",
@@ -724,7 +724,7 @@ mod tests {
         ];
         for (subtopic, payload) in cases {
             let topic = format!("{}/{}", CMD_BASE, subtopic);
-            let result = parse_command(CMD_BASE, &topic, *payload);
+            let result = parse_command(CMD_BASE, &topic, payload);
             assert!(
                 matches!(result, ParseResult::Valid(Command::ToggleItem(_))),
                 "toggle {subtopic} with payload '{}': expected Valid(ToggleItem), got {:?}",
@@ -764,7 +764,7 @@ mod tests {
 
         for (i, (payload, h, m, is_24h)) in cases.iter().enumerate() {
             let topic = format!("{}/set_time", CMD_BASE);
-            let result = parse_command(CMD_BASE, &topic, *payload);
+            let result = parse_command(CMD_BASE, &topic, payload);
             assert_eq!(
                 result,
                 ParseResult::Valid(Command::SetTime {
@@ -789,7 +789,7 @@ mod tests {
 
         for (i, (payload, h, m, is_24h)) in cases.iter().enumerate() {
             let topic = format!("{}/set_time", CMD_BASE);
-            let result = parse_command(CMD_BASE, &topic, *payload);
+            let result = parse_command(CMD_BASE, &topic, payload);
             assert_eq!(
                 result,
                 ParseResult::Valid(Command::SetTime {
@@ -816,7 +816,7 @@ mod tests {
 
         for (i, (payload, _expected)) in cases.iter().enumerate() {
             let topic = format!("{}/set_time", CMD_BASE);
-            let result = parse_command(CMD_BASE, &topic, *payload);
+            let result = parse_command(CMD_BASE, &topic, payload);
             assert!(
                 matches!(result, ParseResult::InvalidPayload(_)),
                 "case {i}: set_time={}: expected InvalidPayload, got {:?}",

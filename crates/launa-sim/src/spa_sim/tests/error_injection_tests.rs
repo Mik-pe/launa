@@ -124,7 +124,7 @@ fn test_all_three_features_together() {
 
     // Ready should appear at interval (1,3), so fewer than 20
     assert!(
-        ready_count >= 7 && ready_count <= 20,
+        (7..=20).contains(&ready_count),
         "ready at randomized interval, got {}",
         ready_count
     );

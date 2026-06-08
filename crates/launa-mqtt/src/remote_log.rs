@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn test_log_entry_to_json_combined_special_chars() {
         // All special chars in one message — round-trip verification
-        let msg = format!("a\\b\"c\nd\re\tf\x01g");
+        let msg = "a\\b\"c\nd\re\tf\x01g".to_string();
         let entry = RemoteLogEntry {
             level: "warn",
             message: msg.clone(),

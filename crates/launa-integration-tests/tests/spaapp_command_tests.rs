@@ -397,9 +397,7 @@ fn test_spaapp_24_hour_smoke() {
         let frames = decoder.feed_slice(&raw_bytes);
 
         for frame in &frames {
-            if frame.message_type == [0xFF, 0xAF] {
-                app.process_frame(frame);
-            } else if frame.message_type == [0x03, 0xBF] {
+            if frame.message_type == [0xFF, 0xAF] || frame.message_type == [0x03, 0xBF] {
                 app.process_frame(frame);
             }
         }

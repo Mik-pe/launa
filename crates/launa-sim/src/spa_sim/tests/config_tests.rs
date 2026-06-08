@@ -21,7 +21,6 @@ fn test_configurable_fault_log_response() {
         set_temperature: 96,
         sensor_a_temp: 95,
         sensor_b_temp: 94,
-        ..Default::default()
     });
 
     let response = sim.generate_fault_log_response();
