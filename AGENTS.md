@@ -86,3 +86,12 @@ Summary line (50-72 chars, imperative mood)
 ```
 
 Run `cargo fmt` before committing. Keep commits focused: one logical change per commit.
+
+## Git delivery
+
+Squash-merge pull requests into main: one commit per PR. Update topic branches
+with ordinary merge commits. Never rebase or force-push. Fetch the current base
+and merge it into the topic branch when conflicts, integration changes, or branch
+protection require it;
+do not update every branch merely because another PR landed. Verify the current
+PR head before merging.
